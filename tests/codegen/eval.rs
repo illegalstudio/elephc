@@ -15,6 +15,7 @@ use crate::support::*;
 
 mod buffers;
 mod declaring_class_reflectors;
+mod early_binding;
 mod invoker_sharing;
 mod json_enums;
 mod literal_catalog;
@@ -10027,23 +10028,24 @@ echo DynEvalNativeFetchConst;
     assert_eq!(out, "dynamic");
 }
 
-/// Verifies native constant fetch misses after eval fail through the eval runtime path.
+/// Verifies a native constant fetch miss after eval throws PHP's uncaught undefined-constant
+/// `Error`.
 #[test]
 fn test_eval_missing_native_dynamic_constant_fetch_fails() {
     let err = compile_and_run_expect_failure("<?php eval(''); echo MissingNativeEvalConst;");
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        err.contains("Uncaught Error: Undefined constant \"MissingNativeEvalConst\""),
+        "stderr did not contain the undefined-constant Error: {err}"
     );
 }
 
-/// Verifies missing eval dynamic constants fail through the eval runtime path.
+/// Verifies a missing constant read in eval throws PHP's uncaught undefined-constant `Error`.
 #[test]
 fn test_eval_missing_dynamic_constant_fetch_fails() {
     let err = compile_and_run_expect_failure("<?php eval('return MissingEvalConst;');");
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        err.contains("Uncaught Error: Undefined constant \"MissingEvalConst\""),
+        "stderr did not contain the undefined-constant Error: {err}"
     );
 }
 
@@ -10091,7 +10093,7 @@ fn test_eval_error_contract_reports_unsupported_construct() {
 #[test]
 fn test_eval_error_contract_reports_runtime_failure() {
     let stderr = assert_eval_failure_contains(
-        "<?php eval('return MissingEvalContractConst;');",
+        "<?php eval('class EvalContractTwice {} class EvalContractTwice {}');",
         "Fatal error: eval() runtime failed",
     );
     assert_no_rust_panic_leaked(&stderr);
@@ -28654,7 +28656,7 @@ echo EvalConstParentIface::BASE . ":";
 echo EvalConstChildIface::BASE . ":";
 echo EvalConstIfaceTraitBox::BASE . ":";
 echo EvalConstIfaceTraitBox::LOCAL . ":";
-echo EvalConstReusableTrait::SEED . ":";
+try { echo EvalConstReusableTrait::SEED . ":"; } catch (Error $e) { echo "direct:"; }
 echo EvalConstIfaceTraitBox::SEED . ":";
 echo EvalConstIfaceTraitBox::readTraitSeed() . ":";
 echo EvalConstDuplicateTraitBox::DUP . ":";
@@ -28666,7 +28668,8 @@ echo EvalConstDuplicateClassBox::DUP;');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "2:2:2:3:6:6:6:9:9");
+    // A trait constant read through the trait throws, as in PHP 8.2+.
+    assert_eq!(out.stdout, "2:2:2:3:direct:6:6:9:9");
 }
 
 /// Verifies eval-declared trait constant conflicts follow PHP compatibility rules.
@@ -31109,4 +31112,179 @@ eval('$x = true and false; var_dump($x); $y = 1 or 0; var_dump($y);');
 "#,
     );
     assert_eq!(out, "bool(true)\nint(1)\n");
+}
+
+/// An eval-declared property default reading `self::` resolves against the declaring class,
+/// including its private constants, for instance and static defaults alike.
+#[test]
+fn test_eval_property_defaults_resolve_self_constants() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalSelfDefaults { private const C = "x"; public $a = self::C; public static $s = self::C . "y"; } $o = new EvalSelfDefaults; echo $o->a, EvalSelfDefaults::$s, "\n";');
+"#,
+    );
+    assert_eq!(out, "xxy\n");
+}
+
+/// Verifies an assignment on the right of a binary operator parses inside eval.
+///
+/// PHP's grammar gives assignment tighter binding than the surrounding binary operator when
+/// it appears on the right: `$a == $b = 1` is `$a == ($b = 1)`. The expression-position path
+/// already did this; the eval parser's binary levels used to leave the `=` unparsed.
+#[test]
+fn test_eval_assignment_on_the_right_of_a_binary_operator() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$a=0;$b=0; $r = $a == $b = 1; echo (int)$r, $b, "\n";
+$a=0;$b=0; $r = $a === $b = 1; echo (int)$r, (int)$b, "\n";
+$a=0;$b=0; $r = $a < $b = 1; echo (int)$r, $b, "\n";
+$a=0;$b=0; $r = $a && $b = 1; echo (int)$r, $b, "\n";
+$a="x";$b="y"; $r = $a . $b = "z"; echo $r, $b, "\n";
+$a=0;$b=0; $r = $a == $b += 2; echo (int)$r, $b, "\n";');
+"#,
+    );
+    assert_eq!(out, "01\n01\n11\n00\nxzz\n02\n");
+}
+
+
+/// Verifies a bridge-run eval fragment's `declare(strict_types=1)` rejects the weak scalar
+/// conversions that the same call applies in a coercive fragment. The runtime-unknown source
+/// keeps the fragment on the interpreter rather than the compile-time literal-eval path.
+#[test]
+fn test_eval_runtime_strict_types_rejects_weak_scalar_function_arguments() {
+    let weak = compile_and_run(
+        r#"<?php
+$code = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+function f(int $x) { echo $x, "\n"; }
+f("42");
+__ELEPHC_EVAL__ : '';
+eval($code);
+"#,
+    );
+    assert_eq!(weak, "42\n");
+    let strict = compile_and_run(
+        r#"<?php
+$code = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+declare(strict_types=1);
+function f(int $x) { echo $x, "\n"; }
+try {
+    f("42");
+} catch (TypeError $error) {
+    echo "caught:", $error->getMessage(), "\n";
+}
+__ELEPHC_EVAL__ : '';
+eval($code);
+"#,
+    );
+    assert_eq!(
+        strict,
+        "caught:f(): Argument #1 ($x) must be of type int, string given\n"
+    );
+}
+
+/// Verifies a saved eval function and closure run their bodies under the strict mode of the
+/// fragment that declared them, while the caller's mode still governs argument binding, and
+/// that strict mode keeps PHP's int-to-float widening.
+#[test]
+fn test_eval_runtime_saved_functions_keep_their_defining_strict_mode() {
+    let out = compile_and_run(
+        r#"<?php
+$weak = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+function inner(int $x) { echo $x, "\n"; }
+function outer() { inner("42"); }
+$closure = function () {
+    $nested = function (int $x) { echo $x, "\n"; };
+    $nested("43");
+};
+__ELEPHC_EVAL__ : '';
+eval($weak);
+$strict = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+declare(strict_types=1);
+outer();
+$closure();
+function widen(float $value) { echo $value, "\n"; }
+widen(44);
+__ELEPHC_EVAL__ : '';
+eval($strict);
+$coercive = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+declare(strict_types=0);
+function coercive(int $x) { echo $x, "\n"; }
+coercive("45");
+__ELEPHC_EVAL__ : '';
+eval($coercive);
+"#,
+    );
+    assert_eq!(out, "42\n43\n44\n45\n");
+}
+
+/// Verifies the strictness of a call site follows the fragment containing the call, not the
+/// fragment that declared the callee.
+#[test]
+fn test_eval_runtime_function_arguments_follow_the_caller_strict_mode() {
+    let out = compile_and_run(
+        r#"<?php
+$weak = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+function inner(int $x) { echo $x, "\n"; }
+__ELEPHC_EVAL__ : '';
+eval($weak);
+$strict = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+declare(strict_types=1);
+try {
+    inner("42");
+} catch (TypeError $error) {
+    echo "caught\n";
+}
+__ELEPHC_EVAL__ : '';
+eval($strict);
+"#,
+    );
+    assert_eq!(out, "caught\n");
+}
+
+/// Verifies `declare(strict_types=...)` accepts exactly `0` or `1` in a bridge-run fragment,
+/// like the main parser.
+#[test]
+fn test_eval_runtime_invalid_strict_types_value_is_a_parse_error() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+$code = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+declare(strict_types=2);
+echo "ran\n";
+__ELEPHC_EVAL__ : '';
+eval($code);
+"#,
+    );
+    assert!(
+        err.contains("Parse error: eval() fragment is invalid"),
+        "invalid strict_types value did not raise an eval parse error: {err}"
+    );
+    assert!(!err.contains("ran"), "invalid strict_types fragment executed: {err}");
+}
+
+/// Verifies a strict bridge-run eval fragment reports a mismatched scalar argument on an AOT
+/// method as PHP's catchable TypeError instead of ending the eval runtime.
+#[test]
+fn test_eval_runtime_strict_types_rejects_aot_method_scalar_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalStrictAotMethodBox {
+    public function read(int $value): int {
+        return $value;
+    }
+}
+$code = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+declare(strict_types=1);
+try {
+    echo (new EvalStrictAotMethodBox())->read("7"), "\n";
+} catch (TypeError $error) {
+    echo "caught:", $error->getMessage(), "\n";
+}
+__ELEPHC_EVAL__ : '';
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "caught:EvalStrictAotMethodBox::read(): Argument #1 ($value) must be of type int, string given\n"
+    );
 }

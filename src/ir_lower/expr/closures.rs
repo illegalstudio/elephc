@@ -158,6 +158,12 @@ pub(super) fn lower_closure_with_context(
     self_ref_callable_capture: Option<&str>,
     is_static: bool,
 ) -> LoweredValue {
+    // A deprecated constant read in a parameter default deprecates once, whichever call
+    // lowers the default; record the defaults before any of those calls is lowered.
+    crate::ir_lower::initializer_reads::register_closure_defaults(
+        params.iter().filter_map(|(_, _, default, _)| default.as_ref()),
+        ctx.current_class.is_some(),
+    );
     // PHP auto-binds `$this` to non-static closures (including arrow functions)
     // defined inside an instance method, with no `use($this)` needed. The parser
     // never lists `$this` as a capture, so thread it through the existing capture
@@ -553,6 +559,8 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
         | StmtKind::InterfaceDecl { .. }
         | StmtKind::EnumDecl { .. }
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
@@ -855,6 +863,8 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
             .any(|case| case.value.as_ref().is_some_and(expr_contains_eval_call)),
         StmtKind::RefAssign { .. }
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }

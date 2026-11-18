@@ -161,6 +161,7 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
         "ArgumentCountError",  // _spl_argument_count_error_class_id, including dynamic mbstring calls
         "ValueError",          // _spl_value_error_class_id
         "ArithmeticError",     // _spl_arithmetic_error_class_id
+        "ReflectionException", // _spl_reflection_exception_class_id
         "DivisionByZeroError", // _spl_division_by_zero_error_class_id
         "JsonException",       // _json_exception_class_id
         // `JsonException extends Exception` DIRECTLY, as in reference PHP, so the ancestor

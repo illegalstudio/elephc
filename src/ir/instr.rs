@@ -229,6 +229,13 @@ pub enum Immediate {
     /// `ArraySet` whose integer key would skip a slot (or is negative) promotes the array to a
     /// hash instead of zero-filling the gap, as PHP does.
     PromotableArray,
+    /// Marks `DynamicObjectNewMixed` as `ReflectionClass::newInstance()` rather than
+    /// `new $class`, so constructor refusals raise `ReflectionException` instead of `Error`.
+    ReflectionConstruction,
+    /// Marks `NormalizeCallable` on a value declared `callable`: a runtime name it resolves is
+    /// limited to user functions, static methods and the builtin names written as literals at
+    /// declared callables (`Module::declared_callable_names`).
+    DeclaredCallableNames,
     Data(DataId),
     /// Data-pool reference carrying the strict-PHP profile of its physical call site.
     ProfiledData {
@@ -241,6 +248,17 @@ pub enum Immediate {
     LocalSlotPair {
         first: LocalSlotId,
         second: LocalSlotId,
+    },
+    /// A hidden property-reference cell plus its typed-reference diagnostic metadata.
+    ///
+    /// `first` is the promoted temporary, `second` its managed-cell owner, and
+    /// `suffix_and_type` packs the 28-bit static diagnostic suffix below the four-bit
+    /// acceptance code selected by the property's declared type. The packing keeps this
+    /// immediate at three words so `Instruction` stays within its stack budget.
+    PropertyRefCell {
+        first: LocalSlotId,
+        second: LocalSlotId,
+        suffix_and_type: u32,
     },
     GlobalName(DataId),
     FunctionRef(FunctionId),
@@ -302,6 +320,45 @@ pub enum Immediate {
     IterStart(IterStartMetadata),
 }
 
+impl Immediate {
+    /// Builds the packed immediate for a typed-property reference promotion.
+    pub fn property_ref_cell(
+        first: LocalSlotId,
+        second: LocalSlotId,
+        suffix: DataId,
+        type_code: u8,
+    ) -> Self {
+        debug_assert!(type_code < 16, "typed-property acceptance code must fit four bits");
+        debug_assert!(suffix.as_raw() < (1 << 28), "property diagnostic data id exceeds 28 bits");
+        Immediate::PropertyRefCell {
+            first,
+            second,
+            suffix_and_type: suffix.as_raw() | (u32::from(type_code) << 28),
+        }
+    }
+
+    /// Returns the slot pair, diagnostic suffix and acceptance code of a property promotion.
+    pub(crate) fn property_ref_cell_parts(
+        &self,
+    ) -> Option<(LocalSlotId, LocalSlotId, DataId, u8)> {
+        let Immediate::PropertyRefCell {
+            first,
+            second,
+            suffix_and_type,
+        } = self
+        else {
+            return None;
+        };
+        Some((
+            *first,
+            *second,
+            DataId::from_raw(*suffix_and_type & ((1 << 28) - 1)),
+            (*suffix_and_type >> 28) as u8,
+        ))
+    }
+}
+
+/// Value-semantic metadata for `Op::IterStart`.
 /// Value-semantic metadata for `Op::IterStart`.
 ///
 /// `state` is the addressable local that owns the iterator's cursor and private relocation
@@ -787,6 +844,21 @@ pub enum CoreBuiltinOp {
     BuiltinDeprecated = 18,
     /// Reads the nearest source call site through compiler-generated diagnostic frames.
     DiagnosticCallerLine = 19,
+    /// Stores the constructing file's `strict_types` state for the next constructor call.
+    PublishCallStrictness = 20,
+    /// Reads the `strict_types` state published by the nearest constructor call site.
+    CallStrictTypes = 21,
+    /// Reads the file published by the nearest real PHP call site.
+    ///
+    /// Prelude code has synthetic spans, so it cannot bake the user call site's file; this
+    /// reads the value `prepare_call_site` published before entering the prelude frame.
+    DiagnosticCallerFile = 22,
+    /// Reports whether a once-per-site runtime notice has not fired yet, marking it as fired.
+    ///
+    /// The flag is module-private storage keyed by the instruction's span, not a PHP global:
+    /// a synthetic `MT_RAND_PHP` constant-expression read uses it to match php-src's
+    /// first-evaluation-only deprecation.
+    DeprecatedOnceBegin = 23,
 }
 
 impl CoreBuiltinOp {
@@ -811,7 +883,11 @@ impl CoreBuiltinOp {
             | Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
             | Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated
-            | Self::DiagnosticCallerLine => BuiltinResultOwnership::NonHeap,
+            | Self::DiagnosticCallerLine
+            | Self::PublishCallStrictness
+            | Self::CallStrictTypes
+            | Self::DiagnosticCallerFile
+            | Self::DeprecatedOnceBegin => BuiltinResultOwnership::NonHeap,
         }
     }
 
@@ -843,6 +919,10 @@ impl CoreBuiltinOp {
             17 => Some(Self::BuiltinWarning),
             18 => Some(Self::BuiltinDeprecated),
             19 => Some(Self::DiagnosticCallerLine),
+            20 => Some(Self::PublishCallStrictness),
+            21 => Some(Self::CallStrictTypes),
+            22 => Some(Self::DiagnosticCallerFile),
+            23 => Some(Self::DeprecatedOnceBegin),
             _ => None,
         }
     }
@@ -865,7 +945,11 @@ impl CoreBuiltinOp {
             | Self::GetIncludedFiles
             | Self::GetErrorHandler
             | Self::GetExceptionHandler
-            | Self::DiagnosticCallerLine => 0,
+            | Self::DiagnosticCallerLine
+            | Self::CallStrictTypes
+            | Self::DiagnosticCallerFile
+            | Self::DeprecatedOnceBegin => 0,
+            Self::PublishCallStrictness => 1,
             Self::GetDefinedFunctions => 1,
         }
     }
@@ -877,6 +961,11 @@ impl CoreBuiltinOp {
             Self::DiagnosticCallerLine => Effects::from_bits_retain(
                 E::READS_GLOBAL.bits() | E::READS_HEAP.bits(),
             ),
+            Self::PublishCallStrictness => E::WRITES_GLOBAL,
+            Self::CallStrictTypes | Self::DiagnosticCallerFile => E::READS_GLOBAL,
+            Self::DeprecatedOnceBegin => {
+                Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::WRITES_GLOBAL.bits())
+            }
             Self::GetDefinedConstants
             | Self::GetDefinedFunctions
             | Self::GetDefinedVars
@@ -1216,6 +1305,7 @@ pub enum Op {
     /// Reinterprets one runtime callable descriptor as an opaque bridge pointer.
     CallablePtr,
     /// Normalizes any supported PHP callable form into an owned descriptor.
+    /// Bool selects scoped factory validation: true throws Error, false throws TypeError.
     NormalizeCallable,
     /// Returns the address of one compiler-emitted PDO callback adapter.
     PdoAdapterAddr,
@@ -1436,6 +1526,9 @@ pub enum Op {
     GeneratorReturn,
     IncludeOnceMark,
     IncludeOnceGuard,
+    /// Reads a program-wide once flag (the `.comm` symbol named by its data immediate) without
+    /// setting it: `true` once an `IncludeOnceGuard` or `IncludeOnceMark` on it has run.
+    IncludeOnceTest,
     FunctionVariantMark,
     FunctionVariantDispatch,
     Acquire,
@@ -1563,6 +1656,7 @@ impl Op {
             | TryPushHandler
             | TryPopHandler => E::WRITES_GLOBAL,
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
+            IncludeOnceTest => E::READS_GLOBAL,
             IToStr | ResourceToStr | StrConcat | StrInterpolate
             | VarDump | PrintR => E::ALLOC_CONCAT,
             // NaN diagnostics and Mixed conversion callbacks may enter PHP handlers.
@@ -1585,10 +1679,12 @@ impl Op {
             // Stores one raw int into preallocated spare capacity and advances the header length.
             ArrayPushReserved => E::WRITES_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
-            | FirstClassCallableNew | CallableValueNew | CallableArrayNew | NormalizeCallable | BufferNew
+            | FirstClassCallableNew | CallableValueNew | CallableArrayNew | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
             }
+            NormalizeCallable => E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
+                | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
             LoadGlobalsArray => E::READS_GLOBAL | E::ALLOC_HEAP | E::REFCOUNT_OP,
             ClosureNew => E::READS_LOCAL | E::WRITES_LOCAL
                 | E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
@@ -2176,6 +2272,7 @@ impl Op {
             GeneratorReturn => "generator_return",
             IncludeOnceMark => "include_once_mark",
             IncludeOnceGuard => "include_once_guard",
+            IncludeOnceTest => "include_once_test",
             FunctionVariantMark => "function_variant_mark",
             FunctionVariantDispatch => "function_variant_dispatch",
             Acquire => "acquire",

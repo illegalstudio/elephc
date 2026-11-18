@@ -7,8 +7,9 @@
 //! Key details:
 //! - Reports the PHP LANGUAGE version, not the elephc compiler's package version, matching
 //!   native `codegen::lower_inst::builtins::lower_phpversion`.
-//! - `phpversion($extension)` answers over the same core extension set eval's
-//!   `extension_loaded` uses, and returns `false` for anything else.
+//! - `phpversion($extension)` answers over the same effective extension set eval's
+//!   `extension_loaded` uses, including host-linked bridge extensions such as `tidy`,
+//!   and returns `false` for anything else.
 
 use super::*;
 

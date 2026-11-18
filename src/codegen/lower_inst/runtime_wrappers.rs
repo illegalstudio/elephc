@@ -165,6 +165,17 @@ pub(in crate::codegen) fn emit_runtime_builtin_wrapper_inline(
 /// Returns the registry/runtime-descriptor ABI used by builtin callable wrappers.
 pub(in crate::codegen) fn runtime_builtin_wrapper_sig(name: &str, sig: &FunctionSig) -> FunctionSig {
     let mut sig = sig.clone();
+    // `array_rand` forwards to a prelude helper whose first parameter is `mixed`: the helper
+    // validates the array and raises PHP's TypeError, so the wrapper must hand it a boxed
+    // value instead of assuming the descriptor already bound an array.
+    if crate::names::php_symbol_key(name.trim_start_matches('\\')) == "array_rand" {
+        if let Some((_, ty)) = sig.params.first_mut() {
+            *ty = PhpType::Mixed;
+        }
+        if let Some(ty) = sig.param_type_exprs.first_mut() {
+            *ty = None;
+        }
+    }
     if let Some(def) = crate::builtins::registry::lookup(name) {
         if let crate::builtins::semantics::BuiltinRuntimeFunctions::One(runtime_fn) =
             def.spec.semantics.runtime_functions
@@ -481,7 +492,8 @@ struct WrapperBuiltinLoweringContext<'a, 'f> {
     builder: &'a mut Builder<'f>,
     data: &'a mut crate::ir::DataPool,
     /// Lowered module functions, so a composing builtin can reproduce the hidden
-    /// argument-collector operand its prelude helper declares.
+    /// argument-collector operand its prelude helper declares, and a generated wrapper call can
+    /// match the callee signature it must satisfy.
     functions: &'a [crate::ir::Function],
     strict_php: bool,
 }
@@ -588,12 +600,14 @@ impl crate::builtins::semantics::BuiltinLoweringContext
         )
     }
 
-    /// Emits a direct call to a prelude helper from a synthetic wrapper.
+    /// Emits a direct call to a declared PHP function from the synthetic wrapper body.
     ///
-    /// A registry builtin whose EIR lowering composes PHP helpers (`clamp`'s mixed path
-    /// is the first with a dynamic callable policy) must reproduce that call here:
-    /// answering a null constant would hand the descriptor caller a value the callee
-    /// never produced.
+    /// A builtin whose semantic lowering composes a prelude helper (`clamp`'s mixed path, or
+    /// `array_rand` forwarding to `__elephc_array_rand`) must reproduce that call here: answering
+    /// a null constant would hand the descriptor caller a value the callee never produced. The
+    /// wrapper interns the callee name in the module data pool exactly like AST lowering does, so
+    /// the callee must be declared in the same module; the registry policy that admits dynamic
+    /// dispatch is what guarantees reachability retained it.
     fn emit_user_call(
         &mut self,
         name: &str,
@@ -601,16 +615,18 @@ impl crate::builtins::semantics::BuiltinLoweringContext
         php_type: PhpType,
         span: Option<crate::span::Span>,
     ) -> crate::builtins::semantics::LoweredBuiltinValue {
-        // A source-declared helper may carry the hidden argument collector that
-        // `func_args::desugar` adds to every frame when the program uses eval or
-        // backtraces. The ordinary lowering appends those operands through
-        // `append_hidden_arguments`; a synthetic wrapper must reproduce them, or the
-        // direct call carries operands the callee signature does not match.
+        // A call generated here bypasses the `func_args::desugar` AST rewrite. Reproduce the
+        // hidden operands that rewrite adds, in the same order: the hidden argument count first,
+        // then the surplus-argument collector array.
         let signature = self
             .functions
             .iter()
-            .find(|function| function.name == name)
+            .find(|function| {
+                crate::names::php_symbol_key(&function.name)
+                    == crate::names::php_symbol_key(name)
+            })
             .map(crate::codegen::callable_signatures::function_signature_from_eir);
+        let mut collector = None;
         if let Some(signature) = signature {
             let actual_count = operands.len();
             if crate::func_args::sig_has_hidden_argc_param(&signature) {
@@ -644,7 +660,7 @@ impl crate::builtins::semantics::BuiltinLoweringContext
                         Op::ConstI64.default_effects(),
                         span,
                     );
-                    let count = self.emit_value(
+                    let boxed = self.emit_value(
                         Op::MixedBox,
                         vec![count.value],
                         None,
@@ -654,25 +670,72 @@ impl crate::builtins::semantics::BuiltinLoweringContext
                     );
                     self.emit_void(
                         Op::ArrayPush,
-                        vec![array.value, count.value],
+                        vec![array.value, boxed.value],
                         None,
                         Op::ArrayPush.default_effects(),
                         span,
                     );
+                    self.emit_void(
+                        Op::Release,
+                        vec![boxed.value],
+                        None,
+                        Op::Release.default_effects(),
+                        span,
+                    );
                 }
+                // The callee can throw (`array_rand`'s ValueError/TypeError). Register the
+                // collector with the exception guard chain so a caught failure releases it; the
+                // normal path unguards and releases it below.
+                let anchor = self.emit_value(
+                    Op::ConstI64,
+                    Vec::new(),
+                    Some(Immediate::I64(0)),
+                    PhpType::Int,
+                    Op::ConstI64.default_effects(),
+                    span,
+                );
+                let guard = self.emit_value(
+                    Op::RuntimeCall,
+                    vec![array.value, anchor.value],
+                    Some(Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::ExceptionGuardOwned,
+                    )),
+                    PhpType::Int,
+                    crate::ir::Effects::WRITES_GLOBAL,
+                    span,
+                );
+                collector = Some((array.value, guard.value));
                 operands.push(array.value);
             }
         }
         let data = self.data.intern_function_name(name);
-        let effects = Op::Call.default_effects();
-        self.emit_value(
+        let result = self.emit_value(
             Op::Call,
             operands,
             Some(Immediate::Data(data)),
             php_type,
-            effects,
+            Op::Call.default_effects(),
             span,
-        )
+        );
+        if let Some((collector, guard)) = collector {
+            self.emit_void(
+                Op::RuntimeCall,
+                vec![guard],
+                Some(Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::ExceptionUnguardOwned,
+                )),
+                crate::ir::Effects::WRITES_GLOBAL,
+                span,
+            );
+            self.emit_void(
+                Op::Release,
+                vec![collector],
+                None,
+                Op::Release.default_effects(),
+                span,
+            );
+        }
+        result
     }
 
     /// A wrapper's operands are its own parameters, never a caller's locals, so there is

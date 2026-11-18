@@ -8,7 +8,8 @@
 //!
 //! Key details:
 //! - Existence probes fail closed as `false` on invalid ABI inputs.
-//! - Constant fetch retains the boxed cell before handing it back to generated code.
+//! - Constant fetch retains the boxed cell before handing it back to generated code; an
+//!   undefined constant comes back as PHP's `Error` throwable.
 
 use super::util::abi_name_to_string;
 #[cfg(not(test))]
@@ -174,7 +175,12 @@ unsafe fn eval_constant_fetch_inner(
     };
     clear_result(out);
     let Some(value) = context.constant(&name) else {
-        return EvalStatus::RuntimeFatal.code();
+        // PHP throws a catchable `Error` for an undefined constant.
+        let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+        return match crate::interpreter::execute_context_undefined_constant(context, &name, &mut values) {
+            Ok(outcome) => super::util::write_outcome(outcome, out).code(),
+            Err(status) => status.code(),
+        };
     };
     if out.is_null() {
         return EvalStatus::Ok.code();

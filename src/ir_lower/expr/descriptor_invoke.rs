@@ -52,6 +52,9 @@ pub(super) fn emit_rooted_expr_call(
     let mut operands = vec![callback.value];
     operands.extend(lower_args_with_signature(ctx, signature, args));
     let conversion_roots = root_unpublished_argument_conversions(ctx, &mut operands[1..], span);
+    // `ExprCall` can dispatch a first-class `__construct` callable; publish the invocation
+    // site's `strict_types` after the arguments are evaluated.
+    super::object_construction::publish_call_strictness(ctx, span);
     let call = ctx.emit_value(
         Op::ExprCall,
         operands,
@@ -550,6 +553,9 @@ pub(super) fn emit_callable_descriptor_invoke(
     // or a separate retain of a prebuilt Mixed box. Root both raw and boxed
     // owners so a throw cannot bypass their EIR retirement.
     let (arg_container, container_owner) = root_owned_call_operand(ctx, arg_container, span);
+    // The descriptor may target a first-class `__construct` callable; php-src binds the
+    // invocation site's `strict_types`, so publish it once the arguments are evaluated.
+    super::object_construction::publish_call_strictness(ctx, span);
     let strict_types = ctx.builder.emit_const_bool(crate::source::current_strict_types());
     let result = emit_descriptor_invoker_value(
         ctx,

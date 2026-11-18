@@ -60,7 +60,15 @@ pub(in crate::interpreter) fn eval_inherited_abstract_setter_write(
         EvalParameterType::intersection(variants)
     } else { EvalParameterType::new(variants, parameter_type.allows_null()) };
     context.push_class_scope(owner.clone());
-    let bound = eval_method_parameter_value(&parameter_type, value, context, values);
+    let bound = eval_method_parameter_value_or_throw(
+        &format!("{owner}::${property_name}::set"),
+        1,
+        Some("value"),
+        &parameter_type,
+        value,
+        context,
+        values,
+    );
     // Restore the caller even if binding failed or user coercion threw.
     context.pop_class_scope();
     match bound {

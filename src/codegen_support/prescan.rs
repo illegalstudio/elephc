@@ -84,6 +84,14 @@ pub(crate) fn collect_constants(
         ("DIRECTORY_SEPARATOR", str_const(std::path::MAIN_SEPARATOR.to_string())),
         ("FNM_NOESCAPE", int_const(fnm_noescape)),
         ("FNM_PATHNAME", int_const(fnm_pathname)),
+        ("CODESET", int_const(match target_platform { Platform::MacOS => 0, Platform::Linux => 14, Platform::Windows => panic!("Windows target is not yet supported (see issue #379)") })),
+        ("LC_ALL", int_const(i64::from(target_platform.lc_all()))),
+        ("LC_COLLATE", int_const(match target_platform { Platform::MacOS => 1, Platform::Linux => 3, Platform::Windows => panic!("Windows target is not yet supported (see issue #379)") })),
+        ("LC_CTYPE", int_const(i64::from(target_platform.lc_ctype()))),
+        ("LC_MESSAGES", int_const(match target_platform { Platform::MacOS => 6, Platform::Linux => 5, Platform::Windows => panic!("Windows target is not yet supported (see issue #379)") })),
+        ("LC_MONETARY", int_const(match target_platform { Platform::MacOS => 3, Platform::Linux => 4, Platform::Windows => panic!("Windows target is not yet supported (see issue #379)") })),
+        ("LC_NUMERIC", int_const(match target_platform { Platform::MacOS => 4, Platform::Linux => 1, Platform::Windows => panic!("Windows target is not yet supported (see issue #379)") })),
+        ("LC_TIME", int_const(match target_platform { Platform::MacOS => 5, Platform::Linux => 2, Platform::Windows => panic!("Windows target is not yet supported (see issue #379)") })),
         ("ICONV_IMPL", str_const(iconv_impl(target_platform == Platform::MacOS).to_string())),
         ("ICONV_VERSION", str_const(ICONV_VERSION.to_string())),
     ];
@@ -120,9 +128,32 @@ fn collect_constant_decls(
     for stmt in stmts {
         match &stmt.kind {
             StmtKind::ConstDecl { name, value } => {
-                constants
-                    .entry(name.clone())
-                    .or_insert((value.kind.clone(), constant_expr_type(&value.kind)));
+                // A user constant whose initializer names an already-known constant keeps that
+                // constant's value: `const X = MT_RAND_PHP;` then reads as the literal `1`
+                // instead of re-evaluating the (deprecated) read at every use.
+                //
+                // Folding only feeds this READ map: the declaration statement still lowers its
+                // original `ConstRef(MT_RAND_PHP)` and fires the one deprecation there, and an
+                // alias chain (`const X = Y;` where `Y = MT_RAND_PHP`) inherits the folded
+                // value without re-deprecating. Runtime-materialized observables such as
+                // `PHP_BINARY` are excluded below because their value is not known yet.
+                let resolved = match &value.kind {
+                    // `PHP_BINARY` is only a placeholder until the runtime materializer
+                    // resolves it per fetch; folding an alias to that placeholder would
+                    // replace the executable path with an empty string.
+                    ExprKind::ConstRef(reference)
+                        if reference.as_str().trim_start_matches('\\') != "PHP_BINARY" =>
+                    {
+                        constants
+                            .get(reference.as_str().trim_start_matches('\\'))
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                (value.kind.clone(), constant_expr_type(&value.kind))
+                            })
+                    }
+                    _ => (value.kind.clone(), constant_expr_type(&value.kind)),
+                };
+                constants.entry(name.clone()).or_insert(resolved);
             }
             StmtKind::ExprStmt(expr) => {
                 if let ExprKind::FunctionCall { name, args } = &expr.kind {

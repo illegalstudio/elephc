@@ -64,6 +64,13 @@ thread_local! {
     static ACTIVE_FOLD_TARGET: RefCell<Option<Target>> = const { RefCell::new(None) };
     static ACTIVE_FOLD_USER_FUNCTIONS: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
     static ACTIVE_TARGET_GUARD_CONDITION: RefCell<bool> = const { RefCell::new(false) };
+    static ACTIVE_DEPRECATION_READING_CONSTANTS: RefCell<Option<Rc<HashSet<String>>>> = const { RefCell::new(None) };
+}
+
+/// Reports whether a user class constant named `name` may read a deprecated constant when it is
+/// first evaluated, so a read of it raises `E_DEPRECATED` and is not a pure expression.
+pub(in crate::optimize) fn class_constant_may_deprecate(name: &str) -> bool {
+    ACTIVE_DEPRECATION_READING_CONSTANTS.with(|slot| slot.borrow().as_ref().is_some_and(|names| names.contains(name)))
 }
 
 /// Borrows the active function-effect summary without cloning its whole map.
@@ -655,6 +662,8 @@ struct StaticMethodBody<'a> {
 /// Holds callable summaries and dispatch metadata shared by optimizer passes.
 #[derive(Clone)]
 struct CallableEffectAnalysis {
+    /// User class constant names whose initializer reads a deprecated constant.
+    deprecation_reading_constants: Rc<HashSet<String>>,
     function_effects: FunctionEffectLookup,
     static_method_effects: Rc<HashMap<String, Effect>>,
     instance_method_effects: Rc<HashMap<String, Effect>>,
@@ -667,6 +676,7 @@ impl CallableEffectAnalysis {
         let (function_effects, static_method_effects, instance_method_effects) =
             compute_program_callable_effects(program);
         Self {
+            deprecation_reading_constants: Rc::new(effects::deprecation_reading_class_constants(program)),
             function_effects: FunctionEffectLookup::new(function_effects, Rc::new(
                 return_boundaries::collect_return_boundaries(program).into_iter()
                     .map(|(name, facts)| (name, facts.declared_result())).collect())),
@@ -695,7 +705,10 @@ fn with_callable_effect_analysis<R>(
                         instance_slot.replace(Some(Rc::clone(&analysis.instance_method_effects)));
                     let previous_metadata = metadata_slot
                         .replace(Some(Rc::clone(&analysis.instance_dispatch_metadata)));
+                    let previous_constants = ACTIVE_DEPRECATION_READING_CONSTANTS
+                        .with(|slot| slot.replace(Some(Rc::clone(&analysis.deprecation_reading_constants))));
                     let result = f();
+                    ACTIVE_DEPRECATION_READING_CONSTANTS.with(|slot| slot.replace(previous_constants));
                     metadata_slot.replace(previous_metadata);
                     instance_slot.replace(previous_instance_methods);
                     static_slot.replace(previous_static_methods);
@@ -717,6 +730,7 @@ fn with_callable_effects<R>(
     f: impl FnOnce() -> R,
 ) -> R {
     let analysis = CallableEffectAnalysis {
+        deprecation_reading_constants: Rc::new(HashSet::new()),
         function_effects: FunctionEffectLookup::new(Rc::new(function_effects), Rc::new(HashMap::new())),
         static_method_effects: Rc::new(static_method_effects),
         instance_method_effects: Rc::new(instance_method_effects),

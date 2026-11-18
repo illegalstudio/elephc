@@ -10,12 +10,100 @@
 //!   order so later `ConstRef` expressions can keep precise PHP metadata.
 //! - Literal `defined("NAME")` folds using global constants plus scope-aware
 //!   `Class::CONST` existence from class/interface/enum metadata.
+//! - `constant("NAME")` of a deprecated constant (`DATE_RFC7231`) raises `E_DEPRECATED`
+//!   through `emit_constant_deprecation`, which scoped constant reads share.
 
-use crate::ir::{Immediate, Op, Ownership};
+use crate::ir::{CoreBuiltinOp, Immediate, Op, Ownership, Terminator};
 use crate::ir_lower::context::{value_ir_type, LoweredValue, LoweringContext};
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{Expr, ExprKind};
+use crate::span::Span;
 use crate::types::PhpType;
+
+/// Emits php-src's `E_DEPRECATED` for a `MT_RAND_PHP` constant-expression read.
+///
+/// `report_span` supplies the file and line (a class-constant access reports the access
+/// site); `declaration_span` identifies the declaration whose value is evaluated, so a
+/// lazily-evaluated class constant notices only once no matter how many sites read it.
+pub(crate) fn emit_mt_rand_php_deprecation(
+    ctx: &mut LoweringContext<'_, '_>,
+    report_span: Span,
+    declaration_span: Span,
+) {
+    // The flag is keyed by the DECLARATION span, not the reported one: every access site of a
+    // class constant shares one notice even though each reports its own line.
+    let first = ctx.emit_value(
+        Op::CoreBuiltin,
+        Vec::new(),
+        Some(Immediate::I64(CoreBuiltinOp::DeprecatedOnceBegin.as_i64())),
+        PhpType::Bool,
+        CoreBuiltinOp::DeprecatedOnceBegin.effects(),
+        Some(declaration_span),
+    );
+    let deprecate = ctx.builder.create_named_block("mt_rand_php_deprecation", Vec::new());
+    let done = ctx
+        .builder
+        .create_named_block("mt_rand_php_deprecation_done", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: first.value,
+        then_target: deprecate,
+        then_args: Vec::new(),
+        else_target: done,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(deprecate);
+    let message_data = ctx.intern_string(
+        "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937",
+    );
+    let message = ctx.emit_value(
+        Op::ConstStr,
+        Vec::new(),
+        Some(Immediate::Data(message_data)),
+        PhpType::Str,
+        Op::ConstStr.default_effects(),
+        Some(report_span),
+    );
+    let level = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(8_192)),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(report_span),
+    );
+    let file_text = crate::source::canonical_span_source_path(report_span)
+        .or_else(|| ctx.source_path().map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string());
+    let file_data = ctx.intern_string(&file_text);
+    let file = ctx.emit_value(
+        Op::ConstStr,
+        Vec::new(),
+        Some(Immediate::Data(file_data)),
+        PhpType::Str,
+        Op::ConstStr.default_effects(),
+        Some(report_span),
+    );
+    let line = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(i64::from(report_span.line))),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(report_span),
+    );
+    ctx.emit_void(
+        Op::CoreBuiltin,
+        vec![message.value, level.value, file.value, line.value],
+        Some(Immediate::I64(CoreBuiltinOp::BuiltinDeprecated.as_i64())),
+        CoreBuiltinOp::BuiltinDeprecated.effects(),
+        Some(report_span),
+    );
+    ctx.builder.terminate(Terminator::Br {
+        target: done,
+        args: Vec::new(),
+    });
+    ctx.builder.position_at_end(done);
+}
 
 /// Records `define("NAME", value)` constants for later source-order references.
 pub(super) fn register_static_define_call(
@@ -139,7 +227,206 @@ pub(super) fn lower_static_constant_call(
     }
     let constant_name = static_constant_name_arg(&args[0])?;
     let referenced = Name::unqualified(constant_name.trim_start_matches('\\'));
+    // php-src reports a deprecated constant from the fetch, so `constant()` reports it too;
+    // `lower_const_ref` raises it at this call's span.
     Some(lower_const_ref(ctx, &referenced, expr))
+}
+
+thread_local! {
+    /// Nesting depth of lowerings that re-evaluate an already evaluated constant initializer,
+    /// during which deprecated constant reads stay silent.
+    static SUPPRESSED_CONSTANT_DEPRECATIONS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Runs `f` with deprecated constant reads silenced, restoring the previous depth on exit.
+pub(crate) fn with_constant_deprecations_suppressed<T>(f: impl FnOnce() -> T) -> T {
+    /// Restores the suppression depth when the scope exits, including on unwind.
+    struct Reset;
+    impl Drop for Reset {
+        /// Leaves one suppression level.
+        fn drop(&mut self) {
+            SUPPRESSED_CONSTANT_DEPRECATIONS.with(|depth| depth.set(depth.get() - 1));
+        }
+    }
+    SUPPRESSED_CONSTANT_DEPRECATIONS.with(|depth| depth.set(depth.get() + 1));
+    let _reset = Reset;
+    f()
+}
+
+/// Reports whether deprecated constant reads are silenced at this point of the lowering.
+pub(crate) fn constant_deprecations_suppressed() -> bool {
+    SUPPRESSED_CONSTANT_DEPRECATIONS.with(|depth| depth.get() > 0)
+}
+
+/// Lowers the name resolver's inline `__elephc_builtin_deprecated(...)` marker to `true`
+/// while a stored constant value is being re-evaluated.
+///
+/// `define("FOO", DATE_RFC7231)` stores its argument after the name resolver rewrote the read
+/// into `__elephc_builtin_deprecated(message) ? value : value`. The `define()` call reports
+/// once; a later `FOO` read re-lowers the stored expression and must stay silent, as php-src
+/// only stored the computed value. The marker's message is a literal, so skipping the call
+/// loses no side effect.
+pub(super) fn lower_silenced_constant_deprecation_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &Name,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if SUPPRESSED_CONSTANT_DEPRECATIONS.with(|depth| depth.get() == 0)
+        || php_symbol_key(name.as_str().trim_start_matches('\\')) != "__elephc_builtin_deprecated"
+    {
+        return None;
+    }
+    Some(super::emit_bool_literal(ctx, true, Some(expr.span)))
+}
+
+/// Emits PHP's `E_DEPRECATED` for a deprecated constant read that reaches lowering.
+///
+/// A read written inside a declared initializer (class or interface constant value, property
+/// default, parameter default) deprecates on its first evaluation only: php-src evaluates such
+/// an initializer once and caches it, while elephc lowers it again at every use. A per-site
+/// test-and-set flag (`Op::IncludeOnceGuard` on a label derived from the read's span) keeps
+/// the notice to the first evaluation. Any other read deprecates every time it runs.
+pub(crate) fn emit_constant_read_deprecation(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: Span,
+) {
+    emit_read_deprecation(ctx, message, span, span);
+}
+
+/// Emits the deprecation of a deprecated GLOBAL constant read (`DATE_RFC7231`, `MT_RAND_PHP`)
+/// that reaches lowering. Inside an initializer evaluation the frame decides the line and
+/// the once flag; otherwise it behaves like [`emit_constant_read_deprecation`].
+pub(crate) fn emit_global_constant_read_deprecation(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: Span,
+) {
+    if let Some(frame) = crate::ir_lower::initializer_evaluation::current_frame() {
+        crate::ir_lower::initializer_evaluation::emit_global_read(ctx, &frame, message, span);
+        return;
+    }
+    emit_read_deprecation(ctx, message, span, span);
+}
+
+/// Shared body of the read emitters: `span` keys the once flag of a read inside a declared
+/// initializer, `line_span` is reported.
+pub(crate) fn emit_read_deprecation(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: Span,
+    line_span: Span,
+) {
+    // A read without a source node is one the compiler synthesized, such as a builtin's
+    // `SUNFUNCS_RET_STRING` default filling an omitted argument; php-src's internal functions
+    // never fetch those constants, so nothing is reported.
+    if SUPPRESSED_CONSTANT_DEPRECATIONS.with(|depth| depth.get() > 0) || !span.identifies_a_node() {
+        return;
+    }
+    if !crate::ir_lower::initializer_reads::is_declared_initializer_span(ctx, span) {
+        emit_constant_deprecation(ctx, message, line_span);
+        return;
+    }
+    let mut line_span = line_span;
+    if let Some((root, scoped)) = crate::ir_lower::initializer_reads::parameter_default_containing(ctx, span) {
+        line_span = crate::ir_lower::initializer_reads::parameter_default_line(&root, scoped, span);
+        // `RECV_INIT` caches only a value that is not refcounted, so a default building an
+        // array or a string is evaluated, and reports, on every omitted call.
+        if crate::ir_lower::initializer_reads::parameter_default_is_refcounted(ctx, ctx.current_class.as_deref(), &root) {
+            emit_constant_deprecation(ctx, message, line_span);
+            return;
+        }
+    }
+    let label = format!(
+        "_constant_deprecation_once_{}_{}_{}",
+        span.source_id(),
+        span.line,
+        span.col
+    );
+    let message = message.to_string();
+    crate::ir_lower::initializer_evaluation::emit_until_success(ctx, &label, span, |ctx| {
+        emit_constant_deprecation(ctx, &message, line_span)
+    });
+}
+
+/// Emits PHP's `E_DEPRECATED` for a deprecated constant read at `span`.
+///
+/// This is the EIR `__elephc_builtin_deprecated(message)` lowers to: the message, level 8192,
+/// and the read's file and line go through the ordinary error-handler and reporting path. The
+/// name resolver covers reads it can name statically; lowering covers reads whose declaring
+/// class is only known from the class hierarchy (`self::`, `parent::`, `static::`, a user
+/// subclass) and `constant()`.
+pub(crate) fn emit_constant_deprecation(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: crate::span::Span,
+) {
+    let line = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(i64::from(span.line))),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(span),
+    );
+    emit_constant_deprecation_with_line(ctx, message, span, line, false);
+}
+
+/// [`emit_constant_deprecation`] with the reported line already lowered as an `int` value.
+/// `caller_file` reports the file the current call was made from, for a line that is the
+/// caller's (`DiagnosticCallerLine`).
+pub(crate) fn emit_constant_deprecation_with_line(
+    ctx: &mut LoweringContext<'_, '_>,
+    message: &str,
+    span: crate::span::Span,
+    line: LoweredValue,
+    caller_file: bool,
+) {
+    let message_data = ctx.intern_string(message);
+    let message = ctx.emit_value(
+        Op::ConstStr,
+        Vec::new(),
+        Some(Immediate::Data(message_data)),
+        PhpType::Str,
+        Op::ConstStr.default_effects(),
+        Some(span),
+    );
+    let level = ctx.emit_value(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(8_192)),
+        PhpType::Int,
+        Op::ConstI64.default_effects(),
+        Some(span),
+    );
+    let file = if caller_file {
+        let operation = crate::ir::CoreBuiltinOp::DiagnosticCallerFile;
+        ctx.emit_value(Op::CoreBuiltin, Vec::new(), Some(Immediate::I64(operation.as_i64())), PhpType::Str, operation.effects(), Some(span))
+    } else {
+        // The reporting site's own file: a class constant evaluated through an included
+        // file's fetch reports that file, not the one whose code is being lowered.
+        let file = crate::source::canonical_span_source_path(span)
+            .or_else(|| ctx.source_path().map(str::to_string))
+            .unwrap_or_else(|| "unknown".to_string());
+        let file_data = ctx.intern_string(&file);
+        ctx.emit_value(
+            Op::ConstStr,
+            Vec::new(),
+            Some(Immediate::Data(file_data)),
+            PhpType::Str,
+            Op::ConstStr.default_effects(),
+            Some(span),
+        )
+    };
+    let operation = crate::ir::CoreBuiltinOp::BuiltinDeprecated;
+    ctx.emit_value(
+        Op::CoreBuiltin,
+        vec![message.value, level.value, file.value, line.value],
+        Some(Immediate::I64(operation.as_i64())),
+        PhpType::Bool,
+        operation.effects(),
+        Some(span),
+    );
 }
 
 /// Returns the literal constant name from `constant()`'s single argument.
@@ -164,6 +451,11 @@ pub(super) fn lower_const_ref(
     name: &Name,
     expr: &Expr,
 ) -> LoweredValue {
+    // Ordinary reads of a deprecated constant were rewritten into an inline deprecation by the
+    // name resolver; a read that gets here sits in a constant expression or `constant()`.
+    if let Some(message) = crate::ir_lower::initializer_reads::global_read_deprecation(name.as_str()) {
+        emit_global_constant_read_deprecation(ctx, message, expr.span);
+    }
     if elephc_builtin_contract::canonical_constant_name(name.as_str()) == "PHP_BINARY" {
         return ctx.emit_value(
             Op::RuntimeCall,
@@ -238,7 +530,11 @@ fn lower_constant_value(
         ExprKind::Null => emit_typed_constant(ctx, Op::ConstNull, None, php_type, expr),
         other => {
             let synthetic = Expr::new(other, expr.span);
-            super::lower_expr(ctx, &synthetic)
+            // This re-evaluates a user constant's stored initializer at a read. php-src
+            // evaluated it once, when the `const` statement or `define()` ran, and reported any
+            // deprecated constant inside it then; the read itself reports nothing, including
+            // the name resolver's inline marker a `define()` argument carries.
+            with_constant_deprecations_suppressed(|| super::lower_expr(ctx, &synthetic))
         }
     }
 }

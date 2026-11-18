@@ -1,0 +1,265 @@
+//! Purpose:
+//! Records, per class, the methods its used traits declare abstract, so the class schema can
+//! treat them as PHP does: requirements on the class, not declarations of it.
+//!
+//! Called from:
+//! - `crate::types::checker::driver` right after trait flattening, next to
+//!   `collect_trait_default_origins`.
+//! - `super::methods` while class methods are applied to the schema.
+//!
+//! Key details:
+//! - Flattening merges a trait's abstract method into the class like any other member, so the
+//!   schema saw `abstract function invalidate()` as written on the class: an inherited
+//!   implementation then read as a re-abstraction ("Cannot make concrete method abstract"), or as
+//!   an override of a final method, and `#[\Override]` on the method that satisfies the
+//!   requirement found no target.
+//! - Requirements are collected through nested trait uses, by trait name, case-insensitively,
+//!   and include the `as` aliases of abstract trait methods, which flattening makes abstract too.
+//!   A requirement a trait implements itself, or that another trait it uses implements, is
+//!   satisfied for that trait's users, and an alias of a method its trait implements is
+//!   concrete, not required. A class's own `use` list keeps such a requirement, as PHP does.
+//!   Each trait's set is memoized once complete, so traits shared along many `use` paths are not
+//!   walked again per path.
+//! - Methods the class body declares itself are recorded too: a requirement satisfied by an
+//!   inherited method is skipped only when the abstract method is the trait's, never when the
+//!   class itself re-declares the method abstract.
+//! - A skipped requirement still checks the inherited signature against it
+//!   (`validate_inherited_implementation`), with the rules enums apply to trait requirements.
+
+use std::collections::{HashMap, HashSet};
+
+use crate::errors::CompileError;
+use crate::names::php_symbol_key;
+use crate::parser::ast::{ClassMethod, Program, Stmt, StmtKind, TraitAdaptation, TraitUse};
+use crate::types::traits::FlattenedClass;
+use crate::types::{FunctionSig, PhpType};
+
+use super::super::super::Checker;
+use super::super::class_constants::strict_type_accepts;
+use super::super::validation::{build_method_sig, validate_abstract_trait_signature};
+
+/// The trait requirements of one class.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TraitMethodRequirements {
+    /// Method keys (`php_symbol_key`) declared abstract by a used trait, directly or nested.
+    pub required: HashSet<String>,
+    /// Method keys the class body declares itself.
+    pub declared: HashSet<String>,
+}
+
+impl TraitMethodRequirements {
+    /// Whether `key` is a trait requirement the class body does not declare itself, so the
+    /// flattened abstract method is the trait's.
+    pub(crate) fn is_imported_requirement(&self, key: &str) -> bool {
+        self.required.contains(key) && !self.declared.contains(key)
+    }
+}
+
+/// One trait declaration's abstract and concrete method keys and the trait uses it declares
+/// itself.
+struct TraitShape {
+    abstract_methods: HashSet<String>,
+    concrete_methods: HashSet<String>,
+    uses: Vec<TraitUse>,
+}
+
+/// What a trait (or a set of `use` blocks) brings into its user once flattened: the method keys
+/// still abstract, and those it implements. Aliases follow the method they select.
+#[derive(Debug, Clone, Default)]
+struct TraitSummary {
+    required: HashSet<String>,
+    provided: HashSet<String>,
+}
+
+/// Collects the trait requirements of every class that uses a trait, keyed by class name.
+pub(crate) fn collect_trait_method_requirements(
+    program: &Program,
+    classes: &[FlattenedClass],
+) -> HashMap<String, TraitMethodRequirements> {
+    let mut traits = HashMap::new();
+    collect_trait_shapes(program, &mut traits);
+    let mut walk = RequirementWalk { traits: &traits, done: HashMap::new(), visiting: HashSet::new() };
+    let mut requirements = HashMap::new();
+    collect_class_requirements(program, classes, &mut walk, &mut requirements);
+    requirements
+}
+
+/// The trait index plus the memo of each trait's completed requirement set, shared by every
+/// class: a trait reached along several `use` paths is walked once, so a diamond of shared
+/// nested traits stays linear instead of exponential.
+struct RequirementWalk<'a> {
+    traits: &'a HashMap<String, TraitShape>,
+    /// Completed summaries by trait key.
+    done: HashMap<String, TraitSummary>,
+    /// Traits on the current path, only to break use cycles (flattening reports those).
+    visiting: HashSet<String>,
+}
+
+/// Indexes every trait declaration, including those nested in namespace blocks.
+fn collect_trait_shapes(program: &[Stmt], traits: &mut HashMap<String, TraitShape>) {
+    for statement in program {
+        match &statement.kind {
+            StmtKind::TraitDecl { name, trait_uses, methods, .. } => {
+                let (abstract_methods, concrete_methods) = method_keys_by_abstractness(methods);
+                traits.insert(php_symbol_key(name), TraitShape {
+                    abstract_methods,
+                    concrete_methods,
+                    uses: trait_uses.clone(),
+                });
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_trait_shapes(body, traits),
+            _ => {}
+        }
+    }
+}
+
+/// Records the requirements of each class declaration that uses at least one trait.
+fn collect_class_requirements(
+    program: &[Stmt],
+    classes: &[FlattenedClass],
+    walk: &mut RequirementWalk<'_>,
+    requirements: &mut HashMap<String, TraitMethodRequirements>,
+) {
+    for statement in program {
+        match &statement.kind {
+            StmtKind::ClassDecl { name, trait_uses, methods, .. } => {
+                if trait_uses.is_empty() || !classes.iter().any(|class| class.name == *name) {
+                    continue;
+                }
+                let required = summary_of_uses(trait_uses, walk).required;
+                if required.is_empty() {
+                    continue;
+                }
+                let declared = methods.iter().map(|method| php_symbol_key(&method.name)).collect();
+                requirements.insert(name.clone(), TraitMethodRequirements { required, declared });
+            }
+            StmtKind::NamespaceBlock { body, .. } => {
+                collect_class_requirements(body, classes, walk, requirements);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Returns what `trait_key` brings into a user: its own abstract methods plus the requirements
+/// of the traits it uses that it does not implement itself (`trait A { use N; function foo() }`
+/// leaves `N::foo` satisfied), and its own concrete methods plus those it imports. Each trait is
+/// computed once and memoized in `walk.done`; `walk.visiting` only breaks use cycles.
+fn trait_summary(trait_key: &str, walk: &mut RequirementWalk<'_>) -> TraitSummary {
+    if let Some(summary) = walk.done.get(trait_key) {
+        return summary.clone();
+    }
+    let traits = walk.traits;
+    let Some(shape) = traits.get(trait_key) else { return TraitSummary::default() };
+    if !walk.visiting.insert(trait_key.to_string()) {
+        return TraitSummary::default();
+    }
+    let used = summary_of_uses(&shape.uses, walk);
+    let mut required = shape.abstract_methods.clone();
+    // A requirement another trait used here implements is satisfied too: flattening gives the
+    // trait that concrete method (`trait W { use NeedsFoo, GivesFoo; }`), so its users see no
+    // abstract `foo`. Only a class's own `use` list keeps such a requirement.
+    required.extend(used.required.into_iter().filter(|key| {
+        !shape.concrete_methods.contains(key) && !used.provided.contains(key)
+    }));
+    let mut provided = shape.concrete_methods.clone();
+    provided.extend(used.provided.into_iter().filter(|key| !shape.abstract_methods.contains(key)));
+    let summary = TraitSummary { required, provided };
+    walk.visiting.remove(trait_key);
+    walk.done.insert(trait_key.to_string(), summary.clone());
+    summary
+}
+
+/// Returns what `uses` bring into their user. An `as` alias takes the abstractness of the
+/// method it selects (`use T { foo as bar; }` requires `bar` only while `T::foo` is still
+/// abstract).
+fn summary_of_uses(uses: &[TraitUse], walk: &mut RequirementWalk<'_>) -> TraitSummary {
+    let mut summary = TraitSummary::default();
+    for use_decl in uses {
+        let per_trait: HashMap<String, TraitSummary> = use_decl
+            .trait_names
+            .iter()
+            .map(|name| {
+                let key = php_symbol_key(name.as_str());
+                let methods = trait_summary(&key, walk);
+                (key, methods)
+            })
+            .collect();
+        for adaptation in &use_decl.adaptations {
+            let TraitAdaptation::Alias { trait_name, method, alias: Some(alias), .. } = adaptation else {
+                continue;
+            };
+            let method_key = php_symbol_key(method);
+            let selected: Vec<&TraitSummary> = match trait_name {
+                Some(name) => per_trait.get(&php_symbol_key(name.as_str())).into_iter().collect(),
+                None => per_trait.values().collect(),
+            };
+            if selected.iter().any(|methods| methods.provided.contains(&method_key)) {
+                summary.provided.insert(php_symbol_key(alias));
+            } else if selected.iter().any(|methods| methods.required.contains(&method_key)) {
+                summary.required.insert(php_symbol_key(alias));
+            }
+        }
+        // `insteadof` drops the excluded traits' bodies (aliases above still read them, as
+        // flattening does), so `use Needs, Gives { Needs::foo insteadof Gives; }` keeps `foo`
+        // abstract. The excluded abstract methods stay requirements.
+        let mut per_trait = per_trait;
+        for adaptation in &use_decl.adaptations {
+            let TraitAdaptation::InsteadOf { method, instead_of, .. } = adaptation else { continue };
+            for excluded in instead_of {
+                if let Some(methods) = per_trait.get_mut(&php_symbol_key(excluded.as_str())) {
+                    methods.provided.remove(&php_symbol_key(method));
+                }
+            }
+        }
+        for methods in per_trait.into_values() {
+            summary.required.extend(methods.required);
+            summary.provided.extend(methods.provided);
+        }
+    }
+    summary
+}
+
+/// Splits the keys of `methods` into the abstract ones and the concrete ones.
+fn method_keys_by_abstractness(methods: &[ClassMethod]) -> (HashSet<String>, HashSet<String>) {
+    let (abstract_methods, concrete_methods): (Vec<_>, Vec<_>) =
+        methods.iter().partition(|method| method.is_abstract);
+    let keys = |methods: Vec<&ClassMethod>| methods.into_iter().map(|method| php_symbol_key(&method.name)).collect();
+    (keys(abstract_methods), keys(concrete_methods))
+}
+
+/// Checks that an inherited implementation is compatible with the trait requirement it
+/// satisfies: parameters may only widen and a declared return type must be honoured, as PHP
+/// reports `Declaration of P::foo() must be compatible with T::foo()` otherwise.
+pub(crate) fn validate_inherited_implementation(
+    checker: &Checker,
+    class: &FlattenedClass,
+    required: &ClassMethod,
+    inherited: &FunctionSig,
+) -> Result<(), CompileError> {
+    let mut required = required.clone();
+    required.substitute_relative_class_types(&class.name, None);
+    let required_sig = build_method_sig(checker, &required, &class.name)?;
+    validate_abstract_trait_signature(
+        checker, required.span, &class.name, &required.name, inherited, &required_sig,
+    )?;
+    if required_sig.by_ref_return && !inherited.by_ref_return {
+        return Err(CompileError::new(required.span, &format!(
+            "Cannot remove by-reference return when implementing trait method: {}::{}",
+            class.name, required.name,
+        )));
+    }
+    let late_static = required.return_type.as_ref().is_some_and(|hint| hint.contains_late_static());
+    if required_sig.declared_return
+        && !late_static
+        && !matches!(inherited.return_type, PhpType::Never)
+        && (!inherited.declared_return
+            || !strict_type_accepts(checker, &required_sig.return_type, &inherited.return_type, false))
+    {
+        return Err(CompileError::new(required.span, &format!(
+            "Cannot change return type when implementing trait method: {}::{}",
+            class.name, required.name,
+        )));
+    }
+    Ok(())
+}

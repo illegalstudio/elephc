@@ -292,7 +292,7 @@ fn try_lower_source_at_for_target_with_reachability(
         crate::php_version::PhpVersion::default(),
         &mut prelude_inventory,
     );
-    let ast = crate::core_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::core_prelude::inject_if_used(ast, false, false, false, &mut prelude_inventory);
     let ast = crate::time_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::clamp_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -300,6 +300,14 @@ fn try_lower_source_at_for_target_with_reachability(
     let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::tidy_prelude::inject_if_used(
+        ast,
+        false,
+        "",
+        "",
+        false,
+        &mut prelude_inventory,
+    );
     let ast = crate::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);

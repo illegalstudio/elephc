@@ -139,6 +139,8 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `Return(Option<Expr>)` | `return $x;` or `return;` |
 | `Break(usize)` | `break;`, `break 2;` |
 | `Continue(usize)` | `continue;`, `continue 2;` |
+| `Goto(String)` | `goto name;`. Exists only until `goto` lowering, which runs on each file right after conditional compilation and rewrites every jump into loops and `continue N` |
+| `GotoLabel(String)` | `name:` at statement position. Validated and removed by `goto` lowering; later passes treat one as a statement that does nothing |
 | `Include { path, once, required }` | `include 'file.php';` |
 | `IncludeOnceMark { label }` | Internal resolver lowering for regular `include` / `require`, marking the resolved file as loaded for later `*_once` guards |
 | `IncludeOnceGuard { label, body }` | Internal resolver lowering for `include_once` / `require_once`; codegen checks a per-file flag before emitting the guarded body |
@@ -288,6 +290,14 @@ references by specialization before EIR lowering. See
 | `TraitAdaptation` | `Alias { trait_name: Option<Name>, method, alias: Option<String>, visibility: Option<Visibility> }`, `InsteadOf { trait_name: Option<Name>, method, instead_of: Vec<Name> }` | PHP-style trait conflict resolution and aliasing |
 | `UseItem` / `UseKind` | `kind`, `name`, `alias` | Namespace import entries for `use`, `use function`, `use const`, and group-use declarations |
 | `CallableTarget` | `Function(Name)`, `StaticMethod { receiver, method }`, `Method { object, method }` | Structured target of first-class callable syntax such as `foo(...)` or `Cls::bar(...)` |
+
+Dynamic first-class callable forms (`$callback(...)`, `($expression)(...)`, and
+`factory()(...)`) become a fully qualified `Closure` static call with an internal method marker
+with the source expression as its sole argument. This preserves one evaluation
+and lets existing AST walkers visit it. The checker and EIR lowering recognize this marker separately from `fromCallable`,
+so invalid dynamic values raise `Error` while the explicit factory raises `TypeError`.
+Both paths validate once and use `NormalizeCallable`, whose result owns a descriptor
+reference and participates in temporary cleanup.
 
 Every AST node carries a `Span` from the source, so error messages in later phases can point to the right location. A `Span` stores the start position (`line`, `col`) plus an exclusive end position (`end_line`, `end_col`); the expression parser widens the end through the last consumed token (e.g. through a call's closing `)` or a binary expression's right operand) while keeping the start anchored, so diagnostics can underline the full expression extent.
 
@@ -510,6 +520,8 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 | `Return` | Return with optional expression |
 | `Break` | Break statement with optional positive integer level |
 | `Continue` | Continue statement with optional positive integer level |
+| `Goto` | `goto` followed by a plain label name and `;` (`parser/stmt/goto.rs`) |
+| `Identifier` followed by `Colon` | A jump label (`name:`), checked before the expression-statement fallback |
 | `Include` / `Require` / `IncludeOnce` / `RequireOnce` | Include statement (path is parsed as an expression and later folded by the resolver when it is a compile-time string) |
 | `Const` | Constant declaration (`const NAME = value;`) |
 | `Namespace` | Namespace declaration (`namespace App\Core;` or `namespace App\Core { ... }`); `namespace` followed by `\` is a relative name instead (`namespace\helper();`) and parses as an expression statement |

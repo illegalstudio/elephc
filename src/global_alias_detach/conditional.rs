@@ -581,7 +581,10 @@ impl ConditionalDetach {
             | StmtKind::ExternGlobalDecl { .. }
             | StmtKind::PackedClassDecl { .. }
             | StmtKind::FunctionVariantGroup { .. }
-            | StmtKind::FunctionVariantMark { .. } => None,
+            | StmtKind::FunctionVariantMark { .. }
+            // `goto` lowering runs before this pass, so no jump statement reaches it.
+            | StmtKind::Goto(_)
+            | StmtKind::GotoLabel(_) => None,
             // Nested declarations are separate scopes: a named function or a class method cannot
             // capture the alias, and its own `global`/unset pair is rewritten by the caller when it
             // reaches that body.

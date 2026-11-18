@@ -834,6 +834,178 @@ err Cannot assign float to reference held by property C::$n of type int\n"
     );
 }
 
+/// Verifies a named argument still receives the object-union runtime guard and unbox.
+#[test]
+fn test_named_object_union_argument_throws_and_unboxes() {
+    let out = compile_and_run(
+        r#"<?php
+class Marker {}
+function take(Marker $m): string { return get_class($m); }
+function id(Marker|false $v): Marker|false { return $v; }
+$v = id(false);
+try { take(m: $v); } catch (TypeError $e) {
+    $message = $e->getMessage();
+    echo str_starts_with($message, 'take(): Argument #1 ($m) must be of type Marker, false given, called in ') ? "prefix-ok" : $message;
+    echo str_contains($message, " on line ") ? ":line-ok\n" : ":no-line\n";
+}
+$ok = id(new Marker());
+echo take(m: $ok), "\n";
+"#,
+    );
+    assert_eq!(out, "prefix-ok:line-ok\nMarker\n");
+}
+
+/// Verifies a by-reference variadic binds and mutates an array property.
+#[test]
+fn test_variadic_by_ref_array_property_binds_by_reference() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public array $items = [1]; }
+function f(&...$refs): void { $refs[0][0] = 9; }
+$box = new Box();
+f($box->items);
+var_export($box->items);
+"#,
+    );
+    assert_eq!(out, "array (\n  0 => 9,\n)");
+}
+
+/// Verifies the plain typed-property reference path rejects a mismatched callee write.
+#[test]
+fn test_by_reference_typed_property_writeback_rejects_a_mismatched_callee_write() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $n = 0; }
+function w(int &$x, mixed $v): void { $x = $v; }
+$c = new C();
+try { w($c->n, "abc"); } catch (TypeError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+var_dump($c->n);
+$d = new C();
+w($d->n, "42");
+var_dump($d->n);
+"#,
+    );
+    assert_eq!(
+        out,
+        "TypeError: Cannot assign string to reference held by property C::$n of type int\nint(0)\nint(42)\n"
+    );
+}
+
+/// Verifies the typed-property reference guard classifies numeric strings by value: PHP's six
+/// leading-whitespace bytes, float forms, and the asymmetric `i64` overflow boundary where
+/// `-9223372036854775809` rounds to `-2^63` but positive `2^63` is rejected.
+#[test]
+fn test_by_reference_typed_property_numeric_string_range_and_whitespace() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $n = 0; }
+class F { public float $f = 0.0; }
+function w(int &$x, mixed $v): void { $x = $v; }
+function wf(float &$x, mixed $v): void { $x = $v; }
+$cases = [
+    "999999999999999999999999",
+    "9223372036854775808",
+    "9223372036854775807",
+    "-9223372036854775808",
+    "-9223372036854775809",
+    "1e2",
+    "1e18",
+    "1e19",
+    "\t42",
+    "\n42\t",
+];
+foreach ($cases as $i => $text) {
+    $c = new C();
+    try {
+        w($c->n, $text);
+        echo $i, "=", $c->n, "\n";
+    } catch (TypeError $e) {
+        echo $i, "=TypeError\n";
+    }
+}
+$f = new F();
+wf($f->f, "1e30");
+echo $f->f > 1e29 ? "float-big\n" : "float-small\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "0=TypeError\n1=TypeError\n2=9223372036854775807\n3=-9223372036854775808\n\
+         4=-9223372036854775808\n5=100\n6=1000000000000000000\n7=TypeError\n\
+         8=42\n9=42\nfloat-big\n"
+    );
+}
+
+/// Verifies a raw scalar reference cell converts between PHP's int and float representations
+/// instead of publishing the source register that belongs to the other type.
+#[test]
+fn test_typed_reference_numeric_representation_conversion() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $n = 0; public float $f = 0.0; }
+function w(int &$x, float &$y): void { $x = 2.5; $y = 3; }
+$c = new C();
+w($c->n, $c->f);
+var_dump($c->n, $c->f);
+$n = 0;
+$f = 0.0;
+w($n, $f);
+var_dump($n, $f);
+"#,
+    );
+    assert_eq!(out, "int(2)\nfloat(3)\nint(2)\nfloat(3)\n");
+}
+
+/// Verifies the string, bool, false, and float typed-property reference guards accept PHP's
+/// weak scalar conversions and reject container/null sources with the reference-form message.
+#[test]
+fn test_typed_property_reference_scalar_guard_matrix() {
+    let out = compile_and_run(
+        r#"<?php
+class S { public string $s = "x"; }
+class B { public bool $b = false; }
+class Fal { public false $flag = false; }
+class F { public float $f = 0.0; }
+class Str { public function __toString(): string { return "ok"; } }
+function ws(string &$x, mixed $v): void { $x = $v; }
+function wb(bool &$x, mixed $v): void { $x = $v; }
+function wf(false &$x, mixed $v): void { $x = $v; }
+function wl(float &$x, mixed $v): void { $x = $v; }
+$s = new S();
+ws($s->s, 42); echo $s->s, ":";
+ws($s->s, true); echo $s->s, ":";
+ws($s->s, new Str()); echo $s->s, ":";
+try { ws($s->s, []); } catch (TypeError $e) { echo $e->getMessage(), ":"; }
+try { ws($s->s, null); } catch (TypeError $e) { echo $e->getMessage(), ":"; }
+$b = new B();
+wb($b->b, 2); var_dump($b->b);
+wb($b->b, ""); var_dump($b->b);
+try { wb($b->b, []); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$fal = new Fal();
+wf($fal->flag, false); var_dump($fal->flag);
+try { wf($fal->flag, true); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$f = new F();
+wl($f->f, 3); var_dump($f->f);
+wl($f->f, "2.5"); var_dump($f->f);
+try { wl($f->f, "abc"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "42:1:ok:\
+Cannot assign array to reference held by property S::$s of type string:\
+Cannot assign null to reference held by property S::$s of type string:\
+bool(true)\n\
+bool(false)\n\
+Cannot assign array to reference held by property B::$b of type bool\n\
+bool(false)\n\
+Cannot assign true to reference held by property Fal::$flag of type false\n\
+float(3)\n\
+float(2.5)\n\
+Cannot assign string to reference held by property F::$f of type float\n"
+    );
+}
+
 /// A `mixed &$out` parameter can bind a typed scalar property: a compatible write updates
 /// it, while an incompatible write raises PHP's typed-reference `TypeError` and leaves the
 /// property unchanged.

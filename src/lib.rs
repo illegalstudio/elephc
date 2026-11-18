@@ -40,6 +40,8 @@ pub mod docblock;
 pub mod func_args;
 /// Monomorphization support for generic function declarations.
 pub mod generics;
+/// Lowers `goto` and its labels into structured control flow right after parsing.
+pub mod goto_lowering;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.
 pub(crate) mod global_decls;
 mod global_alias_detach;
@@ -94,6 +96,8 @@ pub mod opcache_prelude;
 pub mod shared_ini_prelude;
 /// PHP `(object)` cast standard-library prelude injection.
 pub mod object_cast_prelude;
+/// Transaction boundaries outside HTTP for transaction monitoring.
+pub mod apm_prelude;
 /// Optimizer passes.
 pub mod optimize;
 /// Parser for PHP syntax.
@@ -142,7 +146,9 @@ pub mod types;
 pub mod tz_prelude;
 pub mod xml_prelude;
 mod simplexml_prelude;
+pub mod tidy_prelude;
 pub mod fileinfo_prelude;
+pub mod locale_prelude;
 pub mod tokenizer_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;

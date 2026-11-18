@@ -88,6 +88,7 @@ fn feature_label(package: &str) -> &str {
     match package {
         "pcre2" => "regex",
         "libxml2" => "xml",
+        "libtidy" => "tidy",
         _ => package,
     }
 }
@@ -359,6 +360,7 @@ mod tests {
     #[test]
     fn feature_label_names_the_php_surface_or_the_package() {
         assert_eq!(feature_label("libxml2"), "xml");
+        assert_eq!(feature_label("libtidy"), "tidy");
         assert_eq!(feature_label("pcre2"), "regex");
         for package in ["curl", "libssh2", "nghttp2", "openssl", "zlib", "unknown"] {
             assert_eq!(feature_label(package), package, "{package} has no surface of its own");

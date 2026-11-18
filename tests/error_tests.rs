@@ -72,6 +72,9 @@ fn check_source_on_compiler_stack(
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
     let ast = elephc::conditional::apply(ast, &define_set);
+    // Mirrors `source::finalize_physical_program`: `goto` is lowered per physical file.
+    let ast = elephc::goto_lowering::lower_program(ast, "test.php")
+        .map_err(|error| error.message.clone())?;
     let ast = elephc::autoload::collect_aliases(ast).map_err(|error| error.message)?;
     // Mirrors `pipeline::compile`: the hash prelude declares `HashContext` and the
     // `hash_*` context wrappers, and is injected between alias collection and name
@@ -86,7 +89,7 @@ fn check_source_on_compiler_stack(
         elephc::php_version::PhpVersion::default(),
         &mut prelude_inventory,
     );
-    let ast = elephc::core_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::core_prelude::inject_if_used(ast, false, false, false, &mut prelude_inventory);
     let ast = elephc::time_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::clamp_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -133,7 +136,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
         elephc::php_version::PhpVersion::default(),
         &mut prelude_inventory,
     );
-    let ast = elephc::core_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::core_prelude::inject_if_used(ast, false, false, false, &mut prelude_inventory);
     let ast = elephc::time_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::clamp_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);

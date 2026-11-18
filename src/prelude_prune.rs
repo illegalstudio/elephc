@@ -21,5 +21,6 @@
 
 pub(crate) mod usage;
 mod callable_names;
+mod callable_slots;
 mod environment_callables;
 mod environment_parameters;

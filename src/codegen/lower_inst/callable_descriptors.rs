@@ -69,6 +69,72 @@ pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst
     store_callable_descriptor(ctx, inst)
 }
 
+/// Returns whether the prelude helpers a builtin's wrapper calls exist in the lowered module,
+/// as the ordinary runtime callable table requires (`array_rand`, XML and GMP wrappers forward
+/// to prelude functions). A literal name injects and roots them; a recorded name whose helpers
+/// are still absent is skipped instead of failing codegen, and invoking it then reports the
+/// runtime-only builtin error.
+fn declared_callable_wrapper_helpers_present(ctx: &FunctionContext<'_>, key: &str) -> bool {
+    crate::builtins::registry::callable_wrapper_prelude_helpers(key).iter().all(|helper| {
+        ctx.module.functions.iter().any(|function| php_symbol_key(&function.name) == php_symbol_key(helper))
+    })
+}
+
+/// Builds runtime string dispatch cases for the function names a declared `callable` kept as
+/// a string literal (`module.declared_callable_names`).
+///
+/// Runtime string dispatch only pre-emits wrappers for builtins with a runtime-selected
+/// wrapper contract. A literal name was resolved by the checker like a first-class callable,
+/// so its static descriptor is built the same way `name(...)` builds it and the string still
+/// invokes after it reached the callee as a plain PHP string. User functions are already
+/// covered by the ordinary user-function cases.
+pub(super) fn declared_callable_name_cases(
+    ctx: &mut FunctionContext<'_>,
+    candidate_names: Option<&[String]>,
+    strict_php: bool,
+) -> Result<Vec<crate::codegen_support::callable_dispatch::RuntimeCallableCase>> {
+    let names: Vec<String> = ctx.module.declared_callable_names.iter().cloned().collect();
+    let mut cases = Vec::new();
+    for name in names {
+        let key = php_symbol_key(name.trim_start_matches('\\'));
+        if candidate_names.is_some_and(|candidates| !candidates.iter().any(|candidate| *candidate == key))
+            || ctx.module.functions.iter().any(|function| php_symbol_key(&function.name) == key)
+            || crate::builtins::registry::lookup(&key).is_none()
+            || !declared_callable_wrapper_helpers_present(ctx, &key)
+        {
+            continue;
+        }
+        let Some(descriptor) = first_class_callable_descriptor(ctx, &key, strict_php)? else {
+            continue;
+        };
+        let Some(entry_label) = descriptor.entry_label.clone() else {
+            continue;
+        };
+        let invoker_label = descriptor.sig.as_ref().map(|sig| {
+            emit_runtime_callable_invoker_in_class(
+                ctx, sig, &[], descriptor.owns_string_return, false, None,
+            )
+        });
+        let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+            ctx.data,
+            &entry_label,
+            Some(&key),
+            descriptor.kind,
+            descriptor.sig.as_ref(),
+            &[],
+            &[],
+            descriptor.invocation,
+            invoker_label.as_deref(),
+        );
+        cases.push(crate::codegen_support::callable_dispatch::RuntimeCallableCase {
+            label: entry_label,
+            descriptor_label,
+            php_name: Some(key),
+        });
+    }
+    Ok(cases)
+}
+
 /// Keeps descriptor storage and captures while removing object identity for implicit callables.
 fn store_callable_descriptor(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.op == Op::CallableValueNew {

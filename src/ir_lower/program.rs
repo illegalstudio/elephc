@@ -103,8 +103,16 @@ fn lower_on_compiler_stack(
     super::diagnostics::begin_collection();
     let _closure_param_hints =
         crate::ir_lower::closure_param_hints::install(&check_result.closure_param_hints);
+    let _closure_defaults = crate::ir_lower::initializer_reads::install(check_result);
     let mut module = Module::new(target);
-    module.source_path = source_path.map(canonical_source_path);
+    module.source_path = source_path.map(crate::source::canonical_source_path);
+    // Codegen may run on another thread than parsing, so freeze the span-to-file table here.
+    // Paths are canonicalized exactly like `_script_source_file` and `__FILE__`: the CLI may
+    // name the entry file through a symlink, and a diagnostic must not report that spelling.
+    module.source_paths = crate::span::Span::registered_source_paths()
+        .into_iter()
+        .map(|(id, path)| (id, crate::source::canonical_source_path(Path::new(&path))))
+        .collect();
     module.web = web;
     let constants = crate::codegen::collect_constants(program, target);
     let builtin_constants = crate::codegen::collect_constants(&Vec::new(), target);
@@ -194,6 +202,7 @@ fn lower_on_compiler_stack(
     if let Some(error) = super::diagnostics::take_first() {
         return Err(LoweringError::Unsupported(error));
     }
+    module.erase_declared_callable_types();
     validate_module(&module).map_err(|error| super::validation_context::describe(&module, error))?;
     Ok(module)
 }

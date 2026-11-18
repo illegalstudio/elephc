@@ -48,12 +48,15 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
             context.set_pending_throw(thrown);
             Err(EvalStatus::UncaughtThrowable)
         }
-        EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
+        EvalControl::Break | EvalControl::Continue | EvalControl::Goto(_) => {
+            Err(EvalStatus::UnsupportedConstruct)
+        }
     }
 }
 
 /// Applies a registered native/AOT return type to an already materialized result.
 pub(in crate::interpreter) fn eval_declared_native_return_value(
+    callee: Option<&str>,
     return_type: Option<&EvalParameterType>,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
@@ -76,7 +79,7 @@ pub(in crate::interpreter) fn eval_declared_native_return_value(
             return Err(EvalStatus::RuntimeFatal);
         }
         eval_declared_return_value(
-            return_type, return_owner, called_class_name, value, context, values,
+            callee, false, return_type, return_owner, called_class_name, value, context, values,
         )
     })();
     finish_declared_return_value(value, result, context, values)
@@ -152,6 +155,8 @@ fn eval_declared_explicit_return_value(
         return eval_throw_type_error(&format!("{callee}(): Return value must be of type {expected}, null returned"), context, values);
     }
     eval_declared_return_value(
+        Some(callee),
+        context.strict_types(),
         return_type,
         return_owner,
         called_class_name,
@@ -162,7 +167,12 @@ fn eval_declared_explicit_return_value(
 }
 
 /// Applies a non-void declared return type to one returned runtime value.
+///
+/// `strict` selects PHP's strict return rules; compiled AOT callables pass `false` because
+/// their declared return values are already checked when the host is compiled.
 fn eval_declared_return_value(
+    callee: Option<&str>,
+    strict: bool,
     return_type: &EvalParameterType,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
@@ -186,11 +196,34 @@ fn eval_declared_return_value(
         }
         return Err(EvalStatus::RuntimeFatal);
     }
-    for variant in return_type.variants() {
-        if let Some(coerced) =
-            eval_method_parameter_scalar_coercion(variant, value, context, values)?
+    if strict {
+        // A strict fragment allows only exact return types plus int-to-float widening.
+        if values.type_tag(value)? == EVAL_TAG_INT
+            && return_type
+                .variants()
+                .iter()
+                .any(|variant| matches!(variant, EvalParameterTypeVariant::Float))
         {
-            return Ok(coerced);
+            return values.cast_float(value);
+        }
+        if let Some(callee) = callee {
+            return eval_throw_return_type_error(
+                callee,
+                return_owner,
+                called_class_name,
+                return_type,
+                value,
+                context,
+                values,
+            );
+        }
+    } else {
+        for variant in return_type.variants() {
+            if let Some(coerced) =
+                eval_method_parameter_scalar_coercion(variant, value, context, values)?
+            {
+                return Ok(coerced);
+            }
         }
     }
     if return_type.variants().iter().any(|ty| matches!(ty, EvalParameterTypeVariant::Generic(_)))

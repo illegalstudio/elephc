@@ -113,6 +113,8 @@ fn static_array_replacement_cleanup_failure_keeps_the_published_owner() {
         let returned =
             execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
         eval_release_value(&mut context, &mut values, returned).unwrap();
+        // A static default is stored when the class initializes.
+        crate::interpreter::statements::eval_raise_class_initialization_deprecations("StaticCleanupCopy", &mut context, &mut values).unwrap();
         let original = context
             .static_property("StaticCleanupCopy", "items")
             .unwrap();
@@ -143,6 +145,8 @@ fn static_array_read_access_failure_preserves_the_slot() {
     let returned =
         execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
     eval_release_value(&mut context, &mut values, returned).unwrap();
+    // A static default is stored when the class initializes.
+    crate::interpreter::statements::eval_raise_class_initialization_deprecations("StaticDeniedCopy", &mut context, &mut values).unwrap();
     let original = context
         .static_property("StaticDeniedCopy", "items")
         .unwrap();

@@ -186,6 +186,12 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::PromotableArray => {
             let _ = write!(out, " promotable_array");
         }
+        Immediate::ReflectionConstruction => {
+            let _ = write!(out, " reflection_construction");
+        }
+        Immediate::DeclaredCallableNames => {
+            let _ = write!(out, " declared_callable_names");
+        }
         Immediate::Data(id) => {
             let _ = write!(out, " data[{}]", id.as_raw());
         }
@@ -194,6 +200,20 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::LocalSlotPair { first, second } => {
             let _ = write!(out, " slots[{},{}]", first.as_raw(), second.as_raw());
+        }
+        Immediate::PropertyRefCell {
+            first,
+            second,
+            suffix_and_type,
+        } => {
+            let _ = write!(
+                out,
+                " property_ref[{},{}] data[{}] type_code={}",
+                first.as_raw(),
+                second.as_raw(),
+                *suffix_and_type & ((1 << 28) - 1),
+                *suffix_and_type >> 28
+            );
         }
         Immediate::GlobalName(id) => {
             let value = data

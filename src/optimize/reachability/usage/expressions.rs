@@ -133,7 +133,8 @@ impl Scanner<'_> {
                 let classes: HashSet<String> = self.receiver_class(receiver).into_iter().collect();
                 // `Closure::fromCallable('f')` invokes what it names, like `call_user_func`.
                 if classes.contains(&php_symbol_key("Closure"))
-                    && php_symbol_key(method) == php_symbol_key("fromCallable")
+                    && (php_symbol_key(method) == php_symbol_key("fromCallable")
+                        || method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY)
                 {
                     self.callable_or_hazard(args.first().map(unwrap_named_arg));
                 }

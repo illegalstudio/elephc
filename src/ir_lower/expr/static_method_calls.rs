@@ -17,8 +17,40 @@ pub(super) fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    lower_static_method_call_impl(ctx, receiver, method, args, expr, None)
+}
+
+/// Lowers `$object->staticMethod()` through the statically named `receiver`.
+///
+/// The receiver value travels as operand zero so codegen can read the object's runtime
+/// class id and bind `static` to it; the call itself still has no `$this`.
+pub(super) fn lower_object_static_method_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    receiver: &StaticReceiver,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    lower_static_method_call_impl(ctx, receiver, method, args, expr, Some(object))
+}
+
+/// Shared static-call lowering with an optional object receiver for late static binding.
+fn lower_static_method_call_impl(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+    object_receiver: Option<crate::ir::ValueId>,
+) -> LoweredValue {
     // `Closure::bind($closure, $newThis [, $scope])` is the static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
+        if name.trim_start_matches('\\') == "Closure"
+            && (method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY || php_symbol_key(method) == "fromcallable")
+        {
+            return super::dynamic_callable_factory::lower(ctx, args, method, expr);
+        }
         if name.trim_start_matches('\\') == "Closure"
             && php_symbol_key(method) == "bind"
             && !args.is_empty()
@@ -106,7 +138,19 @@ pub(super) fn lower_static_method_call(
     ctx.call_description = previous_description;
     let mut operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
-    let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
+    // `from()`/`tryFrom()` initialize a backed enum: the constants php-src has not evaluated
+    // yet are evaluated, after the argument.
+    // `self::`/`static::` name the enum whose method is being lowered.
+    if matches!(php_symbol_key(dispatch_method).as_str(), "from" | "tryfrom") {
+        if let Some(enum_name) = static_receiver_class_name(ctx, receiver) {
+            emit_backed_enum_initialization(ctx, &enum_name, expr.span);
+        }
+    }
+    emit_deprecated_enum_case_notice(ctx, receiver, dispatch_method);
+    let name = match object_receiver {
+        Some(_) => format!("@object@{}::{}", receiver_name(receiver), dispatch_method),
+        None => format!("{}::{}", receiver_name(receiver), dispatch_method),
+    };
     let data = ctx.intern_string(&name);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
     let roots = root_user_call_operands(
@@ -117,9 +161,19 @@ pub(super) fn lower_static_method_call(
         &result_type,
         expr.span,
     );
+    super::object_construction::publish_static_constructor_call_strictness(
+        ctx,
+        receiver,
+        dispatch_method,
+        expr.span,
+    );
+    let mut call_operands = operands.clone();
+    if let Some(object) = object_receiver {
+        call_operands.insert(0, object);
+    }
     let call = ctx.emit_value(
         Op::StaticMethodCall,
-        operands.clone(),
+        call_operands,
         Some(Immediate::Data(data)),
         result_type,
         Op::StaticMethodCall.default_effects(),
@@ -185,6 +239,47 @@ pub(super) fn static_late_binding_receiver_type_for_ir(
         StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => {
             ctx.current_class.clone()
         }
+    }
+}
+
+/// Raises the case-table deprecation when `cases()`, `from()` or `tryFrom()` first
+/// materializes an enum whose backing value read `MT_RAND_PHP`.
+///
+/// php-src evaluates the whole case table for these calls, so the notice fires there just
+/// like a direct case fetch and shares the same once-per-declaration guard.
+pub(super) fn emit_deprecated_enum_case_notice(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) {
+    if !matches!(php_symbol_key(method).as_str(), "cases" | "from" | "tryfrom") {
+        return;
+    }
+    let enum_name = match receiver {
+        StaticReceiver::Named(name) => name.trim_start_matches('\\').to_string(),
+        StaticReceiver::Self_ | StaticReceiver::Static => match ctx.current_class.clone() {
+            Some(class_name) => class_name,
+            None => return,
+        },
+        StaticReceiver::Parent => {
+            let parent = ctx
+                .current_class
+                .as_ref()
+                .and_then(|class_name| ctx.classes.get(class_name))
+                .and_then(|info| info.parent.clone());
+            let Some(parent) = parent else { return };
+            parent
+        }
+        StaticReceiver::Generic(_) => return,
+    };
+    let declaration_span = ctx.enums.get(enum_name.trim_start_matches('\\')).and_then(|info| {
+        info.cases
+            .iter()
+            .find(|case| case.deprecated_mt_rand_php)
+            .and_then(|case| case.span)
+    });
+    if let Some(span) = declaration_span {
+        super::constants::emit_mt_rand_php_deprecation(ctx, span, span);
     }
 }
 
@@ -499,5 +594,16 @@ pub(crate) fn static_receiver_class_name(
             let current = ctx.current_class.as_deref()?;
             ctx.classes.get(current).and_then(|class_info| class_info.parent.clone())
         }
+    }
+}
+
+/// Raises the deprecations of initializing backed enum `enum_name`, which php-src does on
+/// `from()`/`tryFrom()` and on the first fetch of any of its constants or cases: every constant
+/// of the enum it has not evaluated yet is evaluated.
+pub(super) fn emit_backed_enum_initialization(ctx: &mut LoweringContext<'_, '_>, enum_name: &str, span: crate::span::Span) {
+    let enum_name = enum_name.trim_start_matches('\\');
+    let backed = ctx.enums.get(enum_name).is_some_and(|info| info.backing_type.is_some());
+    if backed && crate::ir_lower::property_default_errors::class_initialization_reports(ctx, enum_name) {
+        crate::ir_lower::property_default_errors::emit_initialization_deprecations(ctx, enum_name, span);
     }
 }

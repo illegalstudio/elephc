@@ -389,9 +389,13 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     elephc::codegen::set_null_repr(null_repr);
     let frontend_phase = fixture_phase_timing("frontend");
     elephc::codegen::set_compile_profile(php_version, false);
+    let synthetic_main = dir.join("test.php");
+    // Mirrors `pipeline::compile`: the entry file uses source ID 0. Registering it makes the
+    // harness cover published diagnostic files (and their canonicalization) for main-file call
+    // sites, which otherwise fall back to `_script_source_file`.
+    elephc::span::Span::register_source_path(0, synthetic_main.display().to_string());
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let synthetic_main = dir.join("test.php");
     // `__FILE__` must name a readable file: some fixtures (the GMP division tests)
     // open it with fopen() to obtain a real resource handle. The CLI pipeline always
     // has the source on disk; the in-process fixture pipeline must mirror that.
@@ -403,6 +407,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // values, so the surface looked tested while nothing exercised it.
     let ast = elephc::docblock::apply(ast, source);
     let ast = elephc::conditional::apply(ast, defines);
+    // Also mirrors `source::finalize_physical_program`: `goto` is lowered per physical file,
+    // right after conditional compilation and before include resolution.
+    let ast = elephc::goto_lowering::lower_program(ast, &synthetic_main.display().to_string())
+        .expect("goto lowering failed");
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
@@ -445,7 +453,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::uri_prelude::inject_if_used_for_version(
         resolved, false, php_version, &mut prelude_inventory,
     );
-    let resolved = elephc::core_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::core_prelude::inject_if_used(resolved, false, false, false, &mut prelude_inventory);
     let resolved = elephc::time_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::clamp_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::bcmath_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
@@ -455,9 +463,31 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let ini_overrides = elephc::codegen_support::ini_overrides();
+    let tidy_value = |name: &str| {
+        ini_overrides
+            .iter()
+            .rev()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map_or("", |(_, value)| value.as_str())
+            .to_string()
+    };
+    let tidy_default_config = tidy_value("tidy.default_config");
+    let tidy_open_basedir = tidy_value("open_basedir");
+    let tidy_clean_output = elephc::codegen_support::ini_bool(&tidy_value("tidy.clean_output"));
+    let resolved = elephc::tidy_prelude::inject_if_used(
+        resolved,
+        tidy_clean_output,
+        &tidy_default_config,
+        &tidy_open_basedir,
+        tidy_clean_output,
+        &mut prelude_inventory,
+    );
     let resolved = elephc::fileinfo_prelude::inject_if_used_for_version(
         resolved, false, php_version, &mut prelude_inventory,
     );
+    let locale_used = elephc::locale_prelude::program_uses_locale(&resolved);
+    let resolved = elephc::locale_prelude::inject_if_used(resolved, locale_used, target().platform);
     let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");

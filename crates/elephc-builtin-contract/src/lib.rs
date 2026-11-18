@@ -16,14 +16,18 @@ mod aot_profile;
 mod callback_parameters;
 mod class_spec;
 mod constant_spec;
+mod constant_deprecation;
 mod catalog_classes;
 mod catalog_constants;
+mod catalog_constants_locale;
 mod catalog_constants_tokenizer;
 mod catalog_constants_curl;
 mod catalog_data;
+mod catalog_locale;
 mod catalog_gmp;
 mod catalog_mbstring;
 mod catalog_pcntl;
+mod catalog_tidy;
 mod catalog_xml;
 #[cfg(feature = "curl")]
 mod catalog_curl;
@@ -59,6 +63,10 @@ pub use eval_profile::{
 };
 pub use class_spec::{ClassContract, ClassKind, ClassRoute};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
+pub use constant_deprecation::{
+    class_constant_deprecation, global_constant_deprecation, is_deprecated_class_constant_name,
+    ConstantDeprecation,
+};
 pub use id::BuiltinId;
 pub use internal_final::INTERNAL_FINAL_CLASSES;
 pub use core_functions::CORE_FUNCTION_NAMES;
@@ -69,9 +77,10 @@ pub use object_operators::{
     ClassCasts, ClassOperators, ObjectArithmetic, ObjectArithmeticResult, ObjectBitwise,
     ObjectCast, ObjectDimension, ObjectOperandDispatch, ObjectOrdering, ObjectProperty,
     ObjectPropertyUpdate, ObjectShift, BCMATH_NUMBER_OPERATORS, DATE_TIME_OPERATORS, GMP_CASTS,
-    GMP_OPERATORS, TIME_DURATION_OPERATORS, TIME_DURATION_VISIBLE_METHODS,
+    GMP_OPERATORS, TIME_DURATION_OPERATORS, TIME_DURATION_VISIBLE_METHODS, TIDY_CASTS,
+    TIDY_OPERATORS,
 };
-pub use catalog_gmp::FUNCTIONS as GMP_FUNCTIONS;
+pub use catalog_gmp::{FUNCTIONS as GMP_FUNCTIONS, GMP_VERSION};
 pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};
 pub use symbol_registry::{canonical_constant_name, classes, constants, lookup_class, lookup_constant};

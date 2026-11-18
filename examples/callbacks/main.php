@@ -450,8 +450,8 @@ echo "\n";
 $mixed_types = array_map(fn($value) => gettype($value), $mixed_values);
 echo "mixed array_map gettype: " . implode(", ", $mixed_types) . "\n";
 
-// A `callable` parameter also accepts a PHP callable string when the name is known at
-// compile time: a builtin, a user function, or "Class::method".
+// A `callable` parameter keeps the value it receives: a builtin or user function name,
+// "Class::method", a callable array, an invokable object, or a closure.
 class StaticWrapper {
     public static function wrap(string $value): string {
         return "<" . $value . ">";
@@ -465,6 +465,13 @@ function apply_callable(callable $fn, string $value): string {
 echo "callable string builtin: " . apply_callable("strtoupper", "abc") . "\n";
 echo "callable string user function: " . apply_callable("callback_name_passthrough", "kept") . "\n";
 echo "callable string static method: " . apply_callable("StaticWrapper::wrap", "wrapped") . "\n";
+
+function callable_kind(callable $fn): string {
+    return gettype($fn);
+}
+
+echo "callable kinds: " . callable_kind("strtoupper") . ", " . callable_kind(["StaticWrapper", "wrap"])
+    . ", " . callable_kind(fn($value) => $value) . "\n";
 
 // Scalar arguments bind to declared scalar parameters using PHP's coercive rules.
 function describe_length(string $label, int $count): string {

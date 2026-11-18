@@ -741,3 +741,11 @@ mod tests {
         );
     }
 }
+
+/// Returns the shared one-parameter contract for Closure::fromCallable planning.
+pub(crate) fn closure_factory_signature() -> FunctionSig {
+    let mut sig = crate::builtins::registry::function_sig("__elephc_normalize_callable")
+        .expect("the internal callable normalizer is registered");
+    sig.params[0].0 = "callback".to_string();
+    sig
+}

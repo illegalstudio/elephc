@@ -513,6 +513,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ErrorSuppressEnd => lower_runtime_void_call(ctx, "__rt_diag_pop_suppression"),
         Op::IncludeOnceMark => lower_include_once_mark(ctx, &inst),
         Op::IncludeOnceGuard => lower_include_once_guard(ctx, &inst),
+        Op::IncludeOnceTest => lower_include_once_test(ctx, &inst),
         Op::FunctionVariantDispatch => Ok(()),
         Op::FunctionVariantMark => lower_function_variant_mark(ctx, &inst),
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),

@@ -595,6 +595,8 @@ pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
         | StmtKind::Return(Some(expr)) => expr_invalidation(expr),
         StmtKind::Return(None)
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }

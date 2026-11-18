@@ -7,6 +7,8 @@
 //! Key details:
 //! - Reference targets, scalar coercion, defaults, and object type checks stay aligned by index.
 //! - Extra positional arguments to user-defined callables are evaluated but ignored like PHP.
+//! - A parameter default's deprecation notices are raised on the first evaluation of its
+//!   declaration site only, keyed by callable name and position.
 
 use super::*;
 use crate::context::EvalFunctionArgsFrame;
@@ -25,6 +27,7 @@ pub(in crate::interpreter) struct BoundEvalFunctionArgs {
 /// `ArgumentCountError` reports.
 pub(in crate::interpreter) fn bind_evaluated_function_args_with_ref_mode(
     callee: &str,
+    default_site: &str,
     params: &[String],
     parameter_types: &[Option<EvalParameterType>],
     parameter_defaults: &[Option<EvalExpr>],
@@ -60,6 +63,7 @@ pub(in crate::interpreter) fn bind_evaluated_function_args_with_ref_mode(
     }
     let args = match bind_evaluated_method_args_with_ref_mode(
         callee,
+        default_site,
         params,
         parameter_types,
         parameter_defaults,
@@ -157,6 +161,7 @@ fn eval_actual_argument_shape(
 /// Binds evaluated method arguments using a selected by-reference target policy.
 pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
     callee: &str,
+    default_site: &str,
     params: &[String],
     parameter_types: &[Option<EvalParameterType>],
     parameter_defaults: &[Option<EvalExpr>],
@@ -254,7 +259,12 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                     return Err(EvalStatus::RuntimeFatal);
                 };
                 *value = Some(BoundMethodArg {
-                    value: eval_method_parameter_default(default, context, values)?,
+                    value: eval_method_parameter_default_at(
+                        default,
+                        &format!("{default_site}#{position}"),
+                        context,
+                        values,
+                    )?,
                     ref_target: None,
                     variadic_ref_targets: Vec::new(),
                 });
@@ -264,7 +274,15 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                 let previous = bound.value;
                 eval_reject_null_object_argument(callee, position + 1, Some(&params[position]),
                     param_type, previous, context, values)?;
-                bound.value = eval_method_parameter_value(param_type, previous, context, values)?;
+                bound.value = eval_method_parameter_value_or_throw(
+                    callee,
+                    position + 1,
+                    Some(&params[position]),
+                    param_type,
+                    previous,
+                    context,
+                    values,
+                )?;
                 if bound.value != previous { release_expr_result(previous, context, values)?; }
             }
         }
@@ -531,7 +549,11 @@ fn bind_dynamic_variadic_args(
             eval_reject_null_object_argument(
                 callee, number, None, param_type, original, context, values,
             )?;
-            eval_method_parameter_value(param_type, original, context, values)?
+            // PHP omits the parameter name from a variadic argument TypeError: the slot has
+            // no single declared `$name`, so the message names only the argument position.
+            eval_method_parameter_value_or_throw(
+                callee, number, None, param_type, original, context, values,
+            )?
         } else { original };
         let inserted = (|| {
             let key = match arg.name {
@@ -586,6 +608,41 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_method_parameter_value_with_error(
+        param_type, value, None, context, values,
+    )
+}
+
+/// Applies one eval parameter type and reports a strict rejection as PHP's `TypeError`.
+///
+/// `callee`, `number`, and `parameter` describe the source call so PHP code can catch the
+/// thrown `TypeError` with the same message php-src builds at a call boundary.
+pub(in crate::interpreter) fn eval_method_parameter_value_or_throw(
+    callee: &str,
+    number: usize,
+    parameter: Option<&str>,
+    param_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_method_parameter_value_with_error(
+        param_type,
+        value,
+        Some((callee, number, parameter)),
+        context,
+        values,
+    )
+}
+
+/// Applies one eval method parameter type, optionally raising a PHP argument `TypeError`.
+fn eval_method_parameter_value_with_error(
+    param_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    error: Option<(&str, usize, Option<&str>)>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if eval_method_parameter_type_accepts_exact(param_type, value, context, values)? {
         return Ok(value);
     }
@@ -595,11 +652,35 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
         }
         return Err(EvalStatus::RuntimeFatal);
     }
-    for variant in param_type.variants() {
-        if let Some(coerced) =
-            eval_method_parameter_scalar_coercion(variant, value, context, values)?
+    if context.strict_types() {
+        // PHP's strict mode accepts only exact types plus the int-to-float widening. Every
+        // other scalar conversion (`"42"` to `int`, `true` to `int`, ...) is a type error.
+        if values.type_tag(value)? == EVAL_TAG_INT
+            && param_type
+                .variants()
+                .iter()
+                .any(|variant| matches!(variant, EvalParameterTypeVariant::Float))
         {
-            return Ok(coerced);
+            return values.cast_float(value);
+        }
+        if let Some((callee, number, parameter)) = error {
+            return eval_throw_argument_type_error(
+                callee,
+                number,
+                parameter,
+                param_type,
+                value,
+                context,
+                values,
+            );
+        }
+    } else {
+        for variant in param_type.variants() {
+            if let Some(coerced) =
+                eval_method_parameter_scalar_coercion(variant, value, context, values)?
+            {
+                return Ok(coerced);
+            }
         }
     }
     if param_type.variants().iter().any(|ty| matches!(ty, EvalParameterTypeVariant::Generic(_)))
@@ -1005,7 +1086,8 @@ fn eval_method_numeric_coercible_value(
     }
 }
 
-/// Materializes a supported eval method parameter default expression.
+/// Evaluates a parameter default outside a call binding (reflection, `get_class_vars()`),
+/// raising its deprecation notices on every evaluation.
 pub(in crate::interpreter) fn eval_method_parameter_default(
     default: &EvalExpr,
     context: &mut ElephcEvalContext,
@@ -1015,7 +1097,46 @@ pub(in crate::interpreter) fn eval_method_parameter_default(
         return Err(EvalStatus::UnsupportedConstruct);
     }
     let mut default_scope = ElephcEvalScope::new();
-    eval_owned_expr(default, context, &mut default_scope, values)
+    context.enter_constant_expression();
+    let value = eval_owned_expr(default, context, &mut default_scope, values);
+    context.leave_constant_expression();
+    value
+}
+
+/// Evaluates the default of parameter `site` (`callable#position`) for a call that omitted
+/// it. php-src evaluates a default, raising its deprecation notices at the reads, until a
+/// successful evaluation yields a value that is not refcounted; it caches that value and the
+/// site never reports again. A default that throws, or whose value is refcounted, is evaluated
+/// (and reports) again on the next call. The site names the declaration, since a callable is
+/// copied for each call.
+pub(in crate::interpreter) fn eval_method_parameter_default_at(
+    default: &EvalExpr,
+    site: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !eval_method_default_expr_is_supported(default) {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    let cached = context.default_site_reported(site);
+    let mut default_scope = ElephcEvalScope::new();
+    if cached {
+        context.begin_deprecation_silence();
+    }
+    context.enter_constant_expression();
+    let value = eval_owned_expr(default, context, &mut default_scope, values);
+    context.leave_constant_expression();
+    if cached {
+        context.end_deprecation_silence();
+    }
+    let value = value?;
+    if !cached
+        && !context.deprecations_silenced()
+        && !super::super::statements::eval_parameter_default_is_refcounted(default, value, context, values)?
+    {
+        context.first_default_site_report(site);
+    }
+    Ok(value)
 }
 
 /// Returns whether an EvalIR expression can be safely evaluated as a method default.

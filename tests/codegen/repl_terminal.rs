@@ -227,7 +227,8 @@ fn test_repl_terminal_controls_and_history() {
     terminal.expect("Error: Call to undefined function isseet()");
     terminal.expect(">>> ");
     for (source, diagnostic) in [
-        ("das\r", "Error: eval() runtime failed"),
+        ("das\r", "Error: Undefined constant \"das\""),
+        ("class ReplTwice {} class ReplTwice {}\r", "Error: eval() runtime failed"),
         ("break;\r", "Error: eval() fragment uses an unsupported construct"),
         ("eval('$a = ;');\r", "Error: eval() fragment is invalid"),
     ] {

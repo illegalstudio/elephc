@@ -496,7 +496,13 @@ alias) and `MYSQLI_OPT_COMPRESS` exist from 8.6. Functions php deprecates
 (`mysqli_ping`, `mysqli_kill`, `mysqli_refresh` in 8.4, `mysqli_execute` in
 8.5, `mysqli_get_charset` / `mysqli_stmt_init` in 8.6) are flagged with php's
 deprecation message in the function reference; like the rest of the surface
-they keep working (elephc raises no runtime `E_DEPRECATED`).
+they keep working (elephc raises no runtime `E_DEPRECATED` for them). The
+constants php deprecates do raise it when read, with php-src's message, from the
+deprecating profile on: `MYSQLI_NO_DATA`, `MYSQLI_DATA_TRUNCATED`,
+`MYSQLI_SERVER_QUERY_NO_GOOD_INDEX_USED`, `MYSQLI_SERVER_QUERY_NO_INDEX_USED`,
+`MYSQLI_SERVER_QUERY_WAS_SLOW`, and `MYSQLI_SERVER_PS_OUT_PARAMS` (8.1),
+`MYSQLI_IS_MARIADB` (8.2), and `MYSQLI_STORE_RESULT_COPY_DATA` and the
+`MYSQLI_REFRESH_*` constants (8.4).
 
 ## Divergences from php-src
 

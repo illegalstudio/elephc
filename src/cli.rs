@@ -124,7 +124,8 @@ Subcommands:
   test [PATH]             Compile and run the test suite under PATH, default `tests`
                           (see `elephc test --help`)
   monitor <TARGET>        Profile a program built with --with-monitoring: a .php
-                          source, a binary, or a running service's address
+                          source, a binary, or a running service's address;
+                          with --apm, a --web service's per-route transactions
                           (see `elephc monitor --help`)
 
 Modes:
@@ -165,8 +166,19 @@ Codegen:
   --with-monitoring=NAMES Embed it for the named functions only (comma list; trailing
                           `*` matches by prefix; name `{main}` for the top-level root;
                           or use @file with one name per line)
+  --with-apm              Embed transaction monitoring alone, without the profiler: a
+                          --web service counts with --apm, a library or a program
+                          built with --apm-collector counts from its start. Also
+                          allowed for a library --emit kind
+  --apm-collector HOST:PORT
+                          Send the transaction counters to `elephc monitor --apm
+                          --listen HOST:PORT` (implies --with-apm unless
+                          --with-monitoring is given)
+  --apm-transaction CLASS::METHOD
+                          Count each call of a method as a transaction of its own,
+                          named after it (repeatable; FUNCTION for a function)
   --heap-debug            Enable heap debug instrumentation
-  --define SYMBOL         Define a symbol for `ifdef` conditional compilation
+  --define SYMBOL        Define a symbol for `ifdef` conditional compilation
   --ini KEY=VALUE         Bake an INI directive override (OPcache and mbstring startup)
   --strict-opcache        Throw when opcache_invalidate() targets AOT-frozen code
 
@@ -257,6 +269,10 @@ pub(crate) struct CliConfig {
     /// Crates with a PHP-surface prelude also force that prelude's injection.
     /// `--with-web` is folded into `web` instead, since it aliases `--web`.
     pub(crate) with_crates: HashSet<String>,
+    /// Where the transaction counters are sent (`--apm-collector host:port`).
+    pub(crate) apm_collector: Option<String>,
+    /// Methods and functions counted as transactions (`--apm-transaction`).
+    pub(crate) apm_transactions: Vec<String>,
     /// Suppresses live/completed progress and bridge-library "Linking" event lines,
     /// forcing plain output regardless of whether stderr is a terminal.
     /// Errors, warnings, and the final success line are unaffected.
@@ -367,6 +383,8 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut gc_stats = false;
     let mut counters = false;
     let mut instrument = crate::codegen::Instrumentation::Off;
+    let mut apm_collector: Option<String> = None;
+    let mut apm_transactions: Vec<String> = Vec::new();
     let mut heap_debug = false;
     let mut strict_opcache = false;
     let mut emit_ir = false;
@@ -465,6 +483,30 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             }
             instrument = crate::codegen::Instrumentation::Only(names);
             with_crates.extend(MONITORING_BRIDGES.iter().map(|s| s.to_string()));
+        } else if arg == "--apm-collector" || arg.starts_with("--apm-collector=") {
+            let value = match arg.strip_prefix("--apm-collector=") {
+                Some(value) => value.to_string(),
+                None => {
+                    i += 1;
+                    args.get(i).cloned().unwrap_or_default()
+                }
+            };
+            if let Err(error) = check_collector_address(&value) {
+                fail(&format!("--apm-collector {value}: {error}"));
+            }
+            apm_collector = Some(value);
+        } else if arg == "--apm-transaction" || arg.starts_with("--apm-transaction=") {
+            let value = match arg.strip_prefix("--apm-transaction=") {
+                Some(value) => value.to_string(),
+                None => {
+                    i += 1;
+                    args.get(i).cloned().unwrap_or_default()
+                }
+            };
+            if let Err(error) = crate::apm_prelude::check_transaction_target(&value) {
+                fail(&format!("--apm-transaction {value}: {error}"));
+            }
+            apm_transactions.push(value);
         } else if arg == "--heap-debug" {
             heap_debug = true;
         } else if arg == "--strict-opcache" {
@@ -590,6 +632,10 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             // so a typo never silently no-ops.
             if name == "web" {
                 web = true;
+            } else if name == "apm" {
+                // Transaction monitoring without the profiler: the probe's
+                // counters and transports, no instrumentation and no sampler.
+                with_crates.insert("probe".to_string());
             } else if name == "monitoring" {
                 // One flag for the whole capability. `--probe` and `--instrument`
                 // used to be two ways to ask a related question, and the answer to
@@ -643,6 +689,16 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     // at every call site with nothing able to arm them — the cost of the
     // capability without the capability. Turning a library on would need an
     // initialization ABI the host calls, which does not exist.
+    // A collector to send to, or transactions to count, need the counters.
+    if apm_collector.is_some() || !apm_transactions.is_empty() {
+        with_crates.insert("probe".to_string());
+    }
+    if emit == Emit::Phpext && with_crates.contains("probe") {
+        fail(
+            "--with-apm cannot be combined with --emit phpext: PHP itself runs the extension, \
+             and its requests are PHP's to count",
+        );
+    }
     if emit.is_library() && !matches!(instrument, crate::codegen::Instrumentation::Off) {
         fail(
             "--with-monitoring cannot be combined with a library --emit kind: a library has no \
@@ -715,8 +771,25 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         web_isolation,
         web_application,
         with_crates,
+        apm_collector,
+        apm_transactions,
         quiet,
         ini_overrides,
+    }
+}
+
+/// Checks a `--apm-collector` address: `host:port`, with a port a program
+/// can connect to. Resolution is the program's, at run time.
+fn check_collector_address(address: &str) -> Result<(), String> {
+    let Some((host, port)) = address.rsplit_once(':') else {
+        return Err("expected HOST:PORT".to_string());
+    };
+    if host.is_empty() {
+        return Err("expected HOST:PORT, the host is missing".to_string());
+    }
+    match port.parse::<u16>() {
+        Ok(0) | Err(_) => Err(format!("`{port}` is not a port")),
+        Ok(_) => Ok(()),
     }
 }
 
@@ -738,7 +811,7 @@ fn with_flag_names() -> Vec<&'static str> {
         .into_iter()
         .filter(|name| !MONITORING_BRIDGES.contains(name))
         .chain(RUNTIME_CAPABILITY_FLAGS.iter().copied())
-        .chain(std::iter::once("monitoring"))
+        .chain(["apm", "monitoring"])
         .collect()
 }
 
@@ -774,6 +847,16 @@ pub(crate) fn help_text() -> String {
 /// compiling anything. Each `native:` field names a managed native package the
 /// project must declare (`elephc native add <package>`) before `--with-<name>`
 /// links, so the release probe prepares exactly what the binary will ask for.
+/// The bridges a capability that is not a bridge of its own links:
+/// `monitoring` both mechanisms, `apm` the probe alone.
+fn capability_bridges(name: &str) -> Option<&'static [&'static str]> {
+    match name {
+        "monitoring" => Some(&MONITORING_BRIDGES),
+        "apm" => Some(&["probe"]),
+        _ => None,
+    }
+}
+
 pub(crate) fn capability_report() -> String {
     let mut report = String::new();
     for name in with_flag_names() {
@@ -781,8 +864,8 @@ pub(crate) fn capability_report() -> String {
             report.push_str(&format!("bridge\t{name}\t{archive}"));
         } else {
             report.push_str(&format!("capability\t{name}"));
-            if name == "monitoring" {
-                for mechanism in MONITORING_BRIDGES {
+            if let Some(mechanisms) = capability_bridges(name) {
+                for mechanism in mechanisms {
                     if let Some(archive) = crate::linker::archive_filename_for_flag(mechanism) {
                         report.push_str(&format!("\t{archive}"));
                     }
@@ -817,7 +900,7 @@ fn native_packages_for_flag(name: &str) -> Vec<&'static str> {
             LinkRequirement::SystemLibrary(_) => {}
         }
     }
-    let flags: Vec<&str> = if name == "monitoring" { MONITORING_BRIDGES.to_vec() } else { vec![name] };
+    let flags: Vec<&str> = capability_bridges(name).map_or_else(|| vec![name], <[&str]>::to_vec);
     libraries.extend(
         flags
             .into_iter()

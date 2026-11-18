@@ -1417,6 +1417,725 @@ echo $d->format(DateTime::RFC822);
     );
 }
 
+/// Verifies the global `DATE_*` format constants match PHP and the `DateTimeInterface` aliases,
+/// and that `date()` / `gmdate()` accept them as format masks. `1719835200` is 2024-07-01 12:00:00
+/// UTC (Monday). `gmdate()` reports the `T` specifier as `GMT`; a Paris `date()` shifts the wall
+/// clock by the summer offset. One output line per constant keeps a failure pointing at its name;
+/// the `DATE_RFC7231` deprecation goes to stderr and is covered separately.
+#[test]
+fn test_date_format_global_constants() {
+    let out = compile_and_run(
+        r#"<?php
+$constants = [
+    "ATOM" => [DATE_ATOM, DateTimeInterface::ATOM],
+    "COOKIE" => [DATE_COOKIE, DateTimeInterface::COOKIE],
+    "ISO8601" => [DATE_ISO8601, DateTimeInterface::ISO8601],
+    "ISO8601_EXPANDED" => [DATE_ISO8601_EXPANDED, DateTimeInterface::ISO8601_EXPANDED],
+    "RFC822" => [DATE_RFC822, DateTimeInterface::RFC822],
+    "RFC850" => [DATE_RFC850, DateTimeInterface::RFC850],
+    "RFC1036" => [DATE_RFC1036, DateTimeInterface::RFC1036],
+    "RFC1123" => [DATE_RFC1123, DateTimeInterface::RFC1123],
+    "RFC7231" => [DATE_RFC7231, DateTimeInterface::RFC7231],
+    "RFC2822" => [DATE_RFC2822, DateTimeInterface::RFC2822],
+    "RFC3339" => [DATE_RFC3339, DateTimeInterface::RFC3339],
+    "RFC3339_EXTENDED" => [DATE_RFC3339_EXTENDED, DateTimeInterface::RFC3339_EXTENDED],
+    "RSS" => [DATE_RSS, DateTimeInterface::RSS],
+    "W3C" => [DATE_W3C, DateTimeInterface::W3C],
+];
+$ts = 1719835200;
+foreach ($constants as $name => $pair) {
+    echo $name, " ", $pair[0] === $pair[1] ? "same" : "differs", " ", gmdate($pair[0], $ts), "\n";
+}
+
+echo "defined ", defined("DATE_ATOM") ? "1" : "0", defined("date_atom") ? "1" : "0", "\n";
+date_default_timezone_set("Europe/Paris");
+echo "paris ", date(DATE_ATOM, $ts), "\n";
+"#,
+    );
+    let expected = [
+        "ATOM same 2024-07-01T12:00:00+00:00",
+        "COOKIE same Monday, 01-Jul-2024 12:00:00 GMT",
+        "ISO8601 same 2024-07-01T12:00:00+0000",
+        "ISO8601_EXPANDED same +2024-07-01T12:00:00+00:00",
+        "RFC822 same Mon, 01 Jul 24 12:00:00 +0000",
+        "RFC850 same Monday, 01-Jul-24 12:00:00 GMT",
+        "RFC1036 same Mon, 01 Jul 24 12:00:00 +0000",
+        "RFC1123 same Mon, 01 Jul 2024 12:00:00 +0000",
+        "RFC7231 same Mon, 01 Jul 2024 12:00:00 GMT",
+        "RFC2822 same Mon, 01 Jul 2024 12:00:00 +0000",
+        "RFC3339 same 2024-07-01T12:00:00+00:00",
+        "RFC3339_EXTENDED same 2024-07-01T12:00:00.000+00:00",
+        "RSS same Mon, 01 Jul 2024 12:00:00 +0000",
+        "W3C same 2024-07-01T12:00:00+00:00",
+        "defined 10",
+        "paris 2024-07-01T14:00:00+02:00",
+    ];
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), expected.len(), "{out}");
+    for (line, expected) in lines.iter().zip(expected) {
+        assert_eq!(*line, expected);
+    }
+}
+
+/// Checking or listing `DATE_RFC7231` (`defined()`, `get_defined_constants()`) is not a fetch,
+/// so PHP raises no deprecation for it; only reading the constant does.
+#[test]
+fn test_defined_and_listing_rfc7231_raise_no_deprecation() {
+    let source = r#"<?php set_error_handler(function (int $l, string $m): bool { echo "DEP:", $m, "\n"; return true; });
+var_dump(defined("DATE_RFC7231"));
+var_dump(defined("DATE_ATOM"));
+$all = get_defined_constants();
+var_dump($all["DATE_RFC7231"]);
+echo "end\n";
+"#;
+    let expected = "bool(true)\nbool(true)\nstring(21) \"D, d M Y H:i:s \\G\\M\\T\"\nend\n";
+    assert_eq!(compile_and_run(source), expected);
+    let eval_source = format!(
+        "<?php set_error_handler(function (int $l, string $m): bool {{ echo \"DEP:\", $m, \"\\n\"; return true; }});\neval(<<<'PHPCODE'\n{}\nPHPCODE);\n",
+        source.lines().skip(1).collect::<Vec<_>>().join("\n")
+    );
+    assert_eq!(compile_and_run(&eval_source), expected);
+}
+
+/// A deprecated predefined constant that the program does not define (`MYSQLI_NO_DATA` without
+/// mysqli) only throws PHP's undefined-constant `Error` from `eval()`; the deprecation belongs
+/// to a fetch that finds the constant.
+#[test]
+fn test_eval_undefined_deprecated_constant_only_throws() {
+    let out = compile_and_run(
+        r#"<?php set_error_handler(function (int $l, string $m): bool { echo "DEP:", $m, "\n"; return true; });
+try { eval('return MYSQLI_NO_DATA;'); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out, "Undefined constant \"MYSQLI_NO_DATA\"\n");
+}
+
+/// A builtin class constant's deprecation belongs to the builtin declaration: a user class
+/// that reuses the name (`Pdo\Pgsql` in a program that does not load pdo_pgsql) declares its
+/// own, silent constant, and an `eval()` read of a class the program does not have only fails
+/// to resolve.
+#[test]
+fn test_builtin_class_constant_deprecations_need_the_builtin_declaration() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Pdo;
+class Pgsql {
+    const TRANSACTION_IDLE = 9;
+    public static function id(): int { return self::TRANSACTION_IDLE; }
+}
+set_error_handler(function (int $l, string $m): bool { echo "DEP:", $m, "\n"; return true; });
+echo Pgsql::id(), "\n";
+echo Pgsql::TRANSACTION_IDLE, "\n";
+"#,
+    );
+    assert_eq!(out, "9\n9\n");
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $l, string $m): bool { echo "DEP:", $m, "\n"; return true; });
+try { eval('return PDO::SQLITE_DETERMINISTIC;'); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out, "Class \"PDO\" not found\n");
+}
+
+/// Reading `DATE_RFC7231` or `DateTimeInterface::RFC7231` raises PHP 8.5's `E_DEPRECATED`
+/// (level 8192) at the read's own line, through every spelling that names the builtin
+/// constant: fully qualified, a namespaced fallback, the implementing builtin classes in any
+/// case, and an import alias. The message always names the declaring interface. The read
+/// still yields the format string, and the sibling constants stay silent.
+#[test]
+fn test_date_rfc7231_read_deprecations() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+use DateTime as Alias;
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", $message, " @", $line, "\n";
+    return true;
+});
+echo DATE_RFC7231, "\n";
+echo \DATE_RFC7231, "\n";
+echo \DateTimeInterface::RFC7231, "\n";
+echo \datetime::RFC7231, "\n";
+echo \DateTimeImmutable::RFC7231, "\n";
+echo Alias::RFC7231, "\n";
+echo DATE_RFC1123, " ", \DateTime::RFC1123, "\n";
+"#,
+    );
+    let global = "[8192] Constant DATE_RFC7231 is deprecated since 8.5, as this format ignores the associated timezone and always uses GMT";
+    let class = "[8192] Constant DateTimeInterface::RFC7231 is deprecated since 8.5, as this format ignores the associated timezone and always uses GMT";
+    let format = "D, d M Y H:i:s \\G\\M\\T";
+    assert_eq!(
+        out,
+        format!(
+            "{global} @8\n{format}\n{global} @9\n{format}\n{class} @10\n{format}\n{class} @11\n{format}\n{class} @12\n{format}\n{class} @13\n{format}\nD, d M Y H:i:s O D, d M Y H:i:s O\n"
+        )
+    );
+}
+
+/// Reads that reach `DateTimeInterface::RFC7231` through the class hierarchy deprecate too: a
+/// user subclass named directly, `self::`, `static::`, and `parent::` inside it. A subclass that
+/// redeclares the constant reads its own value silently, and `constant("DATE_RFC7231")`
+/// reports like a bare read.
+#[test]
+fn test_date_rfc7231_inherited_read_deprecations() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", substr($message, 0, strpos($message, " is deprecated")), " @", $line, "\n";
+    return true;
+});
+class Stamp extends DateTime {
+    public function viaSelf(): string { return self::RFC7231; }
+    public function viaStatic(): string { return static::RFC7231; }
+    public function viaParent(): string { return parent::RFC7231; }
+}
+class Own extends DateTimeImmutable {
+    const string RFC7231 = "own";
+}
+echo Stamp::RFC7231, "\n";
+$stamp = new Stamp("2024-07-01");
+echo $stamp->viaSelf(), "\n";
+echo $stamp->viaStatic(), "\n";
+echo $stamp->viaParent(), "\n";
+echo Own::RFC7231, "\n";
+echo constant("DATE_RFC7231"), "\n";
+"#,
+    );
+    let class = "[8192] Constant DateTimeInterface::RFC7231";
+    let format = "D, d M Y H:i:s \\G\\M\\T";
+    assert_eq!(
+        out,
+        format!(
+            "{class} @14\n{format}\n{class} @7\n{format}\n{class} @8\n{format}\n{class} @9\n{format}\nown\n[8192] Constant DATE_RFC7231 @20\n{format}\n"
+        )
+    );
+}
+
+/// `static::RFC7231` deprecates according to the called class's own declaration: the inherited
+/// builtin constant warns (for the lexical class and a plain descendant), while a descendant
+/// that redeclares it reads silently, whether its value differs or repeats the builtin string.
+#[test]
+fn test_date_rfc7231_static_read_follows_called_class() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", substr($message, 0, strpos($message, " is deprecated")), " @", $line, "\n";
+    return true;
+});
+class Base extends DateTime {
+    public function fmt(): string { return static::RFC7231; }
+}
+class Other extends Base {
+    const string RFC7231 = "custom";
+}
+class Same extends Base {
+    const string RFC7231 = 'D, d M Y H:i:s \G\M\T';
+}
+class Plain extends Base {}
+echo (new Base("2024-07-01"))->fmt(), "\n";
+echo (new Other("2024-07-01"))->fmt(), "\n";
+echo (new Same("2024-07-01"))->fmt(), "\n";
+echo (new Plain("2024-07-01"))->fmt(), "\n";
+"#,
+    );
+    let class = "[8192] Constant DateTimeInterface::RFC7231 @7";
+    let format = "D, d M Y H:i:s \\G\\M\\T";
+    assert_eq!(out, format!("{class}\n{format}\ncustom\n{format}\n{class}\n{format}\n"));
+}
+
+/// An inherited `RFC7231` read written inside a declared initializer (a class constant, a
+/// property default, a parameter default, `parent::` in a subclass constant) deprecates on the
+/// first evaluation only, as PHP's cached initializers do, while a direct read in code
+/// deprecates every time it runs.
+#[test]
+fn test_date_rfc7231_initializer_reads_deprecate_once() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", substr($message, 0, strpos($message, " is deprecated")), " @", $line, "\n";
+    return true;
+});
+class Stamp extends DateTime {
+    const OWN = parent::RFC7231;
+}
+class Formats {
+    const HTTP = Stamp::RFC7231;
+    public string $format = Stamp::RFC7231;
+}
+function g($format = Stamp::RFC7231) { return $format; }
+for ($i = 0; $i < 2; $i++) {
+    echo Formats::HTTP, "\n";
+    echo g(), "\n";
+    echo (new Formats())->format, "\n";
+    echo Stamp::OWN, "\n";
+    echo Stamp::RFC7231, "\n";
+}
+"#,
+    );
+    let class = "[8192] Constant DateTimeInterface::RFC7231";
+    let format = "D, d M Y H:i:s \\G\\M\\T";
+    assert_eq!(
+        out,
+        format!(
+            "{class} @10\n{format}\n{class} @13\n{format}\n{class} @11\n{format}\n{class} @7\n{format}\n{class} @19\n{format}\n{format}\n{format}\n{format}\n{format}\n{class} @19\n{format}\n"
+        )
+    );
+}
+
+/// `define()` reports a deprecated constant argument once, when the call runs, and later reads
+/// of the defined constant stay silent. Closure and arrow-function parameter defaults deprecate
+/// on the first call that omits the argument only, like named functions' defaults.
+#[test]
+fn test_date_rfc7231_define_and_closure_defaults_deprecate_once() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", substr($message, 0, strpos($message, " is deprecated")), " @", $line, "\n";
+    return true;
+});
+define("FOO", DATE_RFC7231);
+define("BAR", DateTime::RFC7231);
+define("MODE", MT_RAND_PHP);
+$g = function ($format = DateTime::RFC7231) { return $format; };
+$h = fn ($format = DATE_RFC7231) => $format;
+for ($i = 0; $i < 2; $i++) {
+    echo FOO, "|", BAR, "|", MODE, "\n";
+    echo $g(), "\n";
+    echo $h(), "\n";
+}
+echo $g("x"), "\n";
+"#,
+    );
+    let class = "[8192] Constant DateTimeInterface::RFC7231";
+    let format = "D, d M Y H:i:s \\G\\M\\T";
+    assert_eq!(
+        out,
+        format!(
+            "[8192] Constant DATE_RFC7231 @6\n{class} @7\n[8192] Constant MT_RAND_PHP @8\n{format}|{format}|1\n{class} @9\n{format}\n[8192] Constant DATE_RFC7231 @10\n{format}\n{format}|{format}|1\n{format}\n{format}\nx\n"
+        )
+    );
+}
+
+/// A named function's deprecated default reports once across every way of calling it: a
+/// dynamic string callable and `call_user_func()` fill the omitted default through the
+/// descriptor invoker, a direct call lowers it inline, and all three share one notice.
+#[test]
+fn test_date_rfc7231_dynamic_call_default_deprecates_once() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", substr($message, 0, strpos($message, " is deprecated")), " @", $line, "\n";
+    return true;
+});
+function k($format = DATE_RFC7231) { return $format; }
+$name = "k";
+echo $name(), "\n";
+echo call_user_func("k"), "\n";
+echo k(), "\n";
+"#,
+    );
+    let format = "D, d M Y H:i:s \\G\\M\\T";
+    assert_eq!(out, format!("[8192] Constant DATE_RFC7231 @6\n{format}\n{format}\n{format}\n"));
+}
+
+/// Property defaults deprecate when PHP initializes their class: on the first instantiation
+/// (including a dynamic `new $cls` of a subclass, which initializes the parent) or the first
+/// static-property access, once per class, covering instance and static defaults alike. A
+/// static method call or an untouched class raises nothing.
+#[test]
+fn test_date_rfc7231_class_initialization_deprecates_once() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", substr($message, 0, strpos($message, " is deprecated")), " @", $line, "\n";
+    return true;
+});
+class P {
+    public static string $p = DateTime::RFC7231;
+}
+class C extends P {}
+class A {
+    public string $x = DateTime::RFC7231;
+    public static int $n = 1;
+}
+class B {
+    public static int $n = 1;
+    public static string $s = DateTimeImmutable::RFC7231;
+    public static function f(): int { return 7; }
+}
+class Untouched {
+    public static string $u = DateTime::RFC7231;
+}
+echo "start\n";
+echo B::f(), "\n";
+$cls = "C";
+new $cls;
+new P;
+echo A::$n, "\n";
+new A;
+echo B::$n, "\n";
+B::$n = 2;
+echo P::$p, "\n";
+"#,
+    );
+    let class = "[8192] Constant DateTimeInterface::RFC7231";
+    assert_eq!(
+        out,
+        format!("start\n7\n{class} @7\n{class} @11\n1\n{class} @16\n1\nD, d M Y H:i:s \\G\\M\\T\n")
+    );
+}
+
+/// `eval()` deprecates `RFC7231` reads through an object receiver, a compiled user subclass,
+/// and an eval-declared subclass, and stays silent for a compiled subclass that redeclares it.
+#[test]
+fn test_date_rfc7231_eval_inherited_read_deprecations() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo "[", $level, "] ", substr($message, 0, strpos($message, " is deprecated")), "\n";
+    return true;
+});
+class Stamp extends DateTime {}
+class Own extends DateTimeImmutable {
+    const string RFC7231 = "own";
+}
+$stamp = new Stamp("2024-07-01");
+echo eval('return $stamp::RFC7231;'), "\n";
+echo eval('return Stamp::RFC7231;'), "\n";
+echo eval('class EvalStamp extends DateTimeImmutable {} return EvalStamp::RFC7231;'), "\n";
+echo eval('return Own::RFC7231;'), "\n";
+"#,
+    );
+    let class = "[8192] Constant DateTimeInterface::RFC7231";
+    let format = "D, d M Y H:i:s \\G\\M\\T";
+    assert_eq!(out, format!("{class}\n{format}\n{class}\n{format}\n{class}\n{format}\nown\n"));
+}
+
+/// `eval()` follows PHP's lazy initializers: a class constant deprecates on its first read and
+/// never when unread, instance and static property defaults on the class's first static access
+/// (instance defaults first) and never again on later `new`s, an untouched class never, and a
+/// parameter default on its first omitted call only.
+#[test]
+fn test_date_rfc7231_eval_initializers_deprecate_lazily_once() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo "[", $level, "] ", substr($message, 0, strpos($message, " is deprecated")), "\n";
+    return true;
+});
+eval('
+class EvalFormats {
+    const HTTP = DateTime::RFC7231;
+    const UNREAD = DATE_RFC7231;
+}
+class EvalProps {
+    public string $format = DateTime::RFC7231;
+    public static int $n = 1;
+    public static string $s = DateTimeImmutable::RFC7231;
+}
+class EvalUntouched {
+    public static string $u = DateTime::RFC7231;
+}
+function eval_h($format = DATE_RFC7231) { return $format; }
+echo "declared\n";
+echo EvalFormats::HTTP, "\n";
+echo EvalFormats::HTTP, "\n";
+echo EvalProps::$n, "\n";
+new EvalProps;
+new EvalProps;
+echo eval_h("x"), "\n";
+echo eval_h(), "\n";
+echo eval_h(), "\n";
+');
+"#,
+    );
+    let class = "[8192] Constant DateTimeInterface::RFC7231";
+    let format = "D, d M Y H:i:s \\G\\M\\T";
+    assert_eq!(
+        out,
+        format!(
+            "declared\n{class}\n{format}\n{format}\n{class}\n{class}\n1\nx\n[8192] Constant DATE_RFC7231\n{format}\n{format}\n"
+        )
+    );
+}
+
+/// A `static` variable initializer deprecates when PHP evaluates it: on the function's first
+/// call only. (Compiled code accepts only literal enum backing values and literal reflected
+/// attribute arguments, and `eval()` only literal attribute arguments, so those sites cannot
+/// hold a deprecated read; `eval()` enum case values are covered below.)
+#[test]
+fn test_date_rfc7231_static_var_initializer_deprecates_once() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", substr($message, 0, strpos($message, " is deprecated")), " @", $line, "\n";
+    return true;
+});
+function counter(): string {
+    static $format = DateTime::RFC7231;
+    return $format;
+}
+echo "start\n";
+echo counter(), "\n";
+echo counter(), "\n";
+"#,
+    );
+    let format = "D, d M Y H:i:s \\G\\M\\T";
+    assert_eq!(
+        out,
+        format!("start\n[8192] Constant DateTimeInterface::RFC7231 @7\n{format}\n{format}\n")
+    );
+}
+
+/// In `eval()`, backed enum case values deprecate once, on the first use of the enum (a case
+/// fetch here, or `cases()`/`from()`/`tryFrom()`), not when the enum is declared, and a
+/// `static` variable initializer on the function's first call only.
+#[test]
+fn test_date_rfc7231_eval_enum_cases_and_static_vars_deprecate_once() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo "[", $level, "] ", substr($message, 0, strpos($message, " is deprecated")), "\n";
+    return true;
+});
+eval('
+enum EvalFmt: string {
+    case Http = DateTime::RFC7231;
+    case Rss = DATE_RSS;
+}
+enum EvalLookup: string {
+    case Http = DateTime::RFC7231;
+    case Plain = "plain";
+}
+function eval_counter(): string {
+    static $format = DateTime::RFC7231;
+    return $format;
+}
+echo "start\n";
+echo EvalFmt::Rss->value, "\n";
+echo EvalFmt::Http->value, "\n";
+echo EvalLookup::tryFrom("plain")->value, "\n";
+echo EvalLookup::tryFrom("plain")->value, "\n";
+echo eval_counter(), "\n";
+echo eval_counter(), "\n";
+');
+"#,
+    );
+    let class = "[8192] Constant DateTimeInterface::RFC7231";
+    let format = "D, d M Y H:i:s \\G\\M\\T";
+    assert_eq!(
+        out,
+        format!(
+            "start\n{class}\nD, d M Y H:i:s O\n{format}\n{class}\nplain\nplain\n{class}\n{format}\n{format}\n"
+        )
+    );
+}
+
+/// Class initialization follows php-src's per-class order: ancestors first, each class
+/// evaluating its flattened instance defaults (so an inherited default reports once per
+/// initialized class) and then its own static defaults. A global constant reports at the
+/// triggering line (`new K`, the class-constant read), a class constant at its own line.
+/// Reflection initializes the class on `getDefaultProperties()` / `getStaticProperties()`
+/// (not on `new ReflectionClass`), and `getDefaultProperties()` evaluates the static defaults
+/// again on every call.
+#[test]
+fn test_date_rfc7231_class_initialization_order_and_reflection() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo substr($message, 0, strpos($message, " is deprecated")), " @", $line, "\n";
+    return true;
+});
+class G { public string $g = DateTime::RFC7231; }
+class P extends G { public string $p = DateTimeImmutable::RFC7231; }
+class K extends P { public static int $n = MT_RAND_PHP; }
+class Formats { const GLOBAL = DATE_RFC7231; }
+class A {
+    public static string $s = DateTime::RFC7231;
+    public string $i = DateTime::RFC7231;
+}
+echo "new K\n";
+new K;
+echo "new G\n";
+new G;
+echo "new K again\n";
+new K;
+echo "const\n";
+echo strlen(Formats::GLOBAL), "\n";
+$r = new ReflectionClass(A::class);
+echo "gdp1\n";
+$r->getDefaultProperties();
+echo "gdp2\n";
+$r->getDefaultProperties();
+echo "gsp\n";
+$r->getStaticProperties();
+echo "end\n";
+"#,
+    );
+    let class = "Constant DateTimeInterface::RFC7231";
+    assert_eq!(
+        out,
+        format!(
+            "new K\n{class} @6\n{class} @6\n{class} @7\n{class} @6\n{class} @7\nConstant MT_RAND_PHP @15\nnew G\nnew K again\nconst\nConstant DATE_RFC7231 @21\n21\ngdp1\n{class} @12\n{class} @11\n{class} @11\ngdp2\n{class} @11\ngsp\nend\n"
+        )
+    );
+}
+
+/// `eval()` follows the same per-class initialization order, global and class-constant
+/// notices, and reflection triggers as compiled code.
+#[test]
+fn test_date_rfc7231_eval_class_initialization_order_and_reflection() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo substr($message, 0, strpos($message, " is deprecated")), "\n";
+    return true;
+});
+eval('
+class G { public string $g = DateTime::RFC7231; }
+class P extends G { public string $p = DateTimeImmutable::RFC7231; }
+class K extends P { public static int $n = MT_RAND_PHP; }
+class Formats { const GLOBAL = DATE_RFC7231; }
+class A {
+    public static string $s = DateTime::RFC7231;
+    public string $i = DateTime::RFC7231;
+}
+echo "new K\n";
+new K;
+echo "new G\n";
+new G;
+echo "new K again\n";
+new K;
+echo "const\n";
+echo strlen(Formats::GLOBAL), "\n";
+$r = new ReflectionClass(A::class);
+echo "gdp1\n";
+$r->getDefaultProperties();
+echo "gdp2\n";
+$r->getDefaultProperties();
+echo "gsp\n";
+$r->getStaticProperties();
+echo "end\n";
+');
+"#,
+    );
+    let class = "Constant DateTimeInterface::RFC7231";
+    assert_eq!(
+        out,
+        format!(
+            "new K\n{class}\n{class}\n{class}\n{class}\n{class}\nConstant MT_RAND_PHP\nnew G\nnew K again\nconst\nConstant DATE_RFC7231\n21\ngdp1\n{class}\n{class}\n{class}\ngdp2\n{class}\ngsp\nend\n"
+        )
+    );
+}
+
+/// Without a handler the `DATE_RFC7231` deprecation reaches stderr in PHP's
+/// `Deprecated: ... on line N` shape and leaves stdout untouched.
+#[test]
+fn test_date_rfc7231_deprecation_default_report() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+echo DATE_RFC7231, "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "D, d M Y H:i:s \\G\\M\\T\n");
+    assert!(
+        out.stderr.contains(
+            "Deprecated: Constant DATE_RFC7231 is deprecated since 8.5, as this format ignores the associated timezone and always uses GMT"
+        ),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("on line 2"), "{}", out.stderr);
+}
+
+/// The constant-read deprecations follow the selected PHP profile: `DATE_RFC7231` and
+/// `DateTime::RFC7231` deprecate from 8.5, `E_STRICT` from 8.4, and `MT_RAND_PHP` from 8.3.
+#[test]
+fn test_constant_read_deprecations_follow_php_profile() {
+    let source = r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo "[", $level, "] ", substr($message, 0, strpos($message, " is deprecated")), "\n";
+    return true;
+});
+$values = [DATE_RFC7231, DateTime::RFC7231, MT_RAND_PHP, E_STRICT];
+echo count($values), "\n";
+"#;
+    let cases = [
+        (elephc::php_version::PhpVersion::Php82, "4\n"),
+        (elephc::php_version::PhpVersion::Php83, "[8192] Constant MT_RAND_PHP\n4\n"),
+        (
+            elephc::php_version::PhpVersion::Php84,
+            "[8192] Constant MT_RAND_PHP\n[8192] Constant E_STRICT\n4\n",
+        ),
+        (
+            elephc::php_version::PhpVersion::Php85,
+            "[8192] Constant DATE_RFC7231\n[8192] Constant DateTimeInterface::RFC7231\n[8192] Constant MT_RAND_PHP\n[8192] Constant E_STRICT\n4\n",
+        ),
+    ];
+    for (profile, expected) in cases {
+        assert_eq!(compile_and_run_with_php_version(source, profile), expected, "{profile:?}");
+    }
+}
+
+/// `DATE_RFC7231` and `DateTime::RFC7231` stay usable inside constant expressions (a global
+/// `const`, a class constant, a parameter default) and deprecate when PHP evaluates them: the
+/// global `const` when its statement runs, the class constant and the default on first use
+/// only, at the line of the initializer.
+#[test]
+fn test_date_rfc7231_constant_expressions() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", substr($message, 0, strpos($message, " is deprecated")), " @", $line, "\n";
+    return true;
+});
+const GLOBAL_FORMAT = DATE_RFC7231;
+class Formats {
+    const HTTP = DateTime::RFC7231;
+}
+function http_format(string $format = DateTimeImmutable::RFC7231): string {
+    return $format;
+}
+for ($i = 0; $i < 2; $i++) {
+    echo GLOBAL_FORMAT, "\n";
+    echo Formats::HTTP, "\n";
+    echo http_format(), "\n";
+}
+"#,
+    );
+    let class = "[8192] Constant DateTimeInterface::RFC7231";
+    let format = "D, d M Y H:i:s \\G\\M\\T";
+    assert_eq!(
+        out,
+        format!(
+            "[8192] Constant DATE_RFC7231 @6\n{format}\n{class} @8\n{format}\n{class} @10\n{format}\n{format}\n{format}\n{format}\n"
+        )
+    );
+}
+
+/// `eval()` reports the same deprecation for a bare read, `constant()`, and a builtin class
+/// receiver, and keeps the values.
+#[test]
+fn test_date_rfc7231_eval_read_deprecations() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo "[", $level, "] ", substr($message, 0, strpos($message, " is deprecated")), "\n";
+    return true;
+});
+echo eval('return DATE_RFC7231;'), "\n";
+echo eval('return constant("DATE_RFC7231");'), "\n";
+echo eval('return DateTime::RFC7231;'), "\n";
+echo eval('return DATE_RFC1123;'), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "[8192] Constant DATE_RFC7231\nD, d M Y H:i:s \\G\\M\\T\n[8192] Constant DATE_RFC7231\nD, d M Y H:i:s \\G\\M\\T\n[8192] Constant DateTimeInterface::RFC7231\nD, d M Y H:i:s \\G\\M\\T\nD, d M Y H:i:s O\n"
+    );
+}
+
 /// Verifies `DateInterval::format()` renders `%f` (microseconds, no padding) and `%F`
 /// (microseconds zero-padded to six digits) from the public `$f` fractional-second float,
 /// matching PHP for both the default 0.0 and an assigned fraction.
@@ -2456,4 +3175,376 @@ echo ($a <=> $b);
 "#,
     );
     assert_eq!(out, "101-1");
+}
+
+/// The `SUNFUNCS_RET_*` constants are deprecated since PHP 8.4, each read raising php-src's
+/// message at its line, interleaved with `echo`'s left-to-right output.
+#[test]
+fn test_sunfuncs_constants_read_deprecations() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", $message, " @", $line, "\n";
+    return true;
+});
+echo SUNFUNCS_RET_TIMESTAMP, SUNFUNCS_RET_STRING, SUNFUNCS_RET_DOUBLE, "\n";
+"#,
+    );
+    let reason = "is deprecated since 8.4, as date_sunrise() and date_sunset() were deprecated in 8.1 @6";
+    assert_eq!(
+        out,
+        format!(
+            "[8192] Constant SUNFUNCS_RET_TIMESTAMP {reason}\n0[8192] Constant SUNFUNCS_RET_STRING {reason}\n1[8192] Constant SUNFUNCS_RET_DOUBLE {reason}\n2\n"
+        )
+    );
+}
+
+/// A builtin whose omitted argument defaults to a deprecated constant (`date_sunrise()`'s
+/// `$returnFormat = SUNFUNCS_RET_STRING`) does not report that constant: php-src's internal
+/// function never fetches it.
+#[test]
+fn test_builtin_default_deprecated_constant_stays_silent() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo $message, "\n";
+    return true;
+});
+$sunrise = date_sunrise(0);
+echo is_string($sunrise) ? "string" : "other", "\n";
+"#,
+    );
+    assert!(!out.contains("Constant SUNFUNCS_RET_STRING"), "{out}");
+    assert!(out.ends_with("string\n"), "{out}");
+}
+
+/// Class initialization keeps php-src's slot order (a non-private redeclaration evaluates in
+/// its parent's slot, before the parent's later properties), `getDefaultProperties()` replays
+/// only the static defaults visible on the reflected class (not a redeclared one, not an
+/// ancestor's private one), and `getStaticPropertyValue()` / `setStaticPropertyValue()`
+/// initialize the reflected class after their arguments, whether the property exists or not.
+#[test]
+fn test_date_rfc7231_slot_order_and_reflected_static_values() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo substr($message, 0, strpos($message, " is deprecated")), "\n";
+    return true;
+});
+class P { public $a = DATE_RFC7231; public $b = MT_RAND_PHP; public $c = SUNFUNCS_RET_STRING; }
+class C extends P { public $b = E_STRICT; public $d = SUNFUNCS_RET_DOUBLE; }
+echo "new C\n";
+new C;
+class PS { public static $s = DateTime::RFC7231; public static $t = MT_RAND_PHP; }
+class CS extends PS { public static $s = DATE_ATOM; }
+$r = new ReflectionClass(CS::class);
+echo "gdp CS 1\n";
+$r->getDefaultProperties();
+echo "gdp CS 2\n";
+$r->getDefaultProperties();
+class P2 { private static $only = DateTime::RFC7231; }
+class C2 extends P2 { public static $other = MT_RAND_PHP; }
+echo "new C2\n";
+new C2;
+echo "gdp C2\n";
+(new ReflectionClass(C2::class))->getDefaultProperties();
+class A { public static $s = DateTime::RFC7231; public $i = MT_RAND_PHP; }
+echo "get A\n";
+(new ReflectionClass(A::class))->getStaticPropertyValue("s", DATE_RFC7231);
+echo "new A\n";
+new A;
+class P3 { public $i = DateTime::RFC7231; public static $s = "ok"; }
+class C3 extends P3 {}
+echo "set C3\n";
+(new ReflectionClass(C3::class))->setStaticPropertyValue("s", "x");
+echo "new C3\n";
+new C3;
+class P4 { public $i = DateTime::RFC7231; }
+class C4 extends P4 {}
+echo "missing C4\n";
+echo (new ReflectionClass(C4::class))->getStaticPropertyValue("missing", 1), "\n";
+echo "new C4\n";
+new C4;
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "new C\nConstant DATE_RFC7231\nConstant MT_RAND_PHP\nConstant SUNFUNCS_RET_STRING\nConstant DATE_RFC7231\nConstant E_STRICT\nConstant SUNFUNCS_RET_STRING\nConstant SUNFUNCS_RET_DOUBLE\ngdp CS 1\nConstant DateTimeInterface::RFC7231\nConstant MT_RAND_PHP\nConstant MT_RAND_PHP\ngdp CS 2\nConstant MT_RAND_PHP\nnew C2\nConstant DateTimeInterface::RFC7231\nConstant MT_RAND_PHP\ngdp C2\nConstant MT_RAND_PHP\nget A\nConstant DATE_RFC7231\nConstant MT_RAND_PHP\nConstant DateTimeInterface::RFC7231\nnew A\nset C3\nConstant DateTimeInterface::RFC7231\nConstant DateTimeInterface::RFC7231\nnew C3\nmissing C4\nConstant DateTimeInterface::RFC7231\nConstant DateTimeInterface::RFC7231\n1\nnew C4\nend\n");
+}
+
+/// `eval()` matches the same slot order, visible-static replay, and static-property-value
+/// initialization as compiled code.
+#[test]
+fn test_date_rfc7231_eval_slot_order_and_reflected_static_values() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo substr($message, 0, strpos($message, " is deprecated")), "\n";
+    return true;
+});
+eval('
+class P { public $a = DATE_RFC7231; public $b = MT_RAND_PHP; public $c = SUNFUNCS_RET_STRING; }
+class C extends P { public $b = E_STRICT; public $d = SUNFUNCS_RET_DOUBLE; }
+echo "new C\n";
+new C;
+class PS { public static $s = DateTime::RFC7231; public static $t = MT_RAND_PHP; }
+class CS extends PS { public static $s = DATE_ATOM; }
+$r = new ReflectionClass(CS::class);
+echo "gdp CS 1\n";
+$r->getDefaultProperties();
+echo "gdp CS 2\n";
+$r->getDefaultProperties();
+class P2 { private static $only = DateTime::RFC7231; }
+class C2 extends P2 { public static $other = MT_RAND_PHP; }
+echo "new C2\n";
+new C2;
+echo "gdp C2\n";
+(new ReflectionClass(C2::class))->getDefaultProperties();
+class A { public static $s = DateTime::RFC7231; public $i = MT_RAND_PHP; }
+echo "get A\n";
+(new ReflectionClass(A::class))->getStaticPropertyValue("s", DATE_RFC7231);
+echo "new A\n";
+new A;
+class P3 { public $i = DateTime::RFC7231; public static $s = "ok"; }
+class C3 extends P3 {}
+echo "set C3\n";
+(new ReflectionClass(C3::class))->setStaticPropertyValue("s", "x");
+echo "new C3\n";
+new C3;
+class P4 { public $i = DateTime::RFC7231; }
+class C4 extends P4 {}
+echo "missing C4\n";
+echo (new ReflectionClass(C4::class))->getStaticPropertyValue("missing", 1), "\n";
+echo "new C4\n";
+new C4;
+echo "end\n";
+');
+"#,
+    );
+    assert_eq!(out, "new C\nConstant DATE_RFC7231\nConstant MT_RAND_PHP\nConstant SUNFUNCS_RET_STRING\nConstant DATE_RFC7231\nConstant E_STRICT\nConstant SUNFUNCS_RET_STRING\nConstant SUNFUNCS_RET_DOUBLE\ngdp CS 1\nConstant DateTimeInterface::RFC7231\nConstant MT_RAND_PHP\nConstant MT_RAND_PHP\ngdp CS 2\nConstant MT_RAND_PHP\nnew C2\nConstant DateTimeInterface::RFC7231\nConstant MT_RAND_PHP\ngdp C2\nConstant MT_RAND_PHP\nget A\nConstant DATE_RFC7231\nConstant MT_RAND_PHP\nConstant DateTimeInterface::RFC7231\nnew A\nset C3\nConstant DateTimeInterface::RFC7231\nConstant DateTimeInterface::RFC7231\nnew C3\nmissing C4\nConstant DateTimeInterface::RFC7231\nConstant DateTimeInterface::RFC7231\n1\nnew C4\nend\n");
+}
+
+/// Untyped property defaults typed by a predefined constant keep that constant's type: a
+/// `DATE_*` string alone or inside an array, and a float constant, are stored and read back.
+#[test]
+fn test_date_format_constants_as_untyped_property_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class F {
+    public $atom = DATE_ATOM;
+    public $list = [DATE_RSS, DATE_W3C];
+    public $pi = M_PI;
+    public $static = DATE_COOKIE;
+}
+$f = new F;
+echo $f->atom, "|", implode(",", $f->list), "|", round($f->pi, 2), "|", $f->static, "\n";
+"#,
+    );
+    assert_eq!(out, "Y-m-d\\TH:i:sP|D, d M Y H:i:s O,Y-m-d\\TH:i:sP|3.14|l, d-M-Y H:i:s T\n");
+}
+
+/// `getDefaultProperties()` re-evaluates the visible static defaults walking from the
+/// reflected class toward the root, each class's own statics in declaration order; a class
+/// initializes its own declarations before its trait imports; a property default that reads a
+/// user class constant reports that constant's deprecated read once, when php-src first
+/// evaluates the constant; and a shadowed private parent slot keeps its own declarer for
+/// `self::` (its value and its notice).
+#[test]
+fn test_date_rfc7231_reflection_traits_and_class_constant_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo substr($message, 0, strpos($message, " is deprecated")), "\n";
+    return true;
+});
+class PS { protected static $s = DateTime::RFC7231; public static $t = MT_RAND_PHP; }
+class CS extends PS { public static $u = SUNFUNCS_RET_DOUBLE; }
+$r = new ReflectionClass(CS::class);
+$r->getDefaultProperties();
+echo "2nd CS\n";
+$r->getDefaultProperties();
+class G { public static $g = DateTime::RFC7231; public static $g2 = SUNFUNCS_RET_STRING; }
+class M extends G { public static $m = MT_RAND_PHP; public static $g2 = SUNFUNCS_RET_TIMESTAMP; }
+$r = new ReflectionClass(M::class);
+$r->getDefaultProperties();
+echo "2nd M\n";
+$r->getDefaultProperties();
+trait T { public $t = DATE_RFC7231; public static $ts = MT_RAND_PHP; }
+class U { public $a = SUNFUNCS_RET_STRING; use T; public $b = E_STRICT; public static $us = SUNFUNCS_RET_DOUBLE; }
+echo "new U\n";
+new U;
+$r = new ReflectionClass(U::class);
+$r->getDefaultProperties();
+echo "2nd U\n";
+$r->getDefaultProperties();
+class NC { public const C = DateTime::RFC7231; public $a = self::C; }
+echo "new NC\n";
+new NC;
+echo "new NC2\n";
+new NC;
+echo "read\n";
+echo strlen(NC::C), "\n";
+class ND extends NC { public $b = MT_RAND_PHP; }
+echo "new ND\n";
+new ND;
+class SP extends DateTime { private $a = self::RFC7231; public function pa() { return $this->a; } }
+class SC extends SP { public const string RFC7231 = "Y-m-d"; public $a = MT_RAND_PHP; }
+echo "new SC\n";
+$o = new SC;
+echo $o->pa(), "|", $o->a, "\n";
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "Constant DateTimeInterface::RFC7231\nConstant MT_RAND_PHP\nConstant SUNFUNCS_RET_DOUBLE\nConstant SUNFUNCS_RET_DOUBLE\nConstant DateTimeInterface::RFC7231\nConstant MT_RAND_PHP\n2nd CS\nConstant SUNFUNCS_RET_DOUBLE\nConstant DateTimeInterface::RFC7231\nConstant MT_RAND_PHP\nConstant DateTimeInterface::RFC7231\nConstant SUNFUNCS_RET_STRING\nConstant MT_RAND_PHP\nConstant SUNFUNCS_RET_TIMESTAMP\nConstant MT_RAND_PHP\nConstant SUNFUNCS_RET_TIMESTAMP\nConstant DateTimeInterface::RFC7231\n2nd M\nConstant MT_RAND_PHP\nConstant SUNFUNCS_RET_TIMESTAMP\nConstant DateTimeInterface::RFC7231\nnew U\nConstant SUNFUNCS_RET_STRING\nConstant E_STRICT\nConstant DATE_RFC7231\nConstant SUNFUNCS_RET_DOUBLE\nConstant MT_RAND_PHP\nConstant SUNFUNCS_RET_DOUBLE\nConstant MT_RAND_PHP\n2nd U\nConstant SUNFUNCS_RET_DOUBLE\nConstant MT_RAND_PHP\nnew NC\nConstant DateTimeInterface::RFC7231\nnew NC2\nread\n21\nnew ND\nConstant MT_RAND_PHP\nnew SC\nConstant DateTimeInterface::RFC7231\nConstant DateTimeInterface::RFC7231\nConstant MT_RAND_PHP\nD, d M Y H:i:s \\G\\M\\T|1\nend\n");
+}
+
+/// `eval()` matches the same replay order, trait order, class-constant caching, and shadowed
+/// private slot as compiled code. (Eval does not parse typed class constants yet, so its `SC`
+/// keeps no redeclaration, and an eval class extending `DateTime` cannot access a shadowed
+/// private property yet, so `SP` reads `DateTime::RFC7231` directly; its private slot is still
+/// evaluated once per initialized class.)
+#[test]
+fn test_date_rfc7231_eval_reflection_traits_and_class_constant_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo substr($message, 0, strpos($message, " is deprecated")), "\n";
+    return true;
+});
+eval('
+class PS { protected static $s = DateTime::RFC7231; public static $t = MT_RAND_PHP; }
+class CS extends PS { public static $u = SUNFUNCS_RET_DOUBLE; }
+$r = new ReflectionClass(CS::class);
+$r->getDefaultProperties();
+echo "2nd CS\\n";
+$r->getDefaultProperties();
+class G { public static $g = DateTime::RFC7231; public static $g2 = SUNFUNCS_RET_STRING; }
+class M extends G { public static $m = MT_RAND_PHP; public static $g2 = SUNFUNCS_RET_TIMESTAMP; }
+$r = new ReflectionClass(M::class);
+$r->getDefaultProperties();
+echo "2nd M\\n";
+$r->getDefaultProperties();
+trait T { public $t = DATE_RFC7231; public static $ts = MT_RAND_PHP; }
+class U { public $a = SUNFUNCS_RET_STRING; use T; public $b = E_STRICT; public static $us = SUNFUNCS_RET_DOUBLE; }
+echo "new U\\n";
+new U;
+$r = new ReflectionClass(U::class);
+$r->getDefaultProperties();
+echo "2nd U\\n";
+$r->getDefaultProperties();
+class NC { public const C = DateTime::RFC7231; public $a = self::C; }
+echo "new NC\\n";
+new NC;
+echo "new NC2\\n";
+new NC;
+echo "read\\n";
+echo strlen(NC::C), "\\n";
+class ND extends NC { public $b = MT_RAND_PHP; }
+echo "new ND\\n";
+new ND;
+class SP { private $a = DateTime::RFC7231; }
+class SC extends SP { public $a = MT_RAND_PHP; }
+echo "new SC\\n";
+$o = new SC;
+echo $o->a, "\\n";
+echo "end\\n";
+');
+"#,
+    );
+    assert_eq!(out, "Constant DateTimeInterface::RFC7231\nConstant MT_RAND_PHP\nConstant SUNFUNCS_RET_DOUBLE\nConstant SUNFUNCS_RET_DOUBLE\nConstant DateTimeInterface::RFC7231\nConstant MT_RAND_PHP\n2nd CS\nConstant SUNFUNCS_RET_DOUBLE\nConstant DateTimeInterface::RFC7231\nConstant MT_RAND_PHP\nConstant DateTimeInterface::RFC7231\nConstant SUNFUNCS_RET_STRING\nConstant MT_RAND_PHP\nConstant SUNFUNCS_RET_TIMESTAMP\nConstant MT_RAND_PHP\nConstant SUNFUNCS_RET_TIMESTAMP\nConstant DateTimeInterface::RFC7231\n2nd M\nConstant MT_RAND_PHP\nConstant SUNFUNCS_RET_TIMESTAMP\nConstant DateTimeInterface::RFC7231\nnew U\nConstant SUNFUNCS_RET_STRING\nConstant E_STRICT\nConstant DATE_RFC7231\nConstant SUNFUNCS_RET_DOUBLE\nConstant MT_RAND_PHP\nConstant SUNFUNCS_RET_DOUBLE\nConstant MT_RAND_PHP\n2nd U\nConstant SUNFUNCS_RET_DOUBLE\nConstant MT_RAND_PHP\nnew NC\nConstant DateTimeInterface::RFC7231\nnew NC2\nread\n21\nnew ND\nConstant MT_RAND_PHP\nnew SC\nConstant DateTimeInterface::RFC7231\nConstant DateTimeInterface::RFC7231\nConstant MT_RAND_PHP\n1\nend\n");
+}
+
+/// php-src evaluates the defaults of a class property that compatibly redeclares a trait
+/// property when execution reaches the class statement (the class's, then the trait's), and the
+/// winning default again when the class initializes, in the class's source order. A class
+/// constant read while another class member is declared is not evaluated until its first
+/// read. A dynamic call's default that reaches a deprecated read through an interface
+/// constant reports it once, at the calling line.
+#[test]
+fn test_date_rfc7231_trait_collisions_declaration_reads_and_interface_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo substr($message, 0, strpos($message, " is deprecated")), " @", $line, "\n";
+    return true;
+});
+echo "first\n";
+trait T { public $a = DATE_RFC7231; }
+class U { public $b = SUNFUNCS_RET_STRING; public $a = DATE_RFC7231; use T; }
+echo "second\n";
+new U;
+echo "third\n";
+new U;
+trait TS { public static $s = DATE_RFC7231; }
+class US { public static $b = SUNFUNCS_RET_STRING; public static $s = DATE_RFC7231; use TS; }
+echo "fourth\n";
+$r = new ReflectionClass(US::class);
+$r->getDefaultProperties();
+echo "again\n";
+$r->getDefaultProperties();
+class NC { public const C = DateTime::RFC7231; public static $a = self::C; }
+echo strlen(NC::C), "\n";
+echo "new NC\n";
+new NC;
+class NA { public const B = DATE_RFC7231; public const A = self::B; }
+echo strlen(NA::B), "\n";
+echo strlen(NA::A), "\n";
+interface I { public const C = DATE_RFC7231; }
+function f($a = I::C) { return strlen($a); }
+echo ("f")(), "\n";
+echo ("f")(), "\n";
+interface I2 { public const C = MT_RAND_PHP; }
+class K implements I2 {}
+function g($a = K::C) { return $a; }
+echo ("g")(), "\n";
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "first\nConstant DATE_RFC7231 @8\nConstant DATE_RFC7231 @8\nsecond\nConstant SUNFUNCS_RET_STRING @10\nConstant DATE_RFC7231 @10\nthird\nConstant DATE_RFC7231 @14\nConstant DATE_RFC7231 @14\nfourth\nConstant SUNFUNCS_RET_STRING @17\nConstant DATE_RFC7231 @17\nConstant SUNFUNCS_RET_STRING @17\nConstant DATE_RFC7231 @17\nagain\nConstant SUNFUNCS_RET_STRING @19\nConstant DATE_RFC7231 @19\nConstant DateTimeInterface::RFC7231 @20\n21\nnew NC\nConstant DATE_RFC7231 @25\n21\n21\nConstant DATE_RFC7231 @28\n21\n21\nConstant MT_RAND_PHP @33\n1\nend\n");
+}
+
+/// `eval()` matches the same trait-collision, class-constant, and interface-default notices as
+/// compiled code.
+#[test]
+fn test_date_rfc7231_eval_trait_collisions_declaration_reads_and_interface_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo substr($message, 0, strpos($message, " is deprecated")), "\n";
+    return true;
+});
+eval('
+echo "first\\n";
+trait T { public $a = DATE_RFC7231; }
+class U { public $b = SUNFUNCS_RET_STRING; public $a = DATE_RFC7231; use T; }
+echo "second\\n";
+new U;
+echo "third\\n";
+new U;
+trait TS { public static $s = DATE_RFC7231; }
+class US { public static $b = SUNFUNCS_RET_STRING; public static $s = DATE_RFC7231; use TS; }
+echo "fourth\\n";
+$r = new ReflectionClass(US::class);
+$r->getDefaultProperties();
+echo "again\\n";
+$r->getDefaultProperties();
+class NC { public const C = DateTime::RFC7231; public static $a = self::C; }
+echo strlen(NC::C), "\\n";
+echo "new NC\\n";
+new NC;
+class NA { public const B = DATE_RFC7231; public const A = self::B; }
+echo strlen(NA::B), "\\n";
+echo strlen(NA::A), "\\n";
+interface I { public const C = DATE_RFC7231; }
+function f($a = I::C) { return strlen($a); }
+echo ("f")(), "\\n";
+echo ("f")(), "\\n";
+interface I2 { public const C = MT_RAND_PHP; }
+class K implements I2 {}
+function g($a = K::C) { return $a; }
+echo ("g")(), "\\n";
+echo "end\\n";
+');
+"#,
+    );
+    assert_eq!(out, "first\nConstant DATE_RFC7231\nConstant DATE_RFC7231\nsecond\nConstant SUNFUNCS_RET_STRING\nConstant DATE_RFC7231\nthird\nConstant DATE_RFC7231\nConstant DATE_RFC7231\nfourth\nConstant SUNFUNCS_RET_STRING\nConstant DATE_RFC7231\nConstant SUNFUNCS_RET_STRING\nConstant DATE_RFC7231\nagain\nConstant SUNFUNCS_RET_STRING\nConstant DATE_RFC7231\nConstant DateTimeInterface::RFC7231\n21\nnew NC\nConstant DATE_RFC7231\n21\n21\nConstant DATE_RFC7231\n21\n21\nConstant MT_RAND_PHP\n1\nend\n");
 }

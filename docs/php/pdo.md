@@ -58,6 +58,12 @@ values.
 The version switch currently governs PDO first; it does not claim that every unrelated
 PHP language or standard-library difference is version-gated.
 
+Under the 8.5 profile, reading a constant PHP 8.5 deprecates raises `E_DEPRECATED` with
+php-src's message, in compiled code and in `eval()`: the legacy `PDO::SQLITE_*`
+spellings (also when read through `Pdo\Sqlite`, the message names `PDO`) and
+`Pdo\Pgsql::TRANSACTION_*`. elephc does not declare `PDO::MYSQL_ATTR_*` or
+`PDO::PGSQL_*`, so reading one is a compile error rather than a deprecation.
+
 ## Connecting
 
 ```php

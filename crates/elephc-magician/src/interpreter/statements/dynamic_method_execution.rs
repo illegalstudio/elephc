@@ -95,6 +95,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.push_method_magic_scope(class_name, method);
     let binding = match bind_evaluated_function_args_with_ref_mode(
         &qualified_method_name,
+        &qualified_method_name,
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
@@ -140,6 +141,10 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
         Some(object),
         false,
     );
+    // Argument binding above used the caller's mode; the body and its return coercion run under
+    // the mode of the fragment that declared this method.
+    let caller_strict_types = context.strict_types();
+    context.set_strict_types(method.strict_types());
     let result = with_runtime_owners(&evaluated_args, || {
         with_runtime_scope_owners(&mut method_scope, |scope| {
             binding_result.and_then(|()| execute_statements(method.body(), context, scope, values))
@@ -171,6 +176,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
             values,
         ),
     };
+    context.set_strict_types(caller_strict_types);
     let return_result = retain_static_local_return(
         return_result,
         &static_names,
@@ -251,6 +257,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context.push_method_magic_scope(class_name, method);
     let binding = match bind_evaluated_function_args_with_ref_mode(
         &qualified_method_name,
+        &qualified_method_name,
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
@@ -295,6 +302,10 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
         None,
         true,
     );
+    // Argument binding above used the caller's mode; the body and its return coercion run under
+    // the mode of the fragment that declared this method.
+    let caller_strict_types = context.strict_types();
+    context.set_strict_types(method.strict_types());
     let result = with_runtime_owners(&evaluated_args, || {
         with_runtime_scope_owners(&mut method_scope, |scope| {
             binding_result.and_then(|()| execute_statements(method.body(), context, scope, values))
@@ -326,6 +337,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
             values,
         ),
     };
+    context.set_strict_types(caller_strict_types);
     let return_result = retain_static_local_return(
         return_result,
         &static_names,

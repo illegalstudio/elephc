@@ -296,6 +296,7 @@ pub(crate) fn parse_instrument_dump(text: &str) -> crate::call_graph::CallGraph 
                     "" | "-" => String::new(),
                     encoded => decode_field(encoded),
                 },
+                status: field("status=").parse::<u16>().ok(),
             });
         } else if let Some(rest) = line.strip_prefix("elephc-instr-query: ") {
             // "<count> <sql text on one line>"

@@ -72,6 +72,13 @@ pub enum ThrowAccessKind {
         /// Method name without the trailing parentheses (e.g. `secret`).
         method: String,
     },
+    /// A private/protected constructor call from an inaccessible scope.
+    PrivateConstructor {
+        /// Visibility label (`private` or `protected`).
+        visibility: String,
+        /// Class declaring the constructor (e.g. `C`).
+        class_name: String,
+    },
     /// A readonly write requiring a runtime initialization check.
     ReadonlyProperty {
         /// Class holding the property (e.g. `Box`).
@@ -104,6 +111,13 @@ pub struct ArrayPushPropertyPlan {
 /// class metadata, warnings, FFI data, and required libraries forward to optimizer,
 /// codegen, and linker setup.
 pub struct CheckResult {
+    /// Default expressions php-src evaluates when execution reaches a class or trait statement
+    /// whose properties compatibly redeclare a used trait's, keyed by class or trait name. A
+    /// trait has no `ClassInfo`, so lowering reads its entry here.
+    pub trait_collision_defaults: HashMap<String, Vec<crate::types::TraitCollisionDefault>>,
+    /// How each user class-like is bound (compile time or at its statement) and where its
+    /// trait-imported properties come from.
+    pub class_binding: crate::types::ClassBindingFacts,
     /// Every instantiation a call site asked for, as (template name, type arguments).
     ///
     /// The pipeline splices one declaration per entry into the program and re-checks, because
@@ -134,6 +148,10 @@ pub struct CheckResult {
     pub function_attribute_names: HashMap<String, Vec<String>>,
     pub function_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Function names written as string literals where a declared `callable` keeps the
+    /// string. Runtime string dispatch must reach each of them, including builtins it would
+    /// not resolve from an arbitrary runtime name.
+    pub declared_callable_names: std::collections::BTreeSet<String>,
     /// Proven return-to-parameter storage aliases for source-declared callables.
     pub(crate) return_alias_summaries: ReturnAliasSummaries,
     #[allow(dead_code)]

@@ -63,6 +63,7 @@ The produced binary accepts these arguments at runtime:
 | `--body-read-timeout N` | No | `30` | Seconds allowed to receive a request body; `0` means unlimited. Enforced in every isolation mode, including the default `worker`. Expiry answers `408 Request Timeout` and closes the connection. |
 | `--response-write-timeout N` | No | `30` | Seconds an isolated response may remain blocked by client backpressure; `0` means unlimited. Available only in `pool` and `request`. |
 | `--gzip` | No | off | Compress responses when the client sends `Accept-Encoding: gzip`. |
+| `--apm` | No | off | Count every request per route (status class, wall time, latency histogram) for [`elephc monitor --apm`](apm.md). Needs a binary built with `--with-apm` or `--with-monitoring`; any other binary refuses it with exit code 2. |
 | `--help`, `--version` | No | — | Print usage / version and exit 0. |
 
 Mode-specific runtime flags are rejected by binaries that cannot implement

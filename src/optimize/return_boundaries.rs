@@ -1,5 +1,5 @@
 //! Purpose:
-//! Models the runtime verification at declared int return boundaries.
+//! Models the runtime verification at declared int and callable return boundaries.
 //!
 //! Called from:
 //! - Callable effect and exception summaries, DCE body scopes, and checker body scopes.
@@ -16,6 +16,9 @@ use crate::types::{declared_int_return_requires_validation, PhpType, TypeEnv};
 #[derive(Clone, Debug)]
 pub(crate) struct ReturnBoundaryFacts {
     declared_int: bool,
+    /// A declared `callable` return checks the returned value with `is_callable` and raises
+    /// `TypeError`; every return is treated as a possible throw, which is conservative.
+    declared_callable: bool,
     declared_result: PhpType,
     stable_parameters: TypeEnv,
 }
@@ -37,15 +40,22 @@ impl ReturnBoundaryFacts {
             Some(TypeExpr::Never) => PhpType::Never,
             _ => parameter_type(hint),
         };
+        let declared_callable =
+            hint.is_some_and(crate::types::checker::type_expr_declares_callable);
         if !declared_int {
-            return Rc::new(Self { declared_int, declared_result, stable_parameters: TypeEnv::new() });
+            return Rc::new(Self {
+                declared_int,
+                declared_callable,
+                declared_result,
+                stable_parameters: TypeEnv::new(),
+            });
         }
         let invalidated = body.iter().fold(Invalidation::none(),
             |writes, stmt| writes.union(stmt_invalidation(stmt)));
         let stable_parameters = parameters.into_iter().filter(|(name, _)|
             matches!(&invalidated, Invalidation::Names(names) if !names.contains(*name)))
             .map(|(name, hint)| (name.to_string(), parameter_type(hint))).collect();
-        Rc::new(Self { declared_int, declared_result, stable_parameters })
+        Rc::new(Self { declared_int, declared_callable, declared_result, stable_parameters })
     }
 
     /// Exposes only the representation promised by the source declaration.
@@ -53,7 +63,9 @@ impl ReturnBoundaryFacts {
 
     /// Tests the same representation predicate used by EIR, with unknown values treated as boxed.
     fn may_throw(&self, expr: &Expr) -> bool {
-        self.declared_int && declared_int_return_requires_validation(true, &PhpType::Int, &self.source_type(expr))
+        self.declared_callable
+            || (self.declared_int
+                && declared_int_return_requires_validation(true, &PhpType::Int, &self.source_type(expr)))
     }
 
     /// Recognizes native values without assuming a mutable local keeps its original hint.
@@ -130,7 +142,8 @@ pub(super) fn active_return_boundary_may_throw(expr: &Expr) -> bool {
 /// Uses the checker's source-point type once inference has established the current read view.
 pub(crate) fn active_return_boundary_checks_source(source: &PhpType) -> bool {
     ACTIVE_RETURN_BOUNDARY.with(|slot| slot.borrow().as_ref().is_some_and(|facts|
-        declared_int_return_requires_validation(facts.declared_int, &PhpType::Int, source)))
+        facts.declared_callable
+            || declared_int_return_requires_validation(facts.declared_int, &PhpType::Int, source)))
 }
 
 /// Collects contracts using the same free-function and method keys as the summary tables.

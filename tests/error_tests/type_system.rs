@@ -102,15 +102,6 @@ fn test_error_method_by_ref_argument_rejects_unsupported_property_storage() {
     }
 }
 
-/// A by-reference variadic cannot bind an array property through the scalar place rewrite.
-#[test]
-fn test_error_variadic_by_ref_argument_rejects_array_property_storage() {
-    expect_error(
-        "<?php function collect(&...$refs): void {} class Box { public array $items = [1]; } $box = new Box(); collect($box->items);",
-        "cannot bind an array property by reference",
-    );
-}
-
 /// Mixed property storage cannot provide the declared array slot needed by nested ref writeback.
 #[test]
 fn test_error_by_ref_argument_rejects_nested_mixed_property_storage() {
@@ -1003,6 +994,55 @@ class AFactory { public function make(): iterable { return []; } }
 class BFactory extends AFactory { public function make(): ZPlain { return new ZPlain(); } }
 "#,
         "Cannot override method BFactory::make with incompatible return type ZPlain (parent returns iterable)",
+    );
+}
+
+/// A deferred `->value` default is still checked once enum cases exist: a string-backed case's
+/// value is a string, so an `int` property rejects it.
+#[test]
+fn test_error_enum_case_value_default_type_mismatch() {
+    expect_error(
+        r#"<?php
+enum Keymap: string {
+    case Linux = 'linux';
+}
+class Settings {
+    public int $keymap = Keymap::Linux->value;
+}
+"#,
+        "Property Settings::$keymap default expects int, got string",
+    );
+}
+
+/// A pure enum case has no `->value`: the deferred default reports the missing property rather
+/// than the syntactic guess's misleading `got int`.
+#[test]
+fn test_error_pure_enum_case_value_default() {
+    expect_error(
+        r#"<?php
+enum Mode {
+    case Fast;
+}
+class Settings {
+    public function __construct(public string $mode = Mode::Fast->value) {}
+}
+"#,
+        "Undefined property: Mode::value",
+    );
+}
+
+/// A deferred enum-case read whose object holds a lazy branch keeps the syntactic fallback: PHP
+/// never evaluates the untaken `W::Missing`, so the property and method defaults type-check.
+#[test]
+fn test_enum_case_value_default_with_untaken_missing_case() {
+    expect_no_error(
+        r#"<?php
+enum W: int { case A = 7; }
+class C {
+    public int $p = (W::A ? W::A : W::Missing)->value;
+    public function m(int $x = (W::A ? W::A : W::Missing)->value): int { return $x; }
+}
+"#,
     );
 }
 

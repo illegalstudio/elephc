@@ -22,6 +22,9 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+#[path = "web/apm.rs"]
+mod apm;
+
 #[path = "web/application.rs"]
 mod application;
 

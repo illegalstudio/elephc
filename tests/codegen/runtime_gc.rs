@@ -339,3 +339,6 @@ mod property_element_writes;
 mod null_receiver_property_writes;
 mod nullable_identity_guards;
 mod safe_point_budget;
+
+#[path = "runtime_gc/dynamic_first_class.rs"]
+mod dynamic_first_class;

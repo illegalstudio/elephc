@@ -43,6 +43,10 @@
         "name": "buffer_ptr"
       },
       {
+        "area": "Math",
+        "name": "clamp"
+      },
+      {
         "area": "Class",
         "name": "class_attribute_args"
       },
@@ -53,6 +57,10 @@
       {
         "area": "Class",
         "name": "class_get_attributes"
+      },
+      {
+        "area": "String",
+        "name": "grapheme_strrev"
       },
       {
         "area": "Type",
@@ -179,15 +187,15 @@
   ],
   "coverage": {
     "classes": {
-      "have": 200,
+      "have": 193,
       "total": 329
     },
     "constants": {
-      "have": 1420,
+      "have": 1603,
       "total": 3181
     },
     "functions": {
-      "have": 1082,
+      "have": 1111,
       "total": 2169
     }
   },
@@ -321,6 +329,16 @@
       ],
       "notes": "Three functions and two classes on the managed libxml2 bridge; supports element and attribute selections, mutation, namespace queries, XPath, and recursive iteration. Auto-linked or forced with --with-xml.",
       "php": "https://www.php.net/manual/en/book.simplexml.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/tidy.md",
+      "feature": "Tidy",
+      "modules": [
+        "tidy"
+      ],
+      "notes": "ext/tidy (24 functions, tidy/tidyNode, 161 TIDY_* constants) on a pinned static libtidy 5.8.0 from the native catalog (elephc native add libtidy); auto-linked or forced with --with-tidy; the full php-src ext/tidy case corpus is migrated into Rust codegen tests",
+      "php": "https://www.php.net/manual/en/book.tidy.php",
       "status": "supported"
     },
     {
@@ -608,8 +626,8 @@
       "docs": null,
       "extension": "ctype",
       "functions": {
-        "eval": 4,
-        "have": 4,
+        "eval": 11,
+        "have": 11,
         "total": 11
       },
       "name": "ctype",
@@ -643,8 +661,8 @@
         "total": 15
       },
       "constants": {
-        "eval": 3,
-        "have": 3,
+        "eval": 17,
+        "have": 17,
         "total": 17
       },
       "docs": "docs/php/datetime.md#functions",
@@ -1485,15 +1503,15 @@
         "total": 6
       },
       "constants": {
-        "eval": 142,
-        "have": 163,
+        "eval": 150,
+        "have": 171,
         "total": 400
       },
       "docs": null,
       "extension": "standard",
       "functions": {
         "eval": 353,
-        "have": 394,
+        "have": 392,
         "total": 545
       },
       "name": "standard",
@@ -1556,20 +1574,20 @@
     },
     {
       "classes": {
-        "eval": 0,
-        "have": 0,
+        "eval": 2,
+        "have": 2,
         "total": 2
       },
       "constants": {
-        "eval": 0,
-        "have": 0,
+        "eval": 161,
+        "have": 161,
         "total": 161
       },
-      "docs": null,
+      "docs": "docs/php/tidy.md#functions",
       "extension": "tidy",
       "functions": {
-        "eval": 0,
-        "have": 0,
+        "eval": 24,
+        "have": 24,
         "total": 24
       },
       "name": "tidy",
@@ -1598,8 +1616,8 @@
     },
     {
       "classes": {
-        "eval": 9,
-        "have": 9,
+        "eval": 0,
+        "have": 0,
         "total": 9
       },
       "constants": null,
@@ -1734,38 +1752,6 @@
       {
         "name": "SortDirection",
         "since": "8.6"
-      },
-      {
-        "name": "Time\\Duration",
-        "since": "8.6"
-      },
-      {
-        "name": "Time\\TimeException",
-        "since": "8.6"
-      },
-      {
-        "name": "Uri\\Rfc3986\\UriBuilder",
-        "since": "8.6"
-      },
-      {
-        "name": "Uri\\Rfc3986\\UriHostType",
-        "since": "8.6"
-      },
-      {
-        "name": "Uri\\Rfc3986\\UriType",
-        "since": "8.6"
-      },
-      {
-        "name": "Uri\\WhatWg\\UrlBuilder",
-        "since": "8.6"
-      },
-      {
-        "name": "Uri\\WhatWg\\UrlHostType",
-        "since": "8.6"
-      },
-      {
-        "name": "Uri\\WhatWg\\UrlPercentEncodingMode",
-        "since": "8.6"
       }
     ],
     "constants": [
@@ -1776,19 +1762,7 @@
     ],
     "functions": [
       {
-        "name": "clamp",
-        "since": "8.6"
-      },
-      {
-        "name": "grapheme_strrev",
-        "since": "8.6"
-      },
-      {
         "name": "mysqli_quote_string",
-        "since": "8.6"
-      },
-      {
-        "name": "url_percent_encode",
         "since": "8.6"
       }
     ]

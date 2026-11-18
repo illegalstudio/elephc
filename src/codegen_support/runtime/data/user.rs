@@ -287,6 +287,7 @@ pub(crate) fn emit_runtime_data_user(
         ("_weak_map_class_id", "WeakMap"),
         ("_spl_value_error_class_id", "ValueError"),
         ("_spl_arithmetic_error_class_id", "ArithmeticError"),
+        ("_spl_reflection_exception_class_id", "ReflectionException"),
         // Emitted for the `intdiv($a, 0)` / `$a % 0` zero-divisor guards, which
         // raise reference PHP's catchable DivisionByZeroError from codegen with
         // no EIR class reference to hang the id off.
@@ -1292,7 +1293,7 @@ pub(crate) fn emit_runtime_data_user(
                                 arg_rows.push((8u64, "0".to_string(), 0u64));
                             }
                             crate::types::AttrArgValue::Array(_)
-                            | crate::types::AttrArgValue::ConstRef(_)
+                            | crate::types::AttrArgValue::ConstRef(..)
                             | crate::types::AttrArgValue::ScopedConst(..) => {
                                 // This legacy flat (tag, lo, hi) table cannot
                                 // represent a nested array or a deferred symbolic
@@ -1407,7 +1408,12 @@ pub(crate) fn emit_runtime_data_user(
                     .is_some_and(|visible_index| visible_index == *prop_index)
             })
             .filter(|(_, (name, _))| {
-                !class_property_is_hidden(class_name, name)
+                let declaring_class = class_info
+                    .property_declaring_classes
+                    .get(name)
+                    .map(String::as_str)
+                    .unwrap_or(class_name);
+                !class_property_is_hidden(declaring_class, name)
                     && class_info
                         .property_visibilities
                         .get(name)
@@ -1461,7 +1467,7 @@ pub(crate) fn emit_runtime_data_user(
                     PhpType::Array(_) => 4,
                     PhpType::AssocArray { .. } => 5,
                     PhpType::Object(_) => 6,
-                    PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => 7,
+                    PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Union(_) | PhpType::Iterable => 7,
                     PhpType::Resource(_) => 9,
                     PhpType::TaggedScalar => {
                         unreachable!("nullable scalar properties use the boxed Mixed representation")
@@ -1521,7 +1527,7 @@ pub(crate) fn emit_runtime_data_user(
                         PhpType::Array(_) => 4,
                         PhpType::AssocArray { .. } => 5,
                         PhpType::Object(_) => 6,
-                        PhpType::Mixed => 7,
+                        PhpType::Mixed | PhpType::DeclaredCallable => 7,
                         PhpType::Union(_) => 7,
                         PhpType::Iterable => 7,
                         PhpType::Resource(_) => 9,
@@ -1553,7 +1559,12 @@ pub(crate) fn emit_runtime_data_user(
             .iter()
             .enumerate()
             .filter_map(|(prop_index, (prop_name, prop_ty))| {
-                (!class_property_is_hidden(class_name, prop_name))
+                let declaring_class = class_info
+                    .property_declaring_classes
+                    .get(prop_name)
+                    .map(String::as_str)
+                    .unwrap_or(class_name);
+                (!class_property_is_hidden(declaring_class, prop_name))
                     .then_some((prop_index, prop_name, prop_ty))
             })
             .collect();
@@ -2578,17 +2589,17 @@ fn emit_eval_reflection_property_lookup_data(
     let mut index = 0usize;
     for (class_name, class_info) in sorted_classes {
         for (slot, (property_name, _)) in class_info.properties.iter().enumerate() {
-            if class_property_is_hidden(class_name, property_name) {
-                continue;
-            }
-            let flags = eval_reflection_instance_property_flags(class_info, slot, property_name);
-            let class_label = format!("_eval_reflection_property_class_{}", index);
-            let property_label = format!("_eval_reflection_property_name_{}", index);
             let declaring_class = eval_reflection_instance_property_declaring_class(
                 class_name,
                 class_info,
                 property_name,
             );
+            if class_property_is_hidden(&declaring_class, property_name) {
+                continue;
+            }
+            let flags = eval_reflection_instance_property_flags(class_info, slot, property_name);
+            let class_label = format!("_eval_reflection_property_class_{}", index);
+            let property_label = format!("_eval_reflection_property_name_{}", index);
             let declaring_label = format!("_eval_reflection_property_declaring_class_{}", index);
             out.push_str(&format!(
                 ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
@@ -2617,17 +2628,17 @@ fn emit_eval_reflection_property_lookup_data(
             index += 1;
         }
         for (slot, (property_name, _)) in class_info.static_properties.iter().enumerate() {
-            if class_property_is_hidden(class_name, property_name) {
-                continue;
-            }
-            let flags = eval_reflection_static_property_flags(class_info, slot, property_name);
-            let class_label = format!("_eval_reflection_property_class_{}", index);
-            let property_label = format!("_eval_reflection_property_name_{}", index);
             let declaring_class = eval_reflection_static_property_declaring_class(
                 class_name,
                 class_info,
                 property_name,
             );
+            if class_property_is_hidden(&declaring_class, property_name) {
+                continue;
+            }
+            let flags = eval_reflection_static_property_flags(class_info, slot, property_name);
+            let class_label = format!("_eval_reflection_property_class_{}", index);
+            let property_label = format!("_eval_reflection_property_name_{}", index);
             let declaring_label = format!("_eval_reflection_property_declaring_class_{}", index);
             out.push_str(&format!(
                 ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
@@ -4143,7 +4154,8 @@ fn is_reflection_backing_slot(class_info: &ClassInfo, class_name: &str, prop_nam
         .get(prop_name)
         .map(String::as_str)
         .unwrap_or(class_name);
-    REFLECTION_CLASS_NAMES.contains(&declaring_class)
+    class_property_is_hidden(declaring_class, prop_name)
+        || REFLECTION_CLASS_NAMES.contains(&declaring_class)
 }
 
 /// Resolves by-name metadata on the nearest ancestor where this physical slot is visible.
@@ -4355,7 +4367,7 @@ fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
         PhpType::False => "false".to_string(),
         PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),
         PhpType::Iterable => "iterable".to_string(),
-        PhpType::Callable => "callable".to_string(),
+        PhpType::Callable | PhpType::DeclaredCallable => "callable".to_string(),
         PhpType::Object(class_name) if !class_name.is_empty() => class_name.clone(),
         PhpType::Object(_) => "object".to_string(),
         _ => "mixed".to_string(),
@@ -4405,7 +4417,7 @@ fn serprop_type_name(prop_ty: &PhpType) -> String {
         PhpType::False => "false".to_string(),
         PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),
         PhpType::Iterable => "Traversable|array".to_string(),
-        PhpType::Callable => "callable".to_string(),
+        PhpType::Callable | PhpType::DeclaredCallable => "callable".to_string(),
         PhpType::Object(class_name) if !class_name.is_empty() => class_name.clone(),
         PhpType::Object(_) => "object".to_string(),
         PhpType::TaggedScalar => "?int".to_string(),
@@ -4895,6 +4907,8 @@ mod tests {
             constants: HashMap::new(),
             constant_order: Vec::new(),
     constant_deprecations: HashMap::new(),
+    property_initialization_order: Vec::new(),
+    trait_collision_defaults: Vec::new(),
     constant_types: HashMap::new(),
     constant_visibilities: HashMap::new(),
     final_constants: HashSet::new(),

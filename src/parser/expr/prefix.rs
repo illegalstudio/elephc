@@ -14,7 +14,9 @@ use crate::names::Name;
 use crate::parser::ast::{ArrayEntry, Expr, ExprKind, MagicConstant, StaticReceiver};
 use crate::span::Span;
 
-use super::calls::{parse_scoped_static_call, peek_cast};
+use super::calls::{
+    dynamic_first_class_callable, parse_first_class_callable_parens, parse_scoped_static_call, peek_cast,
+};
 use super::prefix_complex::{
     parse_arrow_closure, parse_attributed_closure, parse_closure, parse_function_call_or_callable,
     parse_match_expr, parse_named_expr, parse_new_object,
@@ -301,6 +303,10 @@ pub(super) fn parse_prefix(
         Token::This if matches!(tokens.get(*pos + 1), Some((Token::LParen, _))) => {
             let this = Expr::new(ExprKind::This, span);
             *pos += 2;
+            if parse_first_class_callable_parens(tokens, pos)? {
+                let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+                return Ok(dynamic_first_class_callable(this, span));
+            }
             let args = parse_args(tokens, pos, span)?;
             let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
             Ok(Expr::new(
@@ -567,8 +573,8 @@ fn place_suffix_follows(tokens: &[SpannedToken], index: usize) -> bool {
 
 /// Parses a variable expression starting with a `Variable` token. Consumes the variable name,
 /// then checks for a following `++`, `--` (postfix form), or `(` (closure-call syntax like `$var(...)`).
-/// Returns `Variable`, `PostIncrement`, `PostDecrement`, or `ClosureCall`. Advances `pos` past
-/// any consumed postfix tokens.
+/// Returns a variable, increment/decrement, invocation, or first-class callable conversion.
+/// Advances `pos` past any consumed postfix tokens.
 fn parse_variable(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -588,6 +594,11 @@ fn parse_variable(
             }
             Token::LParen => {
                 *pos += 1;
+                if parse_first_class_callable_parens(tokens, pos)? {
+                    let callee = Expr::new(ExprKind::Variable(name), span);
+                    let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+                    return Ok(dynamic_first_class_callable(callee, span));
+                }
                 let args = parse_args(tokens, pos, span)?;
                 let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                 return Ok(Expr::new(ExprKind::ClosureCall { var: name, args }, span));
@@ -631,6 +642,10 @@ fn parse_group_or_cast(
     if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
         let call_span = tokens[*pos].1.span;
         *pos += 1;
+        if parse_first_class_callable_parens(tokens, pos)? {
+            let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
+            return Ok(dynamic_first_class_callable(inner, call_span));
+        }
         let args = parse_args(tokens, pos, call_span)?;
         let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
         return Ok(Expr::new(

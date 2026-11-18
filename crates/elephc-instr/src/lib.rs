@@ -1199,6 +1199,37 @@ thread_local! {
 /// The id→name table, set once at init and read only at dump.
 static NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+#[cfg(not(test))]
+extern "C" {
+    /// Runtime `.comm` slot holding `elephc_probe_apm_event` when the sampling
+    /// probe is linked, else zero: where a `--apm` service counts its routes'
+    /// database and network work.
+    static elephc_probe_apm_event_fn: usize;
+}
+
+// The standalone test binary has no compiled program to define the slot.
+#[cfg(test)]
+#[no_mangle]
+static mut elephc_probe_apm_event_fn: usize = 0;
+
+/// `--apm` event kinds, matching `elephc_probe::apm::IO_*`.
+const APM_DB_OPS: u32 = 0;
+const APM_DB_WAIT: u32 = 1;
+const APM_NET_OPS: u32 = 2;
+const APM_NET_WAIT: u32 = 3;
+
+/// Hands a database or network event to the probe's `--apm` counters, before
+/// this crate's own dormancy check: transaction monitoring counts every
+/// request, profiled or not, and this crate owns the bridges' event slots in a
+/// combined build. A load and a branch when the probe is absent.
+fn forward_to_apm(kind: u32, amount: u64) {
+    let addr = unsafe { std::ptr::addr_of!(elephc_probe_apm_event_fn).read() };
+    if addr != 0 {
+        let record = unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(u32, u64)>(addr) };
+        unsafe { record(kind, amount) };
+    }
+}
+
 /// Global I/O operation counter (currently DB queries). Bumped by
 /// `elephc_instr_io`, called from the runtime through the `_elephc_instr_io_fn`
 /// slot; snapshotted per function at enter/exit like the allocation counter.
@@ -1209,6 +1240,7 @@ static IO_OPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(
 /// `--instrument` linked and initialized this crate.
 #[no_mangle]
 pub extern "C" fn elephc_instr_io() {
+    forward_to_apm(APM_DB_OPS, 1);
     // Dormant means dormant. The slot is filled at init, so without this a
     // binary nobody asked still counted every query it ran.
     if !ENABLED.load(Ordering::Relaxed) {
@@ -1228,6 +1260,7 @@ static WAIT_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 /// `--instrument` linked and initialized this crate.
 #[no_mangle]
 pub extern "C" fn elephc_instr_wait(ns: u64) {
+    forward_to_apm(APM_DB_WAIT, ns);
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
@@ -1237,6 +1270,7 @@ pub extern "C" fn elephc_instr_wait(ns: u64) {
 /// Records one outgoing network operation against the active function.
 #[no_mangle]
 pub extern "C" fn elephc_instr_network() {
+    forward_to_apm(APM_NET_OPS, 1);
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
@@ -1246,6 +1280,7 @@ pub extern "C" fn elephc_instr_network() {
 /// Records blocked outgoing-network nanoseconds against the active function.
 #[no_mangle]
 pub extern "C" fn elephc_instr_network_wait(ns: u64) {
+    forward_to_apm(APM_NET_WAIT, ns);
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
@@ -1568,9 +1603,15 @@ fn render_trace() -> String {
     } else {
         encode_field(route)
     };
+    // Last, and only when known: readers split on whitespace and ignore fields
+    // they do not know, so a slice from an older binary reads the same.
+    let status = match SLICE_STATUS.load(Ordering::Relaxed) {
+        0 => String::new(),
+        code => format!(" status={code}"),
+    };
     format!(
         "elephc-instr-trace: trace={trace_id} span={span_id} parent={parent} \
-         start={start_us} route={route}\n"
+         start={start_us} route={route}{status}\n"
     )
 }
 
@@ -1630,10 +1671,17 @@ pub extern "C" fn elephc_instr_request(begin: u32) {
             }
             ENABLED.store(false, Ordering::Relaxed);
             publish_active(false);
+            // An end may carry the request's HTTP status in its upper bits
+            // (`status << 8`), so a slice says whether its request failed.
+            SLICE_STATUS.store(begin >> 8, Ordering::Relaxed);
             elephc_instr_dump();
+            SLICE_STATUS.store(0, Ordering::Relaxed);
         }
     }
 }
+
+/// The HTTP status of the request whose slice is being dumped, or 0.
+static SLICE_STATUS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// Whether a slice is currently being recorded for one request.
 ///
@@ -5385,6 +5433,13 @@ mod tests {
         let root = render_trace();
         assert!(root.contains("parent=-"), "{root}");
         assert!(!root.contains("4bf92f3577b34da6a3ce929d0e0e4736"), "{root}");
+        assert!(!root.contains("status="), "no status is written when none was handed over: {root}");
+        // The end of a request hands its status over in the upper bits; it is
+        // written as the trace line's last field while the slice is dumped.
+        SLICE_STATUS.store(503, Ordering::Relaxed);
+        let failed = render_trace();
+        SLICE_STATUS.store(0, Ordering::Relaxed);
+        assert!(failed.trim_end().ends_with(" status=503"), "{failed}");
         ENABLED.store(false, Ordering::Relaxed);
     }
 
@@ -5596,6 +5651,32 @@ mod tests {
         let out = render_queries();
         assert!(out.contains("elephc-instr-query: 3 INSERT INTO t VALUES (?)"), "{out}");
         ENABLED.store(was_enabled, Ordering::Relaxed);
+    }
+
+    /// A dormant profiler still hands every database and network event to the
+    /// probe's `--apm` counters: transaction monitoring counts every request,
+    /// profiled or not, and in a combined build this crate owns the slots.
+    #[test]
+    fn dormant_events_still_reach_the_apm_counters() {
+        static FORWARDED: std::sync::Mutex<Vec<(u32, u64)>> = std::sync::Mutex::new(Vec::new());
+        /// Stands in for the probe's APM event entry: records each forwarded event.
+        extern "C" fn record(kind: u32, amount: u64) {
+            FORWARDED.lock().unwrap_or_else(|e| e.into_inner()).push((kind, amount));
+        }
+        let _serial = ENABLED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let was_enabled = ENABLED.swap(false, Ordering::Relaxed);
+        unsafe { std::ptr::addr_of_mut!(super::elephc_probe_apm_event_fn).write(record as usize) };
+        elephc_instr_io();
+        elephc_instr_wait(7_000);
+        elephc_instr_network();
+        elephc_instr_network_wait(9_000);
+        unsafe { std::ptr::addr_of_mut!(super::elephc_probe_apm_event_fn).write(0) };
+        ENABLED.store(was_enabled, Ordering::Relaxed);
+        assert_eq!(
+            *FORWARDED.lock().unwrap(),
+            [(APM_DB_OPS, 1), (APM_DB_WAIT, 7_000), (APM_NET_OPS, 1), (APM_NET_WAIT, 9_000)],
+            "a dormant profiler still hands --apm every event"
+        );
     }
 
     /// A dormant binary records nothing, however many queries it runs.

@@ -38,6 +38,8 @@ Options:
   --access-log           Log one line per request to stderr
   --max-execution-time N Kill and respawn a worker when its handler runs > N seconds; 0 = no limit
   --gzip                 Compress responses when the client sends Accept-Encoding: gzip
+  --apm                  Count every request per route (status, latency) for
+                         `elephc monitor --apm`; needs a --with-monitoring build
   --help                 Show this help and exit
   --version              Show the server version and exit";
 
@@ -66,6 +68,8 @@ Options:
   --access-log           Log one line per request to stderr
   --max-execution-time N Kill only the timed-out handler process; 0 = no limit
   --gzip                 Compress responses when the client sends Accept-Encoding: gzip
+  --apm                  Count every request per route (status, latency) for
+                         `elephc monitor --apm`; needs a --with-monitoring build
   --help                 Show this help and exit
   --version              Show the server version and exit";
 
@@ -100,6 +104,8 @@ pub(super) struct ServerArgs {
     max_exec_secs: u32,
     /// gzip the response when the client accepts it.
     gzip: bool,
+    /// Count every request per route for `elephc monitor --apm`.
+    pub(super) apm: bool,
 }
 
 impl ServerArgs {
@@ -216,6 +222,7 @@ pub(super) fn parse_args(
     let mut access_log = false;
     let mut max_exec_secs: u32 = 0;
     let mut gzip = false;
+    let mut apm = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -299,6 +306,7 @@ pub(super) fn parse_args(
             }
             "--access-log" => access_log = true,
             "--gzip" => gzip = true,
+            "--apm" => apm = true,
             _ => {}
         }
         i += 1;
@@ -326,6 +334,7 @@ pub(super) fn parse_args(
             access_log,
             max_exec_secs,
             gzip,
+            apm,
         }),
         None => {
             eprintln!(
@@ -356,6 +365,25 @@ mod tests {
             .collect::<Vec<_>>();
         let pointers = owned.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
         parse_args(pointers.len() as i32, pointers.as_ptr(), isolation)
+    }
+
+    /// `--apm` is an explicit, off-by-default switch accepted by every model.
+    #[test]
+    fn apm_is_off_unless_asked_for() {
+        for isolation in [IsolationMode::Worker, IsolationMode::Pool, IsolationMode::Request] {
+            let ParsedArgs::Run(plain) =
+                parse_test_args_for(&["app", "--listen", "127.0.0.1:0"], isolation)
+            else {
+                panic!("a valid listen address must produce runnable server arguments");
+            };
+            assert!(!plain.apm, "transaction counting must never default on");
+            let ParsedArgs::Run(asked) =
+                parse_test_args_for(&["app", "--listen", "127.0.0.1:0", "--apm"], isolation)
+            else {
+                panic!("--apm must be accepted by {isolation:?}");
+            };
+            assert!(asked.apm);
+        }
     }
 
     /// Verifies the shipped configuration bounds stalled isolated response writers.

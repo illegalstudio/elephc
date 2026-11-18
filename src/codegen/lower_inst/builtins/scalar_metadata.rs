@@ -240,7 +240,7 @@ pub(in crate::codegen::lower_inst) fn static_gettype_name(ty: &PhpType) -> Optio
         // checker types `ptr<T>`, so it names itself like a pointer.
         PhpType::Packed(_) => Some(b"pointer".as_slice()),
         PhpType::Resource(_) => Some(b"resource".as_slice()),
-        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar | PhpType::Narrow(_) => None,
+        PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Union(_) | PhpType::TaggedScalar | PhpType::Narrow(_) => None,
     }
 }
 
@@ -595,8 +595,10 @@ fn static_debug_type_name(ty: &PhpType) -> Option<&'static [u8]> {
         }
         PhpType::Buffer(_) => Some(b"buffer".as_slice()),
         PhpType::Callable => Some(b"Closure".as_slice()),
+        // A declared `callable` is not concrete: the runtime value decides between Closure,
+        // string, or array, so the debug type is resolved at run time.
         PhpType::Object(_) | PhpType::Resource(_) | PhpType::Mixed | PhpType::Union(_)
-        | PhpType::TaggedScalar => None,
+        | PhpType::TaggedScalar | PhpType::DeclaredCallable => None,
     }
 }
 

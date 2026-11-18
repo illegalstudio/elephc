@@ -48,7 +48,7 @@ impl IrType {
             PhpType::TaggedScalar => IrType::TaggedScalar,
             PhpType::Void | PhpType::Never => IrType::Void,
             PhpType::Iterable => IrType::Heap(IrHeapKind::Iterable),
-            PhpType::Mixed => IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed | PhpType::DeclaredCallable => IrType::Heap(IrHeapKind::Mixed),
             PhpType::Array(_) => IrType::Heap(IrHeapKind::Array),
             PhpType::AssocArray { .. } => IrType::Heap(IrHeapKind::Hash),
             PhpType::Buffer(_) => IrType::Heap(IrHeapKind::Buffer),

@@ -7,7 +7,7 @@ sidebar:
 
 ## Builtins
 
-Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Database](./builtins/database.md) · [Date](./builtins/date.md) · [Filesystem](./builtins/filesystem.md) · [IO](./builtins/io.md) · [Image](./builtins/image.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Network](./builtins/network.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Type](./builtins/type.md) · [URI](./builtins/uri.md) · [Web](./builtins/web.md) · [XML](./builtins/xml.md)
+Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Database](./builtins/database.md) · [Date](./builtins/date.md) · [Filesystem](./builtins/filesystem.md) · [IO](./builtins/io.md) · [Image](./builtins/image.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Network](./builtins/network.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Tidy](./builtins/tidy.md) · [Type](./builtins/type.md) · [URI](./builtins/uri.md) · [Web](./builtins/web.md) · [XML](./builtins/xml.md)
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
@@ -1004,6 +1004,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mb_ucfirst()`](./builtins/string/mb_ucfirst.md) | `(string $string, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`md5()`](./builtins/string/md5.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`nl2br()`](./builtins/string/nl2br.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`nl_langinfo()`](./builtins/string/nl_langinfo.md) | `(int $item): string|false` | `string|false` | ✓ | ✓ |
 | [`number_format()`](./builtins/string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |
 | [`openssl_cipher_iv_length()`](./builtins/string/openssl_cipher_iv_length.md) | `(string $cipher_algo): mixed` | `mixed` | ✓ | ✓ |
 | [`openssl_decrypt()`](./builtins/string/openssl_decrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = ''): mixed` | `mixed` | ✓ | ✓ |
@@ -1018,6 +1019,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`rawurldecode()`](./builtins/string/rawurldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurlencode()`](./builtins/string/rawurlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rtrim()`](./builtins/string/rtrim.md) | `(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string` | `string` | ✓ | ✓ |
+| [`setlocale()`](./builtins/string/setlocale.md) | `(int $category, mixed $locales, ...$rest): string|false` | `string|false` | ✓ | ✓ |
 | [`sha1()`](./builtins/string/sha1.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`sprintf()`](./builtins/string/sprintf.md) | `(string $format, ...$values): string` | `string` | ✓ | ✓ |
 | [`sscanf()`](./builtins/string/sscanf.md) | `(string $string, string $format, ...$vars): array` | `array` | ✓ | ✓ |
@@ -1060,11 +1062,42 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`vprintf()`](./builtins/string/vprintf.md) | `(string $format, array $values): int` | `int` | ✓ | ✓ |
 | [`vsprintf()`](./builtins/string/vsprintf.md) | `(string $format, array $values): string` | `string` | ✓ | ✓ |
 | [`wordwrap()`](./builtins/string/wordwrap.md) | `(string $string, int $width = 75, string $break = "\n", bool $cut_long_words = false): string` | `string` | ✓ | ✓ |
+| [`tidy_access_count()`](./builtins/tidy/tidy_access_count.md) | `(mixed $tidy): int` | `int` | ✓ | ✓ |
+| [`tidy_clean_repair()`](./builtins/tidy/tidy_clean_repair.md) | `(mixed $tidy): bool` | `bool` | ✓ | ✓ |
+| [`tidy_config_count()`](./builtins/tidy/tidy_config_count.md) | `(mixed $tidy): int` | `int` | ✓ | ✓ |
+| [`tidy_diagnose()`](./builtins/tidy/tidy_diagnose.md) | `(mixed $tidy): bool` | `bool` | ✓ | ✓ |
+| [`tidy_error_count()`](./builtins/tidy/tidy_error_count.md) | `(mixed $tidy): int` | `int` | ✓ | ✓ |
+| [`tidy_get_body()`](./builtins/tidy/tidy_get_body.md) | `(mixed $tidy): mixed` | `mixed` | ✓ | ✓ |
+| [`tidy_get_config()`](./builtins/tidy/tidy_get_config.md) | `(mixed $tidy): array` | `array` | ✓ | ✓ |
+| [`tidy_get_error_buffer()`](./builtins/tidy/tidy_get_error_buffer.md) | `(mixed $tidy): string|false` | `string|false` | ✓ | ✓ |
+| [`tidy_get_head()`](./builtins/tidy/tidy_get_head.md) | `(mixed $tidy): mixed` | `mixed` | ✓ | ✓ |
+| [`tidy_get_html()`](./builtins/tidy/tidy_get_html.md) | `(mixed $tidy): mixed` | `mixed` | ✓ | ✓ |
+| [`tidy_get_html_ver()`](./builtins/tidy/tidy_get_html_ver.md) | `(mixed $tidy): int` | `int` | ✓ | ✓ |
+| [`tidy_get_opt_doc()`](./builtins/tidy/tidy_get_opt_doc.md) | `(mixed $tidy, string $option): string|false` | `string|false` | ✓ | ✓ |
+| [`tidy_get_output()`](./builtins/tidy/tidy_get_output.md) | `(mixed $tidy): string` | `string` | ✓ | ✓ |
+| [`tidy_get_release()`](./builtins/tidy/tidy_get_release.md) | `(): string` | `string` | ✓ | ✓ |
+| [`tidy_get_root()`](./builtins/tidy/tidy_get_root.md) | `(mixed $tidy): mixed` | `mixed` | ✓ | ✓ |
+| [`tidy_get_status()`](./builtins/tidy/tidy_get_status.md) | `(mixed $tidy): int` | `int` | ✓ | ✓ |
+| [`tidy_getopt()`](./builtins/tidy/tidy_getopt.md) | `(mixed $tidy, string $option): string|int|bool` | `string|int|bool` | ✓ | ✓ |
+| [`tidy_is_xhtml()`](./builtins/tidy/tidy_is_xhtml.md) | `(mixed $tidy): bool` | `bool` | ✓ | ✓ |
+| [`tidy_is_xml()`](./builtins/tidy/tidy_is_xml.md) | `(mixed $tidy): bool` | `bool` | ✓ | ✓ |
+| [`tidy_parse_file()`](./builtins/tidy/tidy_parse_file.md) | `(string $filename, array|string|null $config = null, ?string $encoding = null, bool $useIncludePath = false): mixed` | `mixed` | ✓ | ✓ |
+| [`tidy_parse_string()`](./builtins/tidy/tidy_parse_string.md) | `(string $string, array|string|null $config = null, ?string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`tidy_repair_file()`](./builtins/tidy/tidy_repair_file.md) | `(string $filename, array|string|null $config = null, ?string $encoding = null, bool $useIncludePath = false): string|false` | `string|false` | ✓ | ✓ |
+| [`tidy_repair_string()`](./builtins/tidy/tidy_repair_string.md) | `(string $string, array|string|null $config = null, ?string $encoding = null): string|false` | `string|false` | ✓ | ✓ |
+| [`tidy_warning_count()`](./builtins/tidy/tidy_warning_count.md) | `(mixed $tidy): int` | `int` | ✓ | ✓ |
 | [`boolval()`](./builtins/type/boolval.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
-| [`ctype_alnum()`](./builtins/type/ctype_alnum.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
-| [`ctype_alpha()`](./builtins/type/ctype_alpha.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
-| [`ctype_digit()`](./builtins/type/ctype_digit.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
-| [`ctype_space()`](./builtins/type/ctype_space.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_alnum()`](./builtins/type/ctype_alnum.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_alpha()`](./builtins/type/ctype_alpha.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_cntrl()`](./builtins/type/ctype_cntrl.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_digit()`](./builtins/type/ctype_digit.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_graph()`](./builtins/type/ctype_graph.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_lower()`](./builtins/type/ctype_lower.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_print()`](./builtins/type/ctype_print.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_punct()`](./builtins/type/ctype_punct.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_space()`](./builtins/type/ctype_space.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_upper()`](./builtins/type/ctype_upper.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_xdigit()`](./builtins/type/ctype_xdigit.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
 | [`floatval()`](./builtins/type/floatval.md) | `(mixed $value): float` | `float` | ✓ | ✓ |
 | [`get_debug_type()`](./builtins/type/get_debug_type.md) | `(mixed $value): string` | `string` | ✓ | ✓ |
 | [`get_resource_id()`](./builtins/type/get_resource_id.md) | `(resource $resource): int` | `int` | ✓ | ✓ |

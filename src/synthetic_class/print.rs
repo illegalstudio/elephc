@@ -406,6 +406,8 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
         StmtKind::Return(None) => format!("{indent}return;"),
         StmtKind::Break(levels) => format!("{indent}break {levels};"),
         StmtKind::Continue(levels) => format!("{indent}continue {levels};"),
+        StmtKind::Goto(label) => format!("{indent}goto {label};"),
+        StmtKind::GotoLabel(name) => format!("{indent}{name}:"),
         StmtKind::Throw(value) => format!("{indent}throw {};", expression(value)),
         StmtKind::Echo(value) => format!("{indent}echo {};", expression(value)),
         // An assignment evaluated for its EFFECT is written bare. Wrapping it in parentheses

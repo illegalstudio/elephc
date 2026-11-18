@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - Submodules group focused fixtures for branches and loops, alternative (`:` … `endif;`)
-//!   syntax, functions, booleans, assignments, nulls, guarded reassignment, and related suites.
+//!   syntax, `goto`, functions, booleans, assignments, nulls, guarded reassignment, and related
+//!   suites.
 
 use crate::support::*;
 
@@ -16,6 +17,8 @@ mod alternative_syntax;
 mod branches_and_loops;
 #[path = "control_flow/functions.rs"]
 mod functions;
+#[path = "control_flow/goto.rs"]
+mod goto;
 #[path = "control_flow/booleans.rs"]
 mod booleans;
 #[path = "control_flow/assignments/mod.rs"]

@@ -15,6 +15,7 @@ use std::path::Path;
 use std::process;
 use std::time::Instant;
 
+use crate::codegen_support::ini_bool;
 use crate::cli::CliConfig;
 use crate::codegen::platform::Target;
 use crate::codegen::Emit;
@@ -163,6 +164,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         web_isolation,
         web_application,
         with_crates,
+        apm_collector,
+        apm_transactions,
         quiet,
         ini_overrides,
     } = config;
@@ -315,6 +318,9 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         || autoloaded("xml")
         || crate::xml_prelude::program_uses_surface(&ast);
     let ast = crate::php86_declarations::inject(ast);
+    let tidy_default_config = ini_override(&ini_overrides, "tidy.default_config");
+    let tidy_open_basedir = ini_override(&ini_overrides, "open_basedir");
+    let tidy_clean_output = ini_bool(ini_override(&ini_overrides, "tidy.clean_output"));
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
     // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
     // no-op rather than a smaller binary: `--with-curl` force-injects the whole surface for
@@ -329,6 +335,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         (with_crates.contains("image"), "image"),
         (with_crates.contains("curl"), "curl"),
         (with_crates.contains("xml"), "xml"),
+        (with_crates.contains("tidy"), "tidy"),
         (with_crates.contains("bcmath"), "bcmath"),
         (with_crates.contains("gmp"), "gmp"),
         (with_crates.contains("random"), "random"),
@@ -562,6 +569,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let ast = crate::core_prelude::inject_if_used(
         ast,
         with_crates.contains("pack"),
+        autoloaded("weak_map"),
+        autoloaded("weak_reference"),
         &mut prelude_inventory,
     );
     let ast = crate::time_prelude::inject_if_used(ast, autoloaded("time"), &mut prelude_inventory);
@@ -630,6 +639,22 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         ast
     };
     timings.record_since("xml-prelude", phase_started);
+
+    // Inject the `ext/tidy` prelude (the `tidy`/`tidyNode` classes and `tidy_*`
+    // wrappers over the `elephc_tidy` extern block) only when the program references
+    // that surface, so tidy-free binaries never declare the classes and never link
+    // `-lelephc_tidy`. `--with-tidy` forces the injection for opaque dynamic use.
+    crate::progress::phase("tidy-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::tidy_prelude::inject_if_used(
+        ast,
+        with_crates.contains("tidy") || autoloaded("tidy") || tidy_clean_output,
+        tidy_default_config,
+        tidy_open_basedir,
+        tidy_clean_output,
+        &mut prelude_inventory,
+    );
+    timings.record_since("tidy-prelude", phase_started);
     let phase_started = Instant::now();
     let fileinfo_force = with_crates.contains("fileinfo") || autoloaded("fileinfo");
     let ast = if php_version == crate::php_version::PhpVersion::default() {
@@ -640,6 +665,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         )
     };
     timings.record_since("fileinfo-prelude", phase_started);
+    crate::progress::phase("locale-prelude");
+    let phase_started = Instant::now();
+    let locale_used = crate::locale_prelude::program_uses_locale(&ast);
+    let ast = crate::locale_prelude::inject_if_used(ast, locale_used, target.platform);
+    timings.record_since("locale-prelude", phase_started);
     // Inject the Termwind-facing DOM HTML subset only when the program names a
     // DOM class, so other binaries never carry the HTML walker. This is an
     // interim prelude (choice B vs draft PR #654's native libxml stack).
@@ -854,6 +884,21 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         }
     };
     timings.record_since("object-cast-prelude", phase_started);
+
+    // Transaction boundaries outside HTTP (Messenger's messages, the methods
+    // `--apm-transaction` names), in a build that counts transactions. After
+    // `autoload::run`, because the boundaries are mostly vendor classes.
+    crate::progress::phase("apm-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::apm_prelude::inject(ast, &apm_transactions, with_crates.contains("probe")) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("apm-prelude", phase_started);
 
     // Desugar PHP's argument-introspection constructs (`func_num_args`, `func_get_args`,
     // `func_get_arg`) into plain PHP: every function scope that uses one gains the hidden
@@ -1234,6 +1279,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         );
     }
 
+    ir_module.apm_collector = apm_collector;
     backend::emit_and_link(backend::BackendInputs {
         repl_build: entry.is_repl_host(),
         announce_success: !entry.is_test_suite(),
@@ -1267,4 +1313,51 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         emit_asm,
         timings: &mut timings,
     });
+}
+
+
+/// Returns the last INI override for `name`, or an empty string when absent.
+fn ini_override<'a>(overrides: &'a [(String, String)], name: &str) -> &'a str {
+    overrides
+        .iter()
+        .rev()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map_or("", |(_, value)| value.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Unit coverage for compile-time INI parsing shared by the tidy prelude.
+    //!
+    //! Called from:
+    //! - `cargo test --bin elephc pipeline::tests`.
+    //!
+    //! Key details:
+    //! - Mirrors `zend_ini_parse_bool`'s named spellings and `strtol` fallback.
+
+    use super::ini_bool;
+
+    /// Named truthy/falsy spellings and leading integer prefixes match PHP.
+    #[test]
+    fn ini_bool_matches_php() {
+        for value in ["1", "2", "-3", "on", "On", "true", "yes", "1x", " 2"] {
+            assert!(ini_bool(value), "{value:?} must be true");
+        }
+        for value in [
+            "",
+            "0",
+            "false",
+            "no",
+            "off",
+            "none",
+            " true ",
+            "0x10",
+            "junk",
+            "  none  ",
+        ] {
+            assert!(!ini_bool(value), "{value:?} must be false");
+        }
+        assert!(ini_bool("999999999999999999999999999999999999999999"));
+    }
 }

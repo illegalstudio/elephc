@@ -23,38 +23,44 @@ pub(super) fn eval_reflection_function_new(
     };
     let lookup_name = requested_name.trim_start_matches('\\').to_ascii_lowercase();
     if let Some(closure) = context.closure(&requested_name).cloned() {
-        let function = closure.function();
-        let required_parameter_count = eval_reflection_required_parameter_count(
-            function.parameter_defaults(),
-            function.parameter_is_variadic(),
-        );
-        let parameters = eval_reflection_function_parameters(
-            function.name(),
-            function.params(),
-            function.attributes().to_vec(),
-            function.parameter_attributes(),
-            function.parameter_types(),
-            function.parameter_defaults(),
-            function.parameter_is_by_ref(),
-            function.parameter_is_variadic(),
-        );
-        return eval_reflection_function_object_result(
-            &requested_name,
-            function.attributes(),
-            &parameters,
-            required_parameter_count,
-            context,
-            values,
-        )
-        .and_then(|object| {
-            eval_reflection_attach_function_closure_target(
-                object,
-                closure_target,
+        // Its parameter reflectors' default factories reach the closure through this object.
+        let previous = context.replace_reflected_closure(closure_target.is_some().then_some(args[0]));
+        let result = (|| {
+            let function = closure.function();
+            let required_parameter_count = eval_reflection_required_parameter_count(
+                function.parameter_defaults(),
+                function.parameter_is_variadic(),
+            );
+            let parameters = eval_reflection_function_parameters(
+                function.name(),
+                function.params(),
+                function.attributes().to_vec(),
+                function.parameter_attributes(),
+                function.parameter_types(),
+                function.parameter_defaults(),
+                function.parameter_is_by_ref(),
+                function.parameter_is_variadic(),
+            );
+            eval_reflection_function_object_result(
+                &requested_name,
+                function.attributes(),
+                &parameters,
+                required_parameter_count,
                 context,
                 values,
             )
-        })
-        .map(Some);
+            .and_then(|object| {
+                eval_reflection_attach_function_closure_target(
+                    object,
+                    closure_target,
+                    context,
+                    values,
+                )
+            })
+            .map(Some)
+        })();
+        context.replace_reflected_closure(previous);
+        return result;
     }
     if let Some(function) = context.function(&lookup_name).cloned() {
         let required_parameter_count = eval_reflection_required_parameter_count(

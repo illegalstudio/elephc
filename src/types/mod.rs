@@ -118,6 +118,7 @@ pub use schema::{
     ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,
     PackedFieldInfo, PropertyHookContract,
 };
+pub use schema::{ClassBindingFacts, TraitCollisionDefault};
 pub(crate) use schema::{collect_attribute_args, collect_attribute_names};
 pub(crate) use defined::{
     class_like_constant_is_defined, class_like_constant_scope_error,

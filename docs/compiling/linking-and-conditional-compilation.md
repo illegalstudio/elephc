@@ -232,6 +232,17 @@ elephc native add libxml2
 elephc app.php --with-xml
 ```
 
+`--with-tidy` has the same shape. The `elephc_tidy` archive carries the
+`tidy` / `tidyNode` surface, and its parser is libtidy itself, so the final link
+also needs the `libtidy` package's `libtidy.a`, declared and installed with
+`elephc native add libtidy`. Auto-detected tidy use requires the package just
+the same; the flag only adds the force-link and the prelude injection.
+
+```bash
+elephc native add libtidy
+elephc app.php --with-tidy
+```
+
 `--with-web` is an alias for [`--web`](../beyond-php/web.md) (the full server
 mode, which owns the program entry point). An unknown capability name is
 rejected with the list of valid names. Forcing a bridge increases binary size,
@@ -242,9 +253,9 @@ installed or versioned by `elephc native`. A bridge or runtime-capability flag
 may require a separately declared managed package: `--with-regex` requires
 `pcre2`, `--with-curl` requires `curl` (which declares `libssh2`, `nghttp2`,
 `openssl` and `zlib`), `--with-mbstring` requires `oniguruma` and `pcre2`, and `--with-xml`
-requires `libxml2`. `--with-gmp` requires `gmp`, `--with-fileinfo` requires
-`libmagic`, and `--with-openssl` requires `openssl-crypto` (with its zlib
-dependency). Ordinary mbstring and opaque eval use the contract-owned
+requires `libxml2`. `--with-tidy` requires `libtidy`, `--with-gmp` requires `gmp`,
+`--with-fileinfo` requires `libmagic`, and `--with-openssl` requires
+`openssl-crypto` (with its zlib dependency). Ordinary mbstring and opaque eval use the contract-owned
 default MIME matcher without PCRE2. Custom MIME expressions in opaque eval need
 the complete `--with-mbstring` capability. These flags do not
 install the packages. Composer dependencies are
@@ -269,7 +280,15 @@ tools/lib/libelephc_web.a
 
 1. `ELEPHC_<NAME>_LIB_DIR`, if set and non-empty — `ELEPHC_WEB_LIB_DIR`,
    `ELEPHC_PDO_LIB_DIR`, and so on, one per bridge. This wins over everything
-   below, and names a **directory**, not the archive itself.
+   below, and names a **directory**, not the archive itself. Two bridges spell
+   the override differently because `<NAME>_LIB_DIR` would be ambiguous with the
+   native library they wrap: `ELEPHC_GMP_BRIDGE_DIR` holds `libelephc_gmp.a`, and
+   `ELEPHC_OPENSSL_BRIDGE_LIB_DIR` holds `libelephc_openssl.a`.
+   `ELEPHC_LIBGMP_DIR` is **not** a bridge override: the `elephc-gmp` crate's build
+   script reads it to link the managed `libgmp.a` into that crate's own test
+   binary (`cargo test -p elephc-gmp`). It is never read when `elephc` links a user
+   program; that link resolves the managed `gmp` package instead (`elephc native
+   add gmp`).
 2. The directory the running `elephc` binary is in.
 3. Its sibling `lib/` (`<bin>/../lib`).
 4. `$CARGO_TARGET_DIR/debug` and `$CARGO_TARGET_DIR/release`, when that variable

@@ -9,11 +9,14 @@
 //! Key details:
 //! - The exhaustive match remains centralized so every new `EvalStmt` variant
 //!   must explicitly define its runtime control-flow behavior.
-//! - Only program-level generic templates are hoisted; nested declarations execute in source order.
+//! - A program's own statement list binds its generic templates and the declarations PHP binds
+//!   at compile time before its first statement (see `early_binding`); nested declarations
+//!   execute in source order.
 
 use super::*;
 
-/// Checks program provenance, seeds CLI globals, and hoists templates before eval/include execution.
+/// Checks program provenance, seeds CLI globals, and binds templates and early declarations
+/// before eval/include execution.
 pub(in crate::interpreter) fn execute_program_statements(
     program: &EvalProgram,
     context: &mut ElephcEvalContext,
@@ -43,7 +46,8 @@ pub(in crate::interpreter) fn execute_program_statements(
             }
         }
     }
-    execute_statement_sequence(statements, true, context, scope, values)
+    let bound = bind_program_declarations(statements, context, scope, values)?;
+    execute_statement_sequence(statements, &bound, context, scope, values)
 }
 
 /// Executes nested statements in source order without registering unreachable declarations.
@@ -53,26 +57,166 @@ pub(in crate::interpreter) fn execute_statements(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    execute_statement_sequence(statements, false, context, scope, values)
+    execute_statement_sequence(statements, &[], context, scope, values)
 }
 
-/// Propagates control flow while skipping only templates already hoisted at program entry.
+/// Propagates control flow while skipping the statements already declared at program entry.
+///
+/// `bound` marks those statements by position: the generic templates and the declarations
+/// `bind_program_declarations` bound before the first statement of a program's own list. PHP
+/// binds them when it compiles the file, so a statement that reaches one does nothing, and a
+/// jump can neither skip such a declaration nor run it twice. `bound` is empty for a nested
+/// list: declarations inside a block stay tied to that block, as in PHP.
 fn execute_statement_sequence(
     statements: &[EvalStmt],
-    templates_registered: bool,
+    bound: &[bool],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    for stmt in statements {
+    for (index, stmt) in statements.iter().enumerate() {
         eval_pcntl_maybe_dispatch(context, values)?;
-        if templates_registered && matches!(stmt, EvalStmt::GenericDecl(_)) { continue; }
+        if bound.get(index).copied().unwrap_or(false) { continue; }
         match execute_stmt(stmt, context, scope, values)? {
             EvalControl::None => {}
+            EvalControl::Goto(label) => {
+                return resume_statement_sequence(statements, bound, label, context, scope, values);
+            }
             control => return Ok(control),
         }
     }
     Ok(EvalControl::None)
+}
+
+/// Registers the function a `FunctionDecl` statement declares. Any other statement is ignored.
+///
+/// Runs when a nested declaration executes, and at program entry for the top-level ones (see
+/// `bind_program_declarations`).
+pub(super) fn declare_function(stmt: &EvalStmt, context: &mut ElephcEvalContext) -> Result<(), EvalStatus> {
+    let EvalStmt::FunctionDecl {
+        name,
+        source_location,
+        attributes,
+        params,
+        parameter_attributes,
+        parameter_types,
+        parameter_defaults,
+        parameter_is_by_ref,
+        parameter_is_variadic,
+        return_type,
+        body,
+    } = stmt
+    else {
+        return Ok(());
+    };
+    let key = name.to_ascii_lowercase();
+    validate_eval_core_attribute_targets(attributes, 2)?;
+    for attributes in parameter_attributes { validate_eval_core_attribute_targets(attributes, 32)?; }
+    if context.generic_function_template(name).is_some() { return Err(EvalStatus::RuntimeFatal); }
+    let mut function = EvalFunction::new(name.clone(), params.clone(), body.clone())
+        .with_attributes(attributes.clone())
+        .with_parameter_attributes(parameter_attributes.clone())
+        .with_parameter_types(parameter_types.clone())
+        .with_parameter_defaults(parameter_defaults.clone())
+        .with_parameter_by_ref_flags(parameter_is_by_ref.clone())
+        .with_parameter_variadic_flags(parameter_is_variadic.clone())
+        .with_return_type(return_type.clone())
+        .with_strict_types(context.strict_types());
+    if let Some(source_location) = source_location {
+        function = function.with_source_location(*source_location);
+    }
+    super::super::bytecode::attach_simple_body(&mut function);
+    context
+        .define_function(key, function)
+        .map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Executes `statements` starting at the label a jump is on its way to.
+///
+/// The caller has established that the list holds the label, by
+/// `EvalStmt::holds_jump_label`. Used to enter an `if` branch or a `try` body a jump lands in.
+pub(in crate::interpreter) fn execute_statements_from_label(
+    statements: &[EvalStmt],
+    label: String,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    resume_statement_sequence(statements, &[], label, context, scope, values)
+}
+
+/// Completes a jump raised inside `statements`, or passes it up when the label is elsewhere.
+///
+/// This is the cold half of `execute_statement_sequence`. A statement list that holds the label
+/// resumes at it and then runs on in source order; a later jump raised from the resumed code is
+/// resolved the same way, so a backward jump loops here without growing the native stack. A
+/// list that does not hold the label ends, like a `break`, and the jump keeps travelling out:
+/// through loops, which stop iterating, and through `try` statements, which run `finally`.
+/// `bound` marks the statements declared at program entry, which must not run again.
+fn resume_statement_sequence(
+    statements: &[EvalStmt],
+    bound: &[bool],
+    label: String,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    let mut pending = Some(label);
+    let mut index = 0;
+    loop {
+        if let Some(label) = &pending {
+            match crate::eval_ir::jump_label_position(statements, label) {
+                Some(target) => index = target,
+                None => return Ok(EvalControl::Goto(pending.take().expect("checked above"))),
+            }
+        }
+        let Some(stmt) = statements.get(index) else {
+            return Ok(EvalControl::None);
+        };
+        eval_pcntl_maybe_dispatch(context, values)?;
+        let control = match pending.take() {
+            Some(label) => execute_stmt_from_label(stmt, label, context, scope, values)?,
+            None if bound.get(index).copied().unwrap_or(false) => EvalControl::None,
+            None => execute_stmt(stmt, context, scope, values)?,
+        };
+        match control {
+            EvalControl::None => index += 1,
+            EvalControl::Goto(label) => pending = Some(label),
+            control => return Ok(control),
+        }
+    }
+}
+
+/// Executes the statement a jump resumes at: the label itself, or the statement holding it.
+fn execute_stmt_from_label(
+    stmt: &EvalStmt,
+    label: String,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    match stmt {
+        // The condition is not evaluated: the jump decides the branch.
+        EvalStmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let branch = if crate::eval_ir::sequence_holds_jump_label(then_branch, &label) {
+                then_branch
+            } else {
+                else_branch
+            };
+            execute_statements_from_label(branch, label, context, scope, values)
+        }
+        EvalStmt::Try {
+            body,
+            catches,
+            finally_body,
+        } => execute_try_stmt(body, catches, finally_body, Some(label), context, scope, values),
+        // The label itself: arriving completes the jump.
+        _ => Ok(EvalControl::None),
+    }
 }
 
 /// Executes one statement and returns `Some` only for eval `return`.
@@ -108,6 +252,9 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::Break => Ok(EvalControl::Break),
+        EvalStmt::Goto(label) => Ok(EvalControl::Goto(label.clone())),
+        // Reached in source order, a label does nothing.
+        EvalStmt::Label(_) => Ok(EvalControl::None),
         EvalStmt::Continue => Ok(EvalControl::Continue),
         EvalStmt::DoWhile { body, condition } => {
             execute_do_while_stmt(body, condition, context, scope, values)
@@ -160,38 +307,8 @@ pub(in crate::interpreter) fn execute_stmt(
             scope,
             values,
         ),
-        EvalStmt::FunctionDecl {
-            name,
-            source_location,
-            attributes,
-            params,
-            parameter_attributes,
-            parameter_types,
-            parameter_defaults,
-            parameter_is_by_ref,
-            parameter_is_variadic,
-            return_type,
-            body,
-        } => {
-            let key = name.to_ascii_lowercase();
-            validate_eval_core_attribute_targets(attributes, 2)?;
-            for attributes in parameter_attributes { validate_eval_core_attribute_targets(attributes, 32)?; }
-            if context.generic_function_template(name).is_some() { return Err(EvalStatus::RuntimeFatal); }
-            let mut function = EvalFunction::new(name.clone(), params.clone(), body.clone())
-                .with_attributes(attributes.clone())
-                .with_parameter_attributes(parameter_attributes.clone())
-                .with_parameter_types(parameter_types.clone())
-                .with_parameter_defaults(parameter_defaults.clone())
-                .with_parameter_by_ref_flags(parameter_is_by_ref.clone())
-                .with_parameter_variadic_flags(parameter_is_variadic.clone())
-                .with_return_type(return_type.clone());
-            if let Some(source_location) = source_location {
-                function = function.with_source_location(*source_location);
-            }
-            super::super::bytecode::attach_simple_body(&mut function);
-            context
-                .define_function(key, function)
-                .map_err(|_| EvalStatus::RuntimeFatal)?;
+        EvalStmt::FunctionDecl { .. } => {
+            declare_function(stmt, context)?;
             Ok(EvalControl::None)
         }
         EvalStmt::Global { vars } => {
@@ -335,7 +452,7 @@ pub(in crate::interpreter) fn execute_stmt(
             body,
             catches,
             finally_body,
-        } => execute_try_stmt(body, catches, finally_body, context, scope, values),
+        } => execute_try_stmt(body, catches, finally_body, None, context, scope, values),
         EvalStmt::UnsetArrayElement { array, index } => {
             eval_array_unset_element_stmt(array, index, context, scope, values)?;
             Ok(EvalControl::None)
@@ -358,6 +475,7 @@ pub(in crate::interpreter) fn execute_stmt(
                     EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
                     EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
                     EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+                    EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
                 }
             }
             Ok(EvalControl::None)

@@ -59,6 +59,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Tokenizer](php/tokenizer.md): PHP source inspection, lossless tokens, `PhpToken` and `TOKEN_PARSE`.
 - [URI](php/uri.md) — RFC 3986 and WHATWG URL parsing, normalization, mutation, builders, host/URI types, percent encoding, validation errors, and serialization
 - [XML](php/xml.md): the `ext/xml` SAX parser (`XMLParser`, handlers, `xml_parse_into_struct()`, error codes), `ext/xmlwriter` (`XMLWriter`, memory and URI output, DTDs, namespaces), and SimpleXML (live child/attribute views, XPath, namespaces, and DOM imports) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`)
+- [Tidy](php/tidy.md) — `ext/tidy`: HTML repair, configuration, diagnostics, the `tidy`/`tidyNode` objects and all 161 `TIDY_*` constants on a statically pinned libtidy 5.8.0 from the native catalog (`elephc native add libtidy`)
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
 - [SPL](php/spl.md) — SPL interfaces, exceptions, autoload/introspection helpers, and runtime-backed containers
 - [Namespaces](php/namespaces.md) — namespace, use, include/require/include_once/require_once, Composer/SPL autoloading, class introspection, constants, superglobals
@@ -97,6 +98,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [Testing](beyond-php/testing.md) — the native test runtime: `Elephc\Testing\TestCase`, the PHPUnit-compatible assertion subset, the `Runner` report and exit code, and the `PHPUnit\Framework\TestCase` alias
 - [Hosting PHP Extensions](beyond-php/php-extensions.md) — `elephc extension add` builds a real PECL/PIE or in-house C extension from source and links it, functions and classes included, on Elephc's own Rust implementation of the extension API
 - [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
+- [Transaction monitoring](beyond-php/apm.md) - `--apm` counts every `--web` request per route from startup, and every run of a script launched through `monitor`; `elephc monitor --apm` shows throughput, latency percentiles and error rates as a table, live terminal trends and histograms, a daily on-disk history, and a Transactions view on the monitor page next to the profile, with Prometheus `/metrics`
 - [Profiling](beyond-php/profiling.md) - PHP-level profiling with one command in every environment: a launched program reports exact wall time, allocations, retained objects, database and outgoing-network wait, SQL queries, network operations and calls; a running service is sampled by default and exact only for a requested completed request. Includes per-`--web`-route tags, `.elephc` performance budgets, automatic curl trace propagation, W3C distributed traces, and a self-contained interactive call-graph page
 
 ## Compiler Internals

@@ -123,6 +123,8 @@ fn dummy_check_result() -> CheckResult {
     );
 
     CheckResult {
+        trait_collision_defaults: HashMap::new(),
+        class_binding: Default::default(),
         requested_instantiations: Vec::new(),
         requested_promotable_clones: Vec::new(),
         requested_class_instantiations: Vec::new(),
@@ -135,6 +137,7 @@ fn dummy_check_result() -> CheckResult {
         function_attribute_names: HashMap::new(),
         function_attribute_args: HashMap::new(),
         callable_param_sigs: HashMap::new(),
+        declared_callable_names: Default::default(),
         return_alias_summaries: Default::default(),
         callable_return_sigs: HashMap::new(),
         callable_array_return_sigs: HashMap::new(),
@@ -204,6 +207,8 @@ fn class_info(_class_name: &str) -> ClassInfo {
         constants: HashMap::new(),
         constant_order: Vec::new(),
         constant_deprecations: HashMap::new(),
+        property_initialization_order: Vec::new(),
+        trait_collision_defaults: Vec::new(),
         constant_types: HashMap::new(),
         constant_visibilities: Default::default(),
         final_constants: Default::default(),
@@ -459,6 +464,9 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::IfDef { symbol: "FEATURE".to_string(), then_body: vec![stmt(StmtKind::Echo(str_lit("ifdef")))], else_body: None }),
         stmt(StmtKind::While { condition: bool_lit(false), body: vec![stmt(StmtKind::Continue(1))] }),
         stmt(StmtKind::DoWhile { body: vec![stmt(StmtKind::Break(1))], condition: bool_lit(false) }),
+        // A label that survives `goto` lowering (its file has no `goto`) lowers to nothing.
+        // `StmtKind::Goto` has no lowering by design: it is refused, see `lower_stmt`.
+        stmt(StmtKind::GotoLabel("unused".to_string())),
         stmt(StmtKind::For {
             init: Some(Box::new(stmt(StmtKind::Assign { name: "i".to_string(), value: int(0) }))),
             condition: Some(bool_lit(false)),

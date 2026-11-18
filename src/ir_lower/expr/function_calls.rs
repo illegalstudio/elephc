@@ -36,6 +36,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
 
 /// Lowers a function call without the promotable-result view `lower_function_call` applies.
 fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
+    if let Some(value) = constants::lower_silenced_constant_deprecation_call(ctx, name, expr) {
+        return value;
+    }
     constants::register_static_define_call(ctx, name, args);
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
         return value;

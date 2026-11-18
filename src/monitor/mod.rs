@@ -70,6 +70,7 @@ mod exports;
 pub(crate) use exports::*;
 mod stitch;
 pub(crate) use stitch::*;
+pub(crate) mod apm;
 
 #[cfg(test)]
 mod tests;
@@ -114,6 +115,8 @@ pub(crate) fn unhonoured_service_flags(cmd: &MonitorCommand) -> Option<String> {
         // endpoint. Accepting them ran a one-shot read and called it success.
         ("--live", cmd.live),
         ("--serve", cmd.serve.is_some()),
+        // A running service was started by someone else, with its own arguments.
+        ("-- <program arguments>", !cmd.target_args.is_empty()),
     ]
     .iter()
     .filter(|(_, given)| *given)
@@ -127,6 +130,55 @@ pub(crate) fn unhonoured_service_flags(cmd: &MonitorCommand) -> Option<String> {
 
 /// Runs the full capture-and-render pipeline; returns the process exit code.
 pub(crate) fn run(cmd: MonitorCommand) -> i32 {
+    if cmd.apm {
+        // Two kinds of transaction, one flag: a running service's requests,
+        // read from its counters, or a launched script's run, recorded by the
+        // exact path once it ends.
+        let service = cmd.target.is_empty()
+            || remote_target(&cmd.target).is_some()
+            || is_socket_path(&cmd.target);
+        let refused = apm::conflicts(&cmd, service);
+        if !refused.is_empty() {
+            eprintln!(
+                "elephc monitor: --apm against {} cannot be combined with {}",
+                if service {
+                    "a running service (it answers with transaction counters, not a profile)"
+                } else {
+                    "a script (it runs once to completion; the live views follow a running service)"
+                },
+                refused.join(", ")
+            );
+            return 2;
+        }
+        let ignored = apm::need_a_collector(&cmd);
+        if service && !ignored.is_empty() {
+            eprintln!(
+                "elephc monitor: {} act{} in the collector, which runs with --live, --store or \
+                 --serve; a one-shot read prints the service's counters and exits",
+                ignored.join(", "),
+                if ignored.len() == 1 { "s" } else { "" }
+            );
+            return 2;
+        }
+        // Under --apm, --duration paces the --live view and sizes a stored
+        // history's span; on a one-shot read or a script it would be ignored,
+        // and someone would believe the read was time-bounded.
+        if cmd.duration_explicit && !cmd.live && !cmd.target.is_empty() {
+            eprintln!(
+                "elephc monitor: --duration paces the --apm --live view only; a one-shot read \
+                 covers everything since the service started, and a script's run is its whole run."
+            );
+        }
+        if service {
+            return apm::run(&cmd);
+        }
+        return run_instrument(&cmd);
+    }
+    // Program arguments reach only a program `monitor` launches itself.
+    if !cmd.target_args.is_empty() && (cmd.attach_pid.is_some() || !cmd.stitch.is_empty()) {
+        eprintln!("elephc monitor: arguments after `--` go to a program monitor launches; --attach and --stitch launch none");
+        return 2;
+    }
     if !cmd.stitch.is_empty() {
         // Offline: read service logs and correlate their slices. Captures
         // nothing itself, so it runs before every capture path.
@@ -252,6 +304,7 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     // the whole reason `--live` needed an external sampler — for a program this
     // process had started itself.
     let mut command = process::Command::new(&binary);
+    command.args(&cmd.target_args);
     let channel = if cmd.live { open_polled_control_channel() } else { None };
     if let Some(channel) = &channel {
         attach_control_channel(&mut command, channel);

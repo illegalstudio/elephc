@@ -138,7 +138,8 @@ fn fold(function: &mut Function, data: &mut DataPool, call_id: InstId) -> bool {
     for (raw, inst) in function.instructions.iter().enumerate() {
         let id = InstId::from_raw(raw as u32);
         let touches_slot = matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot)
-            || matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, second }) if first == slot || second == slot);
+            || matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, second }) if first == slot || second == slot)
+            || matches!(inst.immediate, Some(Immediate::PropertyRefCell { first, .. }) if first == slot);
         if !touches_slot {
             continue;
         }
@@ -228,11 +229,12 @@ fn fold(function: &mut Function, data: &mut DataPool, call_id: InstId) -> bool {
     for (raw, inst) in function.instructions.iter().enumerate() {
         let id = InstId::from_raw(raw as u32);
         let matches_slot = matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot)
-            || matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, .. }) if first == slot);
+            || matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, .. }) if first == slot)
+            || matches!(inst.immediate, Some(Immediate::PropertyRefCell { first, .. }) if first == slot);
         if !matches_slot {
             continue;
         }
-        if inst.op == Op::PromoteLocalRefCell || inst.op == Op::LoadRefCell {
+        if matches!(inst.op, Op::PromoteLocalRefCell | Op::LoadRefCell) {
             dead.push(id);
         }
     }
@@ -243,7 +245,9 @@ fn fold(function: &mut Function, data: &mut DataPool, call_id: InstId) -> bool {
         let result = function.instruction(id).and_then(|inst| inst.result);
         let removable = match result {
             Some(result) => uses.get(&result).copied().unwrap_or(0) == 0,
-            None => function.instruction(id).is_some_and(|inst| inst.op == Op::PromoteLocalRefCell),
+            None => function
+                .instruction(id)
+                .is_some_and(|inst| inst.op == Op::PromoteLocalRefCell),
         };
         if removable {
             if let Some(inst) = function.instruction_mut(id) {

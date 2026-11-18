@@ -19,7 +19,7 @@ use super::assignment_targets::{
     AssignmentExpressionLowerer, is_assignment_expression_target, is_non_local_assignment_target,
     delayed_static_assignment_target,
 };
-use super::calls::parse_first_class_callable_parens;
+use super::calls::{dynamic_first_class_callable, parse_first_class_callable_parens};
 use super::parse_args;
 use super::prefix::parse_prefix;
 use super::parse_expr;
@@ -376,6 +376,11 @@ fn parse_expr_bp_inner(
                 ) {
                     let call_span = tokens[*pos].1.span;
                     *pos += 1;
+                    if parse_first_class_callable_parens(tokens, pos)? {
+                        let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
+                        lhs = dynamic_first_class_callable(lhs, call_span);
+                        continue;
+                    }
                     let args = parse_args(tokens, pos, call_span)?;
                     let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
                     lhs = Expr::new(

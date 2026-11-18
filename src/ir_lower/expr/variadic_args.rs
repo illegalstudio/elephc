@@ -211,7 +211,7 @@ pub(super) fn named_plan_actual_arg_count(
 }
 
 /// Appends the actual argument count as the first boxed Mixed collector element.
-fn push_func_args_count(
+pub(crate) fn push_func_args_count(
     ctx: &mut LoweringContext<'_, '_>,
     array: crate::ir::ValueId,
     array_ty: &PhpType,

@@ -167,7 +167,13 @@ program you launch, a mutual handshake for one you connect to, a signed
 `X-Elephc-Query` header for a single production request. A project's performance
 budget lives in a `.elephc` file and fails the build when it is exceeded, and
 every profile carries a W3C Trace Context identity, so it joins whatever
-distributed trace its caller already belongs to. See
+distributed trace its caller already belongs to. A service started with `--apm`
+also counts every request per route, and `elephc monitor <addr> --apm` turns
+those counters into rates, latency percentiles, error shares and queries per
+request, with the service's CPU and memory, live, stored and charted; a consumer's
+messages, a library's export calls and any method named with `--apm-transaction`
+are transactions too, sent to a collector by builds made with `--with-apm`
+([Transaction monitoring](docs/beyond-php/apm.md)). See
 [Profiling](docs/beyond-php/profiling.md).
 
 The compiler is experimental and evolving. Not everything PHP supports is implemented, and you will find bugs. But as the DOOM showcase demonstrates, you can build real, non-trivial programs with it today.
@@ -329,6 +335,27 @@ elephc monitor --attach <pid> --live
 # writes lets `elephc monitor <host:port>` profile the service in production
 elephc --with-monitoring app.php
 
+# Transaction monitoring: a service started with --apm counts every request
+# per route; monitor --apm reads the table, keeps a history and serves the
+# monitor page with its Transactions view
+elephc --web --with-monitoring shop.php
+ELEPHC_PROBE_ADDR=127.0.0.1:9411 ./shop --listen 0.0.0.0:8080 --apm
+elephc monitor 127.0.0.1:9411 --apm --key shop.key --store /var/lib/shop-apm --serve 127.0.0.1:9000
+
+# Record each run of a script as a transaction in the same history
+elephc monitor bin/console --apm --store /var/lib/shop-apm -- app:import --force
+
+# Empty a running service's route table (the monitor page has the same action)
+elephc monitor 127.0.0.1:9411 --apm --reset-routes --key shop.key
+
+# Beyond HTTP: a consumer counts each Messenger message, a named method counts
+# each call, a library counts each call its host makes into an export; built
+# with --with-apm, they send their counters to a listening collector
+elephc --with-apm --apm-collector 10.0.0.5:9412 \
+    --apm-transaction 'App\Jobs\Importer::importBatch' bin/console.php
+elephc --emit staticlib --target ios-arm64 --with-apm --apm-collector 192.168.1.20:9412 Renderer.php
+elephc monitor --apm --listen 0.0.0.0:9412 --key console.key --store /var/lib/shop-apm
+
 # Embed exact per-function call counters (printed to stderr at exit)
 elephc --counters app.php
 
@@ -359,7 +386,7 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, gmp, random, mbstring, iconv, phar, tz, image, pcntl, xml, fileinfo, tokenizer, reference, eval, regex, curl, web)
+# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, gmp, random, mbstring, iconv, phar, tz, image, pcntl, xml, tidy, fileinfo, tokenizer, reference, eval, regex, curl, web)
 elephc app.php --with-pdo --with-crypto
 # Force-inject the mysqli surface (links the shared elephc_pdo bridge, without the PDO classes)
 elephc app.php --with-mysqli
@@ -437,7 +464,7 @@ elephc main.php
 
 `elephc native` manages a small, runtime/builtin-oriented catalog of verified C
 sources: PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0, libssh2 1.11.1,
-curl 8.21.0, Oniguruma 6.9.10, and libxml2 2.15.3. Adding curl declares and links its complete
+curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, and libtidy 5.8.0. Adding curl declares and links its complete
 pinned dependency closure. This is intentionally **not** the mechanism used for
 Composer packages, Rust bridge crates, compilers/SDKs, or arbitrary FFI
 libraries:
@@ -580,6 +607,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **Database (mysqli)**: a documented `mysqli` / `mysqli_stmt` / `mysqli_result` subset for MySQL/MariaDB over the same pure-Rust client — buffered independent results, prepared statements, `multi_query`, `mysqli_report` error modes, and the full procedural `mysqli_*` alias surface
 - **Process control (PCNTL)**: `pcntl_fork`, wait/status helpers, `pcntl_exec`, signal handlers and async dispatch, masks, priorities, Linux affinity/namespaces, and macOS QoS; see the [PCNTL guide](docs/php/pcntl.md)
 - **Tokenizer**: `token_get_all`, `token_name`, `PhpToken` and all 154 PHP 8.5 constants, including `TOKEN_PARSE`; see the [Tokenizer guide](docs/php/tokenizer.md).
+- **Tidy**: `ext/tidy` repairs malformed HTML with a pinned libtidy 5.8.0, exposing all 24 functions, the `tidy` and `tidyNode` objects, and all 161 `TIDY_*` constants from the native catalog (`elephc native add libtidy`, auto-linked or `--with-tidy`), natively and inside `eval()`; the full php-src `ext/tidy` case corpus is migrated into Rust codegen tests; see the [Tidy guide](docs/php/tidy.md)
 - **XML**: the complete function, class and constant inventory of `ext/xml` (the `XMLParser` SAX parser, every handler, incremental `xml_parse()`, `xml_parse_into_struct()`, libxml2's error codes) and `ext/xmlwriter` (`XMLWriter` with memory and URI output), plus SimpleXML (`SimpleXMLElement`, `SimpleXMLIterator`, parsing, mutation, namespaces and XPath), on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`, auto-linked or `--with-xml`), natively and inside `eval()`; see the [XML guide](docs/php/xml.md) for documented behavioral differences and [runtime limits](docs/php/xml.md#runtime-limits)
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
 - **Crypto**: `md5()`/`sha1()`/`hash()`/`hash_hmac()` hashing and OpenSSL-compatible symmetric ciphers (`openssl_encrypt()`/`openssl_decrypt()`, AES CBC/CTR/ECB/GCM) through a pure-Rust bridge with no system OpenSSL dependency
@@ -594,9 +622,9 @@ The full list of supported constructs, operators, and control structures is in t
 
 </details>
 
-### Built-in functions (1149)
+### Built-in functions (1196)
 
-The generated builtin documentation currently exposes 1149 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, GMP, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
+The generated builtin documentation currently exposes 1196 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, GMP, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web, XML, tidy, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
 
 ### Constants
 
@@ -614,7 +642,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-Physical source (`.php` or `.lfc`) → source classification → Lexer → Parser (AST) → Magic constants (per-file) → strict-PHP audit (PHP files only) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → function-argument introspection desugaring → OPcache manifest bake → Optimizer (constant folding) → Type checking + generic specialization → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Optimizer (declaration reachability) → EIR lowering + validation → fixed-point EIR optimization → register allocation → EIR codegen → assembly/source-map write → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
+Physical source (`.php` or `.lfc`) → source classification → Lexer → Parser (AST) → Magic constants (per-file) → strict-PHP audit (PHP files only) → Conditional (ifdef/--define) → goto lowering (per file) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → function-argument introspection desugaring → OPcache manifest bake → Optimizer (constant folding) → Type checking + generic specialization → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → Optimizer (declaration reachability) → EIR lowering + validation → fixed-point EIR optimization → register allocation → EIR codegen → assembly/source-map write → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -822,6 +850,7 @@ crates/
 ├── elephc-random/       # PHP ext/random engines, CSPRNG, and global Mt19937 state bridge
 ├── elephc-tls/          # TLS stream bridge
 ├── elephc-tz/           # IANA timezone bridge
+├── elephc-tidy/         # ext/tidy bridge over the catalog's static libtidy
 ├── elephc-xml/          # XML parser, writer, and SimpleXML bridge over static libxml2
 └── elephc-web/          # Prefork HTTP server bridge
 ```

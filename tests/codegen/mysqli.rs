@@ -756,3 +756,23 @@ echo $db->connect_errno, "|", $link === false ? "false" : "link";
         "W:mysqli::__construct(): (HY000/2002):8|W:mysqli_connect(): (HY000/2002):9|2002|false"
     );
 }
+
+/// The `MYSQLI_*` constants php-src deprecates raise `E_DEPRECATED` with its message and
+/// version on each read (`MYSQLI_NO_DATA` since 8.1, `MYSQLI_IS_MARIADB` since 8.2,
+/// `MYSQLI_REFRESH_*` since 8.4), and still yield their values.
+#[test]
+fn test_mysqli_deprecated_constant_reads() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", $message, " @", $line, "\n";
+    return true;
+});
+echo MYSQLI_NO_DATA, ",", MYSQLI_IS_MARIADB ? "t" : "f", ",", MYSQLI_REFRESH_GRANT, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "[8192] Constant MYSQLI_NO_DATA is deprecated since 8.1, as it was unused @6\n100,[8192] Constant MYSQLI_IS_MARIADB is deprecated since 8.2, as it is always false @6\nf,[8192] Constant MYSQLI_REFRESH_GRANT is deprecated since 8.4, as mysqli_refresh() is deprecated @6\n1\n"
+    );
+}

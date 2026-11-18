@@ -100,6 +100,15 @@ pub(crate) fn parse_args(
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
             let spread_span = tokens[*pos].1.span;
             *pos += 1;
+            // A trailing comma after `...` is rejected on every profile: php-src only accepts
+            // the ellipsis as the final item (`f(...,)` and `f(1, ...,)` are syntax errors), and
+            // the first-class-callable form is `f(...)` with nothing between `...` and `)`.
+            if tokens.get(*pos).is_some_and(|(token, _)| *token == Token::Comma) {
+                return Err(CompileError::new(
+                    tokens[*pos].1.span,
+                    "A `...` placeholder must be the last argument and cannot be followed by a comma",
+                ));
+            }
             if argument_list_ended(tokens, *pos) {
                 // PHP 8.6 partial application: `foo(1, ...)` forwards the remaining
                 // arguments. `foo(...)` is first-class-callable syntax and never reaches

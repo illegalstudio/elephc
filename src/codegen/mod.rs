@@ -515,17 +515,31 @@ fn finalize_user_asm(
     if emit.is_library() {
         let mut sorted_exports: Vec<&ExportedFunction> = exported_functions.values().collect();
         sorted_exports.sort_by(|a, b| a.c_name.cmp(&b.c_name));
-        let emit_exports = if emit == Emit::Phpext {
-            crate::codegen::cdylib::emit_phpext_exports
-        } else { crate::codegen::cdylib::emit_cdylib_exports };
-        emit_exports(
-            &mut emitter,
-            &mut data,
-            module.target,
-            &sorted_exports,
-            heap_debug,
-            module.mbstring_startup.as_ref().map(|_| "__rt_mbstring_startup_status"),
-        );
+        let startup = module.mbstring_startup.as_ref().map(|_| "__rt_mbstring_startup_status");
+        if emit == Emit::Phpext {
+            crate::codegen::cdylib::emit_phpext_exports(
+                &mut emitter,
+                &mut data,
+                module.target,
+                &sorted_exports,
+                heap_debug,
+                startup,
+            );
+        } else {
+            // `--with-apm`: the library counts its export calls.
+            let apm = shared.apm_only.then_some(crate::codegen::cdylib::LibraryApm {
+                collector: shared.apm_collector,
+            });
+            crate::codegen::cdylib::emit_cdylib_exports(
+                &mut emitter,
+                &mut data,
+                module.target,
+                &sorted_exports,
+                heap_debug,
+                startup,
+                apm,
+            );
+        }
     }
     let property_initializer_ids = module.functions.iter()
         .filter(|function| function.flags.is_synthetic)

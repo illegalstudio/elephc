@@ -72,6 +72,171 @@ class C { use A, B; }
     );
 }
 
+/// A class that USES a trait still may not re-declare an inherited concrete method abstract:
+/// only the trait's own abstract methods are requirements an inherited method satisfies.
+#[test]
+fn test_error_trait_using_class_cannot_make_inherited_method_abstract() {
+    expect_error(
+        r#"<?php
+class P { public function foo(): int { return 1; } }
+trait T { public function bar(): int { return 2; } }
+abstract class C extends P { use T; abstract public function foo(): int; }
+"#,
+        "Cannot make concrete method abstract: C::foo",
+    );
+}
+
+/// An inherited method satisfies a trait requirement only with a compatible signature: it may
+/// not narrow a parameter nor break the declared return type, as PHP reports.
+#[test]
+fn test_error_inherited_method_must_match_trait_requirement_signature() {
+    expect_error(
+        r#"<?php
+class P { public function foo(string $x): int { return 1; } }
+trait T { abstract public function foo(int $x): int; }
+final class C extends P { use T; }
+"#,
+        "Cannot narrow parameter $x when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+class P { public static function make(): int { return 1; } }
+trait T { abstract public static function make(): string; }
+final class C extends P { use T; }
+"#,
+        "Cannot change return type when implementing trait method: C::make",
+    );
+}
+
+/// An inherited method returning by value does not satisfy a trait requirement that returns by
+/// reference, and an `as` alias of an abstract trait method is checked against the inherited
+/// method of the alias name, as PHP reports `Declaration of P::bar() must be compatible`.
+#[test]
+fn test_error_inherited_method_must_keep_trait_requirement_by_ref_and_alias_signature() {
+    expect_error(
+        r#"<?php
+class P { public function foo(): int { return 1; } }
+trait T { abstract public function &foo(): int; }
+final class C extends P { use T; }
+"#,
+        "Cannot remove by-reference return when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+class P { public function foo(): int { return 1; } public function bar(): string { return "s"; } }
+trait T { abstract public function foo(): int; }
+final class C extends P { use T { foo as bar; } }
+"#,
+        "Cannot change return type when implementing trait method: C::bar",
+    );
+}
+
+/// `#[\Override]` on a trait-using class still needs a target: a parent method, an interface
+/// method, or an abstract method of a used trait.
+#[test]
+fn test_error_override_in_trait_using_class_requires_a_target() {
+    expect_error(
+        r#"<?php
+class P {}
+trait T { public function bar(): int { return 2; } }
+final class C extends P { use T; #[\Override] public function baz(): int { return 1; } }
+"#,
+        "C::baz() has #[\\Override] attribute, but no matching parent method was found",
+    );
+}
+
+/// An alias of a trait method that the trait implements itself is concrete, even when the
+/// trait also uses a trait declaring that method abstract: `#[\Override]` on a class method of
+/// the alias name has no target, as in PHP.
+#[test]
+fn test_error_override_on_alias_of_trait_implemented_requirement() {
+    expect_error(
+        r#"<?php
+trait N { abstract public function foo(): string; }
+trait A { use N; public function foo(): string { return "A::foo"; } }
+final class C { use A { foo as bar; } #[\Override] public function bar(): string { return "C::bar"; } }
+"#,
+        "C::bar() has #[\\Override] attribute, but no matching parent method was found",
+    );
+}
+
+/// Two CONCRETE methods of the same name from separate `use` statements still conflict; only an
+/// abstract trait method (a requirement) merges with another declaration.
+#[test]
+fn test_error_trait_concrete_methods_from_separate_uses_conflict() {
+    expect_error(
+        r#"<?php
+trait A { public function foo() { return 1; } }
+trait B { public function foo() { return 2; } }
+class C { use A; use B; }
+"#,
+        "imports duplicate trait method 'foo'",
+    );
+}
+
+/// A concrete trait method satisfies another trait's abstract one only when both are static or
+/// both are instance methods, in one `use A, B` as in separate `use` statements.
+#[test]
+fn test_error_trait_requirement_static_kind_mismatch() {
+    expect_error(
+        r#"<?php
+trait A { abstract public function foo(): string; }
+trait B { public static function foo(): string { return "s"; } }
+final class C { use A, B; }
+"#,
+        "Cannot change method kind when overriding C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait A { abstract public static function foo(): string; }
+trait B { public function foo(): string { return "i"; } }
+final class C { use A, B; }
+"#,
+        "Cannot change method kind when overriding C::foo",
+    );
+}
+
+/// A trait that uses one trait requiring a method and another implementing it has a concrete
+/// method: its users get no requirement, so `#[\Override]` on a class method of that name has
+/// no target, whether the wrapper's traits come in one `use` or in two (php 8.5.12).
+#[test]
+fn test_error_override_on_requirement_satisfied_inside_a_wrapper_trait() {
+    expect_error(
+        r#"<?php
+trait NeedsFoo { abstract public function foo(): string; }
+trait GivesFoo { public function foo(): string { return "G"; } }
+trait W { use NeedsFoo, GivesFoo; }
+class C { use W; #[\Override] public function foo(): string { return "C"; } }
+"#,
+        "C::foo() has #[\\Override] attribute, but no matching parent method was found",
+    );
+    expect_error(
+        r#"<?php
+trait NeedsFoo { abstract public function foo(): string; }
+trait GivesFoo { public function foo(): string { return "G"; } }
+trait W { use NeedsFoo; use GivesFoo; }
+class C { use W; #[\Override] public function foo(): string { return "C"; } }
+"#,
+        "C::foo() has #[\\Override] attribute, but no matching parent method was found",
+    );
+}
+
+/// A trait method that satisfies another trait's abstract method, or a second abstract
+/// declaration of it, must keep its signature: php 8.5.12 reports `Declaration of ... must be
+/// compatible with A::foo(...)` for each case below, so none may merge silently. Flattening
+/// accepts only an identical signature for now.
+#[test]
+fn test_error_trait_requirement_merge_needs_a_compatible_signature() {
+    for source in [
+        "<?php trait A { abstract public function foo(int $x): string; } trait B { public function foo(): array { return []; } } class C { use A; use B; }",
+        "<?php trait A { abstract public function foo(int $x): int; } trait B { public function foo(string $s): string { return $s; } } final class C { use A, B; }",
+        "<?php trait A { abstract public function foo(): int; } trait B { abstract public function foo(): string; } class C { use A; use B; public function foo(): int { return 1; } }",
+        "<?php trait A { abstract public function foo(): int; } trait B { abstract public function foo(): string; } abstract class C { use A, B; }",
+    ] {
+        expect_error(source, "with a signature that differs from the abstract trait method it implements");
+    }
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]
@@ -336,6 +501,16 @@ fn test_error_datetime_immutable_too_many_args() {
     expect_error(
         "<?php $d = new DateTimeImmutable(\"now\", null, 3);",
         "Constructor 'DateTimeImmutable::__construct' expects 0 to 2 arguments, got 3",
+    );
+}
+
+/// Verifies `setMicrosecond()`, which php-src declares `static` outright (not tentatively), still
+/// rejects an override that narrows the return to the concrete class, as PHP's fatal does.
+#[test]
+fn test_error_datetime_immutable_set_microsecond_override_must_return_static() {
+    expect_error(
+        "<?php class Bad extends DateTimeImmutable { public function setMicrosecond(int $microsecond): DateTimeImmutable { return parent::setMicrosecond($microsecond); } } echo 1;",
+        "Cannot override method Bad::setMicrosecond with incompatible return type",
     );
 }
 

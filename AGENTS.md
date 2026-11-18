@@ -117,7 +117,7 @@ A fixture that contains an `eval()` whose source is known only at runtime (the `
 ## Architecture
 
 ```
-PHP source → Lexer → Parser → Magic constants → Conditional compilation → Resolver
+PHP source → Lexer → Parser → Magic constants → Conditional compilation → goto lowering → Resolver
 → NameResolver → Constant folding → Type Checker / warnings → AST optimizer passes
 → EIR lowering / validation → EIR optimization passes → EIR codegen → runtime cache
 → assembler/linker → binary
@@ -143,6 +143,7 @@ by EIR lowering and `src/codegen/`.
 | `src/parser/` | `parse()` | Tokens → `Program` (Vec of Stmt). Pratt parser for expressions |
 | `src/magic_constants/`, `src/magic_constants.rs` | `substitute_file_and_scope_constants()` | Lowers PHP magic constants before resolver/name-resolver/optimizer passes |
 | `src/conditional.rs` | `apply()` | Applies compiler `ifdef` conditional branches |
+| `src/goto_lowering.rs`, `src/goto_lowering/` | `lower_program()` | Validates each file's `goto` jumps and rewrites them into dispatch loops (`while` + `continue N`) before any pass that reads control flow; no `StmtKind::Goto` survives it |
 | `src/resolver/` | `resolve()` | Resolves `include`/`require`, discovers declarations, and tracks include-loaded function variants. Runs before namespace/name canonicalization |
 | `src/name_resolver/` | `resolve()` | Applies namespace/use rules, rewrites references to canonical fully-qualified names, handles PHP-style builtin fallback, and flattens namespace-only AST nodes before type checking |
 | `src/types/` | `check()` | Type checking, returns `CheckResult` with `TypeEnv`, function/class/interface/enum/FFI metadata, warnings, required libraries, and the internal `Mixed` type for heterogeneous assoc-array values |
@@ -187,11 +188,11 @@ bridge.
 
 `--with-<crate>` force-enables a bridge regardless of detection. It force-links
 the staticlib (whole-archived so it is not dead-stripped) and, for crates whose
-PHP surface comes from a prelude (`pdo`, `tz`, `image`, `xml`, `uri`, `pack`), force-injects that
-prelude so the API is declared even when usage was not detected. The flag name is
+PHP surface comes from a prelude (`pdo`, `tz`, `image`, `xml`, `uri`, `pack`, `tidy`), force-injects
+that prelude so the API is declared even when usage was not detected. The flag name is
 the bridge's `flag_name` (`crate_name` minus the `elephc-` prefix): `--with-pdo`,
 `--with-tls`, `--with-crypto`, `--with-iconv`, `--with-pack`, `--with-uri`,
-`--with-phar`, `--with-tz`, `--with-image`, `--with-curl`, `--with-xml`.
+`--with-phar`, `--with-tz`, `--with-image`, `--with-curl`, `--with-xml`, `--with-tidy`.
 `--with-web` is an alias for `--web` (the full server mode, which owns the program
 entry point). An unknown `--with-<name>` is a hard CLI error listing the valid
 crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
@@ -231,11 +232,11 @@ for libxml2's encoding handlers through the entry's
 has no catalog dependencies, and a missing package fails closed with the
 `elephc native add libxml2` recovery, never a `-lxml2`.
 
-`gmp`, `fileinfo` (`libmagic`) and `openssl` (`openssl-crypto`) follow the same
-shape. Every bridge-to-package pairing lives only in `BRIDGE_NATIVE_PACKAGES`,
-whose order is the final link order; `--print-capabilities` reports each pairing
-as a `native:<package>` field, and the release probe adds exactly those packages,
-so a new pairing needs no edit in `scripts/verify-release-artifact.sh`.
+`gmp`, `fileinfo` (`libmagic`), `openssl` (`openssl-crypto`) and `tidy`
+(`libtidy`) follow the same shape. Every bridge-to-package pairing lives only in
+`BRIDGE_NATIVE_PACKAGES`, whose order is the final link order; `--print-capabilities`
+reports each pairing as a `native:<package>` field, and the release probe adds exactly
+those packages, so a new pairing needs no edit in `scripts/verify-release-artifact.sh`.
 
 ### Codegen layout
 

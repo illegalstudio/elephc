@@ -357,6 +357,18 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         }
         StmtKind::Break(level) => lower_break(ctx, *level),
         StmtKind::Continue(level) => lower_continue(ctx, *level),
+        // `crate::goto_lowering` rewrites every jump into structured control flow before the
+        // frontend runs. EIR lowering keeps per-local facts along structured joins only, so a
+        // jump that arrives here is refused rather than lowered as a bare branch.
+        StmtKind::Goto(_) => {
+            crate::ir_lower::diagnostics::refuse(
+                stmt.span,
+                "Internal compiler error: 'goto' reached EIR lowering without being lowered",
+            );
+            ctx.builder.terminate(Terminator::Unreachable);
+        }
+        // A label that survives belongs to a file without any `goto`: it emits nothing.
+        StmtKind::GotoLabel(_) => {}
         StmtKind::ExprStmt(expr) => {
             let boundary = super::scoped_writes::begin_expression(ctx, expr);
             let value = lower_expr(ctx, expr);
@@ -368,12 +380,20 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::NamespaceDecl { name: _ } => lower_noop(ctx, stmt.span),
         StmtKind::NamespaceBlock { name: _, body } => lower_block(ctx, body),
         StmtKind::UseDecl { imports: _ } => lower_noop(ctx, stmt.span),
+        // Reaching a class statement evaluates the defaults of any property that compatibly
+        // redeclares a trait property, as php-src's compatibility check does. A class hoisted
+        // out of an included file does so at its class-binding mark, an anonymous class at its
+        // first `new`.
+        StmtKind::ClassDecl { name, .. } | StmtKind::TraitDecl { name, .. } => {
+            if !crate::ir_lower::initializer_reads::is_bound_elsewhere(name) {
+                crate::ir_lower::property_default_errors::emit_class_statement_deprecations(ctx, name, stmt.span);
+            }
+            lower_noop(ctx, stmt.span);
+        }
         StmtKind::FunctionDecl { .. }
-        | StmtKind::ClassDecl { .. }
         | StmtKind::EnumDecl { .. }
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::InterfaceDecl { .. }
-        | StmtKind::TraitDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => lower_noop(ctx, stmt.span),

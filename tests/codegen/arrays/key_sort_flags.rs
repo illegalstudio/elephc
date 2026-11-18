@@ -16,6 +16,7 @@
 //!   `toupper()` under the process `LC_CTYPE`, which maps Latin-1 on Darwin and not on glibc;
 //!   elephc gives the same answer on every target and one fixture pins that.
 
+use crate::codegen::ctype_php_src::locale_available;
 use crate::support::*;
 
 /// Verifies each documented mode orders the same keys the way PHP does.
@@ -173,6 +174,51 @@ foreach ($b as $k => $v) { echo \"[\", strlen($k), \"]\"; }\n",
     assert_eq!(out, "[2][4][2]|[2][2][4]");
 }
 
+/// Verifies `SORT_LOCALE_STRING` collates through the active `LC_COLLATE`.
+///
+/// `setlocale()` can change the collation, so the comparator has to call libc `strcoll`
+/// instead of comparing bytes: German ordering treats `ä` as an `a` variant, so it sorts
+/// before `z`, while byte order puts `z` (`0x7A`) first. The fixture skips when the host has
+/// no German locale, and the second program sorts the same keys inside a literal `eval()`
+/// so the interpreter keeps the same answer.
+#[test]
+fn locale_key_sort_honours_the_selected_collation() {
+    if !locale_available(&["de_DE.UTF-8", "de_DE.utf8"]) {
+        return;
+    }
+    let direct = compile_and_run(
+        r#"<?php
+if (setlocale(LC_COLLATE, "de_DE.UTF-8", "de_DE.utf8") === false) {
+    echo "skip";
+} else {
+    $a = ["z" => 1, "ä" => 2];
+    ksort($a, SORT_LOCALE_STRING);
+    echo implode(",", array_keys($a));
+}
+"#,
+    );
+    if direct == "skip" {
+        return;
+    }
+    assert_eq!(direct, "ä,z");
+
+    let evaluated = compile_and_run(
+        r#"<?php
+eval('if (setlocale(LC_COLLATE, "de_DE.UTF-8", "de_DE.utf8") === false) {
+    echo "skip";
+} else {
+    $a = ["z" => 1, "ä" => 2];
+    ksort($a, SORT_LOCALE_STRING);
+    echo implode(",", array_keys($a));
+}');
+"#,
+    );
+    if evaluated == "skip" {
+        return;
+    }
+    assert_eq!(evaluated, "ä,z");
+}
+
 /// Verifies natural-order case folding is bounded to ASCII on every target.
 ///
 /// php-src folds with libc `toupper()` under the process `LC_CTYPE`, so PHP itself answers
@@ -301,7 +347,7 @@ echo $n;
     assert_eq!(out.stdout, "12600", "stderr: {}", out.stderr);
     assert!(
         out.stderr.contains("leak summary: clean"),
-        "a flagged key sort must not allocate per comparison: {}",
+        "a flagged key sort must release every comparison temporary: {}",
         out.stderr
     );
 }

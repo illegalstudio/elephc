@@ -239,7 +239,7 @@ pub(super) fn eval_native_php_type_spec(php_type: &PhpType, allow_return_atoms: 
         PhpType::Iterable => Some("iterable".to_string()),
         PhpType::Mixed => Some("mixed".to_string()),
         PhpType::Array(_) | PhpType::AssocArray { .. } => Some("array".to_string()),
-        PhpType::Callable => Some("callable".to_string()),
+        PhpType::Callable | PhpType::DeclaredCallable => Some("callable".to_string()),
         PhpType::Object(name) if name.is_empty() => Some("object".to_string()),
         PhpType::Object(name) => Some(name.clone()),
         PhpType::Union(members) => eval_native_php_type_member_specs(members),

@@ -112,7 +112,17 @@ impl Checker {
         // `$this` and returns a new closure; `call` binds `$this` and invokes the
         // closure in one step, returning its result. `$scope` is accepted and
         // ignored (visibility is resolved at compile time).
-        if matches!(obj_ty, PhpType::Callable) {
+        // A declared `callable` may hold an invokable object with its own `bindTo()` / `call()`,
+        // so those methods are dispatched at run time and their result is untyped.
+        if obj_ty == PhpType::DeclaredCallable
+            && matches!(php_symbol_key(method).as_str(), "bindto" | "call")
+        {
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            return Ok(PhpType::Mixed);
+        }
+        if obj_ty.is_callable_like() {
             match php_symbol_key(method).as_str() {
                 "bindto" => {
                     for arg in args {
@@ -497,7 +507,13 @@ impl Checker {
         let mut magic_return_ty = None;
         let mut magic_original_args = None;
         if let Some(class_info) = self.classes.get(class_name) {
-            if let Some(sig) = class_info.methods.get(&method_key) {
+            let static_method_call = !class_info.methods.contains_key(&method_key)
+                && class_info.static_methods.contains_key(&method_key);
+            if let Some(sig) = class_info
+                .methods
+                .get(&method_key)
+                .or_else(|| class_info.static_methods.get(&method_key))
+            {
                 if let Some(reason) = sig.deprecation.clone() {
                     let message = if reason.is_empty() {
                         format!("Call to deprecated method: {}::{}()", class_name, method)
@@ -510,10 +526,15 @@ impl Checker {
                     self.warnings
                         .push(crate::errors::CompileWarning::new(expr.span, &message));
                 }
-                if let Some(visibility) = class_info.method_visibilities.get(&method_key) {
+                if let Some(visibility) = class_info
+                    .method_visibilities
+                    .get(&method_key)
+                    .or_else(|| class_info.static_method_visibilities.get(&method_key))
+                {
                     let declaring_class = class_info
                         .method_declaring_classes
                         .get(&method_key)
+                        .or_else(|| class_info.static_method_declaring_classes.get(&method_key))
                         .map(String::as_str)
                         .unwrap_or(class_name);
                     if !self.can_access_member(declaring_class, visibility)
@@ -582,6 +603,13 @@ impl Checker {
                         &format!("Method {}::{}", class_name, method),
                         class_name,
                     )?;
+                }
+                // `$object->staticMethod()` is the static surface called through an object:
+                // its return type comes from the static signature, not the instance table.
+                if static_method_call {
+                    return Ok(late_static_return_type
+                        .clone()
+                        .unwrap_or_else(|| effective_sig.return_type.clone()));
                 }
             } else if let Some(sig) = class_info.methods.get("__call") {
                 let magic_args = Self::magic_call_args(method, args, expr.span);
@@ -1072,6 +1100,13 @@ impl Checker {
         // `Closure::bind($closure, $newThis [, $scope])` is the static form of
         // `$closure->bindTo(...)`: it returns a new closure with `$this` rebound.
         // `$scope` is accepted and ignored (closed-world visibility).
+        if class_name.trim_start_matches('\\') == "Closure"
+            && (method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY
+                || php_symbol_key(method) == "fromcallable")
+        {
+            let sig = crate::types::signatures::closure_factory_signature();
+            return self.check_known_callable_call(&sig, args, expr.span, env, "Closure::fromCallable");
+        }
         if class_name.trim_start_matches('\\') == "Closure" && php_symbol_key(method) == "bind" {
             for arg in args {
                 self.infer_type(arg, env)?;

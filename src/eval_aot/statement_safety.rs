@@ -204,6 +204,9 @@ where
             expr_is_eir_function_safe(expr, support, facts, scope_reads).then_some(true)
         }
         StmtKind::Return(None) => Some(true),
+        // `goto` lowering removes every label of a fragment. One left in an unlowered tree is
+        // a statement that does nothing and falls through.
+        StmtKind::GotoLabel(_) => Some(false),
         StmtKind::ExprStmt(expr) => match &expr.kind {
             ExprKind::Print(inner) => {
                 expr_is_eir_function_safe(inner, support, facts, scope_reads).then_some(false)

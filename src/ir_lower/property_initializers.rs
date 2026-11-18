@@ -51,7 +51,11 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, class: &ClassInfo) {
         if matches!(default.kind, ExprKind::Null) && !ty.null_property_default_required() {
             continue;
         }
-        let value = lower_default_value(ctx, default, ty);
+        // The class initialization at `new` already reported this default's deprecations, once
+        // per initialized class; the per-object evaluation stays silent.
+        let value = super::expr::with_constant_deprecations_suppressed(|| {
+            lower_default_value(ctx, default, ty)
+        });
         let value = super::stmt::coerce_typed_assign_value(ctx, value, ty, default.span);
         ctx.emit_void(
             Op::PropSet, vec![object.value, value.value], Some(slot),

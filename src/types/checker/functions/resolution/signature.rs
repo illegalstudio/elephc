@@ -73,7 +73,7 @@ impl Checker {
         let callable_param_names: Vec<String> = param_types
             .iter()
             .filter(|(_, pty)| {
-                pty == &PhpType::Callable || is_callable_array_return_type(pty)
+                pty.is_callable_like() || is_callable_array_return_type(pty)
             })
             .map(|(pname, _)| pname.clone())
             .collect();
@@ -81,7 +81,7 @@ impl Checker {
             .iter()
             .enumerate()
             .filter(|(idx, (_, pty))| {
-                pty == &PhpType::Callable
+                pty.is_callable_like()
                     && decl.param_types.get(*idx).is_some_and(|type_ann| type_ann.is_some())
             })
             .map(|(_, (pname, _))| pname.clone())
@@ -160,6 +160,10 @@ impl Checker {
             .collect();
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
+        let prev_return_declares_callable = std::mem::replace(
+            &mut self.current_return_declares_callable,
+            decl.return_type.as_ref().is_some_and(crate::types::checker::type_expr_declares_callable),
+        );
         self.clear_loop_storage_scope(&function_key);
         self.begin_promotable_walk(&function_key);
         let previous_loop_storage_scope =
@@ -210,6 +214,7 @@ impl Checker {
         self.resolving_functions.remove(&function_key);
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
+        self.current_return_declares_callable = prev_return_declares_callable;
         self.callable_param_names = saved_callable_param_names;
         self.callable_array_targets = saved_callable_array_targets;
         self.callable_array_target_versions = saved_callable_array_target_versions;
@@ -335,7 +340,7 @@ impl Checker {
             is_generator: contains_yield,
         };
         self.publish_function_signature(name.to_string(), sig);
-        if return_type == PhpType::Callable {
+        if return_type.is_callable_like() {
             if let Some(callable_sig) = matching_callable_sig(&callable_return_sigs) {
                 self.callable_return_sigs
                     .insert(name.to_string(), callable_sig);

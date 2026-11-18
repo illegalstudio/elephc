@@ -27,6 +27,7 @@
 
 pub mod __elephc_builtin_deprecated;
 pub mod __elephc_builtin_warning;
+pub mod __elephc_call_strict_types;
 pub mod __elephc_class_has_constructor;
 pub mod __elephc_class_is_abstract;
 pub mod __elephc_eval_reflection_class_build;
@@ -47,6 +48,9 @@ pub mod __elephc_opcache_rt_reset;
 pub mod __elephc_opcache_rt_stat;
 pub mod __elephc_opcache_rt_swap;
 pub mod __elephc_reflection_class_build;
+pub mod __elephc_nl_langinfo;
+pub mod __elephc_setlocale_query;
+pub mod __elephc_setlocale_set;
 pub mod __elephc_pdo_called_class_status;
 pub mod __elephc_pdo_statement_class_status;
 pub mod __elephc_simplexml_warning;

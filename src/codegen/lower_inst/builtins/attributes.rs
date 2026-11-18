@@ -633,7 +633,7 @@ fn emit_box_scalar_arg_aarch64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue
         AttrArgValue::Array(_) => {
             unreachable!("array attribute arguments are boxed by emit_box_arg")
         }
-        AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(..) => {
+        AttrArgValue::ConstRef(..) | AttrArgValue::ScopedConst(..) => {
             // Deferred symbolic references (global/class constants, enum cases)
             // are materialized by the factory-dispatched getArguments()/
             // newInstance() bodies; the fallback $__args array stores a null
@@ -681,7 +681,7 @@ fn emit_box_scalar_arg_x86_64(ctx: &mut FunctionContext<'_>, arg: &AttrArgValue)
         AttrArgValue::Array(_) => {
             unreachable!("array attribute arguments are boxed by emit_box_arg")
         }
-        AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(..) => {
+        AttrArgValue::ConstRef(..) | AttrArgValue::ScopedConst(..) => {
             // Deferred symbolic references (global/class constants, enum cases)
             // are materialized by the factory-dispatched getArguments()/
             // newInstance() bodies; the fallback $__args array stores a null

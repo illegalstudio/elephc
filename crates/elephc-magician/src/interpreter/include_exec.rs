@@ -136,7 +136,7 @@ fn eval_replay_include_segments(
                 context.set_pending_throw(value);
                 return Err(EvalStatus::UncaughtThrowable);
             }
-            EvalControl::Break | EvalControl::Continue => {
+            EvalControl::Break | EvalControl::Continue | EvalControl::Goto(_) => {
                 return Err(EvalStatus::UnsupportedConstruct);
             }
         }
@@ -163,7 +163,12 @@ fn eval_execute_include_program(
         .unwrap_or_default();
     context.set_call_site(file.clone(), dir, 1);
     context.set_file_magic_override(Some(file));
+    // The included file's own `declare(strict_types=...)` governs its declarations and calls,
+    // then the includer's mode is restored.
+    let previous_strict_types = context.strict_types();
+    context.set_strict_types(program.strict_types());
     let result = execute_program_statements(program, context, scope, values);
+    context.set_strict_types(previous_strict_types);
     context.set_call_site(previous.0, previous.1, previous.2);
     context.set_file_magic_override(previous.3);
     result

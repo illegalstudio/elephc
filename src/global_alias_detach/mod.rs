@@ -423,7 +423,10 @@ fn rewrite_variables(stmt: &mut Stmt, name: &str, hidden: &str) {
         | StmtKind::ExternGlobalDecl { .. }
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
-        | StmtKind::FunctionVariantMark { .. } => {}
+        | StmtKind::FunctionVariantMark { .. }
+        // `goto` lowering runs before this pass, so no jump statement reaches it.
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_) => {}
     }
 }
 

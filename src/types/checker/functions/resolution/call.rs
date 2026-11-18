@@ -178,15 +178,17 @@ impl Checker {
             }
             let mut effective_sig =
                 Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
+            let tidy_validation = self.tidy_strict_adapter_signature(Some(name), None, None, &effective_sig);
+            let validation_sig = tidy_validation.as_ref().unwrap_or(&effective_sig);
             let plan = self.plan_named_call_args(
-                &effective_sig,
+                validation_sig,
                 args,
                 span,
                 &format!("Function '{}'", name),
                 caller_env,
             )?;
             self.validate_callable_spread_elements(
-                &effective_sig,
+                validation_sig,
                 args,
                 &plan,
                 caller_env,
@@ -226,10 +228,12 @@ impl Checker {
                 effective_sig =
                     Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
             }
+            let tidy_validation = self.tidy_strict_adapter_signature(Some(name), None, None, &effective_sig);
+            let validation_sig = tidy_validation.as_ref().unwrap_or(&effective_sig);
             return self.check_normalized_resolved_function_call(
                 name,
                 &sig,
-                &effective_sig,
+                validation_sig,
                 &normalized_args,
                 &defaults,
                 &descriptor_projections,
@@ -377,9 +381,20 @@ impl Checker {
             }
         }
 
+        // Spreads and named arguments decide which parameter a spread element binds, so a
+        // possible callable literal anywhere in the planned arguments is recorded.
+        let call_declares_callable = decl
+            .param_types
+            .iter()
+            .flatten()
+            .chain(decl.variadic_type.iter())
+            .any(crate::parser::ast::TypeExpr::declares_callable);
         let mut param_types = Vec::new();
         let mut arg_idx = 0;
         for arg in args {
+            if call_declares_callable {
+                self.record_static_callable_literals(arg);
+            }
             let ty = self.infer_type(arg, caller_env)?;
             if let ExprKind::Spread(_) = &arg.kind {
                 for i in arg_idx..decl.params.len() {
@@ -622,6 +637,14 @@ impl Checker {
                         declared,
                         decl.span,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
+                    )?;
+                    self.require_declared_callable_variadic_arg(
+                        &elem_ty,
+                        &ty,
+                        arg,
+                        caller_env,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                        decl.variadic_by_ref,
                     )?;
                     self.require_compatible_arg_type(
                         &elem_ty,

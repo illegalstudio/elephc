@@ -167,6 +167,15 @@ Two consequences worth knowing when adding one:
 
 These helpers implement PHP's `@` error-suppression operator and the runtime warning channel. The suppression depth lives in `_rt_diag_suppression`; while it is non-zero, suppressible warnings are silently dropped instead of written to stderr. They are emitted before any PHP-visible helper so the rest of the runtime can report warnings through a single path.
 
+Every instruction that can enter another PHP frame, or warn at its own call site, first
+publishes its source coordinates in `_php_diagnostic_line`, `_php_diagnostic_file`, and
+`_php_diagnostic_file_len`. The file is the physical file of the instruction's span, resolved
+through the module's span-to-file table, so a notice raised inside an injected prelude names
+the user's included file and line rather than the prelude or the program entry file.
+Compiler-generated prelude spans skip publication, which keeps the entering user call site
+in place; `diagnostic_caller_file` falls back to `_script_source_file` when no call site has
+published one yet.
+
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_diag_push_suppression` | Enter one nested `@` suppression scope (increment `_rt_diag_suppression`) | — | — |
@@ -1112,8 +1121,8 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_column_str` | Extract column from array of assoc arrays (string values) |
 | `__rt_array_column_mixed` | Extract column values as boxed Mixed cells for heterogeneous input payloads |
 | `__rt_range` | Generate integer range array |
-| `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
-| `__rt_random_u32` / `__rt_random_uniform` / `__rt_random_u64` / `__rt_random_uniform64` | Target-aware random primitives used by `rand()`, `random_int()`, `shuffle()`, and `array_rand()` |
+| `__rt_shuffle` | Randomize order |
+| `__rt_random_u32` / `__rt_random_uniform` / `__rt_random_u64` / `__rt_random_uniform64` | Target-aware random primitives used by `rand()`, `random_int()`, and `shuffle()` |
 | `__rt_asort` / `__rt_arsort` | Sort an indexed array by value, ascending or descending |
 | `__rt_float_compare_slots` / `__rt_float_compare_slots_desc` | Tag raw payloads as floats and delegate to `__rt_php_compare`. Descending negates the result because `NAN` comparisons are not antisymmetric |
 | `__rt_sort_float` / `__rt_sort_mixed` | Sort homogeneous indexed float arrays and validated boxed scalar arrays with PHP's small-sort, insertion and median-partition comparison schedules, including `NAN` placement. One temporary ordinal sidecar keeps equal elements stable in both directions; payloads stay unboxed, and the sidecar is freed before returning |
@@ -1123,7 +1132,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_hash_sort_links` | Shared engine behind the four hash sorts: an allocation-free, stable bottom-up merge sort with `O(n log n)` comparisons that relinks the table's `prev`/`next`/`head`/`tail` chain, so buckets never move, key/value association is preserved, and no refcount changes |
 | `__rt_hash_sort_compare_entries` | Reads and compares the heads of two merge runs with exact `SORT_REGULAR` key semantics, a flag-selected key comparison, or PHP's general value comparison table |
 | `__rt_key_compare_regular` / `__rt_key_compare_exact_decimal_integers` / `__rt_key_parse_i64_decimal` | Key-comparison family behind the hash sorts: `SORT_REGULAR` key ordering with PHP's exact numeric-string rules, including overflow-safe decimal-integer comparison |
-| `__rt_key_compare_flagged` / `__rt_key_sort_int_bytes` / `__rt_key_sort_clip_nul` | The key comparisons `ksort()`/`krsort()` select with `$flags` other than `SORT_REGULAR`. Every byte-comparing mode spells an integer key out as decimal digits into the comparator's own frame first, then reuses `__rt_strcmp`, `__rt_strcasecmp` or `__rt_strnatcmp`; `SORT_NUMERIC` reads each key through `__rt_str_to_number` but compares two integer keys exactly rather than through a double; `SORT_LOCALE_STRING` clips both operands at the first NUL, which is `strcoll` in the C locale |
+| `__rt_key_compare_flagged` / `__rt_key_sort_int_bytes` / `__rt_key_sort_clip_nul` | The key comparisons `ksort()`/`krsort()` select with `$flags` other than `SORT_REGULAR`. Every byte-comparing mode spells an integer key out as decimal digits into the comparator's own frame first, then reuses `__rt_strcmp`, `__rt_strcasecmp` or `__rt_strnatcmp`; `SORT_NUMERIC` reads each key through `__rt_str_to_number` but compares two integer keys exactly rather than through a double; `SORT_LOCALE_STRING` clips both operands at the first NUL and stages them as NUL-terminated copies in one `__rt_heap_alloc` block before calling libc `strcoll`, then frees it, so it honours the active `LC_COLLATE` |
 | `__rt_strnatcmp` | PHP natural order (`strnatcmp_ex`) over two pointer/length strings, with an ASCII case-folding flag. A leaf with no calls: it runs once per comparison inside an `O(n log n)` sort |
 | `__rt_hash_sort_triple` | Reads a hash entry's key or value as a `__rt_php_compare` `(tag, lo, hi)` triple, peeling boxed Mixed cells |
 | `__rt_natsort` / `__rt_natcasesort` | Natural-order sort, case-sensitive or case-insensitive |

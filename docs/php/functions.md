@@ -35,7 +35,7 @@ function repeat(string $label, int $count): string {
 - Function, method, constructor, closure, and arrow-function parameter hints are checked
 - Function, method, closure, and arrow-function return type hints are checked
 - Arguments are bound to declared scalar parameters using PHP's default (coercive) rules where elephc can reproduce them exactly — `takesString(42)` passes `"42"`, `takesInt(5.0)` passes `5`. Conversions PHP decides at run time with a `Deprecated:` notice or a `TypeError` are compile errors instead. A file that opens with `declare(strict_types=1)` switches to PHP's strict binding, where only an exact type match and the `int`→`float` widening are accepted; see [Types → Parameter type coercion](./types.md#parameter-type-coercion) and [Types → Strict types](./types.md#strict-types) for the full tables
-- A `callable` parameter accepts a compile-time-constant callable string (`"strtoupper"`, `"Formatter::wrap"`) as well as closures and first-class callables; see [Types → Callable strings](./types.md#callable-strings)
+- A `callable` parameter keeps the value it receives (a function or `"Class::method"` name, a callable array, an invokable object or a Closure) and checks on entry that it is callable; see [Types → Callable strings](./types.md#callable-strings)
 - Variadic parameters may carry a type hint (`function f(int ...$xs)`), including on methods, closures, and arrow functions; every argument collected into the variadic is checked against the declared element type, just like a regular typed parameter. An untyped variadic accepts heterogeneous arguments.
 - Non-`void` declared return types must return a value on every reachable path; `throw`, `exit()`/`die()`, and infinite loops count as non-returning paths
 - Bare `return;` is valid only for `void` returns; use `return null;` for nullable return types
@@ -314,6 +314,24 @@ $squared = array_map(fn(int $n): int => $n * $n, $nums);
 
 ## First-class callable syntax
 
+A callable value can be converted to a `Closure` with `$callback(...)`, including
+callable parameters, array elements such as `$callbacks[0](...)`, and returned
+callables such as `factory()(...)`. The expression is evaluated once when the
+closure is created; invocation happens later. Existing captures and bound
+receivers remain available through the returned closure. Private and protected method
+callables use the class scope where the closure is created; the returned closure can
+then be invoked outside that scope.
+
+```php
+function wrap(callable $method): Closure {
+    return $method(...);
+}
+
+$callback = fn(int $value): int => $value * 2;
+$wrapped = wrap($callback);
+echo $wrapped(21); // 42
+```
+
 ```php
 <?php
 $triple = triple(...);
@@ -478,11 +496,21 @@ exactly as PHP's shared reference is. The same rewrite accepts scalar, string, a
 `mixed`, union, and nullable properties, static properties, static methods, and free
 functions.
 
-The same property places also bind to by-reference **variadics**, except array properties:
-the variadic collector needs the container payload repacked, so `collect($box->items)` is
-rejected and asks for a local variable instead. Properties whose declared type needs a runtime
-type dispatch the rewrite does not implement (`iterable`, pointers, buffers) still report
-`must be passed a variable`. The write-back runs after the call
+A property reference whose declared type has a single raw storage shape (`int`, `float`,
+`bool`, `false`, `string`, or `array<T>`) also carries the property's declared type into the
+callee's hidden cell. When the callee writes a wider runtime value that the property cannot
+accept — for example `function w(int &$x, mixed $v) { $x = $v; }` called with an arbitrary
+string — the write raises PHP's reference-form `TypeError` before coercion
+(`Cannot assign string to reference held by property C::$n of type int`). Valid weak property
+writes (numeric strings, bools, and in-range floats) still convert normally. The write-back
+itself remains copy-in/copy-out for object, `mixed`, union (including bare `array`), and
+nullable properties.
+
+The same property places also bind to by-reference **variadics**, including array
+properties: the variadic collector transports the boxed container, and the write-back
+repacks the mutated payload into the declared property slot. Properties whose declared type
+needs a runtime type dispatch the rewrite does not implement (`iterable`, pointers, buffers)
+still report `must be passed a variable`. The write-back runs after the call
 returns; if the callee throws after mutating the reference, the property keeps its previous
 value (PHP would already have applied the mutation).
 

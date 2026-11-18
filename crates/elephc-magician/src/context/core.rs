@@ -84,9 +84,14 @@ pub struct ElephcEvalContext {
     pub(super) static_properties: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) static_property_aliases: HashMap<(String, String), EvalReferenceTarget>,
     pub(super) class_constants: HashMap<(String, String), RuntimeCellHandle>,
+    /// Instance property defaults each eval class evaluated when it was initialized, by
+    /// (class, property storage name); a new object copies them.
+    pub(super) instance_defaults: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) included_files: HashSet<String>,
     pub(super) included_file_order: Vec<String>,
     pub(super) included_main_file: Option<String>,
+    /// `declare(strict_types=...)` for the eval fragment currently executing.
+    pub(super) strict_types: bool,
     pub(super) error_reporting: i64,
     pub(super) error_handler: Option<EvalErrorHandlerState>,
     pub(super) error_handler_stack: Vec<Option<EvalErrorHandlerState>>,
@@ -135,6 +140,13 @@ pub struct ElephcEvalContext {
     pub(super) call_dir: String,
     pub(super) call_line: i64,
     pub(super) file_magic_override: Option<String>,
+    /// Deprecation notices captured during eager constant-expression evaluation.
+    pub(super) deprecation_notices: super::deprecation_notices::EvalDeprecationNotices,
+    /// Class lookups made by the override checks of the class being bound early, if any.
+    /// The checks only hold a shared context, hence the cell. A record left open by a panic is
+    /// replaced by the next bind, so the cell is safe to carry across `catch_unwind`.
+    pub(super) override_lookups:
+        std::panic::AssertUnwindSafe<std::cell::RefCell<Option<super::override_lookups::EvalOverrideLookups>>>,
 }
 
 impl ElephcEvalContext {
@@ -191,9 +203,11 @@ impl ElephcEvalContext {
             static_properties: HashMap::new(),
             static_property_aliases: HashMap::new(),
             class_constants: HashMap::new(),
+            instance_defaults: HashMap::new(),
             included_files: HashSet::new(),
             included_file_order: Vec::new(),
             included_main_file: None,
+            strict_types: false,
             error_reporting: crate::eval_php_profile::eval_all_error_mask(),
             error_handler: None,
             error_handler_stack: Vec::new(),
@@ -238,6 +252,8 @@ impl ElephcEvalContext {
             call_dir: String::new(),
             call_line: 0,
             file_magic_override: None,
+            deprecation_notices: Default::default(),
+            override_lookups: Default::default(),
         }
     }
 
@@ -295,9 +311,11 @@ impl ElephcEvalContext {
             static_properties: HashMap::new(),
             static_property_aliases: HashMap::new(),
             class_constants: HashMap::new(),
+            instance_defaults: HashMap::new(),
             included_files: HashSet::new(),
             included_file_order: Vec::new(),
             included_main_file: None,
+            strict_types: false,
             error_reporting: crate::eval_php_profile::eval_all_error_mask(),
             error_handler: None,
             error_handler_stack: Vec::new(),
@@ -342,6 +360,8 @@ impl ElephcEvalContext {
             call_dir: String::new(),
             call_line: 0,
             file_magic_override: None,
+            deprecation_notices: Default::default(),
+            override_lookups: Default::default(),
         }
     }
 
@@ -371,5 +391,15 @@ impl ElephcEvalContext {
         }
         self.abi_owner_count -= 1;
         self.abi_owner_count == 0
+    }
+
+    /// Returns the strict-types mode of the eval fragment currently executing.
+    pub(crate) fn strict_types(&self) -> bool {
+        self.strict_types
+    }
+
+    /// Sets the strict-types mode for the eval fragment currently executing.
+    pub(crate) fn set_strict_types(&mut self, strict_types: bool) {
+        self.strict_types = strict_types;
     }
 }

@@ -102,7 +102,8 @@ fn slot_effect(function: &Function, instructions: &[InstId], slot: LocalSlotId) 
 fn names_slot(inst: &Instruction, slot: LocalSlotId) -> bool {
     match inst.immediate {
         Some(Immediate::LocalSlot(named)) => named == slot,
-        Some(Immediate::LocalSlotPair { first, second }) => first == slot || second == slot,
+        Some(Immediate::LocalSlotPair { first, second })
+        | Some(Immediate::PropertyRefCell { first, second, .. }) => first == slot || second == slot,
         Some(Immediate::IterStart(metadata)) => metadata.local_slots().any(|named| named == slot),
         _ => false,
     }

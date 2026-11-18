@@ -32,6 +32,11 @@ pub(super) fn lower_include(
 
 /// Lowers an include-once marker.
 pub(super) fn lower_include_once_mark(ctx: &mut LoweringContext<'_, '_>, label: &str, span: Span) {
+    // A class-binding mark stands where an included file binds a hoisted class or trait.
+    if let Some(class_name) = crate::parser::ast::class_binding_mark_class(label) {
+        crate::ir_lower::property_default_errors::emit_class_statement_deprecations(ctx, class_name, span);
+        return;
+    }
     let data = ctx.intern_string(label);
     ctx.emit_void(
         Op::IncludeOnceMark,

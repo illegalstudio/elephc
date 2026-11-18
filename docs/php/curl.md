@@ -464,6 +464,8 @@ target version, the same way `JSON_*` is — including the PHP 8.5 additions
 `CURLOPT_SSL_SIGNATURE_ALGORITHMS`, `CURLFOLLOW_*`, `CURLOPT_INFILESIZE_LARGE`).
 Their values are frozen from the pinned libcurl 8.21.0 headers, which understands
 all of them at every profile, so `--php-version 8.4` still resolves them.
+`CURLOPT_BINARYTRANSFER`, which PHP 8.4 deprecates, raises `E_DEPRECATED` with
+php-src's message when read under the 8.4 and later profiles.
 
 `curl_share_init_persistent()` deserves one note: the native share it creates is
 **process-lifetime**. elephc has no PHP-FPM-worker-restart boundary to key a
@@ -955,13 +957,10 @@ that is itself an array), and an object inside a nested array.
 
 ### Memory and lifetime
 
-- **A callback that captures its own handle leaks it.** `curl_setopt($ch,
-  CURLOPT_WRITEFUNCTION, function () use ($ch) { ... })` closes a reference cycle.
-  elephc's memory model is refcount-only with no cycle collector, so the handle —
-  and its libcurl session, socket, and DNS cache — lives until the process exits.
-  php-src has the identical cycle and survives it only because Zend has a cycle
-  collector. Pass the handle the callback already receives as its first argument
-  instead of capturing it.
+- **Callbacks retain their captured handles.** A callback that captures its own
+  handle forms a reference cycle. The runtime cycle collector can reclaim it once
+  the handle and callback are unreachable. Callback normalization releases its
+  temporary descriptor owner after installation.
 - **`curl_version()` and the array form of `curl_getinfo()` leak on every call.**
   Both build their array by decoding a JSON blob with the ordinary `json_decode()`
   builtin, and `json_decode()` never releases the value it decodes — a

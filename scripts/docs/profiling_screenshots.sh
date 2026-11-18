@@ -44,18 +44,21 @@ echo "elephc:  $ELEPHC"
 cp "$DEMO"/shop.php "$DEMO"/shop_v2.php "$WORK/"
 cd "$WORK"
 
-# Exact: every dimension, the query panel, the per-function source view, checks.
+# Exact (a launched run is measured exactly; no flag asks for it): every
+# dimension, the query panel, the per-function source view, checks.
 cp "$DEMO/budget.elephc" "$WORK/.elephc"
-"$ELEPHC" monitor shop.php --instrument --html exact.html >/dev/null 2>&1 || true
+"$ELEPHC" monitor shop.php --html exact.html >/dev/null 2>&1 || true
 
-# Sampled: the per-line source view, which needs the dSYM rather than hooks.
-"$ELEPHC" monitor shop.php --duration 6 --html sampled.html >/dev/null 2>&1 || true
+# The per-line source view (source-lines.png) comes from a sampled capture,
+# which a launched run no longer makes: a local `monitor` is always exact, and
+# its source view is per function. That image is kept as it is until the
+# script can sample again.
 
 # A/B: the same service after the N+1 is folded into one query.
-"$ELEPHC" monitor shop.php --instrument --save before.json >/dev/null 2>&1 || true
-"$ELEPHC" monitor shop_v2.php --instrument --baseline before.json --html diff.html >/dev/null 2>&1 || true
+"$ELEPHC" monitor shop.php --save before.json >/dev/null 2>&1 || true
+"$ELEPHC" monitor shop_v2.php --baseline before.json --html diff.html >/dev/null 2>&1 || true
 
-for f in exact.html sampled.html diff.html; do
+for f in exact.html diff.html; do
   [ -s "$f" ] || { echo "capture failed: $f was not written" >&2; exit 1; }
 done
 
@@ -84,10 +87,10 @@ shot () {  # shot <name> <page> <hash>
 echo "writing $OUT"
 shot call-graph   exact.html      '#m=time'
 shot call-graph-dark exact_dark.html '#m=time'
+shot function     exact.html      '#m=time&s=load_price'
 shot memory       exact.html      '#m=mem'
 shot flame        exact.html      '#v=flame'
 shot queries      exact.html      '#v=sql'
 shot source       exact.html      '#v=src'
 shot checks       exact.html      '#v=chk'
-shot source-lines sampled.html    '#v=src'
 shot diff         diff.html       ''

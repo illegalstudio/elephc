@@ -430,6 +430,54 @@ pub(super) fn builtin_reflection_class_mixed_method(method_name: &str, property:
     }
 }
 
+/// Returns the statement that answers a reflection getter through the reflector's `__lazy`
+/// callable when one is set: an `eval()` reflector whose value PHP has not computed when it
+/// was built stores a closure there that makes the evaluation PHP makes on the call (`method`,
+/// with `args`), raising its notices and errors then.
+pub(super) fn reflection_lazy_return(method: &str, args: Vec<Expr>, span: crate::span::Span) -> Stmt {
+    let lazy = Expr::new(
+        ExprKind::PropertyAccess { object: Box::new(Expr::new(ExprKind::This, span)), property: "__lazy".to_string() },
+        span,
+    );
+    let mut call_args = vec![lazy.clone(), Expr::new(ExprKind::StringLiteral(method.to_string()), span)];
+    call_args.extend(args);
+    Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(lazy.clone()),
+                    op: BinOp::StrictNotEq,
+                    right: Box::new(Expr::new(ExprKind::Null, span)),
+                },
+                span,
+            ),
+            then_body: vec![Stmt::new(
+                StmtKind::Return(Some(Expr::new(
+                    ExprKind::FunctionCall { name: Name::unqualified("call_user_func"), args: call_args },
+                    span,
+                ))),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Returns a public mixed getter backed by one private slot that defers to `__lazy` when set
+/// (see [`reflection_lazy_return`]).
+pub(super) fn builtin_reflection_lazy_mixed_method(method_name: &str, property: &str) -> ClassMethod {
+    let mut method = builtin_reflection_class_mixed_method(method_name, property);
+    method.body.insert(0, reflection_lazy_return(method_name, Vec::new(), crate::span::Span::dummy()));
+    method
+}
+
+/// Returns the private `__lazy` slot of a reflector whose getters defer to it.
+pub(super) fn builtin_reflection_lazy_property() -> ClassProperty {
+    builtin_property("__lazy", Visibility::Private, Some(mixed_type()), Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())))
+}
+
 /// Returns a public `ReflectionClass` boolean method backed by one private slot.
 pub(super) fn builtin_reflection_class_bool_method(method_name: &str, property: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();

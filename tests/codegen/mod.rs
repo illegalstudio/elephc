@@ -155,12 +155,17 @@ mod simplexml_php_src;
 mod fileinfo;
 mod fileinfo_autoload;
 mod autoload_preludes;
+mod weak_map_autoload;
 mod fileinfo_reflection;
 mod fileinfo_validation;
 mod fileinfo_stream_diagnostics;
 mod fileinfo_wrapper_stat;
+mod ctype_php_src;
 mod fileinfo_stream_magic;
 
-mod uri_php_src;
+mod tidy_php_src;
 mod uri86_php_src;
+mod uri_php_src;
+
+mod tidy;
 mod uri;

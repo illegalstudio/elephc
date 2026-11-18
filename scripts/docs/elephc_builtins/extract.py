@@ -608,6 +608,41 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
         "xml",
         "crates/elephc-builtin-contract/src/catalog_xml.rs",
     ),
+    # The tidy surface is built AST; the extractor's builder pattern finds
+    # `function("tidy_*")` in the generated functions module.
+    "tidy": (
+        "tidy_prelude/build/functions.rs",
+        "tidy",
+        "crates/elephc-builtin-contract/src/catalog_tidy.rs",
+    ),
+}
+
+# PHP-visible functions whose injected prelude is not keyed by the contract ``Module`` or
+# ``Area``. Both locale functions are `Area::String` (like the hash prelude) but live in
+# their own synthetic-AST prelude, so a per-name override keeps the page link truthful.
+PRELUDE_SOURCE_BY_NAME: dict[str, tuple[str | tuple[str, ...], str, str]] = {
+    "setlocale": (
+        "locale_prelude.rs",
+        "locale",
+        "crates/elephc-builtin-contract/src/catalog_locale.rs",
+    ),
+    "nl_langinfo": (
+        "locale_prelude.rs",
+        "locale",
+        "crates/elephc-builtin-contract/src/catalog_locale.rs",
+    ),
+    # `pack`/`unpack` are `Area::String` like the hash prelude, but the PHP 8.6 endianness
+    # surface lives in its own synthetic-AST prelude, so name the real source per function.
+    "pack": (
+        "pack_prelude.rs",
+        "pack",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    "unpack": (
+        "pack_prelude.rs",
+        "pack",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
 }
 
 
@@ -666,24 +701,18 @@ def resolve_non_registry_lowering(
     lowering = LoweringInfo(sig_file=contract_file)
     kind = aot_support.get("kind")
     if kind == "prelude":
-        if canonical in ("pack", "unpack"):
-            # Area::String covers both hash_* and the core pack/unpack prelude; these two
-            # share no source file, so choose by name instead of by area.
-            source, label, sig_file = (
-                "pack_prelude.rs",
-                "pack",
-                "crates/elephc-builtin-contract/src/catalog_data.rs",
-            )
-        else:
-            try:
-                source, label, sig_file = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
-            except KeyError:
-                raise ValueError(
-                    f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
-                    f"PRELUDE_SOURCES does not map to a prelude. Add the area (see the constant's "
-                    f"comment) — falling back to another area's prelude would publish a page "
-                    f"pointing at the wrong file with the wrong prose."
-                ) from None
+        try:
+            source_entry = PRELUDE_SOURCE_BY_NAME.get(canonical)
+            if source_entry is None:
+                source_entry = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
+            source, label, sig_file = source_entry
+        except KeyError:
+            raise ValueError(
+                f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
+                f"PRELUDE_SOURCES does not map to a prelude. Add the area (see the constant's "
+                f"comment) — falling back to another area's prelude would publish a page "
+                f"pointing at the wrong file with the wrong prose."
+            ) from None
         lowering.sig_file = sig_file
         sources = (source,) if isinstance(source, str) else source
         prelude, match = None, None

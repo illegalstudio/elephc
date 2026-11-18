@@ -962,10 +962,24 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     {
         return;
     }
-    let Some(constructor) = class_info.methods.get(&php_symbol_key("__construct")) else {
+    // A runtime-selected descendant of a private constructor carries no `__construct` entry of
+    // its own; PHP still runs the ancestor's. Resolve the owner here too, otherwise the child has
+    // no thunk and `new $class()` falls back to constructor-less allocation despite an allowed
+    // scope.
+    let Some((constructor_class_name, constructor_class_info)) =
+        crate::types::constructor_owner(&module.class_infos, class_name)
+    else {
         return;
     };
-    let regular = crate::types::call_args::regular_param_count(constructor);
+    let constructor_class_name = constructor_class_name.to_string();
+    let Some(constructor) = constructor_class_info
+        .methods
+        .get(&php_symbol_key("__construct"))
+        .cloned()
+    else {
+        return;
+    };
+    let regular = crate::types::call_args::regular_param_count(&constructor);
     let is_variadic = constructor.variadic.is_some();
     if is_variadic {
         // A VARIADIC constructor needs a thunk at EVERY arity, including its declared one. The
@@ -1035,14 +1049,14 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         }
     };
     let slot_type = |index: usize| -> Option<PhpType> {
-        crate::types::call_args::positional_param_type(constructor, index)
+        crate::types::call_args::positional_param_type(&constructor, index)
     };
     if (0..provided_args).any(|index| slot_type(index).is_none()) {
         return;
     }
     // What the collector declares one element to be. `None` means it collects anything, and the
     // overflow is passed through untouched.
-    let element = crate::types::call_args::variadic_element_type(constructor);
+    let element = crate::types::call_args::variadic_element_type(&constructor);
     let cast = match element.as_ref().map(PhpType::codegen_repr) {
         None | Some(PhpType::Mixed) => None,
         Some(PhpType::Int) => Some(CastType::Int),
@@ -1055,7 +1069,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     };
 
     let span = Span::dummy();
-    let this_type = PhpType::Object(class_name.to_string());
+    let this_type = PhpType::Object(constructor_class_name.clone());
     let mut args = Vec::with_capacity(provided_args.max(constructor.params.len()));
     let mut guards = Vec::new();
     for index in 0..provided_args {
@@ -1071,7 +1085,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
                 // The guard is what keeps that from becoming a silent `(int)"x" === 0`: php raises
                 // a TypeError for a value it cannot read as a number, and so does this.
                 guards.push(coercible_or_throw_stmt(
-                    class_name,
+                    &constructor_class_name,
                     &variable,
                     index + 1,
                     target.clone(),
@@ -1364,13 +1378,17 @@ pub(crate) fn eval_native_default_helper_name(
     )
 }
 
-/// Lowers native deferred defaults and eval-safe deep literals into zero-argument EIR helpers.
+/// Lowers native deferred defaults, eval-safe deep literals, and defaults that read a
+/// deprecated constant into zero-argument EIR helpers.
 ///
 /// Compact eval metadata deliberately has a recursion bound. A finite source literal beyond that
 /// bound is still safe for the compiler to lower normally, so the binder calls one of these
 /// helpers when no compact value was registered. Deferred-error helpers run only on native
 /// callable and reflection paths. Eval receives those trees as owned data, never as callbacks
-/// that could unwind through interpreter-owned Rust frames.
+/// that could unwind through interpreter-owned Rust frames. A default that reads a deprecated
+/// constant (`DATE_RFC7231`, an `RFC7231` class constant) gets a helper too, for functions,
+/// methods, and closures alike, so a dynamic call raises the notice on first use instead of
+/// materializing a value folded at compile time.
 pub(crate) fn lower_eval_native_default_helpers(
     module: &mut Module,
     check_result: &CheckResult,
@@ -1388,6 +1406,10 @@ pub(crate) fn lower_eval_native_default_helpers(
         })
     });
     let mut specs = Vec::new();
+    let tables = super::initializer_reads::ConstantTables {
+        classes: &module.class_infos,
+        interfaces: &check_result.interfaces,
+    };
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, info)| info.class_id);
     for (class_name, class_info) in classes {
@@ -1404,6 +1426,9 @@ pub(crate) fn lower_eval_native_default_helpers(
                         && !matches!(default.kind, ExprKind::Throw(_))
                         || (uses_eval && eval_native_default_helper_literal(&default.kind)
                             && crate::types::signatures::literal_default_exceeds_compact_depth(default))
+                        || super::initializer_reads::default_reaches_deprecated_read(
+                            &tables, Some(class_name.as_str()), default,
+                        )
                     {
                         let scope = if is_static {
                             class_info.static_method_impl_classes.get(method_name)
@@ -1422,13 +1447,50 @@ pub(crate) fn lower_eval_native_default_helpers(
     for (name, signature) in functions {
         for (index, default) in signature.defaults.iter().enumerate() {
             let Some(default) = default else { continue; };
-            if contains_deferred_error(default) && !matches!(default.kind, ExprKind::Throw(_)) {
+            if contains_deferred_error(default) && !matches!(default.kind, ExprKind::Throw(_))
+                || super::initializer_reads::default_reaches_deprecated_read(
+                    &tables, None, default,
+                )
+            {
                 specs.push((format!("__elephc_eval_default\\function\\{name}\\{index}"),
                     None, default.clone()));
             }
         }
     }
-    for (function_name, default_scope, default) in specs {
+    // A closure's descriptor invoker fills an omitted default from a value folded at compile
+    // time. A default that reads a deprecated constant must raise its notice on first use
+    // instead, so it is evaluated through a helper like a deferred-error default.
+    for closure in &module.closures {
+        let Some(signature) = &closure.signature else { continue };
+        for (index, default) in signature.defaults.iter().enumerate() {
+            let Some(default) = default else { continue };
+            if super::initializer_reads::default_reaches_deprecated_read(
+                &tables, closure.lexical_class.as_deref(), default,
+            ) {
+                specs.push((
+                    format!("__elephc_eval_default\\closure\\{}\\{index}", closure.name),
+                    closure.lexical_class.clone(),
+                    default.clone(),
+                ));
+            }
+        }
+    }
+    // `ReflectionParameter::getDefaultValue()` evaluates a fresh copy of the default on every
+    // call, at the caller's line, and leaves the parameter's own once flags alone. It gets a
+    // twin of each helper whose default reads a deprecated constant.
+    let reflection_specs: Vec<_> = specs
+        .iter()
+        .filter(|(_, scope, default)| {
+            super::initializer_reads::default_reaches_deprecated_read(&tables, scope.as_deref(), default)
+        })
+        .map(|(name, scope, default)| (reflection_default_helper_name(name), scope.clone(), default.clone()))
+        .collect();
+    let specs: Vec<_> = specs
+        .into_iter()
+        .map(|(name, scope, default)| (name, scope, default, false))
+        .chain(reflection_specs.into_iter().map(|(name, scope, default)| (name, scope, default, true)))
+        .collect();
+    for (function_name, default_scope, default, for_reflection) in specs {
         if module.functions.iter().any(|function| function.name == function_name) {
             continue;
         }
@@ -1456,10 +1518,18 @@ pub(crate) fn lower_eval_native_default_helpers(
         };
         function.source_signature = Some(source_signature(&function_name, &signature));
         function.signature = Some(eir_runtime_metadata_signature(&signature));
+        let frame = for_reflection.then(|| {
+            super::initializer_evaluation::InitializerFrame::top_unfolded(
+                default_scope.is_some(),
+                super::initializer_evaluation::LineSource::Caller,
+                &default,
+                None,
+            )
+        });
         let body = [Stmt::new(StmtKind::Return(Some(default)), Span::dummy())];
         // The helper inherits class scope through `current_class` below. It must not enter the
         // separate property-initializer path, which skips `body` and expects an object receiver.
-        let closures = lower_body_into_function(
+        let lower = || lower_body_into_function(
             &mut function,
             None,
             &mut module.data,
@@ -1512,9 +1582,23 @@ pub(crate) fn lower_eval_native_default_helpers(
             None,
             module.web,
         );
+        let closures = match frame {
+            Some(frame) => super::initializer_evaluation::with_frame(frame, lower),
+            None => lower(),
+        };
         add_closures(module, closures);
         module.add_function(function);
     }
+}
+
+/// Returns the name of the reflection twin of default helper `helper`.
+fn reflection_default_helper_name(helper: &str) -> String {
+    format!("__elephc_reflection_default\\{helper}")
+}
+
+/// Reports whether `name` is a reflection twin made by [`reflection_default_helper_name`].
+pub(crate) fn is_reflection_default_helper(name: &str) -> bool {
+    name.starts_with("__elephc_reflection_default\\")
 }
 
 /// Returns whether a default is a finite, side-effect-free literal tree.
@@ -1896,6 +1980,7 @@ fn lower_body_into_function(
         .collect::<Vec<_>>();
     // By-reference parameters of a union of null, arrays and objects are checked on entry,
     // after the caller evaluated every argument (php's RECV order).
+    let mut callable_variadic_guard: Option<(String, usize, String, PhpType)> = None;
     let reference_entry_guards = {
         let display = function
             .display_name
@@ -1905,17 +1990,49 @@ fn lower_body_into_function(
         let mut position = 0;
         let mut guards = Vec::new();
         for (index, (name, php_type)) in params.iter().enumerate() {
+            // Hidden ABI parameters (the receiver, a static method's late-static-binding class
+            // id, func_get_args() state) are not PHP arguments and take no position.
             if name == "this"
+                || name == crate::names::CALLED_CLASS_ID_LOCAL
                 || name == crate::func_args::HIDDEN_ARGC_PARAM
                 || name == crate::func_args::HIDDEN_ARGS_PARAM
             {
                 continue;
             }
             position += 1;
-            if by_ref_params.get(index).copied().unwrap_or(false)
-                && crate::ir_lower::expr::reference_parameter_needs_entry_guard(php_type)
-            {
+            let by_ref = by_ref_params.get(index).copied().unwrap_or(false);
+            let variadic = function
+                .signature
+                .as_ref()
+                .is_some_and(|signature| signature.variadic.as_deref() == Some(name.as_str()));
+            if variadic {
+                // A variadic's storage need not carry its declared element type: a by-reference
+                // collector is `array<mixed>` and one a descriptor or named arguments can fill is
+                // promoted to an iterable container. The source hint keeps the contract, so a
+                // `callable ...$xs` / `callable &...$xs` checks each value on entry from it.
+                let callable_element = function
+                    .signature
+                    .as_ref()
+                    .and_then(crate::types::signatures::variadic_source_element_type_expr)
+                    .filter(|hint| crate::types::checker::type_expr_declares_callable(hint))
+                    .map(crate::ir_lower::context::type_expr_to_php_type);
+                if let Some(element) = callable_element {
+                    callable_variadic_guard = Some((display.clone(), position, name.clone(), element));
+                    continue;
+                }
+            }
+            if by_ref && crate::ir_lower::expr::reference_parameter_needs_entry_guard(php_type) {
                 guards.push((display.clone(), position, name.clone(), php_type.clone()));
+            } else if !variadic && php_type.declares_callable() {
+                // A declared `callable` keeps the PHP value it received, so PHP's binding
+                // check (`must be of type callable, T given`) runs here, on entry. A by-reference
+                // parameter checks the referenced value.
+                guards.push((display.clone(), position, name.clone(), php_type.clone()));
+            } else if let (true, false, PhpType::Array(element)) = (variadic, by_ref, php_type) {
+                if element.declares_callable() {
+                    callable_variadic_guard =
+                        Some((display.clone(), position, name.clone(), (**element).clone()));
+                }
             }
         }
         guards
@@ -2038,17 +2155,28 @@ fn lower_body_into_function(
     ctx.lower_with_final_string_storage(|ctx| {
         if !eager_parameters {
             super::object_boundaries::guard_parameters(ctx, &reference_entry_guards);
+            if let Some((display, position, name, element)) = &callable_variadic_guard {
+                crate::ir_lower::expr::guard_declared_callable_variadic_entry(
+                    ctx, display, *position, name, element,
+                );
+            }
         }
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
         } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
             if eager_parameters {
                 // Generators check their parameters eagerly elsewhere; these keep their
-                // place at the start of the body.
+                // place at the start of the body. A declared `callable` is checked once, at
+                // the call, by the generator's eager validator: checking it again here would
+                // read a by-reference binding the caller may have changed since.
                 for (display, position, name, php_type) in &reference_entry_guards {
+                    if php_type.declares_callable() {
+                        continue;
+                    }
                     crate::ir_lower::expr::guard_reference_parameter_entry(ctx, display, *position, name, php_type);
                 }
             }
+            crate::ir_lower::reflection_deprecations::emit_pending_prologue(ctx);
             crate::ir_lower::numeric_storage::lower_body(ctx, body);
         }
     });

@@ -1005,6 +1005,24 @@ fn test_parse_trailing_comma_in_call_args() {
 }
 
 #[test]
+/// Verifies bare `exit;` and `die;` parse as zero-argument calls, matching PHP's
+/// parenthesis-free language-construct form.
+fn test_parse_bare_exit_and_die() {
+    for keyword in ["exit", "die", "EXIT", "Die"] {
+        let source = format!("<?php {keyword};");
+        let stmts = parse_source(&source);
+        let StmtKind::ExprStmt(expr) = &stmts[0].kind else {
+            panic!("expected ExprStmt for {keyword}");
+        };
+        let ExprKind::FunctionCall { name, args } = &expr.kind else {
+            panic!("expected FunctionCall for {keyword}, got {:?}", expr.kind);
+        };
+        assert!(name.as_str().eq_ignore_ascii_case(keyword));
+        assert!(args.is_empty());
+    }
+}
+
+#[test]
 // Verifies that a trailing comma after the last parameter (PHP 8.0+) is accepted:
 // `<?php function foo($a, $b,) {}` parses to a `FunctionDecl` with two parameters.
 /// Verifies that a trailing comma in a parameter list parses.
@@ -1135,4 +1153,43 @@ fn test_parse_closure_parameter_doc_comment() {
         &attribute.args.first().map(|arg| &arg.kind),
         Some(ExprKind::StringLiteral(doc)) if doc == "/** doc */"
     ));
+}
+
+/// Dynamic callable syntax uses the existing global Closure conversion path.
+#[test]
+fn test_issue_828_dynamic_first_class_callable_parser() {
+    for source in ["$callback", "$this", "($callback)", "$callbacks[0]", "factory()", "($box->callback)"] {
+        let stmts = parse_source(&format!("<?php $f = {source}(...);"));
+        let StmtKind::Assign { value, .. } = &stmts[0].kind else { panic!("assignment"); };
+        let ExprKind::StaticMethodCall { receiver, method, args } = &value.kind else {
+            panic!("expected callable conversion: {:?}", value.kind);
+        };
+        assert!(matches!(receiver, StaticReceiver::Named(name) if name.kind == elephc::names::NameKind::FullyQualified && name.as_str() == "Closure"));
+        assert_eq!(method, elephc::parser::ast::DYNAMIC_CALLABLE_FACTORY);
+        assert_eq!(args.len(), 1);
+    }
+}
+
+/// A callable placeholder cannot be mixed with arguments or a trailing comma.
+///
+/// `$f(1, ...)` is no longer in this list: PHP 8.6 partial application makes a trailing `...`
+/// after bound arguments a partial application of the callable, and `$f(...,)` stays an error
+/// because a comma may not follow the ellipsis.
+#[test]
+fn test_issue_828_dynamic_first_class_callable_invalid_syntax() {
+    for source in ["$f(...,)", "($f)(..., 1)", "$a[0](...,)"] {
+        assert!(parse_fails(&format!("<?php {source};")), "{source}");
+    }
+    let stmts = parse_source("<?php $f(1, ...);");
+    let StmtKind::ExprStmt(Expr { kind: ExprKind::ClosureCall { args, .. }, .. }) = &stmts[0].kind else {
+        panic!("expected a partial application call, got {:?}", stmts[0].kind);
+    };
+    assert!(matches!(
+        &args.last().expect("trailing placeholder").kind,
+        ExprKind::Spread(inner)
+            if matches!(&inner.kind,
+                ExprKind::Variable(name) if name == "__elephc_pfa_variadic_placeholder")
+    ));
+    let stmts = parse_source("<?php $f(...$args);");
+    assert!(matches!(&stmts[0].kind, StmtKind::ExprStmt(Expr { kind: ExprKind::ClosureCall { .. }, .. })));
 }

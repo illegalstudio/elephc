@@ -22,6 +22,8 @@ pub struct EvalEnum {
     cases: Vec<EvalEnumCase>,
     constants: Vec<EvalClassConstant>,
     methods: Vec<EvalClassMethod>,
+    /// Case and constant names in declaration order, which is php-src's constant-table order.
+    member_order: Vec<String>,
 }
 
 impl PartialEq for EvalEnum {
@@ -99,6 +101,7 @@ impl EvalEnum {
             cases,
             constants,
             methods,
+            member_order: Vec::new(),
         }
     }
 
@@ -114,6 +117,17 @@ impl EvalEnum {
     pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
         self.source_location = Some(source_location);
         self
+    }
+
+    /// Returns a copy of this enum with its case and constant names in declaration order.
+    pub fn with_member_order(mut self, member_order: Vec<String>) -> Self {
+        self.member_order = member_order;
+        self
+    }
+
+    /// Returns the case and constant names in declaration order (empty when not recorded).
+    pub fn member_order(&self) -> &[String] {
+        &self.member_order
     }
 
     /// Returns a copy of this enum with class-like attributes attached.

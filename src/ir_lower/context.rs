@@ -327,6 +327,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) expression_depth: usize,
     /// Printed callable description (`Class::method`) for argument `TypeError` messages.
     pub(crate) call_description: Option<String>,
+    /// Call span of the `ReflectionMethod::invoke*()` currently dispatching its target.
+    ///
+    /// Reflection calls run under weak typing in php-src, so an explicitly reflected
+    /// `__construct` must publish weak typing — but only that final call. The span keeps
+    /// ordinary constructor calls nested in the forwarded arguments on the calling file's
+    /// own `strict_types` mode.
+    pub(crate) reflected_invoke_call_span: Option<Span>,
     /// Staging published by the enclosing reference assignment, if one is being lowered.
     ///
     /// `finish_reference_return_call` adopts the transferred lease into that staging immediately
@@ -779,6 +786,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             int_seed_bindings: HashMap::new(),
             pointer_reference_bindings: Vec::new(),
             call_description: None,
+            reflected_invoke_call_span: None,
             source_path,
             closure_display_names: HashMap::new(),
         }
@@ -1025,9 +1033,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 crate::types::width_type_from_type_expr(inner)
                     .unwrap_or_else(|| self.type_expr_to_php_type_for_value(inner)),
             )),
-            TypeExpr::Array(inner) => {
-                PhpType::Array(Box::new(self.type_expr_to_php_type_for_value(inner)))
-            }
+            TypeExpr::Array(inner) => PhpType::Array(Box::new(
+                self.type_expr_to_php_type_for_value(inner).as_container_element(),
+            )),
             TypeExpr::Nullable(inner) => PhpType::Union(vec![
                 PhpType::Void,
                 self.type_expr_to_php_type_for_value(inner),
@@ -1190,6 +1198,42 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     let owner = info.constant_declaring_interfaces.get(const_name)
                         .map(String::as_str).unwrap_or(name.as_str());
                     return self.constant_value_in_scope(value, owner);
+                }
+                queue.extend(info.parents.iter().cloned());
+            }
+        }
+        None
+    }
+
+    /// Returns the class or interface whose declaration `class_name::const_name` resolves to,
+    /// searching parent classes first and then implemented and parent interfaces, like
+    /// [`Self::scoped_constant_value`].
+    pub(crate) fn scoped_constant_owner(&self, class_name: &str, const_name: &str) -> Option<String> {
+        let mut current = Some(class_name);
+        while let Some(name) = current {
+            let Some(info) = self.classes.get(name) else {
+                break;
+            };
+            if info.constants.contains_key(const_name) {
+                return Some(name.to_string());
+            }
+            current = info.parent.as_deref();
+        }
+        let mut queue = self
+            .classes
+            .get(class_name)
+            .map(|info| info.interfaces.clone())
+            .unwrap_or_default();
+        queue.push(class_name.to_string());
+        let mut visited = HashSet::new();
+        while let Some(name) = queue.pop() {
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            if let Some(info) = self.interfaces.get(&name) {
+                if info.constants.contains_key(const_name) {
+                    let owner = info.constant_declaring_interfaces.get(const_name).unwrap_or(&name);
+                    return Some(owner.clone());
                 }
                 queue.extend(info.parents.iter().cloned());
             }
@@ -3910,6 +3954,35 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots.insert(owner_slot);
     }
 
+    /// Promotes a typed property's copy-in/copy-out temporary, attaching the runtime metadata
+    /// that lets a callee write enforce the property's declared type before coercing.
+    pub(crate) fn promote_local_property_ref_cell(
+        &mut self,
+        name: &str,
+        suffix: &str,
+        type_code: u8,
+        span: Option<Span>,
+    ) {
+        let slot = self.declare_local(name, self.local_type(name));
+        let fallback_ty = self.builder.local_php_type(slot);
+        let owner_slot = self.declare_ref_cell_owner(name, fallback_ty.clone());
+        let suffix = self.intern_string(suffix);
+        let immediate = Immediate::property_ref_cell(slot, owner_slot, suffix, type_code);
+        self.builder.emit_with_effects(
+            Op::PromoteLocalRefCell,
+            Vec::new(),
+            Some(immediate),
+            IrType::Void,
+            fallback_ty,
+            Ownership::NonHeap,
+            Op::PromoteLocalRefCell.default_effects(),
+            span,
+        );
+        self.mark_ref_bound_local(name);
+        self.initialized_slots.insert(slot);
+        self.initialized_slots.insert(owner_slot);
+    }
+
     /// Widens a concrete local to boxed `Mixed` storage, then promotes that storage to a
     /// durable heap reference cell suitable for an escaping by-reference parameter.
     pub(crate) fn promote_local_mixed_ref_cell(&mut self, name: &str, span: Option<Span>) {
@@ -4206,6 +4279,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // `MixedUnbox` stays the borrowed projection its consumers expect.
             return true;
         }
+        if self.builder.value_defining_op(value.value) == Some(Op::NormalizeCallable)
+            && self.builder.value_ownership(value.value) == Ownership::Owned
+        {
+            // A normalized descriptor carries its own lease (a retained selected descriptor
+            // or a freshly built one), released after the call or store that consumes it.
+            return true;
+        }
         if self.value_is_owned_temp_load(value.value) {
             return true;
         }
@@ -4297,6 +4377,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ClosureBind
                     | Op::FirstClassCallableNew
                     | Op::CallableValueNew
+                    | Op::NormalizeCallable
                     | Op::CallableArrayNew
                     | Op::BufferNew
                     | Op::GeneratorNew
@@ -6376,10 +6457,12 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
         TypeExpr::Void => PhpType::Void,
         TypeExpr::Never => PhpType::Never,
         TypeExpr::Iterable => PhpType::Iterable,
-        TypeExpr::Array(inner) => PhpType::Array(Box::new(type_expr_to_php_type(inner))),
+        TypeExpr::Array(inner) => {
+            PhpType::Array(Box::new(type_expr_to_php_type(inner).as_container_element()))
+        }
         TypeExpr::AssocArray { key, value } => PhpType::AssocArray {
             key: Box::new(type_expr_to_php_type(key)),
-            value: Box::new(type_expr_to_php_type(value)),
+            value: Box::new(type_expr_to_php_type(value).as_container_element()),
         },
         TypeExpr::Ptr(name) => {
             PhpType::Pointer(name.as_ref().map(|name| {
@@ -6417,7 +6500,7 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
 fn named_type_expr_to_php_type(name: &str) -> PhpType {
     match name.trim_start_matches('\\').to_ascii_lowercase().as_str() {
         "array" => PhpType::php_array(),
-        "callable" => PhpType::Callable,
+        "callable" => PhpType::DeclaredCallable,
         "closure" => PhpType::Callable,
         "mixed" => PhpType::Mixed,
         "null" | "void" => PhpType::Void,

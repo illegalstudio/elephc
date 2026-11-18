@@ -156,11 +156,14 @@ pub fn execute_program_outcome_with_context(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
+    let previous_strict_types = context.strict_types();
+    context.set_strict_types(program.strict_types());
     let executed = match bytecode::try_execute(context, program, scope, values) {
         Ok(Some(control)) => Ok(control),
         Ok(None) => execute_program_statements(program, context, scope, values),
         Err(status) => Err(status),
     };
+    context.set_strict_types(previous_strict_types);
     match executed {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
         Ok(EvalControl::Return(result)) => {
@@ -171,7 +174,9 @@ pub fn execute_program_outcome_with_context(
             let result = if result.is_borrowed() { values.retain(result)? } else { result };
             Ok(EvalOutcome::Throwable(result))
         }
-        Ok(EvalControl::Break | EvalControl::Continue) => Err(EvalStatus::UnsupportedConstruct),
+        Ok(EvalControl::Break | EvalControl::Continue | EvalControl::Goto(_)) => {
+            Err(EvalStatus::UnsupportedConstruct)
+        }
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()
             .map(EvalOutcome::Throwable)

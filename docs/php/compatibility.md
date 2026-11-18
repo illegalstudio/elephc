@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3181 constants).
 
-Overall coverage: functions **1082 / 2169** (50%), classes **200 / 329** (61%), constants **1420 / 3181** (45%).
+Overall coverage: functions **1111 / 2169** (51%), classes **193 / 329** (59%), constants **1603 / 3181** (50%).
 
 ## Coverage by PHP module
 
@@ -22,9 +22,9 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `bz2` | 0 / 10 · 0% | - | - |
 | [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | - | 21 / 21 · 100% |
 | `core` | 62 / 62 · 100% | 40 / 40 · 100% | 89 / 89 · 100% |
-| `ctype` | 4 / 11 · 36% | - | - |
+| `ctype` | 11 / 11 · 100% | - | - |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
-| [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
+| [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 17 / 17 · 100% |
 | `dba` | 0 / 15 · 0% | 0 / 1 · 0% | - |
 | [`dom`](./dom-html.md#functions) | 0 / 2 · 0% | 10 / 50 · 20% | 0 / 61 · 0% |
 | `enchant` | 0 / 25 · 0% | 0 / 2 · 0% | 0 / 3 · 0% |
@@ -70,13 +70,13 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
 | `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 394 / 545 · 72% | 3 / 6 · 50% | 163 / 400 · 41% |
+| `standard` | 392 / 545 · 72% | 3 / 6 · 50% | 171 / 400 · 43% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
-| `tidy` | 0 / 24 · 0% | 0 / 2 · 0% | 0 / 161 · 0% |
+| [`tidy`](./tidy.md#functions) | 24 / 24 · 100% | 2 / 2 · 100% | 161 / 161 · 100% |
 | [`tokenizer`](./tokenizer.md#functions) | 2 / 2 · 100% | 1 / 1 · 100% | 154 / 154 · 100% |
-| `uri` | - | 9 / 9 · 100% | - |
+| `uri` | - | 0 / 9 · 0% | - |
 | [`xml`](./xml.md#functions) | 22 / 22 · 100% | 1 / 1 · 100% | 28 / 28 · 100% |
 | `xmlreader` | - | 0 / 1 · 0% | - |
 | [`xmlwriter`](./xml.md#functions) | 42 / 42 · 100% | 1 / 1 · 100% | - |
@@ -98,8 +98,8 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `pdo` functions: 1 / 0
 - `random` functions: 9 / 3
 - `session` functions: 23 / 0
-- `standard` functions: 394 / 353
-- `standard` constants: 163 / 142
+- `standard` functions: 392 / 353
+- `standard` constants: 171 / 150
 
 Of those functions, 223 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
 
@@ -109,7 +109,7 @@ In addition, elephc implements 3 PHP language constructs that PHP does not count
 
 elephc also defines 1 constant(s) at runtime that PHP registers only in specific states and never lists statically: `SID`.
 
-elephc also implements 14 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `MYSQLI_OPT_COMPRESS` (PHP 8.6), `SortDirection` (PHP 8.6), `Time\Duration` (PHP 8.6), `Time\TimeException` (PHP 8.6), `Uri\Rfc3986\UriBuilder` (PHP 8.6), `Uri\Rfc3986\UriHostType` (PHP 8.6), `Uri\Rfc3986\UriType` (PHP 8.6), `Uri\WhatWg\UrlBuilder` (PHP 8.6), `Uri\WhatWg\UrlHostType` (PHP 8.6), `Uri\WhatWg\UrlPercentEncodingMode` (PHP 8.6), `clamp()` (PHP 8.6), `grapheme_strrev()` (PHP 8.6), `mysqli_quote_string()` (PHP 8.6), `url_percent_encode()` (PHP 8.6).
+elephc also implements 3 symbol(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `MYSQLI_OPT_COMPRESS` (PHP 8.6), `SortDirection` (PHP 8.6), `mysqli_quote_string()` (PHP 8.6).
 
 The baseline PHP build does not expose these platform-dependent symbols, so they are excluded from its coverage percentages: `pcntl_getcpu()` (PHP build guard HAVE_SCHED_GETCPU), `pcntl_getqos_class()` (target-specific), `pcntl_setns()` (PHP build guard HAVE_PIDFD_OPEN), `pcntl_setqos_class()` (target-specific).
 
@@ -158,6 +158,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [PCNTL](./pcntl.md) ([PHP](https://www.php.net/manual/en/book.pcntl.php)) | ✅ Supported | Target-aware Unix process control; auto-linked or forced with --with-pcntl |
 | [XML](./xml.md) ([PHP](https://www.php.net/manual/en/book.xml.php)) | ✅ Supported | ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost |
 | [SimpleXML](./xml.md) ([PHP](https://www.php.net/manual/en/book.simplexml.php)) | ✅ Supported | Three functions and two classes on the managed libxml2 bridge; supports element and attribute selections, mutation, namespace queries, XPath, and recursive iteration. Auto-linked or forced with --with-xml. |
+| [Tidy](./tidy.md) ([PHP](https://www.php.net/manual/en/book.tidy.php)) | ✅ Supported | ext/tidy (24 functions, tidy/tidyNode, 161 TIDY_* constants) on a pinned static libtidy 5.8.0 from the native catalog (elephc native add libtidy); auto-linked or forced with --with-tidy; the full php-src ext/tidy case corpus is migrated into Rust codegen tests |
 | [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 34 shared-contract functions; curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract and is the one function the row does not count. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compiled-script manifest plus a runtime parsed-script cache for dynamic include/require through eval(), with optional persistent file caching; ordinary code remains AOT-compiled and there is no tracing JIT |
@@ -176,6 +177,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `class_attribute_names()` | Class | Returns the list of attribute names applied to a class. |
 | `class_get_attributes()` | Class | Returns an array of ReflectionAttribute objects for all attributes of a class. |
 | `read_exif_data()` | Image | Alias of exif_read_data(). |
+| `clamp()` | Math | Clamps a value to be within a specified range. *(No PHP equivalent (not in PHP 8.4/8.5))* |
 | `log2()` | Math | Returns the base-2 logarithm of a number. *(No PHP equivalent (PHP has log(), log10(), log1p()))* |
 | `memory_get_allocations()` | Misc | Returns the cumulative number of successful native heap allocations, including reused blocks. Direct native reads do not allocate; eval boxes the sampled count. |
 | `memory_get_frees()` | Misc | Returns the cumulative number of native heap blocks released. Direct native reads do not allocate; eval boxes the sampled count. |
@@ -204,6 +206,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `zval_pack()` | Pointer | Packs an elephc runtime value into a heap-allocated PHP zval pointer. |
 | `zval_type()` | Pointer | Returns the PHP zval type byte for a zval pointer. |
 | `zval_unpack()` | Pointer | Unpacks a PHP zval pointer into an owned elephc Mixed value. |
+| `grapheme_strrev()` | String | Reverses a string by grapheme cluster, returning false on failure. *(No PHP equivalent (not in PHP 8.4/8.5 intl))* |
 | `is_real()` | Type | Alias of is_float(). *(Removed in PHP 8.0; kept as a compatibility alias of is_float())* |
 
 Classes: `DateUnknownException` (`date`), `Elephc\Testing\AssertionFailedError`, `Elephc\Testing\IncompleteTestError`, `Elephc\Testing\Runner`, `Elephc\Testing\SkippedTestError`, `Elephc\Testing\TestCase`, `Elephc\Web\Request`, `Elephc\Web\Worker`, `Elephc\Web\WorkerApplication`, `ImageException` (`gd`), `PHPUnit\Framework\TestCase`.

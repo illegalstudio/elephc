@@ -110,7 +110,8 @@ fn execute_program_call_user_func_releases_literal_callback_after_arg_eval_fatal
 
     let result = execute_program(&program, &mut scope, &mut values);
 
-    assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+    // The undefined constant throws PHP's `Error`.
+    assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
     assert!(
         values
             .releases

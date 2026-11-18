@@ -44,7 +44,8 @@ pub(super) fn balanced_roots(function: &Function) -> HashSet<LocalSlotId> {
         for inst in &function.instructions {
             match inst.immediate {
                 Some(Immediate::LocalSlot(slot)) if slot == local.id => uses.push(inst),
-                Some(Immediate::LocalSlotPair { first, second }) if first == local.id || second == local.id => return false,
+                Some(Immediate::LocalSlotPair { first, second })
+                | Some(Immediate::PropertyRefCell { first, second, .. }) if first == local.id || second == local.id => return false,
                 Some(Immediate::IterStart(metadata)) if metadata.local_slots().any(|slot| slot == local.id) => return false,
                 _ => {}
             }
