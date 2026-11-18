@@ -1033,3 +1033,33 @@ for ($i = 0; $i < 3; $i++) {
     assert_eq!(output.stdout, "caught\ncaught\ncaught\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// The Composer classmap scan parses a file only to index its classes, under the entry file's
+/// source identity; a one-line function it declares at the same line and column used to replace
+/// the entry function's parameter lines, so the `int` precision deprecation named line 2
+/// instead of the parameter's line 3.
+#[test]
+fn test_classmap_scan_keeps_the_entry_parameter_lines() {
+    let out = compile_and_run_files(
+        &[
+            ("composer.json", r#"{"autoload":{"classmap":["lib/"]}}"#),
+            (
+                "lib/Unused.php",
+                "<?php\nfunction unused_g(int $x): int { return $x; }\nclass Unused {}\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+function f(
+    int $n
+): int { return $n; }
+function box(mixed $v): mixed { return $v; }
+set_error_handler(function (int $no, string $msg, string $file, int $line): bool { echo basename($file), ":", $line, " ", $msg, "\n"; return true; });
+echo f(box(1.5)), "\n";
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "main.php:3 Implicit conversion from float 1.5 to int loses precision\n1\n");
+}
