@@ -26,6 +26,8 @@
 //!   Raw static properties retain their old words until their initializers re-run.
 //!   Optional managed Mixed bindings detach their cell and restore the uninitialized marker.
 
+use elephc_memoir::arena_reset::{emit_gc_state_reset, emit_heap_arena_reset};
+
 use crate::codegen::abi;
 use crate::codegen::data_section::{DataSection, StaticLocalRecord};
 use crate::codegen::emit::Emitter;
@@ -380,69 +382,6 @@ fn emit_core_handler_reset(emitter: &mut Emitter) {
         crate::codegen::compile_php_version().error_reporting_mask(),
     );
     abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), "_php_error_reporting", 0);
-}
-
-/// Restores request-local cycle-collector controls and counters to process-start defaults.
-fn emit_gc_state_reset(emitter: &mut Emitter) {
-    emitter.comment("reset cycle collector controls and counters for the next request");
-    abi::emit_call_label(emitter, "__rt_gc_drop_pins");
-    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);
-    abi::emit_store_reg_to_symbol(
-        emitter,
-        abi::int_result_reg(emitter),
-        "_gc_enabled",
-        0,
-    );
-    for symbol in [
-        "_gc_collecting",
-        "_gc_pending_throw",
-        "_gc_freeing_unreachable",
-        "_gc_release_suppressed",
-        "_gc_runs",
-        "_gc_collected",
-        "_gc_safe_point_credit",
-        "_gc_safe_point_live_limit",
-        "_gc_destructor_depth",
-    ] {
-        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
-    }
-}
-
-/// Resets the PHP heap arena to a pristine bump-only state: `_heap_off = 0`, an empty
-/// ordered free list, and empty exact size-class bins. Emitted as the final step of the
-/// per-request `__rt_web_reset`, so the whole arena is reclaimed at once after every
-/// refcounted per-request value has already been released above. Valid only under
-/// `--web` full-reset semantics — nothing in the PHP arena legitimately survives a
-/// request; Rust-side state (the PDO persistent-connection pool, bridge result cells)
-/// lives outside `_heap_buf` and is unaffected.
-fn emit_heap_arena_reset(emitter: &mut Emitter) {
-    emitter.comment("reset the PHP heap arena to pure-bump allocation for the next request");
-    crate::codegen_support::runtime::emit_heap_live_bases_reset(emitter);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
-    abi::emit_call_label(emitter, "__rt_heap_bins_clear");
-    // A request that called `ini_set('memory_limit', …)` moved `_heap_limit`; the next
-    // request must start from the compile-time ceiling again, exactly like PHP's INI reset.
-    abi::emit_load_symbol_to_reg(
-        emitter,
-        abi::int_result_reg(emitter),
-        "_heap_limit_startup",
-        0,
-    );
-    abi::emit_store_reg_to_symbol(
-        emitter,
-        abi::int_result_reg(emitter),
-        "_heap_limit",
-        0,
-    );
-    // Bulk reclamation also retires every block that remained after typed cleanup.
-    // Keep cumulative allocation totals, but do not carry their live footprint into a new arena.
-    let value = abi::int_result_reg(emitter);
-    abi::emit_load_symbol_to_reg(emitter, value, "_gc_allocs", 0);
-    abi::emit_store_reg_to_symbol(emitter, value, "_gc_frees", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_gc_live", 0);
-    // `memory_get_peak_usage()` is per request in PHP, so its watermark starts over with the arena.
-    abi::emit_store_zero_to_symbol(emitter, "_gc_peak", 0);
 }
 
 #[cfg(test)]

@@ -99,7 +99,6 @@ pub(crate) use arrays::{
 /// The `__rt_hash_map` callback result-kind selector, chosen by the `array_map()` lowering.
 pub(crate) use arrays::HashMapResultKind;
 /// Retire allocator payload-base metadata before bulk web arena reclamation.
-pub(crate) use arrays::heap_live_bases::emit_reset as emit_heap_live_bases_reset;
 /// The call-stack overflow guard's shared symbol name. Codegen's prologue check and the
 /// runtime emitter must name the same `.comm` word or the guard silently never fires.
 pub(crate) use system::STACK_LIMIT_SYMBOL;

@@ -413,27 +413,11 @@ fn allocate_previous_handler_node(
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
     let node_reg = abi::nested_call_reg(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, node_reg, abi::int_result_reg(ctx.emitter));
-    for (offset, symbol) in [
-        (0, stack_symbol),
-        (8, value_symbol),
-        (16, callable_symbol),
-    ] {
-        let scratch = abi::secondary_scratch_reg(ctx.emitter);
-        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, symbol, 0);
-        abi::emit_store_to_address(ctx.emitter, scratch, node_reg, offset);
-    }
-    if let Some(mask_symbol) = mask_symbol {
-        let scratch = abi::secondary_scratch_reg(ctx.emitter);
-        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, mask_symbol, 0);
-        abi::emit_store_to_address(ctx.emitter, scratch, node_reg, 24);
-    }
-    let extra_base = if mask_symbol.is_some() { 32 } else { 24 };
-    for (index, symbol) in extra_symbols.iter().enumerate() {
-        let scratch = abi::secondary_scratch_reg(ctx.emitter);
-        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, symbol, 0);
-        abi::emit_store_to_address(ctx.emitter, scratch, node_reg, extra_base + index * 8);
-    }
-    abi::emit_store_reg_to_symbol(ctx.emitter, node_reg, stack_symbol, 0);
+    let mut fields = vec![stack_symbol, value_symbol, callable_symbol];
+    fields.extend(mask_symbol);
+    fields.extend_from_slice(extra_symbols);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    elephc_memoir::handler_owners::emit_save_node(ctx.emitter, node_reg, scratch, &fields, false);
 }
 
 /// Retains the old callback for the return value while its original owner moves to the stack.

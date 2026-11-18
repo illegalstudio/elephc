@@ -11,13 +11,20 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
-const PENDING: usize = 8;
+use elephc_memoir::handler_owners::{self, PENDING};
 
 /// Emits the two handler kinds through the same ownership and linked-stack protocol.
 pub(super) fn emit_handler_state(emitter: &mut Emitter) {
     for kind in ["error", "exception"] {
-        emit_release(emitter, kind);
-        emit_pop(emitter, kind);
+        let prefix = format!("__rt_core_{kind}_handler");
+        let fields = fields(kind);
+        let fields = fields.iter().map(String::as_str).collect::<Vec<_>>();
+        let context = fields.len() - 2;
+        handler_owners::emit_release(
+            emitter, &prefix, [fields[1], fields[2], fields[context], fields[context + 1]],
+            emit_finish_cleanup,
+        );
+        handler_owners::emit_pop(emitter, &prefix, &fields, emit_finish_cleanup);
     }
 }
 
@@ -29,66 +36,6 @@ fn fields(kind: &str) -> Vec<String> {
     }
     suffixes.extend(["context", "context_release"]);
     suffixes.iter().map(|suffix| format!("_php_{kind}_handler_{suffix}")).collect()
-}
-
-/// Releases a detached snapshot, keeping captured contexts alive until descriptors are gone.
-fn emit_release(emitter: &mut Emitter, kind: &str) {
-    let stack = if emitter.target.arch == Arch::AArch64 { "sp" } else { "rsp" };
-    let result = abi::int_result_reg(emitter);
-    emitter.blank();
-    emitter.label_global(&format!("__rt_core_{kind}_handler_release"));
-    abi::emit_frame_prologue(emitter, 64);
-    abi::emit_store_zero_to_local_slot(emitter, PENDING);
-    for (index, suffix) in ["value", "callable", "context", "context_release"].iter().enumerate() {
-        let symbol = format!("_php_{kind}_handler_{suffix}");
-        abi::emit_load_symbol_to_reg(emitter, result, &symbol, 0);
-        abi::emit_store_to_address(emitter, result, stack, index * 8);
-        abi::emit_store_zero_to_symbol(emitter, &symbol, 0);
-    }
-    for (offset, helper) in [(0, "__rt_decref_mixed"), (8, "__rt_callable_descriptor_release")] {
-        let skip = format!("__rt_core_{kind}_handler_release_skip_{offset}");
-        abi::emit_load_from_address(emitter, result, stack, offset);
-        abi::emit_branch_if_int_result_zero(emitter, &skip);
-        super::exceptions::emit_guarded_cleanup_call(emitter, helper, result, PENDING);
-        emitter.label(&skip);
-    }
-    let done = format!("__rt_core_{kind}_handler_release_done");
-    abi::emit_load_from_address(emitter, result, stack, 24);
-    abi::emit_branch_if_int_result_zero(emitter, &done);
-    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), result);
-    abi::emit_load_from_address(emitter, abi::int_arg_reg_name(emitter.target, 1), stack, 16);
-    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 2), PENDING);
-    abi::emit_call_label(emitter, "__rt_cleanup_invoke");
-    emitter.label(&done);
-    emit_finish_cleanup(emitter, &format!("__rt_core_{kind}_handler_release_return"), 64);
-}
-
-/// Clears the active handler before checking whether a previous registration exists.
-fn emit_pop(emitter: &mut Emitter, kind: &str) {
-    let stack = if emitter.target.arch == Arch::AArch64 { "sp" } else { "rsp" };
-    let result = abi::int_result_reg(emitter);
-    let scratch = abi::secondary_scratch_reg(emitter);
-    let done = format!("__rt_core_{kind}_handler_pop_done");
-    emitter.blank();
-    emitter.label_global(&format!("__rt_core_{kind}_handler_pop"));
-    abi::emit_frame_prologue(emitter, 48);
-    abi::emit_store_zero_to_local_slot(emitter, PENDING);
-    abi::emit_load_int_immediate(emitter, result, 0);
-    super::exceptions::emit_guarded_cleanup_call(
-        emitter, &format!("__rt_core_{kind}_handler_release"), result, PENDING,
-    );
-    abi::emit_load_symbol_to_reg(emitter, result, &format!("_php_{kind}_handler_stack"), 0);
-    abi::emit_branch_if_int_result_zero(emitter, &done);
-    abi::emit_store_to_address(emitter, result, stack, 0);
-    for (index, symbol) in fields(kind).iter().enumerate() {
-        abi::emit_load_from_address(emitter, result, stack, 0);
-        abi::emit_load_from_address(emitter, scratch, result, index * 8);
-        abi::emit_store_reg_to_symbol(emitter, scratch, symbol, 0);
-    }
-    abi::emit_load_from_address(emitter, result, stack, 0);
-    abi::emit_call_label(emitter, "__rt_heap_free");
-    emitter.label(&done);
-    emit_finish_cleanup(emitter, &format!("__rt_core_{kind}_handler_pop_return"), 48);
 }
 
 /// Propagates a pending destructor throw only after the caller has finished its handler cleanup.
