@@ -2456,11 +2456,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         };
         if op == Op::LoadRefCellValue { php_type = PhpType::Mixed; }
         let ir_type = value_ir_type(&php_type);
-        // Reference-cell reads borrow their pointee. Append normalization chooses the
-        // final boxed representation without changing other reference payload contracts.
+        // Global symbols and reference cells lend their current heap value. Append
+        // normalization chooses the final box without changing reference payload contracts.
         let ownership = if op == Op::LoadRefCellValue {
             Ownership::Owned
-        } else if op == Op::LoadRefCell
+        } else if matches!(op, Op::LoadRefCell | Op::LoadGlobal)
             && Ownership::php_type_needs_lifetime_tracking(&php_type)
         {
             Ownership::Borrowed

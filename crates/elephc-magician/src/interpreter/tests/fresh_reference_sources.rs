@@ -19,6 +19,7 @@ fn assert_reference_fixture(source: &str, checked: &str, permissive: &str) {
             let mut context = ElephcEvalContext::new();
             context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, locals)).unwrap();
             let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+            assert!(context.set_global_scope(&mut scope));
             if dispatch {
                 let program = crate::parser::parse_fragment_with_semantics(source.as_bytes(), context.semantic_profile()).unwrap();
                 let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
@@ -132,4 +133,11 @@ fn captured_value_producers_eval_values_and_owners() {
     assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/captured_value_producers.php"),
         "2|Tinteger:1|integer:1|2|Tstring:old|string:old|2|Winteger:3|integer:1|2|Wstring:ready|string:old|Tinteger:1|Winteger:2|Tinteger:1|Tstring:old|Wstring:ready|Wstring:new|Tinteger:1|",
         "2|Wstring:new|integer:1|2|Winteger:2|string:old|2|Winteger:3|integer:1|2|Wstring:ready|string:old|Wstring:bad|Winteger:2|Wstring:again|Winteger:2|Wstring:ready|Wstring:new|Wstring:new|");
+}
+
+/// Global value captures keep independent owners after their source symbol is replaced.
+#[test]
+fn global_value_snapshots_eval_values_and_owners() {
+    let expected = "1:2|old:next|1:2|1:2|";
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/global_value_snapshots.php"), expected, expected);
 }

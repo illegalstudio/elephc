@@ -2293,3 +2293,22 @@ The native memory fix does not extend that language subset. The unsupported form
 are now documented and tested as parse errors in both profiles, with implementation
 tracked separately as task a8e94959. No parser behavior or serialized cache shape
 changed. Acceptance is recorded in step195-evidence.json before the signed commit.
+
+### Verified196: global value snapshots borrow the program-owned source
+
+Ordinary tracked LoadGlobal expressions now explicitly borrow their symbol's heap
+value, like reference-cell reads, instead of leaving provisional MaybeOwned
+metadata on a direct pointer load. Closure capture takes its own lease and its
+view cleanup no longer consumes the program symbol's owner. Explicit storage
+loads for retirement keep their separate Owned path. No global representation,
+reference layout or target ABI changed.
+
+The baseline snapshot of global integer 1 printed Array:2 after the symbol was
+replaced with 2, in both profiles, despite a clean heap report. The new regression
+retains captured integers, strings, arrays and objects after source replacement.
+Acceptance requires borrowed-load emission on all five targets, native profile and
+optimizer pairs, both interpreter entries/profiles with complete owner retirement,
+existing captured-value controls, the default build and public PHP/LFC combinations
+plus the updated complete example. Evidence is recorded in step196-evidence.json
+before committing. Global alias unset and reference rebinding remain separate active
+work; this ownership correction does not claim to resolve them.

@@ -237,3 +237,14 @@ function checkQuantitySnapshot(bool $numeric, mixed $replacement): void {
 }
 checkQuantitySnapshot(true, 2.5);
 checkQuantitySnapshot(false, 'ready');
+
+// A global value snapshot keeps its owner when the program symbol is replaced.
+$globalQuantity = 1;
+function snapshotGlobalQuantity(): callable {
+    global $globalQuantity;
+    return function() use ($globalQuantity): mixed { return $globalQuantity; };
+}
+$globalSnapshot = snapshotGlobalQuantity();
+$globalQuantity = 2;
+echo "Global snapshot: ", $globalSnapshot(), PHP_EOL;
+echo "Global quantity: ", $globalQuantity, PHP_EOL;
