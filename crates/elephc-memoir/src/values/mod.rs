@@ -59,6 +59,8 @@ pub mod array_push_refcounted;
 pub mod array_merge_into;
 pub mod array_merge_into_refcounted;
 pub mod array_shift;
+pub mod array_splice_insert;
+pub mod array_splice_remove;
 pub mod array_unshift;
 pub mod hash_iter;
 pub mod hash_bucket;

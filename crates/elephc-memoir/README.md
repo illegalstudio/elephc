@@ -35,7 +35,11 @@ rewind, guarded callback-result ownership, staged reference pins and the Zend
 storage transfers used by pack and unpack. Memoir also marks transient concat
 reservations, probes buckets using normalized keys, tracks append-index storage,
 adopts staged payloads into Mixed cells, owns scoped serialization streams, and
-snapshots the nested deserializer's borrowed registry and outer context.
+snapshots borrowed registry storage for nested serialization and deserialization,
+including the outer context around nested deserialization.
+It shares physical hash bucket publication, call argument setup for protected
+cleanup and local cell release, pre-read stream buffer growth, and packed array
+splice slot transfer, growth and compaction.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
