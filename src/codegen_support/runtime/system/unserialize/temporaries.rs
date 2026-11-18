@@ -14,7 +14,7 @@ use crate::codegen_support::runtime::exceptions::emit_guarded_cleanup_call;
 use elephc_memoir::ScopedOwnerState;
 
 /// Names the owner-list state independently of parser completion policy.
-const TEMPORARIES: ScopedOwnerState<'static> = ScopedOwnerState {
+pub(super) const TEMPORARIES: ScopedOwnerState<'static> = ScopedOwnerState {
     head: "_unser_temporaries", depth: "_unser_active",
 };
 
@@ -38,7 +38,6 @@ fn emit_detach_data(emitter: &mut Emitter) {
 /// Releases detached data after context restoration, returning the parsed owner or propagating cleanup.
 fn emit_finish_data(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    let scratch = abi::secondary_scratch_reg(emitter);
     emitter.blank();
     emitter.label_global("__rt_unserialize_finish_data");
     abi::emit_frame_prologue(emitter, 64);
@@ -48,23 +47,7 @@ fn emit_finish_data(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, result, 24);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_store_zero_to_local_slot(emitter, 32);
-    emitter.label("__rt_unserialize_finish_data_loop");
-    abi::load_at_offset(emitter, result, 16);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_unserialize_finish_data_done");
-    abi::emit_load_from_address(emitter, scratch, result, 0);
-    abi::store_at_offset(emitter, scratch, 40);
-    abi::emit_load_from_address(emitter, scratch, result, 8);
-    abi::store_at_offset(emitter, scratch, 48);
-    abi::emit_call_label(emitter, "__rt_heap_free");
-    abi::load_at_offset(emitter, result, 48);
-    emit_guarded_cleanup_call(emitter, "__rt_decref_any", result, 24);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_unserialize_finish_data_next");
-    abi::emit_load_int_immediate(emitter, result, 1);
-    abi::store_at_offset(emitter, result, 32);
-    emitter.label("__rt_unserialize_finish_data_next");
-    abi::load_at_offset(emitter, result, 40);
-    abi::store_at_offset(emitter, result, 16);
-    abi::emit_jump(emitter, "__rt_unserialize_finish_data_loop");
+    elephc_memoir::scoped_owners::emit_drain_detached_data(emitter);
     emitter.label("__rt_unserialize_finish_data_done");
     abi::load_at_offset(emitter, result, 32);
     abi::emit_branch_if_int_result_zero(emitter, "__rt_unserialize_finish_data_return");

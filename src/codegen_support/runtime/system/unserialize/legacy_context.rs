@@ -57,35 +57,14 @@ fn emit_inherit_policy(emitter: &mut Emitter) {
 
 /// Keeps nested registry leases alive until the enclosing shared parser completes.
 fn emit_promote_data(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    let scratch = abi::secondary_scratch_reg(emitter);
-    let depth = abi::tertiary_scratch_reg(emitter);
     // -- demote the newest reference leases to the enclosing parser depth --
     emitter.blank();
     emitter.label_global("__rt_unserialize_promote_legacy_data");
     emit_shared_check(emitter, "__rt_unserialize_promote_legacy_done");
-    abi::emit_load_symbol_to_reg(emitter, depth, "_unser_active", 0);
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!("sub {depth}, {depth}, #1")), // promote owners to the enclosing parser depth
-        Arch::X86_64 => emitter.instruction(&format!("sub {depth}, 1")),        // promote owners to the enclosing parser depth
-    }
-    abi::emit_load_symbol_to_reg(emitter, result, "_unser_temporaries", 0);
-    emitter.label("__rt_unserialize_promote_legacy_loop");
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_unserialize_promote_legacy_done");
-    abi::emit_load_from_address(emitter, scratch, result, 16);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("cmp {scratch}, {depth}"));            // compare each owner with the enclosing context depth
-            emitter.instruction("b.ls __rt_unserialize_promote_legacy_done");   // older owners already belong to the enclosing parser
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("cmp {scratch}, {depth}"));            // compare each owner with the enclosing context depth
-            emitter.instruction("jbe __rt_unserialize_promote_legacy_done");    // older owners need no promotion
-        }
-    }
-    abi::emit_store_to_address(emitter, depth, result, 16);
-    abi::emit_load_from_address(emitter, result, result, 0);
-    abi::emit_jump(emitter, "__rt_unserialize_promote_legacy_loop");
+    elephc_memoir::scoped_owners::emit_promote_prefix(
+        emitter, super::temporaries::TEMPORARIES,
+        "__rt_unserialize_promote_legacy_loop", "__rt_unserialize_promote_legacy_done",
+    );
     emitter.label("__rt_unserialize_promote_legacy_done");
     abi::emit_return(emitter);
 }

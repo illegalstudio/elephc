@@ -71,17 +71,14 @@ fn emit_set_exception_handler_aarch64(
     emitter.instruction(&format!("mov x0, #{EXCEPTION_HANDLER_NODE_BYTES}"));   // allocate one native exception-handler stack node
     emitter.instruction("bl __rt_heap_alloc");                                  // create storage for the previous process-wide state
     emitter.instruction("str x0, [sp, #24]");                                   // preserve the node across symbol loads and calls
-    for (offset, symbol) in [
-        (0, "_php_exception_handler_stack"),
-        (8, "_php_exception_handler_value"),
-        (16, "_php_exception_handler_callable"),
-        (24, "_php_exception_handler_context"),
-        (32, "_php_exception_handler_context_release"),
-    ] {
-        abi::emit_load_symbol_to_reg(emitter, "x9", symbol, 0);
-        emitter.instruction(&format!("str x9, [x0, #{offset}]"));               // transfer the selected prior handler field into the node
-    }
-    abi::emit_store_reg_to_symbol(emitter, "x0", "_php_exception_handler_stack", 0);
+    let fields = [
+        "_php_exception_handler_stack",
+        "_php_exception_handler_value",
+        "_php_exception_handler_callable",
+        "_php_exception_handler_context",
+        "_php_exception_handler_context_release",
+    ];
+    elephc_memoir::handler_owners::emit_save_node(emitter, "x0", "x9", &fields, true);
     abi::emit_load_symbol_to_reg(emitter, "x0", "_php_exception_handler_value", 0);
     emitter.instruction(&format!("cbz x0, {no_previous}"));                     // an empty prior registration returns a null raw pointer
     emitter.instruction("bl __rt_incref");                                      // give the PHP return value an independent owner
@@ -174,17 +171,14 @@ fn emit_set_exception_handler_x86_64(
     emitter.instruction(&format!("mov rax, {EXCEPTION_HANDLER_NODE_BYTES}"));   // allocate one native exception-handler stack node
     emitter.instruction("call __rt_heap_alloc");                                // create storage for the previous process-wide state
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the node across symbol loads and calls
-    for (offset, symbol) in [
-        (0, "_php_exception_handler_stack"),
-        (8, "_php_exception_handler_value"),
-        (16, "_php_exception_handler_callable"),
-        (24, "_php_exception_handler_context"),
-        (32, "_php_exception_handler_context_release"),
-    ] {
-        abi::emit_load_symbol_to_reg(emitter, "r10", symbol, 0);
-        emitter.instruction(&format!("mov QWORD PTR [rax + {offset}], r10"));   // transfer the selected prior handler field into the node
-    }
-    abi::emit_store_reg_to_symbol(emitter, "rax", "_php_exception_handler_stack", 0);
+    let fields = [
+        "_php_exception_handler_stack",
+        "_php_exception_handler_value",
+        "_php_exception_handler_callable",
+        "_php_exception_handler_context",
+        "_php_exception_handler_context_release",
+    ];
+    elephc_memoir::handler_owners::emit_save_node(emitter, "rax", "r10", &fields, true);
     abi::emit_load_symbol_to_reg(emitter, "rax", "_php_exception_handler_value", 0);
     emitter.instruction("test rax, rax");                                       // check for an existing callback value
     emitter.instruction(&format!("jz {no_previous}"));                          // an empty prior registration returns a null raw pointer
