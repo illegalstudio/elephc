@@ -696,16 +696,22 @@ fn emit_loaded_indexed_array_callback_call(
                 push_default_ref_arg(index, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done_label);
                 emitter.label(&load_label);
-                by_reference::warn_indexed_ref_temporary(
-                    emitter, ctx, data, sig, index, &elem_ty, array_reg, elem_size,
-                );
+                // `warn_indexed_nonreference_roots` already reported every mbstring variable
+                // root, including this named one; a second generic warning would duplicate it.
+                if !ctx.mbstring_variable_ref_warnings {
+                    by_reference::warn_indexed_ref_temporary(
+                        emitter, ctx, data, sig, index, &elem_ty, array_reg, elem_size,
+                    );
+                }
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
                 push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
                 emitter.label(&done_label);
             } else {
-                by_reference::warn_indexed_ref_temporary(
-                    emitter, ctx, data, sig, index, &elem_ty, array_reg, elem_size,
-                );
+                if !ctx.mbstring_variable_ref_warnings {
+                    by_reference::warn_indexed_ref_temporary(
+                        emitter, ctx, data, sig, index, &elem_ty, array_reg, elem_size,
+                    );
+                }
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
                 push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
             }
