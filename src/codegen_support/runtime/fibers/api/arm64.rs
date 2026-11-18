@@ -14,16 +14,9 @@ use crate::codegen_support::emit::Emitter;
 use super::common::emit_box_null_mixed;
 use super::super::switch::{fiber_initial_entry_offset, fiber_initial_stack_frame_bytes};
 use super::super::{
-    FIBER_CALLABLE_OFFSET, FIBER_CALLABLE_WRAPPER_OFFSET, FIBER_CALLER_OFFSET,
-    FIBER_DEFAULT_STACK_SIZE, FIBER_FLOAT_ARGS_MAX, FIBER_FLOAT_ARGS_OFFSET,
-    FIBER_OBJECT_SIZE, FIBER_OWN_CALL_FRAME_OFFSET, FIBER_OWN_EXC_HEAD_OFFSET,
-    FIBER_OWN_MAGIC_SET_GUARD_OFFSET, FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET,
-    FIBER_PENDING_THROW_OFFSET, FIBER_SAVED_SP_OFFSET,
-    FIBER_STACK_BASE_OFFSET, FIBER_STACK_SIZE_OFFSET, FIBER_STACK_TOP_OFFSET,
-    FIBER_START_ARGS_MAX, FIBER_START_ARGS_OFFSET, FIBER_START_ARG_COUNT_OFFSET,
-    FIBER_STATE_NOT_STARTED, FIBER_STATE_OFFSET, FIBER_STATE_RUNNING,
-    FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
-    FIBER_USER_ARG_MAX_OFFSET,
+    FIBER_CALLER_OFFSET, FIBER_DEFAULT_STACK_SIZE, FIBER_PENDING_THROW_OFFSET,
+    FIBER_STATE_NOT_STARTED, FIBER_STATE_OFFSET, FIBER_STATE_RUNNING, FIBER_STATE_SUSPENDED,
+    FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
 };
 
 /// __rt_fiber_throw_state_error: allocate a `FiberError`, set its message, and
@@ -78,70 +71,9 @@ pub(super) fn emit_construct(emitter: &mut Emitter) {
     emitter.instruction("mov x20, x1");                                         // x20 = class_id (preserved across heap_alloc)
     emitter.instruction("mov x22, x2");                                         // x22 = optional Fiber entry wrapper pointer
 
-    // -- allocate the Fiber object payload --
-    emitter.instruction(&format!("mov x0, #{}", FIBER_OBJECT_SIZE));            // size in bytes for the Fiber object payload
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = pointer to the object payload (header at x0-8)
-    emitter.instruction("mov x21, x0");                                         // x21 = Fiber object pointer (kept until return)
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
-    emitter.instruction("str x9, [x21, #-8]");                                  // stamp the kind in the uniform heap header
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new Fiber object to its PHP object handle (x0 still holds it)
-    emitter.instruction("str x20, [x21]");                                      // store the runtime class_id at the object header
-
-    // -- zero-initialise every Fiber field before populating the meaningful ones --
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_STATE_OFFSET));   // state placeholder (overwritten below with NotStarted)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_STACK_BASE_OFFSET)); // stack_base placeholder (overwritten after stack alloc)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_STACK_TOP_OFFSET)); // stack_top placeholder (overwritten after stack alloc)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_STACK_SIZE_OFFSET)); // stack_size placeholder (overwritten after stack alloc)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_SAVED_SP_OFFSET)); // saved_sp placeholder (overwritten after fake-frame setup)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_CALLABLE_OFFSET)); // callable.lo placeholder (overwritten with x19 below)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_CALLABLE_WRAPPER_OFFSET)); // callable wrapper placeholder (overwritten with x22 below)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_CALLER_OFFSET));  // caller starts NULL (no resumer until start/resume)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // transfer_value.lo cleared
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // transfer_value.hi cleared
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_PENDING_THROW_OFFSET)); // pending_throw cleared
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_EXC_HEAD_OFFSET)); // own_exc_head cleared (no installed handlers yet)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_CALL_FRAME_OFFSET)); // own_call_frame cleared (no activation records on the fresh fiber stack yet)
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_MAGIC_SET_GUARD_OFFSET)); // no active magic-set recursion guard on a fresh fiber
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET)); // a fresh coroutine has no suspended deep release
-    for i in 0..FIBER_START_ARGS_MAX {
-        emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARGS_OFFSET + i * 8)); // start_args[i] cleared
-    }
-    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARG_COUNT_OFFSET)); // start_arg_count cleared until Fiber::start() copies values
-    for i in 0..FIBER_FLOAT_ARGS_MAX {
-        emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_FLOAT_ARGS_OFFSET + i * 8)); // clear reserved legacy float slot storage
-    }
-    // user_arg_max defaults to FIBER_START_ARGS_MAX so start() may fill every
-    // visible start_args slot. Captures now live in callable descriptors.
-    emitter.instruction(&format!("mov x9, #{}", FIBER_START_ARGS_MAX));         // default user_arg_max = full slot count
-    emitter.instruction(&format!("str x9, [x21, #{}]", FIBER_USER_ARG_MAX_OFFSET)); // user_arg_max stored on the freshly built fiber
-
-    // -- record the captured callable --
-    emitter.instruction(&format!("str x19, [x21, #{}]", FIBER_CALLABLE_OFFSET)); // callable.lo = descriptor pointer
-    emitter.instruction(&format!("str x22, [x21, #{}]", FIBER_CALLABLE_WRAPPER_OFFSET)); // callable wrapper = Fiber entry ABI adapter
-
-    // -- allocate the per-fiber stack via mmap; alloc returns base/top/total --
-    emitter.instruction(&format!("mov x0, #{}", FIBER_DEFAULT_STACK_SIZE));     // request the default usable fiber stack size in bytes
-    emitter.instruction("bl __rt_fiber_alloc_stack");                           // x0 = stack_base (mapping start), x1 = stack_top, x2 = total mapped length
-    emitter.instruction("cbz x0, __rt_fiber_construct_stack_failed");           // abort construction if mmap failed instead of writing a fake frame at NULL
-    emitter.instruction(&format!("str x0, [x21, #{}]", FIBER_STACK_BASE_OFFSET)); // stack_base = mmap mapping start (includes the guard page)
-    emitter.instruction(&format!("str x1, [x21, #{}]", FIBER_STACK_TOP_OFFSET)); // stack_top = initial SP target (16-byte aligned high address)
-    emitter.instruction(&format!("str x2, [x21, #{}]", FIBER_STACK_SIZE_OFFSET)); // stack_size = total mapped length, needed verbatim by munmap on free
-
-    // -- carve out a fake initial frame at the very top of the stack --
-    emitter.instruction(&format!("sub x10, x1, #{}", initial_frame_bytes));     // x10 = initial saved_sp (room for the switch save area)
-    emitter.instruction(&format!("str x10, [x21, #{}]", FIBER_SAVED_SP_OFFSET)); // saved_sp points at the bottom of the fake frame
-
-    // -- zero the fake frame so callee-saved registers come back as zero on first switch --
-    emitter.instruction("mov x11, x10");                                        // x11 = cursor through the fake frame
-    emitter.instruction(&format!("mov x12, #{}", initial_frame_bytes / 16));    // number of 16-byte chunks to zero
-    emitter.label("__rt_fiber_construct_zero_loop");
-    emitter.instruction("stp xzr, xzr, [x11], #16");                            // zero a 16-byte slice and advance the cursor
-    emitter.instruction("subs x12, x12, #1");                                   // decrement the chunk counter
-    emitter.instruction("b.ne __rt_fiber_construct_zero_loop");                 // continue until the entire frame is zero
-
-    // -- install __rt_fiber_entry as the saved x30 so the first switch returns into it --
-    abi::emit_symbol_address(emitter, "x9", "__rt_fiber_entry");                // x9 = absolute address of the entry trampoline
-    emitter.instruction(&format!("str x9, [x10, #{}]", initial_entry_offset));  // saved x30 slot = entry trampoline address
+    elephc_memoir::coroutine_storage::emit_payload_and_stack(
+        emitter, FIBER_DEFAULT_STACK_SIZE, initial_frame_bytes, initial_entry_offset,
+    );
 
     // -- finish: state = NotStarted and return the new Fiber pointer --
     emitter.instruction(&format!("mov x9, #{}", FIBER_STATE_NOT_STARTED));      // FIBER_STATE_NOT_STARTED constant

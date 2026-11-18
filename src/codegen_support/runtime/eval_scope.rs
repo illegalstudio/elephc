@@ -81,20 +81,9 @@ fn emit_aarch64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction("mov x24, x25");                                        // previous-next pointer now addresses current->next
     emitter.instruction("ldr x25, [x25]");                                      // advance to the next entry
     emitter.instruction("b __elephc_eval_scope_set_probe");                     // continue scanning the entry list
-    emitter.label("__elephc_eval_scope_set_update");
-    emitter.instruction("ldr x9, [x25, #32]");                                  // load old entry flags
-    emitter.instruction(&format!("tst x9, #{}", EVAL_SCOPE_FLAG_OWNED));        // check whether the old cell is scope-owned
-    emitter.instruction("b.eq __elephc_eval_scope_set_store");                  // borrowed old cells do not need release
-    emitter.instruction("ldr x0, [x25, #24]");                                  // load the old Mixed cell pointer
-    emitter.instruction("cmp x0, x22");                                         // compare old and replacement cells
-    emitter.instruction("b.eq __elephc_eval_scope_set_store");                  // retaining the same cell must not decref it
-    emitter.instruction("cbz x0, __elephc_eval_scope_set_store");               // tolerate null old cells defensively
-    emitter.instruction("bl __rt_decref_mixed");                                // release the overwritten owned Mixed cell
-    emitter.label("__elephc_eval_scope_set_store");
-    emitter.instruction("str x22, [x25, #24]");                                 // store the replacement Mixed cell
-    emitter.instruction(&format!("mov x9, #{}", EVAL_SCOPE_FLAG_PRESENT | EVAL_SCOPE_FLAG_DIRTY)); // materialize visible and dirty ABI bits
-    emitter.instruction("orr x9, x23, x9");                                     // merge caller ownership flags with core visibility flags
-    emitter.instruction("str x9, [x25, #32]");                                  // publish the updated ABI flags
+    elephc_memoir::values::eval_scope_storage::emit_replace(
+        emitter, EVAL_SCOPE_FLAG_OWNED, EVAL_SCOPE_FLAG_PRESENT | EVAL_SCOPE_FLAG_DIRTY,
+    );
     emitter.instruction(&format!("mov x0, #{}", EVAL_STATUS_OK));               // report successful scope write
     emitter.instruction("b __elephc_eval_scope_set_done");                      // restore the frame and return
     elephc_memoir::values::eval_scope_storage::emit_insert(emitter, EVAL_SCOPE_FLAG_PRESENT | EVAL_SCOPE_FLAG_DIRTY);
@@ -226,23 +215,9 @@ fn emit_x86_64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // advance to the next entry
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // save the next candidate as current
     emitter.instruction("jmp __elephc_eval_scope_set_probe");                   // continue scanning the entry list
-    emitter.label("__elephc_eval_scope_set_update");
-    emitter.instruction("mov r10, QWORD PTR [r9 + 32]");                        // load old entry flags
-    emitter.instruction(&format!("test r10, {}", EVAL_SCOPE_FLAG_OWNED));       // check whether the old cell is scope-owned
-    emitter.instruction("jz __elephc_eval_scope_set_store");                    // borrowed old cells do not need release
-    emitter.instruction("mov rax, QWORD PTR [r9 + 24]");                        // load the old Mixed cell pointer
-    emitter.instruction("cmp rax, QWORD PTR [rbp - 32]");                       // compare old and replacement cells
-    emitter.instruction("je __elephc_eval_scope_set_store");                    // retaining the same cell must not decref it
-    emitter.instruction("test rax, rax");                                       // tolerate null old cells defensively
-    emitter.instruction("jz __elephc_eval_scope_set_store");                    // skip release when the old cell is null
-    emitter.instruction("call __rt_decref_mixed");                              // release the overwritten owned Mixed cell
-    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload current entry after the runtime call
-    emitter.label("__elephc_eval_scope_set_store");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the replacement Mixed cell
-    emitter.instruction("mov QWORD PTR [r9 + 24], r10");                        // store the replacement Mixed cell
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload caller-provided ABI flags
-    emitter.instruction(&format!("or r10, {}", EVAL_SCOPE_FLAG_PRESENT | EVAL_SCOPE_FLAG_DIRTY)); // mark the entry visible and dirty
-    emitter.instruction("mov QWORD PTR [r9 + 32], r10");                        // publish the updated ABI flags
+    elephc_memoir::values::eval_scope_storage::emit_replace(
+        emitter, EVAL_SCOPE_FLAG_OWNED, EVAL_SCOPE_FLAG_PRESENT | EVAL_SCOPE_FLAG_DIRTY,
+    );
     emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_OK));               // report successful scope write
     emitter.instruction("jmp __elephc_eval_scope_set_done");                    // restore the frame and return
     elephc_memoir::values::eval_scope_storage::emit_insert(emitter, EVAL_SCOPE_FLAG_PRESENT | EVAL_SCOPE_FLAG_DIRTY);

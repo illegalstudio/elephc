@@ -41,16 +41,9 @@ use crate::codegen_support::runtime::fibers::{
 const INT_TAG: i64 = 0;
 
 // ── Generator-specific field offsets (within the reused Fiber object) ──────
-/// Byte offset of `gen_last_key`: boxed Mixed of the most recent yield key.
-pub(crate) const GEN_LAST_KEY_OFFSET: i32 = 184;
-/// Byte offset of `gen_last_value`: boxed Mixed of the most recent yield value.
-pub(crate) const GEN_LAST_VALUE_OFFSET: i32 = 192;
-/// Byte offset of `gen_return_value`: boxed Mixed of the body `return` value.
-pub(crate) const GEN_RETURN_VALUE_OFFSET: i32 = 200;
-/// Byte offset of `gen_auto_key`: next auto-increment integer key (raw i64).
-pub(crate) const GEN_AUTO_KEY_OFFSET: i32 = 208;
-/// Byte offset of `gen_delegated_iter`: inner iterator for `yield from`.
-pub(crate) const GEN_DELEGATED_ITER_OFFSET: i32 = 216;
+pub(crate) use elephc_memoir::coroutine_storage::{
+    GEN_AUTO_KEY_OFFSET, GEN_LAST_KEY_OFFSET, GEN_LAST_VALUE_OFFSET, GEN_RETURN_VALUE_OFFSET,
+};
 
 /// Emits the ARM64 auto-key bookkeeping that fronts `__rt_gen_suspend`.
 ///

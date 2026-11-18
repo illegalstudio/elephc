@@ -18,11 +18,13 @@ conversion, packed array header updates, persistent references,
 reference-cell lifetime, wrapper promotion and writable child-slot selection,
 parameter-owner acquisition, original-identity pins, protected cleanup, temporary
 owner retirement, validated boxed object transfers, the object-handle pool, guarded stack mapping,
-zend_string allocation, recursive zval/string/array storage retirement, and memory
+coroutine payload and initial stack storage, Zend array header allocation and inline zval
+ownership transfer, zend_string allocation, recursive zval/string/array storage retirement, and memory
 proofs for direct scalar/empty-array cleanup, static binding storage, guard
 records, depth-stamped temporary owner lists, abandoned activation cleanup,
 declared-object slot layout and initialization, stored-property ownership completion,
-Throwable previous-owner transfer, previous-slot release and box reuse during hydration,
+Throwable previous-slot access and ownership transfer, previous-slot release and box reuse during hydration,
+borrowed frame and raw reference cleanup, eval scope cell replacement, fixed array resize storage,
 non-owning observer caches, hash-entry reference promotion and borrowed payload views,
 temporary/fixed-frame owner record publication, exact chain unlink and consuming
 container boxing, Mixed symbol publication through persistent reference children,
