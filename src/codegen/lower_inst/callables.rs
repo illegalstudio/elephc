@@ -864,7 +864,20 @@ fn emit_inline_mixed_callable_descriptor_value(
 
     ctx.emitter.label(&fatal_label);
     if let Some(slot) = eval_fallback_slot {
-        emit_eval_closure_descriptor_fallback(ctx, callable, slot, &done_label)?;
+        if fresh_closure {
+            // An eval closure, invokable object or function name becomes an owned adapter
+            // descriptor; a factory wraps that adapter in a new Closure.
+            let wrap = ctx.next_label("mixed_callable_eval_closure");
+            emit_eval_closure_descriptor_fallback(ctx, callable, slot, &wrap)?;
+            let after = ctx.next_label("mixed_callable_eval_closure_miss");
+            abi::emit_jump(ctx.emitter, &after);
+            ctx.emitter.label(&wrap);
+            abi::emit_call_label(ctx.emitter, "__rt_callable_closure_from_owned");
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&after);
+        } else {
+            emit_eval_closure_descriptor_fallback(ctx, callable, slot, &done_label)?;
+        }
         // A declared `callable` reports an unlinked builtin with the named Error even on a
         // conversion surface (`Closure::fromCallable()`) whose other misses raise TypeError.
         if ctx.declared_callable_candidates.is_some() {

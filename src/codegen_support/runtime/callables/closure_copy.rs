@@ -286,6 +286,42 @@ fn emit_callable_closure_copy_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the owned Closure descriptor
 }
 
+/// Emits `__rt_callable_closure_from_owned`: [`emit_callable_closure_copy`] for a descriptor the
+/// caller owns, which it then releases. Input and output as for `__rt_callable_closure_copy`;
+/// the result is the caller's only new owner whether the copy is fresh or the same Closure.
+pub(crate) fn emit_callable_closure_from_owned(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: callable closure from an owned descriptor ---");
+    emitter.label_global("__rt_callable_closure_from_owned");
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("push rbp");                                        // save the caller frame pointer
+        emitter.instruction("mov rbp, rsp");                                    // establish the helper frame
+        emitter.instruction("sub rsp, 16");                                     // reserve the source and result slots
+        emitter.instruction("mov [rsp], rax");                                  // save the owned source descriptor
+        emitter.instruction("call __rt_callable_closure_copy");                 // rax = the Closure for the source
+        emitter.instruction("mov [rsp+8], rax");                                // save the Closure
+        emitter.instruction("mov rax, [rsp]");                                  // reload the owned source descriptor
+        emitter.instruction("call __rt_callable_descriptor_release");           // drop the caller's owner of the source
+        emitter.instruction("mov rax, [rsp+8]");                                // return the Closure
+        emitter.instruction("mov rsp, rbp");                                    // tear down the helper frame
+        emitter.instruction("pop rbp");                                         // restore the caller frame pointer
+        emitter.instruction("ret");                                             // return the owned Closure descriptor
+        return;
+    }
+    emitter.instruction("sub sp, sp, #32");                                     // reserve the source and result slots
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across helper calls
+    emitter.instruction("add x29, sp, #16");                                    // establish the helper frame
+    emitter.instruction("str x0, [sp, #0]");                                    // save the owned source descriptor
+    emitter.instruction("bl __rt_callable_closure_copy");                       // x0 = the Closure for the source
+    emitter.instruction("str x0, [sp, #8]");                                    // save the Closure
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the owned source descriptor
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // drop the caller's owner of the source
+    emitter.instruction("ldr x0, [sp, #8]");                                    // return the Closure
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // tear down the helper frame
+    emitter.instruction("ret");                                                 // return the owned Closure descriptor
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

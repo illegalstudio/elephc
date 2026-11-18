@@ -17,7 +17,7 @@ mod invoke_owned_args;
 mod named_parameter_errors;
 
 pub(crate) use closure_bind::emit_closure_bind;
-pub(crate) use closure_copy::emit_callable_closure_copy;
+pub(crate) use closure_copy::{emit_callable_closure_copy, emit_callable_closure_from_owned};
 pub(crate) use descriptor_release::emit_callable_descriptor_release;
 pub(crate) use function_exists::emit_function_exists_lookup;
 pub(crate) use is_callable::emit_is_callable_runtime;
