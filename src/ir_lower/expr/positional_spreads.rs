@@ -110,6 +110,15 @@ pub(super) fn lower_positional_spread_args_with_signature(
     for param_idx in first_spread_param_idx..regular_param_count {
         let element_idx = param_idx - first_spread_param_idx;
         let default = sig.defaults.get(param_idx).and_then(|default| default.as_ref());
+        // PHP binds the supplied parameters before it evaluates an omitted default, so the
+        // values read so far (the prefix and the unpacked elements) are checked, and rooted,
+        // before a default that can throw (`int $n = 1 % 0`) may run.
+        if !capture_values
+            && element_idx >= required_len
+            && default.is_some_and(|default| !super::call_arg_coercion::default_is_inert(default))
+        {
+            check_bound_operands_before_default(ctx, sig, &mut operands, args[spread_idx].span);
+        }
         let expr = if let Some(default) = default {
             if element_idx < required_len {
                 spread_element_expr_for_ir(
@@ -183,6 +192,30 @@ pub(super) fn lower_positional_spread_args_with_signature(
         let sources = vec![super::scalar_param_guards::GuardSource::Unrecorded; operands.len()];
         coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), true)
     })
+}
+
+/// Checks the operands a positional spread call has bound so far, then roots them, before an
+/// omitted default that can throw is evaluated.
+///
+/// The deferral left the unpacked elements boxed and unchecked; their checks run here from the
+/// values (the elements have no checker record), so a refused element throws its `TypeError`
+/// before the default. A converted string is rooted with the rest while the default runs.
+fn check_bound_operands_before_default(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    operands: &mut Vec<ValueId>,
+    span: Span,
+) {
+    let sources = vec![super::scalar_param_guards::GuardSource::Unrecorded; operands.len()];
+    let checked = coerce_operands_to_params_guarded(ctx, sig, std::mem::take(operands), Some(&sources), true);
+    *operands = checked;
+    for index in 0..operands.len() {
+        if sig.ref_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        let lowered = lowered_value_from_id(ctx, operands[index]);
+        operands[index] = root_evaluated_call_argument(ctx, lowered, span).value;
+    }
 }
 
 /// Counts a staged unpack using its actual storage representation, not its PHP array hint.

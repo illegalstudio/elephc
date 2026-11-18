@@ -1253,3 +1253,31 @@ echo p(box("ok"), make(9)), "\n";
     assert_eq!(output.stdout, "f\ng\np\nf\ng\np\nf\ng\np\nok:9223372036854775807\nok\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A positional spread binds its unpacked elements before an omitted default that can throw is
+/// evaluated, as PHP does: `f(...$row)` with `$row = [box(null)]` and `int $n = 1 % 0` threw
+/// `DivisionByZeroError` instead of the `TypeError` for `$s`. The prefix (a fresh array here)
+/// and the elements stay rooted while the default runs.
+#[test]
+fn test_positional_spread_checks_unpacked_elements_before_throwing_defaults() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function make(int $i): array { return [str_repeat("x", 50), $i]; }
+function show(Throwable $e): void { echo get_class($e), ": ", explode(', called', $e->getMessage())[0], "\n"; }
+function f(string $s, int $n = 1 % 0) { return $s; }
+function g(array $a, string $s, int $n = 1 % 0) { return $s; }
+function h(string $s, int $m = 5, int $n = 1 % 0) { return $s; }
+for ($i = 0; $i < 2; $i++) {
+    $rows = [[box(null)], [box([1])]];
+    try { f(...$rows[$i]); } catch (Throwable $e) { show($e); }
+    try { g(make($i), ...$rows[$i]); } catch (Throwable $e) { show($e); }
+    try { h(...[box("ok"), box("x")]); } catch (Throwable $e) { show($e); }
+}
+try { f(...[box("ok")]); } catch (Throwable $e) { show($e); }
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "TypeError: f(): Argument #1 ($s) must be of type string, null given\nTypeError: g(): Argument #2 ($s) must be of type string, null given\nTypeError: h(): Argument #2 ($m) must be of type int, string given\nTypeError: f(): Argument #1 ($s) must be of type string, array given\nTypeError: g(): Argument #2 ($s) must be of type string, array given\nTypeError: h(): Argument #2 ($m) must be of type int, string given\nDivisionByZeroError: Modulo by zero\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
