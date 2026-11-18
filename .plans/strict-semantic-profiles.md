@@ -1953,3 +1953,34 @@ matching PHP with clean heaps. The CLI reference explains unused-closure formati
 
 Continue with call-planner reference arguments and the remaining stronger Locals
 and pending-family audits. This fix admits no additional registered guarantee.
+
+### Verified184: source-order reference arguments
+
+CallArgPlan now projects directly supplied reference source indices, retaining
+unpack provenance and defaults without using spans as identities. The checker
+consumes the same planned source list for declared free functions and tracked
+callable signatures, creates each missing plain local at its argument position,
+and retains existing closed producers. Provisional signatures reuse declaration
+metadata and leave authoritative call diagnostics with the ordinary validator.
+
+Empty reference-taking functions, methods and closure invocations now retain the
+caller binding effect in AST summaries independently of body effects. A baseline
+optimized permissive call lost its newly formed name from get_defined_vars; the
+shared parameter-binding effect fixes that regression without making by-value
+calls impure. Fact4ccbbcde records the source-observable distinction.
+
+The eval signature snapshot requests persistent cells for interpreted reference
+parameters at their source operand. The initial walker probe missed a new name in
+later get_defined_vars and read stale null after a later nested reference write.
+The full walker and normal dispatcher fixture now agree with native behavior in
+both profiles, with all Fake owners drained. Existing native reference layout
+selection remains unchanged. Factea45e105 records this early identity requirement.
+
+Verification covers planner indices and matching, same-span inputs, direct/named/
+variadic/first-class/closure arguments, defaults private to the callee, source-order
+reads and writes, catches, preserved closed origins, empty bodies, five-target
+emission, native values and clean heaps, real opaque eval in both profiles and
+optimizer settings, prior reference formation controls, pure-call controls, the
+default serial compiler build, PHP/LFC CLI combinations and the complete updated
+strict-locals example. All focused gates and diff hygiene pass. PHP confirms the
+permissive fixture output. This step admits no additional strict guarantee.

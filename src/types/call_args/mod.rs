@@ -31,3 +31,6 @@ pub(crate) use static_spread::{
     expand_planned_positional_spreads, expand_static_assoc_spread_args, has_named_args,
     static_assoc_spread_bindings_for_inference,
 };
+
+#[cfg(test)]
+mod reference_source_tests;

@@ -102,13 +102,13 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
     Ok((evaluated_args, receiver_owners))
 }
 
-/// Captures a retaining native boxed argument without changing legacy or intermediate receivers.
+/// Captures stable reference arguments before later source operands can mutate their bindings.
 fn eval_source_call_argument(
     argument: &EvalCallArg, position: usize, modes: &CallArgumentModes,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
-    if modes.persistent_native_reference(argument.name(), position)
+    if modes.persistent_reference(argument.name(), position)
         || (context.semantic_profile().checked_property_references()
             && modes.by_reference(argument.name(), position))
     {

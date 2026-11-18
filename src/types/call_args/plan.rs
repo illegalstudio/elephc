@@ -120,6 +120,25 @@ pub(crate) enum CallArgPlanError {
 }
 
 impl CallArgPlan {
+    /// Projects caller reference source indices, excluding defaults and unpacked values.
+    pub(crate) fn reference_source_indices(&self, sig: &crate::types::FunctionSig) -> Vec<usize> {
+        let variadic = sig.variadic.as_ref().and_then(|name|
+            sig.params.iter().position(|(parameter, _)| parameter == name));
+        let by_ref = |position: Option<usize>| position
+            .and_then(|index| sig.ref_params.get(index)).copied().unwrap_or(false);
+        let direct = |index: usize| self.source_origins.get(index).is_some_and(|origin|
+            *origin == super::static_spread::ExpandedArgOrigin::Source)
+            && self.source_args.get(index).is_some_and(|arg| !matches!(arg.kind, ExprKind::Spread(_)));
+        if let Some(args) = &self.passthrough_args {
+            return args.iter().enumerate().take_while(|(_, arg)| !matches!(arg.kind, ExprKind::Spread(_)))
+                .filter(|(index, _)| direct(*index) && by_ref(
+                    if *index < self.regular_param_count { Some(*index) } else { variadic }))
+                .map(|(index, _)| index).collect();
+        }
+        self.source_values.iter().filter(|value| direct(value.source_index())
+            && by_ref(value.param_idx().or(variadic))).map(PlannedSourceValue::source_index).collect()
+    }
+
     /// Projects a fixed source/default expression only when no dynamic unpack can replace it.
     pub(crate) fn known_regular_argument<'a>(&'a self, signature: &'a crate::types::FunctionSig,
         parameter_index: usize) -> Option<&'a Expr> {

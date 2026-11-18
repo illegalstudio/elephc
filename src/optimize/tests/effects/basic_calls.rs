@@ -430,3 +430,24 @@ fn test_reference_capture_creation_survives_dead_expression_elimination() {
         assert_eq!(optimized.iter().any(|statement| matches!(statement.kind, StmtKind::ExprStmt(_))), observable);
     }
 }
+
+/// Caller reference formation stays observable even when a declared callable body does nothing.
+#[test]
+fn test_reference_parameter_bindings_are_observable_for_empty_bodies() {
+    let source = "<?php function refEmpty(mixed &$value):void {} function valueEmpty(mixed $value):void {} class RefEffectHost {public static function stat(mixed &$value):void {} public function inst(mixed &$value):void {}}";
+    let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+    let (functions, statics, methods) = compute_program_callable_effects(&program);
+    assert!(functions["refEmpty"].has_side_effects);
+    assert!(!functions["refEmpty"].may_throw);
+    assert_eq!(functions["valueEmpty"], Effect::PURE);
+    assert!(statics["RefEffectHost::stat"].has_side_effects);
+    assert!(methods["RefEffectHost::inst"].has_side_effects);
+    for (signature, observable) in [("mixed &$value", true), ("mixed $value", false)] {
+        let source = format!("<?php $callback=function({signature}):void {{}};");
+        let program = crate::parser::parse(&crate::lexer::tokenize(&source).unwrap()).unwrap();
+        let StmtKind::Assign { value, .. } = &program[0].kind else { panic!("expected closure assignment") };
+        let effect = crate::optimize::effects::expr_call_effect(value);
+        assert_eq!(effect.has_side_effects, observable);
+        assert!(!effect.may_throw);
+    }
+}

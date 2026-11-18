@@ -1098,6 +1098,12 @@ an explicit `$value = null` still has a null contract under `--strict-locals`.
 Escaped aliases retain the old binding after its original name is unset.
 Creating an unused closure still creates its reference-captured names, without
 running its body.
+Passing an undeclared plain local to a declared function's reference parameter creates
+an open null binding at that argument's position. Later arguments see the name
+and any intervening changes to the same reference, even if the callee has an empty
+body. Named arguments and tracked callable signatures follow the same rule.
+Omitted defaults stay in the callee's scope; unpacked values do not create plain
+local names in the caller.
 
 **Migrating.** The `unset()` kill is the one shape that can reject code that
 compiled before. Reading a variable after a straight-line `unset()` of it is now

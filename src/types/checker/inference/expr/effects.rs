@@ -307,7 +307,9 @@ impl Checker {
                 self.infer_type(expr, env)
             }
             ExprKind::FunctionCall { name, args } => {
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args, self.semantic_profile);
+                let prepared = self.declared_call_reference_arguments(name.as_str(), args, expr.span, env);
+                let reference_sources = prepared.reference_sources;
+                let expanded_args = prepared.args;
                 let builtin_name = name.trim_start_matches('\\');
                 // `isset`/`unset` are lazy language constructs: an operand may be
                 // an undeclared property routed to `__isset`/`__unset`, which must
@@ -350,6 +352,7 @@ impl Checker {
                         crate::types::builtin_call_sig_with_semantics(builtin_name, self.semantic_profile, self.semantic_source_mode)
                     };
                     for (idx, arg) in expanded_args.iter().enumerate() {
+                        self.prepare_reference_source_argument(arg, idx, &reference_sources, env);
                         let param_idx = match &arg.kind {
                             ExprKind::NamedArg { name, .. } => contextual_sig
                                 .as_ref()
@@ -582,12 +585,15 @@ impl Checker {
                 Ok(ty)
             }
             ExprKind::ClosureCall { var, args } => {
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args, self.semantic_profile);
+                let prepared = self.callable_reference_arguments(var, args, expr.span, env);
+                let reference_sources = prepared.reference_sources;
+                let expanded_args = prepared.args;
                 let skip_contextual_callback =
                     self.variable_targets_preg_replace_callback(var.as_str());
                 let descriptor_args = self.callable_param_names.contains(var)
                     || self.callable_array_targets.contains_key(var);
                 for (idx, arg) in expanded_args.iter().enumerate() {
+                    self.prepare_reference_source_argument(arg, idx, &reference_sources, env);
                     if skip_contextual_callback && idx == 1 {
                         self.infer_contextual_callback_effects(arg, env)?;
                         continue;

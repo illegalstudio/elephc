@@ -196,3 +196,10 @@ function recreateQuantityReference(): void {
     echo "Recreated reference: ", $read(), PHP_EOL;
 }
 recreateQuantityReference();
+
+// A reference argument creates an open binding before the callee writes its value.
+function createQuantityArgument(): void {
+    replaceValue($newQuantity, 'ready');
+    echo "Reference argument: ", $newQuantity, PHP_EOL;
+}
+createQuantityArgument();

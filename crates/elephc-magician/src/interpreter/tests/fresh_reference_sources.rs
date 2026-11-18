@@ -37,3 +37,29 @@ fn fresh_reference_sources_eval_values_and_owners() {
     }
 }
 
+/// Known reference arguments publish their source before subsequent operands in both engines.
+#[test]
+fn fresh_reference_arguments_eval_values_and_owners() {
+    let source = include_str!("../../../../../tests/fixtures/strict/fresh_reference_arguments.php")
+        .strip_prefix("<?php").unwrap();
+    for dispatch in [false, true] {
+        for locals in [false, true] {
+            let mut context = ElephcEvalContext::new();
+            context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, locals)).unwrap();
+            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+            if dispatch {
+                let program = crate::parser::parse_fragment_with_semantics(source.as_bytes(), context.semantic_profile()).unwrap();
+                let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+                values.release(result).unwrap();
+            } else {
+                staged_numeric_execution(source, false, &mut context, &mut scope, &mut values).unwrap();
+            }
+            let prefix = "bound|bound|bound|closure|NULL:NULL|observed|present:NULL|observed|formed|closure-formed|later:string|observed|positional:named|NULL|private|NULL|";
+            assert_eq!(values.output, format!("{prefix}{}", if locals { "Tinteger|" } else { "Wstring|" }),
+                "locals={locals} dispatch={dispatch}");
+            for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+            for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "locals={locals} dispatch={dispatch}: {:?}", values.values[id]); }
+        }
+    }
+}
+
