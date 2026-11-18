@@ -133,7 +133,9 @@ pub(crate) fn filter_declarations(
 ///
 /// Test fixtures use this to keep unrelated opaque-eval programs from pulling the complete
 /// filter surface into their compile. Production still uses [`program_uses_surface`], because
-/// an opaque eval may call filter at run time.
+/// an opaque eval may call filter at run time. The binary target re-declares this module
+/// privately, so the helper is dead code there even though the integration tests call it.
+#[allow(dead_code)]
 pub fn program_uses_explicit_surface(program: &[crate::parser::ast::Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
     functions()
