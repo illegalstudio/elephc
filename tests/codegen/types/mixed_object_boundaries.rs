@@ -444,6 +444,47 @@ $f = getMixed(new Timer('f')); echo raw(n: ($f = 7), t: getMixed(new Timer('g'))
     assert_eq!(out, "a\nb\nc\nd\ne\ng\n");
 }
 
+/// A call that unpacks into a function reading `func_get_args()` binds every parameter from a
+/// boxed slot; a class-like parameter still gets its runtime class check there.
+#[test]
+fn test_unpacked_call_into_func_get_args_function_checks_class_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+class T {}
+function take(?T $t): void { echo count(func_get_args()), "\n"; }
+function raw(T $t): void { echo get_class($t), " ", count(func_get_args()), "\n"; }
+function getMixed(mixed $v): mixed { return $v; }
+function msg(TypeError $e): string { return explode(", called in", $e->getMessage())[0]; }
+try { take(getMixed(42), ...[1]); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { take(getMixed(new T()), ...[1]); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { take(getMixed(null), ...[1, 2]); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { raw(getMixed("s"), ...[1]); } catch (TypeError $e) { echo msg($e), "\n"; }
+try { raw(new T(), ...[1]); } catch (TypeError $e) { echo msg($e), "\n"; }
+"#,
+    );
+    assert_eq!(out, "take(): Argument #1 ($t) must be of type ?T, int given\n2\n3\n\
+raw(): Argument #1 ($t) must be of type T, string given\nT 2\n");
+}
+
+/// A deferred class check that throws after the variadic tail array was built releases that
+/// array while unwinding.
+#[test]
+fn test_deferred_class_check_releases_the_variadic_tail_when_it_throws() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class T {}
+function ordered(T $first, T ...$rest): void { echo "body\n"; }
+function getMixed(mixed $v): mixed { return $v; }
+function msg(TypeError $e): string { return explode(", called in", $e->getMessage())[0]; }
+try { ordered(getMixed(null), new T(), new T()); } catch (TypeError $e) { echo msg($e), "\n"; }
+ordered(getMixed(new T()), new T());
+"#,
+    );
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "ordered(): Argument #1 ($first) must be of type T, null given\nbody\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// The optimizer must see the runtime class check of a by-value `?T`, union or `object`
 /// parameter: a call into an otherwise pure or non-throwing body keeps its `TypeError` and
 /// the `catch` that observes it.

@@ -106,7 +106,14 @@ pub(super) fn reflection_object_operand(
     let Some(object_operand) = inst.operands.first().copied() else {
         return Ok(None);
     };
-    if matches!(ctx.value_php_type(object_operand)?, PhpType::Object(_)) {
+    // A bare `object` operand outside a method (a checked `mixed` argument) names no class to
+    // bound the runtime dispatch, so it keeps the static metadata path a boxed operand takes.
+    let bare_object_without_scope = matches!(ctx.value_php_type(object_operand)?,
+        PhpType::Object(ref class) if class.is_empty())
+        && reflection_current_method_class(ctx).is_none();
+    if bare_object_without_scope {
+        Ok(None)
+    } else if matches!(ctx.value_php_type(object_operand)?, PhpType::Object(_)) {
         Ok(Some(object_operand))
     } else {
         Ok(None)

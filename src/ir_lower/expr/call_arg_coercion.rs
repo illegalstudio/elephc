@@ -1353,6 +1353,27 @@ pub(super) fn coerce_operands_to_params(
     coerce_operands_to_params_with_checks(ctx, sig, operands, &[])
 }
 
+/// Normalizes operands bound from boxed unpack slots (`lower_boxed_spread_args`).
+///
+/// Every slot holds a `mixed` box whatever its source was, so each declared class-like
+/// parameter gets the runtime class check the other call paths defer for `mixed` sources.
+pub(super) fn coerce_boxed_operands_to_params(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    operands: Vec<crate::ir::ValueId>,
+    span: Span,
+) -> Vec<crate::ir::ValueId> {
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    let object_checks = (0..operands.len().min(regular_param_count))
+        .filter(|index| !sig.ref_params.get(*index).copied().unwrap_or(false)
+            && sig.declared_params.get(*index).copied().unwrap_or(false)
+            && sig.params.get(*index).is_some_and(|(_, ty)|
+                crate::types::object_boundary::declared_object_boundary(ty).is_some()))
+        .map(|index| (index, span))
+        .collect::<Vec<_>>();
+    coerce_operands_to_params_with_checks(ctx, sig, operands, &object_checks)
+}
+
 /// Normalizes a call's operands and runs the class-like parameter checks its argument
 /// evaluation deferred (`DeferredObjectParamChecks`), in parameter order, after every argument
 /// was evaluated.
@@ -1381,6 +1402,15 @@ fn coerce_operands_to_params_with_checks(
             let lowered = lowered_value_from_id(ctx, operands[index]);
             operands[index] =
                 root_evaluated_call_argument(ctx, lowered, Span::dummy()).value;
+        }
+        // A deferred class check runs after the variadic tail array was built; publish that
+        // owned array too, so the check's `TypeError` releases it while unwinding.
+        if !object_checks.is_empty() && !variadic_param_is_by_ref(sig) {
+            for index in limit..operands.len() {
+                let lowered = lowered_value_from_id(ctx, operands[index]);
+                operands[index] =
+                    root_evaluated_call_argument(ctx, lowered, Span::dummy()).value;
+            }
         }
     }
     for index in 0..limit {
