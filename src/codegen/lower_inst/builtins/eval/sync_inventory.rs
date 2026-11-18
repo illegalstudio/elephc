@@ -299,8 +299,23 @@ fn flush_eval_scope_locals_with_mask(
         if let Some((offset, skip)) = &skip {
             emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, *offset, skip);
         }
+        // A heap-pointer local (array, hash, object) nothing has assigned yet holds a zero
+        // pointer, and boxing that would publish an `array` entry of nothing: the fragment's
+        // reload then rejects it as a non-array "native reference" write. Such a slot is the
+        // frame's uninitialized marker too, as for a Mixed one. `$trace = debug_backtrace();`
+        // after an `include` is the common spelling; the slot only exists as a pointer when no
+        // reference cell stands in for it.
+        let heap_may_be_uninitialized = matches!(
+            local.ty.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+        ) && !ctx.local_slot_ever_stores_ref_cell_pointer(local.slot);
+        let may_be_unset = may_be_unset || heap_may_be_uninitialized;
+        if heap_may_be_uninitialized {
+            ctx.load_raw_local_to_result(local.slot)?;
+            abi::emit_branch_if_int_result_zero(ctx.emitter, &absent);
+        }
         ctx.load_eval_local_snapshot_to_mixed(local.slot)?;
-        if may_be_unset {
+        if may_be_unset && !heap_may_be_uninitialized {
             // Eval barriers widen PHP-visible locals to boxed Mixed storage. A zero slot is
             // therefore the frame's uninitialized marker, not PHP null (which has its own
             // non-null Mixed cell). Keep the materialized scope's visibility in sync so
