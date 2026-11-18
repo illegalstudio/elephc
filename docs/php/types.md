@@ -399,6 +399,30 @@ Add the explicit cast the call site means — `takesInt((int) $f)`, `takesFloat(
 - **Classes injected by the compiler** (SPL, `Exception`, reflection) stay strict, because several of their members are lowered by dedicated emitters rather than the shared argument path.
 - **Nullable and union parameters** (`?string $s`, `int|string $v`) stay strict; only a plain declared scalar type binds coercively.
 
+### Class-typed boundaries
+
+A `mixed` value, or an `object|null` value, can reach a return, parameter or typed property declared as a class, an interface, `object`, or a nullable or union of those (`?Timer`, `A|B|null`). Array element reads, `WeakMap` lookups and other untyped containers produce such values. PHP checks the value's class at run time, and elephc emits the same check:
+
+```php
+final class TimerQueue {
+    /** @var array<int, Timer> */
+    private array $timers = [];
+    public function extract(): ?Timer {
+        return $this->timers[0] ?? null;   // mixed, checked against ?Timer
+    }
+}
+```
+
+A value of the wrong class or type throws `TypeError` with PHP's message for that boundary:
+
+- return: `TimerQueue::extract(): Return value must be of type ?Timer, string returned`
+- parameter: `take(): Argument #1 ($t) must be of type Timer, int given, called in … on line N`
+- property: `Cannot assign int to property Holder::$timer of type Timer`
+
+A `static` return is checked against the called class, as in PHP. After the boundary, the value has the declared type.
+
+**Not covered yet.** A `callable` boundary still rejects a `mixed` value at compile time. A named argument (`take(t: $m)`) to a nullable or union class parameter is not checked at the call; issue #2159 tracks the named-argument path for class parameters. A union that mixes classes with scalar types (`Timer|int`) keeps the static rules.
+
 ### Strict types
 
 A file whose leading `declare` sequence enables `strict_types=1` gets PHP's strict parameter binding: a declared scalar parameter accepts only an argument of exactly that type, plus the single widening of `int` into a declared `float`. Every conversion in the tables above becomes a compile error naming the `TypeError` PHP would throw at run time.
@@ -454,7 +478,7 @@ echo coerceHere(true);      // compile error — this call lives in a strict fil
 - **Builtin function arguments** keep their own per-builtin rules; the directive does not tighten them. PHP throws `TypeError` for `strlen(42)` under `strict_types=1` while elephc still applies each builtin's own argument checking.
 - **Return types, typed property assignments and typed constants** are unaffected; PHP also applies `strict_types` to those.
 - **Positional spread arguments** (`f(...$args)`) and **variadic parameters of an inline closure literal** (`function (int ...$xs) {}`) are not checked against the declared parameter type, in strict or coercive mode.
-- **Values whose type is only known at run time** (`mixed`, union-typed and array-element values) are not rejected: elephc cannot raise PHP's runtime `TypeError` at a parameter boundary, so such a binding is left to the existing compatibility rules. The exception is an **object union** in the exact shape `Class|false` or `Class|null` passed to a `Class` parameter of a user-declared method or constructor: elephc accepts it and inserts a runtime `instanceof` guard that throws `TypeError` for the other alternative.
+- **Values whose type is only known at run time** (`mixed`, union-typed and array-element values) are not rejected: elephc cannot raise PHP's runtime `TypeError` at a parameter boundary, so such a binding is left to the existing compatibility rules. The exception is an **object union** in the exact shape `Class|false` or `Class|null` passed to a `Class` parameter of a user-declared method or constructor: elephc accepts it and inserts a runtime `instanceof` guard that throws `TypeError` for the other alternative. A `mixed` or `object|null` value at a class-typed parameter is checked the same way; see [Class-typed boundaries](#class-typed-boundaries).
 
 ### Callable strings
 

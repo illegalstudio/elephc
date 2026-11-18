@@ -422,6 +422,11 @@ impl Checker {
 
         Self::require_matching_array_element_storage(expected, actual, span, context)?;
 
+        // PHP returns a `mixed` (or `object|null`) value from a class-typed function and checks
+        // its class at run time; EIR return coercion emits that check and its `TypeError`.
+        if crate::types::object_boundary::runtime_object_boundary(expected, actual).is_some() {
+            return Ok(());
+        }
         self.require_compatible_arg_type(expected, actual, span, context)
     }
 
