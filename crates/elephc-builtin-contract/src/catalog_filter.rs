@@ -69,12 +69,8 @@ macro_rules! filter_contract {
     };
 }
 
-/// `array|int $options` on `filter_var()` and `filter_input()`.
+/// `array|int $options` on `filter_var()`, `filter_input()` and `filter_var_array()`.
 const OPTIONS: TypeSpec = TypeSpec::Union(&[TypeSpec::Array, TypeSpec::Int]);
-
-/// `array|int|null $options` on `filter_var_array()`.
-const OPTIONS_NULLABLE: TypeSpec =
-    TypeSpec::Union(&[TypeSpec::Array, TypeSpec::Int, TypeSpec::Null]);
 
 /// The `ext/filter` function contracts, in PHP stub order.
 pub(crate) static CONTRACTS: &[BuiltinContract] = &[
@@ -138,11 +134,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "filter_var_array",
         [
             param!("array", TypeSpec::Array),
-            param!(
-                "options",
-                OPTIONS_NULLABLE,
-                DefaultSpec::Constant("FILTER_DEFAULT")
-            ),
+            param!("options", OPTIONS, DefaultSpec::Constant("FILTER_DEFAULT")),
             param!("add_empty", TypeSpec::Bool, DefaultSpec::Bool(true)),
         ],
         TypeSpec::Union(&[TypeSpec::Array, TypeSpec::False, TypeSpec::Null]),

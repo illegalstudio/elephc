@@ -51218,7 +51218,7 @@
           },
           "name": "options",
           "optional": true,
-          "type": "array|int|null"
+          "type": "array|int"
         },
         {
           "by_ref": false,
@@ -51259,7 +51259,7 @@
           "default": "516",
           "name": "options",
           "optional": true,
-          "type": "array|int|null"
+          "type": "array|int"
         },
         {
           "by_ref": false,
@@ -51308,7 +51308,7 @@
           "default": "FILTER_DEFAULT",
           "name": "options",
           "optional": true,
-          "type": "array|int|null"
+          "type": "array|int"
         },
         {
           "by_ref": false,

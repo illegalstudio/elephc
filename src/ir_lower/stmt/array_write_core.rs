@@ -308,7 +308,15 @@ fn lower_array_reference_assignment(
         && (!ctx.is_ref_bound_local(source_name)
             || ctx.local_type(source_name).codegen_repr() == PhpType::Mixed);
     if matches!(storage, Op::HashSet | Op::ArraySet) && bindable_source {
-        lower_concrete_array_reference_bind(ctx, array, array_value, index, source_name, span);
+        lower_concrete_array_reference_bind(
+            ctx,
+            array,
+            array_value,
+            index,
+            source_name,
+            span,
+            auto_viv,
+        );
         return;
     }
     // A boxed PHP array stores references through the nested persistent-cell ABI, and an
@@ -344,7 +352,17 @@ fn lower_concrete_array_reference_bind(
     index: &Expr,
     source_name: &str,
     span: Span,
+    auto_viv: Option<PhpType>,
 ) {
+    // A first write auto-vivifies `$array` into a temporary container. Publish it before the
+    // entry bind: an already-Mixed hash needs no conversion, so the conversion storeback path
+    // below would otherwise be skipped and the new container would never reach the local.
+    let array_value = match auto_viv {
+        Some(ty) => super::array_write_storage::publish_auto_vivified_container(
+            ctx, array, array_value, ty, span,
+        ),
+        None => array_value,
+    };
     ctx.promote_local_mixed_ref_cell(source_name, Some(span));
     let Some(owner_slot) = ctx.ref_cell_owner_slot(source_name) else {
         return;

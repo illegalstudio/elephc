@@ -79,14 +79,35 @@ fn split_php_pattern(pattern: &str) -> Result<(&str, &str), String> {
 ///
 /// PCRE `$` matches at the end or immediately before a final newline; `D` restricts it to the
 /// end. Rust's regex engine implements only the strict-end form, so the body needs this pass.
+/// Inline modifier groups can change `m` for a scope (`(?-m:$)`) or for the rest of the
+/// enclosing group (`(?m)`), so the anchor decision follows those scopes instead of only the
+/// outer modifier list.
 fn rewrite_dollar_anchors(body: &str, dollar_end_only: bool, multiline: bool) -> String {
     let mut out = String::with_capacity(body.len());
+    let mut chars = body.chars().peekable();
     let mut escaped = false;
     let mut in_class = false;
-    for ch in body.chars() {
+    // The current and enclosing groups' multiline state. A setting group updates the current
+    // entry; a scoped group pushes the state its closing parenthesis restores.
+    let mut scopes = vec![multiline];
+    while let Some(ch) = chars.next() {
         if escaped {
             out.push(ch);
             escaped = false;
+            continue;
+        }
+        if in_class {
+            match ch {
+                '\\' => {
+                    out.push(ch);
+                    escaped = true;
+                }
+                ']' => {
+                    in_class = false;
+                    out.push(ch);
+                }
+                _ => out.push(ch),
+            }
             continue;
         }
         match ch {
@@ -98,12 +119,8 @@ fn rewrite_dollar_anchors(body: &str, dollar_end_only: bool, multiline: bool) ->
                 in_class = true;
                 out.push(ch);
             }
-            ']' => {
-                in_class = false;
-                out.push(ch);
-            }
-            '$' if !in_class => {
-                if multiline {
+            '$' => {
+                if *scopes.last().expect("multiline scope") {
                     out.push_str("(?=\\n|\\z)");
                 } else if dollar_end_only {
                     out.push_str("\\z");
@@ -111,10 +128,82 @@ fn rewrite_dollar_anchors(body: &str, dollar_end_only: bool, multiline: bool) ->
                     out.push_str("(?=\\n?\\z)");
                 }
             }
+            '(' => {
+                let current = *scopes.last().expect("multiline scope");
+                if let Some((suffix, scoped, changed)) = inline_flag_group(&mut chars, current) {
+                    out.push('(');
+                    out.push_str(&suffix);
+                    if scoped {
+                        scopes.push(changed);
+                    } else {
+                        *scopes.last_mut().expect("multiline scope") = changed;
+                    }
+                } else {
+                    out.push('(');
+                    scopes.push(current);
+                }
+            }
+            ')' => {
+                if scopes.len() > 1 {
+                    scopes.pop();
+                }
+                out.push(')');
+            }
             _ => out.push(ch),
         }
     }
     out
+}
+
+/// Reads an inline PCRE modifier group starting after `(`.
+///
+/// Returns the consumed `?flags` suffix with its `:` or `)` terminator, whether the group is
+/// scoped (`:`), and the multiline state its flags select. A group that is not a plain inline
+/// modifier setting returns `None` and is treated as an ordinary nesting group.
+fn inline_flag_group(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    current_multiline: bool,
+) -> Option<(String, bool, bool)> {
+    let mut look = chars.clone();
+    if look.next()? != '?' {
+        return None;
+    }
+    let mut suffix = String::from("?");
+    let mut multiline = current_multiline;
+    let mut negating = false;
+    let mut saw_flag = false;
+    loop {
+        let flag = look.next()?;
+        match flag {
+            ')' | ':' => {
+                if !saw_flag {
+                    return None;
+                }
+                suffix.push(flag);
+                break;
+            }
+            '-' => {
+                if negating {
+                    return None;
+                }
+                negating = true;
+                suffix.push(flag);
+            }
+            'i' | 'm' | 's' | 'x' | 'U' | 'J' | 'X' | 'n' | 'r' => {
+                saw_flag = true;
+                if flag == 'm' {
+                    multiline = !negating;
+                }
+                suffix.push(flag);
+            }
+            _ => return None,
+        }
+    }
+    for _ in 0..suffix.chars().count() {
+        chars.next();
+    }
+    let scoped = suffix.ends_with(':');
+    Some((suffix, scoped, multiline))
 }
 
 /// Builds one fancy-regex from a PHP pattern body and its modifiers.
@@ -467,6 +556,14 @@ mod tests {
         assert!(php_pattern(b"bar", b"/foo|bar/A"));
         assert!(php_pattern(b"foo\n", b"/foo$\n/"));
         assert!(!php_pattern(b"foo\nbar", b"/foo$\n/"));
+    }
+
+    /// A scoped inline modifier changes the `$` rewrite for its own group only.
+    #[test]
+    fn regexp_scoped_multiline_dollar_matches_pcre() {
+        assert!(php_pattern(b"foo\n", b"/\\Afoo(?-m:$)/m"));
+        assert!(!php_pattern(b"foo\nbar", b"/\\Afoo(?-m:$)/m"));
+        assert!(php_pattern(b"foo\nbar", b"/\\Afoo(?m:$)/"));
     }
 
     /// The lookaround fallback keeps PHP's non-`u` ASCII shorthand classes.

@@ -6,14 +6,14 @@ description: "Filters several values from one array using a definition of filter
 ## filter_var_array()
 
 ```php
-function filter_var_array(array $array, array|int|null $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null
+function filter_var_array(array $array, array|int $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null
 ```
 
 Filters several values from one array using a definition of filters and flags.
 
 **Parameters**:
 - `$array` (`array`)
-- `$options` (`array|int|null`), default `FILTER_DEFAULT`, optional
+- `$options` (`array|int`), default `FILTER_DEFAULT`, optional
 - `$add_empty` (`bool`), default `true`, optional
 
 **Returns**: `array|false|null`

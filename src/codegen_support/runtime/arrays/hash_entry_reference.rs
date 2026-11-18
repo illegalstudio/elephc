@@ -266,9 +266,9 @@ fn emit_bind_reference(emitter: &mut Emitter) {
             emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // save the entry value address
             emitter.instruction("mov QWORD PTR [rbp - 16], rsi");               // save the replacement cell
             emitter.instruction("mov QWORD PTR [rbp - 24], rax");               // save the cell the entry is giving up
-            emitter.instruction("mov rdi, rsi");                                // retain the replacement cell for the entry
+            emitter.instruction("mov rax, rsi");                                // pass the replacement cell in the private incref register
             emitter.instruction("call __rt_incref");                            // the entry takes its own reference
-            emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");               // load the old cell
+            emitter.instruction("mov rax, QWORD PTR [rbp - 24]");               // load the old cell in the private release register
             emitter.instruction("call __rt_reference_cell_release");            // release the entry's share of the old cell
             emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // reload the entry value address
             emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");               // reload the replacement cell

@@ -435,6 +435,39 @@ array(0) {
     );
 }
 
+/// `filter_var_array()`'s options parameter is `array|int`: weak mode deprecates null and
+/// coerces it to filter 0, while strict mode raises PHP's TypeError.
+#[test]
+fn test_filter_var_array_options_rejects_strict_null() {
+    let weak = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $errno, string $message): bool {
+    echo $message, "\n";
+    return true;
+});
+var_dump(filter_var_array(["x" => "1"], null));
+"#,
+    );
+    assert!(
+        weak.contains(
+            "filter_var_array(): Passing null to parameter #2 ($options) of type array|int is deprecated"
+        ),
+        "{weak}"
+    );
+    assert!(weak.contains("filter_var_array(): Unknown filter with ID 0"), "{weak}");
+    assert!(weak.ends_with("bool(false)\n"), "{weak}");
+    let strict = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+try { filter_var_array(["x" => "1"], null); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        strict,
+        "filter_var_array(): Argument #2 ($options) must be of type array|int, null given\n"
+    );
+}
+
 /// A warning handler that runs another filter cannot replace the outer regexp match result.
 #[test]
 fn test_filter_regexp_warning_handler_cannot_replace_the_match_result() {

@@ -457,8 +457,8 @@ fn lower_hash_reference_set_x86_64(
     // handler. Their SSA homes may be caller-saved, and the key helpers and `__rt_incref`
     // clobber those registers.
     abi::emit_reserve_temporary_stack(ctx.emitter, 32);
-    ctx.load_value_to_reg(cell, "rdi")?;
-    abi::emit_store_to_sp(ctx.emitter, "rdi", 0);
+    ctx.load_value_to_reg(cell, "rax")?;
+    abi::emit_store_to_sp(ctx.emitter, "rax", 0);
     ctx.load_value_to_reg(hash, "rdi")?;
     abi::emit_store_to_sp(ctx.emitter, "rdi", 8);
     materialize_hash_key_x86_64(ctx, key)?;
@@ -471,7 +471,7 @@ fn lower_hash_reference_set_x86_64(
         ctx.load_value_to_reg(hash, "rdi")?;
         abi::emit_store_to_sp(ctx.emitter, "rdi", 24);
     }
-    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 16);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
     abi::emit_call_label(ctx.emitter, "__rt_incref");
     abi::emit_load_temporary_stack_slot(ctx.emitter, "rcx", 16);
     abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 24);

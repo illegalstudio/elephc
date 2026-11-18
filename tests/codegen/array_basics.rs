@@ -1349,6 +1349,29 @@ fn test_exit_weak_scalar_statuses() {
     assert!(!compile_and_run_capture("<?php exit(1.5);").success, "float truncates to 1");
 }
 
+/// Strict `exit()` enforces `string|int`: weak-only scalar statuses raise a catchable TypeError.
+#[test]
+fn test_exit_strict_scalar_statuses_raise_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+try { exit(true); } catch (TypeError $e) { echo "true: ", $e->getMessage(), "\n"; }
+try { exit(false); } catch (TypeError $e) { echo "false: ", $e->getMessage(), "\n"; }
+try { exit(1.5); } catch (TypeError $e) { echo "float: ", $e->getMessage(), "\n"; }
+try { exit(null); } catch (TypeError $e) { echo "null: ", $e->getMessage(), "\n"; }
+echo "done";
+"#,
+    );
+    assert_eq!(
+        out,
+        "true: exit(): Argument #1 ($status) must be of type string|int, bool given\n\
+false: exit(): Argument #1 ($status) must be of type string|int, bool given\n\
+float: exit(): Argument #1 ($status) must be of type string|int, float given\n\
+null: exit(): Argument #1 ($status) must be of type string|int, null given\n\
+done"
+    );
+}
+
 /// `exit("message")` flushes active output buffers before terminating.
 #[test]
 fn test_exit_string_flushes_output_buffers() {

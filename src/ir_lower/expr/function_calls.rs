@@ -642,6 +642,35 @@ fn emit_builtin_call_value_with_target(
             effects_lookup::language_construct_effects(name),
         )
     };
+    // PHP 8.5's exit/die are functions with a `string|int $status` signature. Weak call sites
+    // coerce bool/float/null, but strict call sites raise a catchable TypeError. The argument
+    // has already been lowered for its side effects, so replace the exit with that throw.
+    let exit_name = php_symbol_key(name.trim_start_matches('\\'));
+    if matches!(exit_name.as_str(), "exit" | "die") && crate::source::current_strict_types() {
+        if let Some(status) = operands.first().copied() {
+            let actual = match ctx.builder.value_php_type(status).codegen_repr() {
+                PhpType::Bool | PhpType::False => Some("bool"),
+                PhpType::Float => Some("float"),
+                PhpType::Void => Some("null"),
+                _ => None,
+            };
+            if let Some(actual) = actual {
+                let message = format!(
+                    "{}(): Argument #1 ($status) must be of type string|int, {actual} given",
+                    exit_name
+                );
+                let exception = Expr::new(
+                    ExprKind::NewObject {
+                        class_name: Name::unqualified("TypeError"),
+                        args: vec![Expr::new(ExprKind::StringLiteral(message), span)],
+                    },
+                    span,
+                );
+                let throw = Expr::new(ExprKind::Throw(Box::new(exception)), span);
+                return lower_expr(ctx, &throw);
+            }
+        }
+    }
     let eval_needs_barrier = match eval_literal {
         Some(fragment) => eval_literal_needs_barrier(ctx, fragment),
         None => true,

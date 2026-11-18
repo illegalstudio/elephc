@@ -351,7 +351,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`filter_input_array()`](./builtins/filter/filter_input_array.md) | `(int $type, array|int $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null` | `array|false|null` | ✓ | ✓ |
 | [`filter_list()`](./builtins/filter/filter_list.md) | `(): array` | `array` | ✓ | ✓ |
 | [`filter_var()`](./builtins/filter/filter_var.md) | `(mixed $value, int $filter = FILTER_DEFAULT, array|int $options = 0): mixed` | `mixed` | ✓ | ✓ |
-| [`filter_var_array()`](./builtins/filter/filter_var_array.md) | `(array $array, array|int|null $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null` | `array|false|null` | ✓ | ✓ |
+| [`filter_var_array()`](./builtins/filter/filter_var_array.md) | `(array $array, array|int $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null` | `array|false|null` | ✓ | ✓ |
 | [`closedir()`](./builtins/io/closedir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
 | [`fclose()`](./builtins/io/fclose.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fdatasync()`](./builtins/io/fdatasync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |

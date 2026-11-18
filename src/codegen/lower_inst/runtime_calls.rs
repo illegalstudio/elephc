@@ -657,8 +657,8 @@ fn lower_hash_entry_bind_reference(
             super::hashes::materialize_hash_key_x86_64(ctx, key)?;
             ctx.load_value_to_reg(hash, "rdi")?;
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-            ctx.emitter.instruction(&format!("test r8, r8"));                   // a missing entry has no reference storage to bind
-            ctx.emitter.instruction(&format!("jz {done}"));
+            ctx.emitter.instruction(&format!("test r8, r8"));                   // did the lookup find a matching entry?
+            ctx.emitter.instruction(&format!("jz {done}"));                     // a missing entry has no reference storage to bind
             ctx.emitter.instruction("lea rdi, [r8 + 24]");                      // address the entry's low value word
             ctx.load_value_to_reg(cell, "rsi")?;
             abi::emit_call_label(ctx.emitter, "__rt_hash_entry_bind_reference");

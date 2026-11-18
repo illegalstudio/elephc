@@ -378,6 +378,21 @@ echo $x, "|", $y, "|", $a[0], "\n";
 ");
 }
 
+/// A first reference write into an undefined array publishes the auto-vivified hash, and the
+/// returned array keeps the reference cell that write created.
+#[test]
+fn test_first_array_element_reference_write_publishes_the_array() {
+    let out = compile_and_run(
+        r#"<?php
+function build(mixed $x): array { $a["k"] = &$x; $x = 2; return $a; }
+$v = 1;
+$a = build($v);
+echo $a["k"], "|", $v, "|", implode(",", array_keys($a)), "\n";
+"#,
+    );
+    assert_eq!(out, "2|1|k\n");
+}
+
 /// Rebinding a packed array's element promotes the container to hash storage without moving
 /// the element's insertion position.
 #[test]
