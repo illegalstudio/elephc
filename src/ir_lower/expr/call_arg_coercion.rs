@@ -968,13 +968,29 @@ fn emit_object_param_guard(
     let value = crate::ir_lower::object_boundary_checks::guard_runtime_object_value(
         ctx, value, boundary, prefix, &suffix, release, span,
     );
-    if !matches!(param_ty, PhpType::Object(_)) {
+    if !matches!(param_ty, PhpType::Object(_)) || callee_reflects_boxed_object(ctx) {
         return value;
     }
     let result = ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None, param_ty.clone(),
         Op::mixed_unbox_effects(param_ty), Some(span));
     release_coerced_source_if_owned(ctx, value, Some(span));
     result
+}
+
+/// Returns whether the call being lowered is the builtin `ReflectionObject`/`ReflectionClass`
+/// constructor, which the backend lowers itself.
+///
+/// It reads a boxed operand through static metadata, as before this check existed, while an
+/// unboxed bare `object` outside a method names no class to dispatch on.
+fn callee_reflects_boxed_object(ctx: &LoweringContext<'_, '_>) -> bool {
+    let Some(class) = ctx.call_description.as_deref()
+        .and_then(|description| description.strip_suffix("::__construct"))
+    else {
+        return false;
+    };
+    let class = class.trim_start_matches('\\');
+    (class.eq_ignore_ascii_case("ReflectionObject") || class.eq_ignore_ascii_case("ReflectionClass"))
+        && ctx.classes.iter().any(|(name, info)| name.eq_ignore_ascii_case(class) && info.is_internal)
 }
 
 /// Opens a frame that defers the class-like parameter checks of the call being lowered at the
