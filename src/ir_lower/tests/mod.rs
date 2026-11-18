@@ -72,6 +72,7 @@ mod settype_foreach;
 mod string_offset_lifetime;
 mod string_offset_writes;
 mod arrays;
+mod object_literal_storage;
 mod unset_collection;
 mod typed_element_refs;
 mod list_hash_param_binding;

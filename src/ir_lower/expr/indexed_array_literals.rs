@@ -784,10 +784,12 @@ pub(crate) fn array_literal_type_for_ir(
             return PhpType::Array(Box::new(pointer));
         }
     }
+    // Items of related classes share object slots typed as their common ancestor, the element
+    // the checker infers for the same literal (`object_element_join`).
     let mut item_types = item_types.into_iter();
     let mut elem_ty = item_types.next().expect("a non-empty literal has a first item");
     for item_ty in item_types {
-        elem_ty = merge_ir_indexed_element_type(elem_ty, item_ty);
+        elem_ty = merge_ir_literal_element_type(ctx, elem_ty, item_ty);
     }
     PhpType::Array(Box::new(elem_ty))
 }

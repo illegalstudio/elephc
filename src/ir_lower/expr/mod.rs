@@ -104,6 +104,8 @@ mod variadic_args;
 mod call_return_types;
 mod indexed_array_literals;
 pub(in crate::ir_lower) use indexed_array_literals::box_tagged_scalar_element;
+mod object_element_join;
+pub(crate) use object_element_join::{merge_ir_literal_element_type, object_class_is_a};
 mod array_cast_source;
 mod assoc_array_literals;
 mod match_expr;
