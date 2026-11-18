@@ -9,14 +9,14 @@
 //! - Saturation at PHP_INT_MAX is preserved when popping that maximum key.
 //! - A nonthrowing probe lets query registration stop a field on append exhaustion.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-use super::hash_layout::NEXT_INDEX_OFFSET;
+use crate::{Arch, Emitter, abi};
+use crate::hash_layout::NEXT_INDEX_OFFSET;
 
 /// Records a newly inserted integer key, preserving all registers except the documented scratch set.
 /// ARM uses x13-x15; x86 uses r11/r13/r14. The caller supplies a unique branch-label prefix.
-pub(super) fn record_insert(emitter: &mut Emitter, hash: &str, entry: &str, prefix: &str) {
+pub fn record_insert(emitter: &mut impl Emitter, hash: &str, entry: &str, prefix: &str) {
     let done = format!("{prefix}_next_index_done");
-    if emitter.target.arch == Arch::AArch64 {
+    if emitter.arch() == Arch::AArch64 {
         emitter.instruction(&format!("ldr x13, [{entry}, #16]"));               // inspect the normalized key length
         emitter.instruction("cmn x13, #1");                                     // integer keys carry the negative-one length sentinel
         emitter.instruction(&format!("b.ne {done}"));                           // string keys leave automatic indexing unchanged
@@ -43,11 +43,11 @@ pub(super) fn record_insert(emitter: &mut Emitter, hash: &str, entry: &str, pref
 
 /// Rewinds the append counter only when pop removes its integer predecessor.
 /// Preserves the hash/key/length argument registers; ARM uses x9/x10, x86 uses r10/r11.
-pub(super) fn rewind_after_pop(
-    emitter: &mut Emitter, hash: &str, key: &str, key_len: &str, prefix: &str,
+pub fn rewind_after_pop(
+    emitter: &mut impl Emitter, hash: &str, key: &str, key_len: &str, prefix: &str,
 ) {
     let done = format!("{prefix}_next_index_done");
-    match emitter.target.arch {
+    match emitter.arch() {
         Arch::AArch64 => {
             // -- rewind the next key only when the popped integer is its immediate predecessor --
             emitter.instruction(&format!("cmn {key_len}, #1"));                 // only integer tail keys can rewind automatic indexing
@@ -72,10 +72,10 @@ pub(super) fn rewind_after_pop(
     emitter.label(&done);
 }
 
-/// Emits nonthrowing and required lookups, accepting a C-ABI hash pointer without taking ownership.
-/// The probe returns index/available in x0/x1 or rax/rdx; the required entry returns the index or Error.
-pub(super) fn emit(emitter: &mut Emitter) {
-    let arm = emitter.target.arch == Arch::AArch64;
+/// Emits the nonthrowing index/availability probe for a borrowed hash.
+/// Returns index/available in x0/x1 or rax/rdx.
+pub fn emit_try_next_index(emitter: &mut impl Emitter) {
+    let arm = emitter.arch() == Arch::AArch64;
     emitter.label_global("__rt_hash_try_next_index");
     if arm {
         emitter.instruction(&format!("ldr x9, [x0, #{NEXT_INDEX_OFFSET}]"));    // read insertion history without a capacity scan
@@ -119,18 +119,4 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("add rsp, 8");                                      // restore the caller's stack alignment
     }
     emitter.instruction("ret");                                                 // report exhaustion without throwing for query callers
-    emitter.label_global("__rt_hash_next_index");
-    emitter.instruction(if arm { "stp x29, x30, [sp, #-16]!" } else { "sub rsp, 8" }); // preserve linkage and align the shared probe
-    abi::emit_call_label(emitter, "__rt_hash_try_next_index");
-    emitter.instruction(if arm { "ldp x29, x30, [sp], #16" } else { "add rsp, 8" }); // restore the caller before any exception unwinding
-    if arm {
-        emitter.instruction("cbnz x1, __rt_hash_next_index_available");         // keep the successful conditional transfer inside the current Mach-O atom
-        emitter.instruction("b __rt_hash_append_error");                        // raise PHP's catchable Error through the shared global helper
-        emitter.label("__rt_hash_next_index_available");
-    } else {
-        emitter.instruction("test edx, edx");                                   // inspect availability for ordinary PHP append
-        emitter.instruction("jz __rt_hash_append_error");                       // saturated occupied keys raise PHP's catchable Error
-    }
-    emitter.instruction("ret");                                                 // return the available index to EIR before value ownership transfer
-    super::hash_append_error::emit(emitter);
 }

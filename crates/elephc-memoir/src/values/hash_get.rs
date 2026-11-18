@@ -3,10 +3,10 @@
 //! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
+//! - The compiler runtime inventory and generated hash table operations.
 //!
 //! Key details:
-//! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
+//! - The compiler supplies already-normalized integer keys or string byte spans.
 //! - A matching entry whose runtime value tag is 11 belongs to a PHP reference set. The
 //!   returned payload registers are dereferenced through its managed cell so every reader sees a
 //!   value, while the entry address keeps pointing at the reference entry itself.
@@ -16,9 +16,8 @@
 //! - Empty option maps can use indexed-array storage, so an empty container must miss
 //!   before the hash-specific entry-storage pointer is read.
 
-use crate::codegen_support::runtime::arrays::hash_layout;
-use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::{abi, hash_layout, layout::NULL_SENTINEL};
+use crate::{Arch, Emitter};
 
 /// Emits the `__rt_hash_get` runtime helper using linear probing with typed key comparison.
 /// Uses `__rt_hash_key_hash` to compute the initial slot and `__rt_hash_key_eq` for equality checks.
@@ -33,8 +32,8 @@ use crate::codegen_support::platform::Arch;
 /// the probe has already computed the address. Both `x4` and the x86_64 mirror `r8` are
 /// caller-saved and were already clobbered by this helper's own probing and key comparisons, so
 /// exposing them adds no constraint on existing callers.
-pub fn emit_hash_get(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
+pub fn emit_hash_get(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
         emit_hash_get_linux_x86_64(emitter);
         return;
     }
@@ -59,10 +58,10 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save key_ptr
     emitter.instruction("str x2, [sp, #16]");                                   // save key_len
     emitter.instruction("cbz x0, __rt_hash_get_not_found");                     // null tables cannot contain the requested key
-    crate::codegen_support::abi::emit_load_int_immediate(
+    abi::emit_load_int_immediate(
         emitter,
         "x5",
-        crate::codegen_support::sentinels::NULL_SENTINEL,
+        NULL_SENTINEL,
     );
     emitter.instruction("cmp x0, x5");                                          // does the receiver carry the in-band null-container sentinel?
     emitter.instruction("b.eq __rt_hash_get_not_found");                        // sentinel-null receivers from missed reads cannot contain the key
@@ -165,7 +164,7 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
 /// `r8` mirrors the AArch64 `x4` entry-address output used by the by-reference `foreach` element
 /// fetch (issue #580); the probe loop already builds the address there, so only the miss path
 /// needs an explicit clear.
-fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
+fn emit_hash_get_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_get ---");
     emitter.label_global("__rt_hash_get");
@@ -178,10 +177,10 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the key length across helper calls and probe iterations
     emitter.instruction("test rdi, rdi");                                       // null tables cannot contain the requested key
     emitter.instruction("jz __rt_hash_get_not_found");                          // return a miss before reading a null table header
-    crate::codegen_support::abi::emit_load_int_immediate(
+    abi::emit_load_int_immediate(
         emitter,
         "r11",
-        crate::codegen_support::sentinels::NULL_SENTINEL,
+        NULL_SENTINEL,
     );
     emitter.instruction("cmp rdi, r11");                                        // does the receiver carry the in-band null-container sentinel?
     emitter.instruction("je __rt_hash_get_not_found");                          // sentinel-null receivers from missed reads cannot contain the key

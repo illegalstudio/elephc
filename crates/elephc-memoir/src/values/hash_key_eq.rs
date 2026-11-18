@@ -3,13 +3,12 @@
 //! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
+//! - The compiler runtime inventory and generated hash table operations.
 //!
 //! Key details:
-//! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
+//! - The compiler supplies already-normalized integer keys or string byte spans.
 
-use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::{Arch, Emitter};
 
 /// Emits `__rt_hash_key_eq` for ARM64.
 ///
@@ -20,8 +19,8 @@ use crate::codegen_support::platform::Arch;
 /// x1=left_lo, x2=left_hi, x3=right_lo, x4=right_hi.
 /// Returns x0=1 when equal, x0=0 when different or when the key kinds mismatch
 /// (e.g. int vs string). Never panics; all control paths return through x0.
-pub fn emit_hash_key_eq(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
+pub fn emit_hash_key_eq(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
         emit_hash_key_eq_linux_x86_64(emitter);
         return;
     }
@@ -60,7 +59,7 @@ pub fn emit_hash_key_eq(emitter: &mut Emitter) {
 ///
 /// The sentinel for an integer key is -1 in the hi register (rsi/rcx); a string key
 /// carries a pointer in the lo register and the length in the hi register.
-fn emit_hash_key_eq_linux_x86_64(emitter: &mut Emitter) {
+fn emit_hash_key_eq_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_key_eq ---");
     emitter.label_global("__rt_hash_key_eq");

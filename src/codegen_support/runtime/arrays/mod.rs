@@ -157,19 +157,15 @@ mod gc_note_child_ref;
 mod hash_count;
 mod hash_append;
 mod hash_append_error;
-mod hash_next_index;
+use elephc_memoir::values::hash_next_index;
 mod hash_clone_shallow;
 mod hash_chunk;
-mod hash_fnv1a;
 mod hash_free_deep;
-mod hash_get;
 mod hash_grow;
 pub(crate) mod hash_layout;
 mod hash_pin;
 mod hash_write_guard;
 mod hash_array_union;
-mod hash_key_eq;
-mod hash_key_hash;
 mod hash_normalize_key;
 mod hash_may_have_cyclic_values;
 mod hash_ensure_unique;
@@ -177,7 +173,6 @@ mod hash_set_reference_layout;
 mod hash_entry_reference;
 mod hash_flip;
 mod hash_slice;
-mod hash_insert_owned;
 mod hash_reindex_dense;
 mod hash_map;
 mod hash_iter;
@@ -496,11 +491,11 @@ pub use gc_mark_reachable::emit_gc_mark_reachable;
 /// Emit GC mark reachable helper.
 pub use gc_note_child_ref::emit_gc_note_child_ref;
 /// Emit GC note child reference helper.
-pub use hash_fnv1a::emit_hash_fnv1a;
+pub use elephc_memoir::values::hash_fnv1a::emit_hash_fnv1a;
 /// Emit FNV-1a hash helper.
 pub use hash_free_deep::emit_hash_free_deep;
 /// Emit deep hash free helper.
-pub use hash_get::emit_hash_get;
+pub use elephc_memoir::values::hash_get::emit_hash_get;
 /// Emit hash get helper.
 pub use hash_grow::emit_hash_grow;
 pub use hash_pin::emit_hash_pin;
@@ -508,9 +503,9 @@ pub use hash_write_guard::emit_hash_write_guards;
 /// Emit hash grow helper.
 pub use hash_array_union::emit_hash_array_union;
 /// Emit hash array union helper.
-pub use hash_key_eq::emit_hash_key_eq;
+pub use elephc_memoir::values::hash_key_eq::emit_hash_key_eq;
 /// Emit hash key equality check.
-pub use hash_key_hash::emit_hash_key_hash;
+pub use elephc_memoir::values::hash_key_hash::emit_hash_key_hash;
 /// Emit hash key hash computation.
 pub use hash_normalize_key::emit_hash_normalize_key;
 /// Emit hash key normalization helper.
@@ -518,7 +513,7 @@ pub use hash_may_have_cyclic_values::emit_hash_may_have_cyclic_values;
 /// Emit cyclic value detection helper.
 pub use hash_ensure_unique::emit_hash_ensure_unique;
 /// Emit hash uniqueness enforcement helper.
-pub use hash_insert_owned::emit_hash_insert_owned;
+pub use elephc_memoir::values::hash_insert_owned::emit_hash_insert_owned;
 /// Emit owned hash insert helper.
 pub use hash_iter::emit_hash_iter;
 /// Emit hash iterator helper.

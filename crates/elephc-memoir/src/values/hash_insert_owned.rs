@@ -15,9 +15,9 @@ use crate::{Arch, Emitter};
 /// belongs to the destination table. Used by hash_grow when moving entries.
 /// Input:  x0=hash_table_ptr, x1=key_lo, x2=key_hi (-1 means integer key), x3=value_lo, x4=value_hi, x5=value_tag
 /// Output: x0=hash_table_ptr
-pub fn emit_hash_insert_owned<E: Emitter>(emitter: &mut E, record_insert: fn(&mut E, &str, &str, &str)) {
+pub fn emit_hash_insert_owned(emitter: &mut impl Emitter) {
     if emitter.arch() == Arch::X86_64 {
-        emit_hash_insert_owned_linux_x86_64(emitter, record_insert);
+        emit_hash_insert_owned_linux_x86_64(emitter);
         return;
     }
 
@@ -125,7 +125,7 @@ pub fn emit_hash_insert_owned<E: Emitter>(emitter: &mut E, record_insert: fn(&mu
     emitter.instruction("ldr x13, [x5]");                                       // load current entry count
     emitter.instruction("add x13, x13, #1");                                    // count the newly inserted slot
     emitter.instruction("str x13, [x5]");                                       // store updated entry count
-    record_insert(emitter, "x5", "x12", "__rt_hash_insert_owned");
+    super::hash_next_index::record_insert(emitter, "x5", "x12", "__rt_hash_insert_owned");
     emitter.instruction("b __rt_hash_insert_owned_done");                       // insertion is complete
 
     // -- duplicate key during grow: overwrite value in place --
@@ -147,7 +147,7 @@ pub fn emit_hash_insert_owned<E: Emitter>(emitter: &mut E, record_insert: fn(&mu
 /// x86_64 Linux variant of `emit_hash_insert_owned`. Targets the x86_64 SysV ABI.
 /// Input: rdi=hash_table_ptr, rsi=key_ptr, rdx=key_len, rcx=value_lo, r8=value_hi, r9=value_tag
 /// Output: rax=hash_table_ptr
-fn emit_hash_insert_owned_linux_x86_64<E: Emitter>(emitter: &mut E, record_insert: fn(&mut E, &str, &str, &str)) {
+fn emit_hash_insert_owned_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_insert_owned ---");
     emitter.label_global("__rt_hash_insert_owned");
@@ -232,7 +232,7 @@ fn emit_hash_insert_owned_linux_x86_64<E: Emitter>(emitter: &mut E, record_inser
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the current live-entry count from the hash header before incrementing it
     emitter.instruction("add r11, 1");                                          // increment the live-entry count after claiming a previously empty hash slot
     emitter.instruction("mov QWORD PTR [r10], r11");                            // store the updated live-entry count back into the hash header
-    record_insert(emitter, "r10", "r12", "__rt_hash_insert_owned");
+    super::hash_next_index::record_insert(emitter, "r10", "r12", "__rt_hash_insert_owned");
     emitter.instruction("mov rax, r10");                                        // return the destination hash-table pointer after a successful owned insertion
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the owned-insert helper
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the owned-insert helper

@@ -59,7 +59,13 @@ pub mod array_merge_into_refcounted;
 pub mod array_shift;
 pub mod array_unshift;
 pub mod hash_iter;
+pub mod hash_fnv1a;
+pub mod hash_get;
+pub mod hash_key_eq;
+pub mod hash_key_hash;
+pub mod hash_next_index;
 pub mod hash_insert_owned;
+pub mod hash_reindex_dense;
 pub mod object_storage;
 
 pub mod throwable_previous;

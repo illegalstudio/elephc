@@ -3,20 +3,19 @@
 //! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
+//! - The compiler runtime inventory and generated hash table operations.
 //!
 //! Key details:
-//! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
+//! - The compiler supplies already-normalized integer keys or string byte spans.
 
-use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::{Arch, Emitter};
 
 /// Emits the `__rt_hash_key_hash` runtime helper.
-/// Normalizes a PHP associative-array key (string or integer sentinel) into a hash value for bucketing.
+/// Hashes an already-normalized associative-array key for bucket selection.
 ///
 /// # Input (ARM64)
-/// - `x1`: integer key payload (when `x2 == -1`) or string length (when `x2 != -1`)
-/// - `x2`: integer-key sentinel (`-1`) or string pointer (high 32 bits)
+/// - `x1`: integer key payload (when `x2 == -1`) or string pointer (when `x2 != -1`)
+/// - `x2`: integer-key sentinel (`-1`) or string length
 ///
 /// # Output
 /// - `x0`: hash value
@@ -25,8 +24,8 @@ use crate::codegen_support::platform::Arch;
 /// - If `key_hi == -1`: treats the key as a signed integer, seeds hash from `key_lo`, mixes high bits,
 ///   and multiplies by an odd 64-bit constant (Knuth-style multiplicative hash).
 /// - Otherwise: delegates to `__rt_hash_fnv1a` to hash the string key byte-by-byte.
-pub fn emit_hash_key_hash(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
+pub fn emit_hash_key_hash(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
         emit_hash_key_hash_linux_x86_64(emitter);
         return;
     }
@@ -66,7 +65,7 @@ pub fn emit_hash_key_hash(emitter: &mut Emitter) {
 /// # Behavior
 /// - Mirrors the ARM64 path: sentinel check on `rsi`, integer-key multiplicative hash path,
 ///   or string-hash delegation to `__rt_hash_fnv1a`.
-fn emit_hash_key_hash_linux_x86_64(emitter: &mut Emitter) {
+fn emit_hash_key_hash_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_key_hash ---");
     emitter.label_global("__rt_hash_key_hash");
