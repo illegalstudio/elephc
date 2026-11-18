@@ -624,6 +624,16 @@ impl Checker {
             return Ok(());
         }
 
+        // A bare `object` return takes a boxed value: php checks the value the call returns, so
+        // `new $class()` or an untyped array element returned from `: object` compiles and the
+        // boundary raises the TypeError at run time. Named classes go through the nominal guard
+        // above; the bare `object` has no class to name, so the object-ness check is the guard.
+        if matches!(expected, PhpType::Object(name) if name.is_empty())
+            && actual.codegen_repr() == PhpType::Mixed
+        {
+            return Ok(());
+        }
+
         if !strict_types && param_accepts_weak_string_coercion(expected) {
             if let PhpType::Object(class_name) = actual.codegen_repr() {
                 if self.object_supports_weak_string_coercion(&class_name) {
