@@ -32,8 +32,10 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
                 let callback_effect = args
                     .get(callback_index)
                     .map(|callback| {
-                        let effect = expr_call_effect(callback);
-                        if callback_binding_may_throw(callback) { effect.with_may_throw() } else { effect }
+                        // The builtin binds each runtime value through the callable invoker's
+                        // scalar checks, exactly as a call through a callable value does.
+                        expr_call_effect(callback)
+                            .combine(super::callable_value_binding_effect(callback, args))
                     })
                     .unwrap_or_else(conservative_call_effect);
                 return Effect::from_eir(intrinsic_effects).combine(callback_effect);
@@ -59,7 +61,7 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
 /// when the callback body is pure. Only a closure literal's parameters are visible here; a
 /// builtin's first-class callable is never checked, and any other callback (a user function's
 /// first-class callable, an alias) is assumed to declare one.
-fn callback_binding_may_throw(callback: &Expr) -> bool {
+pub(super) fn callback_binding_may_throw(callback: &Expr) -> bool {
     let params = match &callback.kind {
         ExprKind::Closure { params, .. } => params,
         // A builtin bound as a callback keeps its own argument rules: the runtime check only

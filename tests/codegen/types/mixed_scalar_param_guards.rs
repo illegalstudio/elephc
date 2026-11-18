@@ -1169,3 +1169,30 @@ try { g(n: box(null), s: box(new Name())); } catch (Throwable $e) { show($e); }
     );
     assert_eq!(out, "toString ran\nTypeError: f(): Argument #2 ($n) must be of type int, null given\ntoString ran\nTypeError: g(): Argument #2 ($n) must be of type int, null given\nLogicException: from toString\ntoString ran\nTypeError: g(): Argument #2 ($n) must be of type int, null given\n");
 }
+
+/// A builtin's callback and a call through a callable value bind each value through the
+/// callable invoker's scalar checks, whose precision deprecation runs the error handler: a
+/// global it writes must not be read back from a value the optimizer saved before the call
+/// (`array_map(fn(int $n) => $n, [1.5])`, `usort` and `$f($v)` kept `$x` at 1).
+#[test]
+fn test_callable_binding_handler_writes_are_seen_after_the_call() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function ti(int $n): int { return $n; }
+set_error_handler('handler');
+$v = box(1.5);
+$x = 1; array_map(fn(int $n) => $n, [$v]); echo "map ", $x, "\n";
+$x = 1; array_map('ti', [$v]); echo "map-named ", $x, "\n";
+$x = 1; array_filter([$v], fn(int $n) => true); echo "filter ", $x, "\n";
+$x = 1; $a = [$v, $v]; usort($a, fn(int $a, int $b) => 0); echo "usort ", $x, "\n";
+$x = 1; call_user_func('ti', $v); echo "cuf ", $x, "\n";
+$x = 1; call_user_func_array('ti', [$v]); echo "cufa ", $x, "\n";
+$x = 1; array_reduce([$v], fn($c, int $n) => 0, 0); echo "reduce ", $x, "\n";
+$f = 'ti'; $x = 1; $f($v); echo "var ", $x, "\n";
+$g = fn(int $n) => $n; $x = 1; $g($v); echo "closure ", $x, "\n";
+function handler(int $no, string $msg): bool { global $x; $x = 2; return true; }
+"#,
+    );
+    assert_eq!(out, "map 2\nmap-named 2\nfilter 2\nusort 2\ncuf 2\ncufa 2\nreduce 2\nvar 2\nclosure 2\n");
+}
