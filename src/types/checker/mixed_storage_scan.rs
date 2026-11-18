@@ -395,11 +395,13 @@ impl Checker {
     /// Separated from the replay so the caller can answer it BEFORE building the per-name
     /// transparency vector, which walks every guard region in the body.
     fn name_is_markable(&self, name: &str, facts: &NameFacts) -> bool {
-        if facts.disqualified || facts.captured_by_ref
+        if facts.disqualified || (facts.captured_by_ref && !self.strict_locals)
             || (facts.passed_by_ref && !self.strict_locals) || facts.assigns.len() < 2 {
             return false;
         }
-        // A reference-aliased name is NEVER markable: the mark gives the local one boxed `Mixed`
+        // Strict owned origins use canonical cells before an outgoing capture is formed.
+        // Incoming foreign references still retain their ABI and stay excluded below.
+        // In permissive mode a reference-aliased name is not markable: boxed `Mixed`
         // slot, and for a `use (&$m)` capture that slot IS the caller's storage, so the boxed
         // pointer would be written straight through the alias into the enclosing frame. Measured
         // before this check: the caller's `var_dump($m)` printed a raw pointer (`int(4378264920)`)

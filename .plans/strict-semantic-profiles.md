@@ -2223,3 +2223,23 @@ open-parameter/reference controls, the default build, assembly comments and publ
 PHP/LFC optimizer pairs. The complete example demonstrates detaching a captured
 reference and retains its existing expected output. Acceptance evidence is stored
 in step192-evidence.json before the signed commit.
+
+### Verified193: outgoing reference captures retain executed producers
+
+Strict storage selection now admits an owned conditional producer even when an
+outgoing closure captures that name by reference. Strict native origins already
+use canonical reference cells, so capture formation can share the executed source
+without writing a boxed pointer through foreign raw storage. Incoming reference
+parameters/captures remain excluded by their independent ABI role, and permissive
+storage selection keeps its existing behavior.
+
+Focused tests cover both exclusive first producers, accepted/rejected subsequent
+writes, propagation back to the enclosing frame, an escaped old alias after unset,
+and an ordinary top-level captured integer. Known incompatible writes to a live
+origin remain checker diagnostics. Both native optimizer modes and eval execution
+entries/profiles retire every owner. Real opaque eval checks interpreted closures
+and native captured scope writes, plus preceding capture-end, eval-binding-end and
+reference controls. Acceptance additionally requires all-five-target emission,
+default build, assembly comments, public PHP/LFC optimizer pairs and the complete
+example, which now writes through a reference-capturing closure with unchanged
+expected output. The signed result is backed by step193-evidence.json.

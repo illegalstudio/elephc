@@ -165,11 +165,14 @@ function checkQuantityStream(mixed $replacement): void {
 }
 checkQuantityStream(1);
 
-// Exclusive first bindings keep their executed contract across a reference call.
+// Exclusive first bindings keep their executed contract through a captured reference.
 function replaceSelectedValue(bool $numeric, mixed $replacement): void {
     if ($numeric) { $value = 1; } else { $value = 'pending'; }
-    try {
+    $replace = function(mixed $replacement) use (&$value): void {
         replaceValue($value, $replacement);
+    };
+    try {
+        $replace($replacement);
     } catch (TypeError $error) {
         echo "The selected binding kept its original kind", PHP_EOL;
     }

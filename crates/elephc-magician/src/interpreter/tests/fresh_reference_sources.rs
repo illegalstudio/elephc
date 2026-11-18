@@ -117,3 +117,11 @@ fn captured_binding_origins_eval_values_and_owners() {
         &format!("{prefix}Winteger|Tstring|W2:integer:2|2|T2:string:new|2|"),
         &format!("{prefix}Winteger|Winteger|W2:integer:2|2|W2:integer:3|2|"));
 }
+
+/// Reference captures retain whichever exclusive producer executed before capture formation.
+#[test]
+fn captured_reference_producers_eval_values_and_owners() {
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/captured_reference_producers.php"),
+        "Tinteger:1|integer:1|Tstring:old|string:old|Winteger:3|integer:3|Wstring:ready|string:ready|1:new|old:new|1|",
+        "Wstring:new|string:new|Winteger:2|integer:2|Winteger:3|integer:3|Wstring:ready|string:ready|1:new|old:new|1|");
+}
