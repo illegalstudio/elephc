@@ -26,7 +26,7 @@ use crate::span::Span;
 use crate::source::SourceMode;
 use crate::timings::CompileTimings;
 use crate::{
-    autoload, codegen, debug_info, dom_prelude, errors, exports, func_args, ir, ir_lower, ir_passes,
+    autoload, codegen, debug_info, errors, exports, func_args, ir, ir_lower, ir_passes,
     lexer, linker, list_id_prelude, mysqli_prelude, name_resolver, opcache_prelude, optimize,
     parser, pdo_prelude, resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude,
     web_prelude,
@@ -463,11 +463,14 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // consumed only when `opcache.preload` is set (see `opcache_prelude::preload_statistics`).
     let opcache_preload_symbols = opcache_prelude::collect_preload_symbols(&ast);
 
-    // Standard DOM classes are built as AST so they participate in name resolution, type
-    // checking, EIR lowering, and closed-world pruning like user classes. They are injected only
-    // when the program names one (or a `libxml_*` function); the late gate below covers a program
-    // that only an autoloaded class reaches them from.
-    let ast = dom_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // Inject the DOM HTML subset (`DOMDocument` family, built as AST so it participates in name
+    // resolution, type checking, EIR lowering and closed-world pruning like user classes) only
+    // when the program names a DOM class, so other binaries never carry the HTML walker. The late
+    // gate below covers a program that only an autoloaded class reaches them from.
+    crate::progress::phase("dom-html-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    timings.record_since("dom-html-prelude", phase_started);
 
     // Inject the PDO standard-library prelude (extern bridge + PDO classes,
     // written in elephc-PHP) only when the program references PDO, so non-PDO
@@ -702,7 +705,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
     // php 8.4's `Dom\HTMLDocument` and its node classes; the late gate below covers a program
     // that only an autoloaded class (symfony/html-sanitizer's `NativeParser`) names it from.
-    let ast = crate::dom_html_prelude::inject_if_used(ast, php_version, false, &mut prelude_inventory);
+    let ast = crate::dom_modern_prelude::inject_if_used(ast, php_version, false, &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
     // Inject the testing runtime (`Elephc\Testing\TestCase`, `Runner`, the PHPUnit alias)
@@ -778,9 +781,6 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         )
     };
     timings.record_since("fileinfo-prelude", phase_started);
-    // `Dom\HTMLDocument` and its node classes are injected with the other early preludes above
-    // (`dom_html_prelude::inject_if_used`); main's separate Termwind-subset phase is superseded
-    // by the branch's `dom_prelude`.
     crate::progress::phase("locale-prelude");
     let phase_started = Instant::now();
     let locale_used = crate::locale_prelude::program_uses_locale(&ast);
@@ -1193,17 +1193,28 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_gradual_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
-    // The classic DOM classes: an autoloaded vendor class (Symfony's `XmlDescriptor`, Termwind's
-    // `HtmlRenderer`) is usually the first to name them.
-    let ast = crate::dom_prelude::inject_if_used(ast, &mut prelude_inventory);
-    if prelude_inventory.groups.contains_key(crate::dom_prelude::GROUP) {
-        // eval()-interpreted vendor code reaches these classes through the native-class bridge.
-        forced_groups.insert(crate::dom_prelude::GROUP.to_string());
-    }
-    let ast = crate::dom_html_prelude::inject_if_used(ast, php_version, false, &mut prelude_inventory);
+    // Discover DOM use inside newly loaded classes, resolving only injected declarations (an
+    // autoloaded vendor class such as Symfony's `XmlDescriptor` or Termwind's `HtmlRenderer` is
+    // usually the first to name them).
+    crate::progress::phase("dom-html-autoload-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::dom_html_prelude::inject_after_autoload(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("dom-html-autoload-prelude", phase_started);
     if prelude_inventory.groups.contains_key(crate::dom_html_prelude::GROUP) {
         // eval()-interpreted vendor code reaches these classes through the native-class bridge.
         forced_groups.insert(crate::dom_html_prelude::GROUP.to_string());
+    }
+    let ast = crate::dom_modern_prelude::inject_if_used(ast, php_version, false, &mut prelude_inventory);
+    if prelude_inventory.groups.contains_key(crate::dom_modern_prelude::GROUP) {
+        // eval()-interpreted vendor code reaches these classes through the native-class bridge.
+        forced_groups.insert(crate::dom_modern_prelude::GROUP.to_string());
     }
     // `Attribute`'s TARGET_* constants are named by every attribute class declaration, including
     // ones only the interpreter reads at run time.

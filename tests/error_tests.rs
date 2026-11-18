@@ -81,7 +81,7 @@ fn check_source_with_defines_and_options(
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = elephc::dom_html_prelude::inject_if_used(
+    let ast = elephc::dom_modern_prelude::inject_if_used(
         ast,
         elephc::php_version::PhpVersion::default(),
         false,
@@ -135,7 +135,7 @@ fn check_source_full_with(
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = elephc::dom_html_prelude::inject_if_used(
+    let ast = elephc::dom_modern_prelude::inject_if_used(
         ast,
         elephc::php_version::PhpVersion::default(),
         false,

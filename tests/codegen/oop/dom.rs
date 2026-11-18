@@ -18,7 +18,7 @@ fn type_checks_cleanly(source: &str) -> Result<(), String> {
     let tokens = elephc::lexer::tokenize(source).map_err(|error| error.message.clone())?;
     let ast = elephc::parser::parse(&tokens).map_err(|error| error.message.clone())?;
     let ast = elephc::autoload::collect_aliases(ast).map_err(|error| error.message.clone())?;
-    let ast = elephc::dom_prelude::inject(ast);
+    let ast = elephc::dom_html_prelude::inject(ast);
     let ast = elephc::name_resolver::resolve(ast).map_err(|error| error.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
     elephc::types::check(&ast).map_err(|error| error.message.clone())?;

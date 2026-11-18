@@ -132,7 +132,7 @@ pub mod conditional_classes;
 pub mod conditional_functions;
 /// Standard DOM class-surface prelude injection.
 pub mod dom_html_prelude;
-pub mod dom_prelude;
+pub mod dom_modern_prelude;
 /// `ext/curl` easy-handle standard-library prelude injection (`CurlHandle` + `curl_*`).
 pub mod curl_prelude;
 /// Error and warning reporting.

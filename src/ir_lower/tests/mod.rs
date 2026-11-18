@@ -273,7 +273,6 @@ fn try_lower_source_at_for_target_with_reachability(
     // tests inspect a named function or method's EIR, and most declare helpers only to lower
     // them. Compiler preludes are still pruned exactly as `pipeline::compile` prunes them.
     prelude_inventory.record_program(FIXTURE_DECLARATIONS_GROUP, &ast);
-    let ast = crate::dom_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::pdo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     // Same injection order as `pipeline::compile`: mysqli after PDO, so the
     // shared `elephc_pdo` externs are merged in exactly once.
@@ -319,7 +318,8 @@ fn try_lower_source_at_for_target_with_reachability(
     );
     let ast = crate::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = crate::dom_html_prelude::inject_if_used(
+    let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::dom_modern_prelude::inject_if_used(
         ast,
         crate::php_version::PhpVersion::default(),
         false,
@@ -338,6 +338,8 @@ fn try_lower_source_at_for_target_with_reachability(
         &defines,
     )
     .expect("autoload failed");
+    let ast = crate::dom_html_prelude::inject_after_autoload(ast, &mut prelude_inventory)
+        .expect("autoload DOM prelude injection failed");
     // The compatibility preludes `pipeline::compile` injects once the autoloaded classes are
     // spliced in (`compat-preludes` phase): the lowering routes `array_merge`, `array_walk`,
     // `min`/`max`, `filter_var` and friends to these helpers, so a fixture lowered without them

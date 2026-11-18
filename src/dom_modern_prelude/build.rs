@@ -2,12 +2,12 @@
 //! The `Dom\\` classes of PHP 8.4's DOM API for HTML documents, built as AST.
 //!
 //! Called from:
-//! - `crate::dom_html_prelude::declarations`.
+//! - `crate::dom_modern_prelude::declarations`.
 //!
 //! Key details:
 //! - TRANSCRIBED, not written: every declaration was generated from the parse of the PHP model
 //!   in `fragments` (`synthetic_class::transcribe`), which was differential-tested against php's
-//!   own `Dom\\HTMLDocument` -- see the module documentation of `dom_html_prelude`. Edit the PHP
+//!   own `Dom\\HTMLDocument` -- see the module documentation of `dom_modern_prelude`. Edit the PHP
 //!   model and re-transcribe rather than editing these builders by hand; `oracle` compares the
 //!   two node by node.
 //! - One helper per declaration (and per large method): a prelude built as one nested builder

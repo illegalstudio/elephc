@@ -505,7 +505,7 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
-    let resolved = elephc::dom_html_prelude::inject_if_used(
+    let resolved = elephc::dom_modern_prelude::inject_if_used(
         resolved,
         elephc::php_version::PhpVersion::default(),
         false,
@@ -717,8 +717,8 @@ fn compile_and_run_files_with_defines_per_argv(
     // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
     // `(object)` cast that only appears in an autoloaded class file is still detected.
     // Mirrors `pipeline::compile`: an autoloaded class is usually the first to name `DOMDocument`.
-    let resolved = elephc::dom_prelude::inject_if_used(resolved, &mut prelude_inventory);
-    let resolved = elephc::dom_html_prelude::inject_if_used(
+    let resolved = elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::dom_modern_prelude::inject_if_used(
         resolved,
         elephc::php_version::PhpVersion::default(),
         false,

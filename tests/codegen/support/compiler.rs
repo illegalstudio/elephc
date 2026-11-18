@@ -421,7 +421,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     // Mirrors `pipeline::compile`: the classic DOM classes are injected when the program names
     // one (or a `libxml_*` function); the late gate after autoloading covers the rest.
-    let resolved = elephc::dom_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
     // the harness seeds `set_linked_extensions` from the same bits so
     // `extension_loaded('PDO'/'mysqli')` agrees between `compile_and_run` and
@@ -466,7 +466,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::array_edge_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_gradual_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved =
-        elephc::dom_html_prelude::inject_if_used(resolved, php_version, false, &mut prelude_inventory);
+        elephc::dom_modern_prelude::inject_if_used(resolved, php_version, false, &mut prelude_inventory);
     let resolved = elephc::array_ucompare_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
@@ -521,9 +521,9 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::array_edge_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_gradual_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved =
-        elephc::dom_prelude::inject_if_used(resolved, &mut prelude_inventory);
+        elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved =
-        elephc::dom_html_prelude::inject_if_used(resolved, php_version, false, &mut prelude_inventory);
+        elephc::dom_modern_prelude::inject_if_used(resolved, php_version, false, &mut prelude_inventory);
     let resolved = elephc::array_ucompare_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::attribute_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_merge_prelude::inject_if_used(resolved, &mut prelude_inventory);
@@ -622,15 +622,15 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // eval()-interpreted vendor code reaches the DOM classes through the native-class bridge.
     if prelude_inventory
         .groups
-        .contains_key(elephc::dom_prelude::GROUP)
-    {
-        forced_groups.insert(elephc::dom_prelude::GROUP.to_string());
-    }
-    if prelude_inventory
-        .groups
         .contains_key(elephc::dom_html_prelude::GROUP)
     {
         forced_groups.insert(elephc::dom_html_prelude::GROUP.to_string());
+    }
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::dom_modern_prelude::GROUP)
+    {
+        forced_groups.insert(elephc::dom_modern_prelude::GROUP.to_string());
     }
     // Reached from `exit()` lowering, never from PHP, exactly as `pipeline::compile` forces it.
     if prelude_inventory

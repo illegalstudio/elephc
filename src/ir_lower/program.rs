@@ -213,7 +213,6 @@ fn lower_on_compiler_stack(
     module.user_defined_constants = constants
         .keys()
         .filter(|name| !builtin_constants.contains_key(*name))
-        .filter(|name| !crate::dom_prelude::PRELUDE_CONSTANTS.contains(&name.as_str()))
         .cloned()
         .collect();
     module.user_defined_constants.sort();
