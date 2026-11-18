@@ -319,7 +319,7 @@ pub fn emit(emitter: &mut impl Emitter) {
     emitter.label_global("__rt_reference_validation_pin_leave");
     abi::emit_frame_prologue(emitter, 32);
     abi::emit_call_label(emitter, "__rt_reference_validation_pin_take");
-    abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_any", result);
+    crate::cleanup_preserve::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_any", result);
     abi::emit_frame_restore(emitter, 32);
     abi::emit_return(emitter);
 }

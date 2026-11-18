@@ -9,13 +9,30 @@
 //! - The cell is freed before an accumulated exception rejoins the enclosing exception chain.
 
 use crate::layout::REFERENCE_CELL_HEAP_KIND;
-use crate::{abi, Emitter, Arch};
+use crate::{abi, Emitter, Arch, TargetAbi};
 
 const FRAME: usize = 64;
 const ENTRY: usize = 8;
 const CELL: usize = 16;
 const THROWN: usize = 24;
 const DEFER: usize = 32;
+
+/// Stages a local cell owner and optional unary release for protected retirement.
+pub fn emit_call(
+    emitter: &mut impl TargetAbi, cell_reg: &str, entry: Option<&str>, defer_throw: bool,
+) {
+    let arg0 = abi::int_arg_reg_name(emitter, 0);
+    let arg1 = abi::int_arg_reg_name(emitter, 1);
+    let arg2 = abi::int_arg_reg_name(emitter, 2);
+    abi::emit_reg_move(emitter, arg1, cell_reg);
+    abi::emit_load_int_immediate(emitter, arg2, i64::from(defer_throw));
+    if let Some(entry) = entry {
+        abi::emit_symbol_address(emitter, arg0, entry);
+    } else {
+        abi::emit_load_int_immediate(emitter, arg0, 0);
+    }
+    abi::emit_call_label(emitter, "__rt_local_ref_cell_release");
+}
 
 /// Releases one cell owner and retires its payload and allocation only after the final alias is gone.
 pub fn emit_local_ref_cell_release(emitter: &mut impl Emitter) {

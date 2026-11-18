@@ -21,8 +21,6 @@ pub trait MemoryContext {
     fn emit_reference_source_success(&mut self);
     /// Supplies the compiler's marker for an uninitialized PHP property payload.
     fn uninitialized_property_sentinel(&self) -> i64;
-    /// Delegates emit unary cleanup preserving exception to the established compiler ABI.
-    fn emit_unary_cleanup_preserving_exception(&mut self, entry: &str, payload: &str);
     /// Emits PHP resource policy inside the Mixed boxing frame, including its resource entry label.
     fn emit_mixed_resource_identity(&mut self);
     /// Publishes the boxed result through the compiler's weak resource inventory layout.

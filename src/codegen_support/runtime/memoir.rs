@@ -175,8 +175,6 @@ impl elephc_memoir::MemoryContext for Emitter {
     fn concat_capacity(&self) -> usize { self.concat_capacity }
     /// Preserves compiler translation of native reference-source failures.
     fn emit_reference_source_success(&mut self) { super::reference_cells::require_source_success(self); }
-    /// Delegates emit unary cleanup preserving exception to the established compiler ABI.
-    fn emit_unary_cleanup_preserving_exception(&mut self, entry: &str, payload: &str) { abi::emit_unary_cleanup_preserving_exception(self, entry, payload) }
     /// Keeps PHP resource identity and subtype decisions in the compiler adapter.
     fn emit_mixed_resource_identity(&mut self) { resources::emit_identity(self); }
     /// Keeps the resource inventory's weak-pointer layout authoritative in the compiler.
