@@ -490,8 +490,8 @@ echo json_encode(mixedGetterOwnerRead(new MixedGetterBorrowedOwner()));
         );
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let symbol = crate::names::function_symbol("mixedGetterOwnerRead");
-        let function = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
-        let function = function.split("\n.globl ").next().unwrap();
+        let function = function_with_outlined_property_bodies(&assembly, &symbol);
+        let function = function.as_str();
         assert!(function.contains("magic_return_owned"), "{target}: borrowed returns need marker handling");
         let clone = function.find("__rt_mixed_clone").expect("reference returns need value snapshots");
         let release = function.find("__rt_reference_cell_release").expect("reference leases need retirement");
@@ -529,4 +529,18 @@ var_dump(referenceIssetOwnerProbe(new ReferenceIssetOwner()));
             .expect("probe must test the returned bool");
         assert!(release < compare, "{target}: restore the bool before the existing probe branch");
     }
+}
+
+/// One function's assembly plus the shared by-name property read bodies it may have outlined
+/// (the merged backend emits one read ladder per property name instead of one per site).
+fn function_with_outlined_property_bodies(assembly: &str, symbol: &str) -> String {
+    let mut text = String::new();
+    for chunk in assembly.split("\n.globl ") {
+        let chunk = chunk.trim_start();
+        if chunk.starts_with(symbol) || chunk.starts_with("_eir_shared_named_prop_get") {
+            text.push_str(chunk);
+            text.push('\n');
+        }
+    }
+    text
 }

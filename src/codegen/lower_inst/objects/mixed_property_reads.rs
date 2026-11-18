@@ -682,6 +682,23 @@ pub(super) fn box_magic_result(ctx: &mut FunctionContext<'_>, getter: &MethodCal
     }
 }
 
+/// Retires the reference cell a `&__isset()` transferred, keeping its raw bool in the result
+/// register so the probe branches on the value, not on the cell address.
+fn retire_reference_isset_cell(ctx: &mut FunctionContext<'_>, isset: &MethodCallTarget) {
+    if !isset.by_ref_return || !matches!(isset.return_ty.codegen_repr(), PhpType::Bool | PhpType::Int) {
+        return;
+    }
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_load_from_address(ctx.emitter, result, result, 0);
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+}
+
 /// The magic accessors class `class_name` answers a `mode` read through, or `None` when it has
 /// none this ladder can call.
 pub(super) fn magic_property_arm(
@@ -988,6 +1005,7 @@ fn emit_mixed_magic_get_arm(
         abi::emit_call_label(ctx.emitter, "__rt_incref");
         abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
         emit_magic_accessor_call(ctx, property, &isset_target)?;
+        retire_reference_isset_cell(ctx, &isset_target);
         if boxed_isset {
             abi::emit_store_to_sp(ctx.emitter, result_reg, 8);
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
@@ -999,7 +1017,7 @@ fn emit_mixed_magic_get_arm(
         abi::emit_branch_if_int_result_zero(ctx.emitter, &label);
         abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
         emit_magic_accessor_call(ctx, property, &get_target)?;
-        box_method_result_as_mixed(ctx, &get_target.return_ty);
+        box_magic_result(ctx, &get_target);
         // Unpin: the answer waits at 8 while the receiver's pin is released.
         abi::emit_store_to_sp(ctx.emitter, result_reg, 8);
         abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
@@ -1016,7 +1034,7 @@ fn emit_mixed_magic_get_arm(
         return Ok(());
     }
     emit_magic_accessor_call(ctx, property, &get_target)?;
-    box_method_result_as_mixed(ctx, &get_target.return_ty);
+    box_magic_result(ctx, &get_target);
     abi::emit_jump(ctx.emitter, done_label);
     Ok(())
 }
@@ -1053,6 +1071,7 @@ fn emit_mixed_magic_isset_arm(
         return Ok(());
     }
     emit_magic_accessor_call(ctx, property, &isset_target)?;
+    retire_reference_isset_cell(ctx, &isset_target);
     emit_isset_answer_as_boxed_flag(ctx, boxed, done_label);
     Ok(())
 }
@@ -1138,6 +1157,7 @@ pub(super) fn emit_runtime_name_magic_get_arm(
         }
         load_call_args(ctx);
         emit_resolved_method_call(ctx, &isset_target)?;
+        retire_reference_isset_cell(ctx, &isset_target);
         abi::emit_release_temporary_stack(ctx.emitter, frame_bytes);
         emit_isset_answer_as_boxed_flag(ctx, boxed, done_label);
         return Ok(());
@@ -1168,6 +1188,7 @@ pub(super) fn emit_runtime_name_magic_get_arm(
             let unset_label = ctx.next_label("mixed_dyn_prop_magic_unset");
             load_call_args(ctx);
             emit_resolved_method_call(ctx, &isset_target)?;
+            retire_reference_isset_cell(ctx, &isset_target);
             if boxed_isset {
                 abi::emit_reserve_temporary_stack(ctx.emitter, 16);
                 abi::emit_store_to_sp(ctx.emitter, result_reg, 0);
@@ -1181,7 +1202,7 @@ pub(super) fn emit_runtime_name_magic_get_arm(
             abi::emit_branch_if_int_result_zero(ctx.emitter, &unset_label);
             load_call_args(ctx);
             emit_resolved_method_call(ctx, &get_target)?;
-            box_method_result_as_mixed(ctx, &get_target.return_ty);
+            box_magic_result(ctx, &get_target);
             abi::emit_release_temporary_stack(ctx.emitter, frame_bytes);
             abi::emit_jump(ctx.emitter, done_label);
             ctx.emitter.label(&unset_label);
@@ -1193,7 +1214,7 @@ pub(super) fn emit_runtime_name_magic_get_arm(
     }
     load_call_args(ctx);
     emit_resolved_method_call(ctx, &get_target)?;
-    box_method_result_as_mixed(ctx, &get_target.return_ty);
+    box_magic_result(ctx, &get_target);
     abi::emit_release_temporary_stack(ctx.emitter, frame_bytes);
     abi::emit_jump(ctx.emitter, done_label);
     Ok(())
