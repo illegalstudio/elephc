@@ -455,6 +455,11 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved =
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    // Mirrors `pipeline::compile`, which decides XML usage on the program as the user wrote it
+    // (`xml_used`) before any DOM or core prelude is injected: the DOM prelude's own `loadXML`
+    // would otherwise hide the user's call from the receiver analysis, and `loadXML` would call a
+    // SimpleXML loader that was never injected.
+    let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::core_prelude::inject_if_used(resolved, false, false, &mut prelude_inventory);
     let resolved = elephc::bcmath_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let force_gmp = FORCE_GMP_PRELUDE.with(|flag| flag.replace(false));
@@ -469,7 +474,6 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         elephc::dom_html_prelude::inject_if_used(resolved, php_version, false, &mut prelude_inventory);
     let resolved = elephc::array_ucompare_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
-    let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let ini_overrides = elephc::codegen_support::ini_overrides();
     let tidy_value = |name: &str| {
         ini_overrides
