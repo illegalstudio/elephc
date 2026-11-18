@@ -271,7 +271,7 @@ fn emit_content_shared_invoker(
         shared_tails::emit_once(emitter, data);
     }
     let shared = emitter.content_sharing_active();
-    if shared {
+    if shared && !data.has_invoker_owner_visitor(invoker.sig.params.len()) {
         // A shared body is renamed from its text, which names the invoker's own label: an owner
         // visitor spelled `{label}__gc_argument_owners` and emitted beside the body would be
         // referenced as `_eir_cbody_*__gc_argument_owners` and never defined (any program with a
