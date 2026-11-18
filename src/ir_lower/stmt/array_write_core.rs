@@ -567,10 +567,10 @@ pub(super) fn lower_boxed_array_set(
         let index = lower_operand(ctx, index);
         (index, lower_operand(ctx, value))
     };
-    crate::ir_lower::array_key_guards::for_prepared_write(ctx, array, index, span);
-    string_offset_writes::lower_boxed_set(
+    super::boxed_write_parents::lower(
         ctx, array, index, value, span, key_already_diagnosed,
     );
+    if ctx.builder.insertion_block_is_terminated() { return; }
     for root in roots.into_iter().rev() {
         crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
     }
@@ -598,10 +598,10 @@ pub(super) fn lower_boxed_array_set_values(
     };
     let index = root(ctx, index);
     let value = root(ctx, value);
-    crate::ir_lower::array_key_guards::for_prepared_write(ctx, array, index, span);
-    string_offset_writes::lower_boxed_set(
+    super::boxed_write_parents::lower(
         ctx, array, index, value, span, key_already_diagnosed,
     );
+    if ctx.builder.insertion_block_is_terminated() { return; }
     for root in roots.into_iter().rev() {
         crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
     }

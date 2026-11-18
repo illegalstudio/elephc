@@ -817,3 +817,5 @@ mod reflection_constructor_arrays;
 mod array_key_foreach_guards;
 mod array_key_write_guards;
 mod array_access_write_kinds;
+
+mod boolean_offset_writes;
