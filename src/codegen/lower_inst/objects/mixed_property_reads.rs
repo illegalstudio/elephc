@@ -1452,7 +1452,11 @@ fn emit_table_dynamic_hash_read(
     abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &key_label);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
     abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &skip_label);
+    // The matching entry's address decides, never the possibly-false value it holds.
+    let found_label = ctx.next_label("mixed_prop_hash_found");
+    super::named_property_writes::emit_branch_if_hash_entry_found(ctx, &found_label);
+    abi::emit_jump(ctx.emitter, &skip_label);
+    ctx.emitter.label(&found_label);
     match target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
