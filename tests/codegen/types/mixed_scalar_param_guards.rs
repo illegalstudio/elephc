@@ -1098,3 +1098,25 @@ function handler(int $no, string $msg): bool { global $x, $y; $x = 2; $y = 2; K:
     );
     assert_eq!(out, "2\n2\n2\n2\n");
 }
+
+/// A supplied named argument is checked before an omitted default that can throw is
+/// evaluated, as PHP binds supplied parameters first: `f(s: box(null))` with
+/// `int $n = 1 % 0` threw `DivisionByZeroError` instead of the `TypeError` for `$s`.
+#[test]
+fn test_named_call_checks_supplied_arguments_before_throwing_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function show(Throwable $e): void { echo get_class($e), ": ", str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+function f(string $s, int $n = 1 % 0) {}
+class C { public function m(string $s, int $n = 1 % 0) {} public static function sm(int $i, int $n = 1 % 0) {} }
+try { f(s: box(null)); } catch (Throwable $e) { show($e); }
+try { f(box(null)); } catch (Throwable $e) { show($e); }
+try { (new C())->m(s: box(null)); } catch (Throwable $e) { show($e); }
+try { C::sm(i: box("x")); } catch (Throwable $e) { show($e); }
+try { f(n: 2, s: box([])); } catch (Throwable $e) { show($e); }
+try { f(s: box("ok")); } catch (Throwable $e) { show($e); }
+"#,
+    );
+    assert_eq!(out, "TypeError: f(): Argument #1 ($s) must be of type string, null given, called in F on line 6\nTypeError: f(): Argument #1 ($s) must be of type string, null given, called in F on line 7\nTypeError: C::m(): Argument #1 ($s) must be of type string, null given, called in F on line 8\nTypeError: C::sm(): Argument #1 ($i) must be of type int, string given, called in F on line 9\nTypeError: f(): Argument #1 ($s) must be of type string, array given, called in F on line 10\nDivisionByZeroError: Modulo by zero\n");
+}
