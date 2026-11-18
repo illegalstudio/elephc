@@ -308,8 +308,19 @@ pub(crate) fn emit_copy_static_descriptor_to_runtime(
     descriptor_label: &str,
 ) {
     let source_reg = abi::symbol_scratch_reg(emitter);
-    let word_reg = abi::secondary_scratch_reg(emitter);
     abi::emit_symbol_address(emitter, source_reg, descriptor_label);
+    emit_copy_descriptor_header_to_runtime(emitter, dest_reg, source_reg);
+}
+
+/// Copies the fixed header of the descriptor in `source_reg` into a runtime descriptor allocation.
+///
+/// `source_reg` must differ from the secondary scratch register, which carries each word.
+pub(crate) fn emit_copy_descriptor_header_to_runtime(
+    emitter: &mut Emitter,
+    dest_reg: &str,
+    source_reg: &str,
+) {
+    let word_reg = abi::secondary_scratch_reg(emitter);
     for offset in (0..CALLABLE_DESC_STATIC_SIZE).step_by(8) {
         abi::emit_load_from_address(emitter, word_reg, source_reg, offset);
         abi::emit_store_to_address(emitter, word_reg, dest_reg, offset);

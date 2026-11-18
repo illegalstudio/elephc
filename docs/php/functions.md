@@ -374,6 +374,50 @@ var_dump(call_user_func($callback, "probe", 9));   // string(5) "probe"
 A body that computes its own result keeps its inferred type (`function add($a, $b) { return $a
 + $b; }` still returns `int`), and a declared return type always wins.
 
+### `Closure::fromCallable()`
+
+`Closure::fromCallable($callback)` converts any callable value to a `Closure`, like
+`$callback(...)`. It accepts an existing closure or arrow function, a function name, a
+`"Class::method"` string, an `[$object, "method"]` or `[ClassName::class, "method"]` array
+and an invokable object. The argument may be a literal, a variable or a `callable`
+parameter. Passing a `Closure` returns that same closure (`===`); every other conversion
+creates a new closure, so two conversions of the same name are not identical. A value that
+is not callable throws a catchable `TypeError`. Private and protected methods are resolved from
+the class scope where the factory is called.
+
+The result owns its target: an array or method callable keeps its receiver alive, and a
+closure keeps its captured variables. This makes a nullable `Closure` property the usual
+way to keep a callback for later and to release it again:
+
+```php
+<?php
+final class Timer {
+    private ?Closure $callback;
+
+    public function __construct(callable $callback) {
+        $this->callback = Closure::fromCallable($callback);
+    }
+
+    public function fire(): void {
+        $callback = $this->callback;
+        if ($callback !== null) {
+            $callback();
+        }
+    }
+
+    public function cancel(): void {
+        $this->callback = null; // releases the receiver or the captured variables
+    }
+}
+
+$timer = new Timer(function (): void { echo "called\n"; });
+$timer->fire();   // called
+$timer->cancel();
+$timer->fire();   // nothing: the callback is gone
+```
+
+`examples/timers/main.php` builds a small timer queue on this pattern.
+
 ## Global variables
 
 ```php

@@ -340,3 +340,5 @@ mod safe_point_budget;
 
 #[path = "runtime_gc/dynamic_first_class.rs"]
 mod dynamic_first_class;
+#[path = "runtime_gc/closure_factory_storage.rs"]
+mod closure_factory_storage;
