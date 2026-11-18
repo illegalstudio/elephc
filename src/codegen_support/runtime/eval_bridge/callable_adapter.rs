@@ -11,6 +11,7 @@
 //!   owned result only when the native exception cell is empty.
 
 use super::*;
+use crate::codegen_support::runtime::exceptions::PROTECTED_INPUT_OFFSET as PIO;
 
 /// Emits the C ABI that boxes a borrowed persistent native factory as an owned Mixed callable.
 pub(super) fn emit(emitter: &mut Emitter) {
@@ -111,14 +112,14 @@ fn invoke_body(emitter: &mut Emitter) {
     let done = "__rt_eval_invoke_native_callable_v2_body_done";
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x10, [sp, #248]");                         // recover the caller-owned output slot retained by the native boundary
+            emitter.instruction(&format!("ldr x10, [sp, #{}]", PIO + 24));                         // recover the caller-owned output slot retained by the native boundary
             emitter.instruction("str xzr, [x10]");                              // a failed invocation must never publish an owned result
-            emitter.instruction("ldr x0, [sp, #224]");                          // borrow the boxed callable retained by Rust throughout this invocation
+            emitter.instruction(&format!("ldr x0, [sp, #{}]", PIO + 0));                          // borrow the boxed callable retained by Rust throughout this invocation
         }
         Arch::X86_64 => {
-            emitter.instruction("mov r10, QWORD PTR [rsp + 248]");              // recover the C output pointer before decoding the callback
+            emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", PIO + 24));              // recover the C output pointer before decoding the callback
             emitter.instruction("mov QWORD PTR [r10], 0");                      // leave failed or unsupported invocations with no output owner
-            emitter.instruction("mov rax, QWORD PTR [rsp + 224]");              // adapt the borrowed boxed callback to the native unbox convention
+            emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", PIO + 0));              // adapt the borrowed boxed callback to the native unbox convention
         }
     }
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
@@ -130,8 +131,8 @@ fn invoke_body(emitter: &mut Emitter) {
             emitter.instruction("ldr x9, [x1, #56]");                           // select the uniform descriptor invoker rather than its typed native entry
             emitter.instruction(&format!("cbz x9, {unsupported}"));             // optional invokers report an unsupported bridge explicitly
             emitter.instruction("mov x0, x1");                                  // argument zero is the descriptor, including its persistent captures
-            emitter.instruction("ldr x1, [sp, #232]");                          // argument one contains only the PHP arguments supplied by the caller
-            emitter.instruction("ldr x2, [sp, #240]");                          // argument two preserves call-site visibility and strict scalar scope
+            emitter.instruction(&format!("ldr x1, [sp, #{}]", PIO + 8));                          // argument one contains only the PHP arguments supplied by the caller
+            emitter.instruction(&format!("ldr x2, [sp, #{}]", PIO + 16));                          // argument two preserves call-site visibility and strict scalar scope
             emitter.instruction("blr x9");                                      // contain all native throws inside the complete protected callback frame
         }
         Arch::X86_64 => {
@@ -142,8 +143,8 @@ fn invoke_body(emitter: &mut Emitter) {
             emitter.instruction("mov r10, QWORD PTR [rdi + 56]");               // preserve the uniform invoker while materializing its three ABI arguments
             emitter.instruction("test r10, r10");                               // some descriptor forms have no dynamic invocation adapter
             emitter.instruction(&format!("jz {unsupported}"));                  // report unsupported without unwinding into Rust
-            emitter.instruction("mov rsi, QWORD PTR [rsp + 232]");              // pass the borrowed supplied-argument container after the descriptor in rdi
-            emitter.instruction("mov rdx, QWORD PTR [rsp + 240]");              // forward invocation scope through the third SysV argument
+            emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", PIO + 8));              // pass the borrowed supplied-argument container after the descriptor in rdi
+            emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", PIO + 16));              // forward invocation scope through the third SysV argument
             emitter.instruction("call r10");                                    // invoke through the protected descriptor boundary
         }
     }
@@ -152,13 +153,13 @@ fn invoke_body(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("cbnz {scratch}, {pending}"));         // eval-boundary invokers can return normally while retaining a pending throw
-            emitter.instruction("ldr x10, [sp, #248]");                         // publish only a successful owned Mixed result
+            emitter.instruction(&format!("ldr x10, [sp, #{}]", PIO + 24));                         // publish only a successful owned Mixed result
             emitter.instruction("str x0, [x10]");                               // transfer the result into the caller's output owner
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("test {scratch}, {scratch}"));         // distinguish a genuine success from an invoker's caught native throw
             emitter.instruction(&format!("jnz {pending}"));                     // pending Throwable takes precedence over an apparent returned value
-            emitter.instruction("mov r10, QWORD PTR [rsp + 248]");              // recover the caller's output pointer after native execution
+            emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", PIO + 24));              // recover the caller's output pointer after native execution
             emitter.instruction("mov QWORD PTR [r10], rax");                    // transfer exactly one successful result owner to Rust
         }
     }
@@ -187,12 +188,12 @@ mod tests {
             let assembly = emitter.output();
             assert!(assembly.contains(&target.extern_symbol("__elephc_eval_invoke_native_callable_v2")), "{name}");
             let (scope, call, publish) = if target.arch == Arch::AArch64 {
-                ("ldr x2, [sp, #240]", "blr x9", "str x0, [x10]")
+                (format!("ldr x2, [sp, #{}]", PIO + 16), "blr x9", "str x0, [x10]")
             } else {
-                ("mov rdx, QWORD PTR [rsp + 240]", "call r10", "mov QWORD PTR [r10], rax")
+                (format!("mov rdx, QWORD PTR [rsp + {}]", PIO + 16), "call r10", "mov QWORD PTR [r10], rax")
             };
-            assert!(assembly.find(scope).unwrap() < assembly.find(call).unwrap(), "{name}");
-            let body = assembly.split_once(scope).unwrap().1;
+            assert!(assembly.find(&scope).unwrap() < assembly.find(call).unwrap(), "{name}");
+            let body = assembly.split_once(&scope).unwrap().1;
             assert!(body.find("_exc_value").unwrap() < body.find(publish).unwrap(), "{name}");
             assert!(body.contains("__rt_cleanup_preserve_exception"), "{name}: abandon interrupted result safely");
         }

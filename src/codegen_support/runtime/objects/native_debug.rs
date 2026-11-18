@@ -10,6 +10,7 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::types::PhpType;
+use super::super::exceptions::PROTECTED_INPUT_OFFSET;
 
 const FRAME_BYTES: usize = 160;
 const RECEIVER: usize = 8;
@@ -151,11 +152,11 @@ pub(crate) fn emit_native_debug(emitter: &mut Emitter) {
 /// Invokes only the PHP debug hook inside a complete exception boundary and stores its owned cell.
 fn protected_projection(emitter: &mut Emitter) {
     let entry = abi::tertiary_scratch_reg(emitter);
-    abi::emit_load_temporary_stack_slot(emitter, abi::int_arg_reg_name(emitter.target, 0), 224);
-    abi::emit_load_temporary_stack_slot(emitter, entry, 232);
+    abi::emit_load_temporary_stack_slot(emitter, abi::int_arg_reg_name(emitter.target, 0), PROTECTED_INPUT_OFFSET);
+    abi::emit_load_temporary_stack_slot(emitter, entry, PROTECTED_INPUT_OFFSET + 8);
     abi::emit_call_reg(emitter, entry);
     let output = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_temporary_stack_slot(emitter, output, 240);
+    abi::emit_load_temporary_stack_slot(emitter, output, PROTECTED_INPUT_OFFSET + 16);
     abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), output, 0);
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
 }
