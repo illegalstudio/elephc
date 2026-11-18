@@ -14,6 +14,8 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::types::PhpType;
 
+pub use elephc_memoir::cleanup_preserve::emit_unary_cleanup_preserving_exception;
+
 use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
 use super::frame::{load_at_offset, store_at_offset};
 use super::registers::{float_result_reg, int_result_reg, string_result_regs};
@@ -112,15 +114,6 @@ pub fn emit_decref_preserving_exception(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
-/// Calls unary cleanup, accumulating its exception and returning whether this call caught one.
-pub fn emit_unary_cleanup_preserving_exception(emitter: &mut Emitter, entry: &str, payload: &str) {
-    let arg0 = super::int_arg_reg_name(emitter.target, 0);
-    let arg1 = super::int_arg_reg_name(emitter.target, 1);
-    super::emit_reg_move(emitter, arg1, payload);
-    super::emit_symbol_address(emitter, arg0, entry);
-    emit_call_label(emitter, "__rt_cleanup_preserve_exception");
-}
-
 /// Selects the unary release helper for one concrete or boxed heap representation.
 pub(crate) fn refcount_release_helper(ty: &PhpType) -> Option<&'static str> {
     match ty {
@@ -157,16 +150,7 @@ fn emit_local_ref_cell_cleanup(emitter: &mut Emitter, cell_reg: &str, value_ty: 
         PhpType::Str => Some("__rt_heap_free_safe"),
         ty => refcount_release_helper(&ty),
     };
-    let arg0 = super::int_arg_reg_name(emitter.target, 0);
-    let arg1 = super::int_arg_reg_name(emitter.target, 1);
-    super::emit_reg_move(emitter, arg1, cell_reg);
-    emit_load_int_immediate(emitter, super::int_arg_reg_name(emitter.target, 2), i64::from(defer_throw));
-    if let Some(entry) = entry {
-        super::emit_symbol_address(emitter, arg0, entry);
-    } else {
-        emit_load_int_immediate(emitter, arg0, 0);
-    }
-    emit_call_label(emitter, "__rt_local_ref_cell_release");
+    elephc_memoir::reference_cells::local_release::emit_call(emitter, cell_reg, entry, defer_throw);
 }
 
 /// Loads a value of the given type from a stack frame offset into result registers.

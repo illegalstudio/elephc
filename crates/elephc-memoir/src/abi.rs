@@ -7,7 +7,7 @@
 //! Key details:
 //! - This code runs in the compiler and emits assembly; it is never a target-program library.
 
-use crate::{TargetAbi, MemoryContext};
+use crate::TargetAbi;
 
 /// Delegates emit branch if equal wide without duplicating target logic.
 pub(crate) fn emit_branch_if_equal_wide(emitter: &mut impl TargetAbi, label: &str) { emitter.emit_branch_if_equal_wide(label) }
@@ -105,8 +105,6 @@ pub(crate) fn tertiary_scratch_reg(emitter: &impl TargetAbi) -> &'static str { e
 /// Uses the authoritative host emit cmp reg to symbol operation.
 pub(crate) fn emit_cmp_reg_to_symbol(emitter: &mut impl TargetAbi, reg: &str, symbol: &str) { emitter.emit_cmp_reg_to_symbol(reg, symbol) }
 
-/// Uses the authoritative host emit unary cleanup preserving exception operation.
-pub(crate) fn emit_unary_cleanup_preserving_exception(emitter: &mut impl MemoryContext, entry: &str, payload: &str) { emitter.emit_unary_cleanup_preserving_exception(entry, payload) }
 
 /// Delegates local frame addressing to the authoritative compiler ABI.
 pub(crate) fn emit_frame_slot_address(emitter: &mut impl TargetAbi, dest: &str, offset: usize) {

@@ -48,7 +48,7 @@ pub fn emit(emitter: &mut impl Emitter, layout: Layout) {
             emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", layout.x86_64_payload.bytes())); // load the independently owned payload
         }
     }
-    abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_any", abi::int_result_reg(emitter));
+    crate::cleanup_preserve::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_any", abi::int_result_reg(emitter));
     emitter.label("986");
 }
 

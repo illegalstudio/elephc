@@ -38,6 +38,15 @@ pub fn emit_cleanup_preserve_exception(emitter: &mut impl Emitter) {
     abi::emit_return(emitter);
 }
 
+/// Calls unary cleanup, accumulating its exception and returning whether this call caught one.
+pub fn emit_unary_cleanup_preserving_exception(emitter: &mut impl TargetAbi, entry: &str, payload: &str) {
+    let arg0 = abi::int_arg_reg_name(emitter, 0);
+    let arg1 = abi::int_arg_reg_name(emitter, 1);
+    abi::emit_reg_move(emitter, arg1, payload);
+    abi::emit_symbol_address(emitter, arg0, entry);
+    abi::emit_call_label(emitter, "__rt_cleanup_preserve_exception");
+}
+
 /// Transfers the current exception owner into the frame slot used by guarded releases.
 pub fn emit_take_exception(emitter: &mut impl TargetAbi, pending: FrameOffset) {
     let result = emitter.int_result_reg();

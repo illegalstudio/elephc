@@ -26,7 +26,7 @@ fn emit_owner_cleanup_entry(emitter: &mut impl Emitter, label: &str, release: &s
     abi::emit_reg_move(emitter, address, abi::int_arg_reg_name(emitter, 0));
     abi::emit_load_from_address(emitter, result, address, 0);
     abi::emit_store_zero_to_address(emitter, address, 0);
-    abi::emit_unary_cleanup_preserving_exception(emitter, release, result);
+    crate::cleanup_preserve::emit_unary_cleanup_preserving_exception(emitter, release, result);
     abi::emit_frame_restore(emitter, 16);
     abi::emit_return(emitter);
 }
