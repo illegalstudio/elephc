@@ -460,6 +460,9 @@ fn try_emit_direct_closure_wrapper(
         || closure.params[0].variadic
         || closure.flags.is_generator
         || closure.flags.is_fiber_wrapper
+        // The helper reads the result as one boxed Mixed pointer. A closure whose body infers a
+        // narrower return (`fn($x) => "t" . $x` is `string`) returns it in its own registers.
+        || closure.return_php_type.codegen_repr() != PhpType::Mixed
     {
         return Ok(None);
     }
