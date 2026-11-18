@@ -7,9 +7,9 @@
 //!
 //! Key details:
 //! - Each prelude (PDO, mysqli, tz, image, hash, tokenizer, curl, xml, fileinfo, var_export,
-//!   web environment, web request, random, bcmath, gmp, listIdentifiers, preg_grep, OPcache/INI,
-//!   version, and core's WeakMap/WeakReference) is injected only when the program uses its
-//!   surface, and that decision has to be taken before name resolution so a
+//!   web environment, web request, random, bcmath, gmp, proc, listIdentifiers, preg_grep,
+//!   OPcache/INI, version, and core's WeakMap/WeakReference) is injected only when the program
+//!   uses its surface, and that decision has to be taken before name resolution so a
 //!   namespaced caller resolves to the injected declarations. The Composer/SPL autoload pass runs
 //!   AFTER name resolution, so a class file it loads that uses `PDO` or `CurlHandle` was never
 //!   scanned: the prelude was skipped and the program failed with `Unknown type: PDO`.
@@ -59,6 +59,7 @@ const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
     ("random", crate::random_prelude::program_uses_random),
     ("bcmath", crate::bcmath_prelude::program_uses_bcmath),
     ("gmp", crate::gmp_prelude::program_uses_gmp),
+    ("proc", crate::proc_prelude::program_uses_proc),
     ("list_id", crate::list_id_prelude::program_uses_list_identifiers),
     ("weak_map", crate::core_prelude::program_uses_weak_map),
     ("weak_reference", crate::core_prelude::program_uses_weak_reference),
