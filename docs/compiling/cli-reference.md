@@ -1013,6 +1013,10 @@ An executed conditional `unset` starts a new activation-local binding with its
 replacement producer's contract. The other path keeps the static contract, and
 aliases captured before detachment still observe the persistent value.
 A reached `global` declaration connects the activation name to the program value.
+It replaces the old parameter or local type view with the program source's view,
+including when the old binding was a persistent static. A declared mixed program
+source stays open even when the displaced parameter was concrete. Detaching an
+incoming reference this way leaves the caller's variable intact.
 Unsetting or rebinding that local name leaves the program entry intact. References
 captured before detachment keep observing the program value; value captures keep
 an independent snapshot. A conditional detach affects only its executed path,

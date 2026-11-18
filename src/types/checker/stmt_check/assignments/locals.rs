@@ -1653,38 +1653,6 @@ fn clear_callable_metadata(checker: &mut Checker, dest: &str) {
     checker.first_class_callable_targets.remove(dest);
 }
 
-/// Type-checks a `global` declaration and registers the variables as globals.
-///
-/// For each variable name, marks it as a global in `checker.active_globals` and
-/// populates the local type environment with the variable's type from
-/// `checker.top_level_env` if available, otherwise uses `Mixed`.
-pub(super) fn check_global(
-    checker: &mut Checker,
-    vars: &[String],
-    env: &mut TypeEnv,
-) -> Result<(), CompileError> {
-    for var in vars {
-        let retired = checker.binding_retirement_type(var, env);
-        checker.record_loop_binding_end(var);
-        checker.invalidate_local_flow_narrowing(var, env);
-        checker.active_globals.insert(var.clone());
-        if !env.contains_key(var) {
-            if let Some(global_ty) = checker.top_level_env.get(var) {
-                env.insert(var.clone(), global_ty.clone());
-            } else {
-                // Function-like bodies are checked before the top-level statement walk has
-                // necessarily reached the global's first assignment. PHP globals have no
-                // implicit integer contract: a later callback, generator resume, or destructor
-                // may replace the cell with any value. Seeding an unseen alias as `Int` made a
-                // perfectly valid `$global = function () { ... };` fail before lowering.
-                env.insert(var.clone(), PhpType::Mixed);
-            }
-        }
-        checker.record_binding_retirement_exception_flow(&retired, env);
-    }
-    Ok(())
-}
-
 /// Type-checks a `static` variable declaration and registers it in the checker.
 ///
 /// Infers the type of the initializer expression, marks the variable as static in

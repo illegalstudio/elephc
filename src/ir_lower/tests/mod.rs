@@ -872,3 +872,5 @@ mod conditional_static_origins;
 mod global_binding_leases;
 
 mod global_publication_owners;
+
+mod reached_global_producers;

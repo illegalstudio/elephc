@@ -10,6 +10,7 @@
 
 mod arrays;
 mod locals;
+mod global_bindings;
 mod properties;
 mod properties_null_coalesce;
 mod static_properties;
@@ -180,7 +181,7 @@ impl Checker {
             StmtKind::ListUnpack { vars, value } => {
                 locals::check_list_unpack(self, vars, value, stmt.span, env)
             }
-            StmtKind::Global { vars } => locals::check_global(self, vars, env),
+            StmtKind::Global { vars } => global_bindings::check(self, vars, env),
             StmtKind::StaticVar { name, init } => {
                 locals::check_static_var(self, name, init, stmt.span, env)
             }

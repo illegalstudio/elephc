@@ -175,3 +175,10 @@ fn global_publication_sources_eval_values_and_owners() {
     let expected = "DCobject:2|DCarray:3|DCstring:xx|";
     assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/global_publication_owners.php"), expected, expected);
 }
+
+/// Reached global sources replace old activation contracts across both interpreter entries.
+#[test]
+fn reached_global_producers_eval_values_and_owners() {
+    let expected = "string:after|after|string:after|1:after|string:after|after|string:after|string:after|after|double:2.5|string:ready|";
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/reached_global_producers.php"), expected, expected);
+}

@@ -2350,3 +2350,15 @@ Focused acceptance refreshes the compiler and Magician archive, covers all five 
 No additional strict family is admitted. Reached global producer roles and conditional recreation remain active, followed by Nullability, Mixed, Initialization, ArrayTypes, Indexing and complete umbrella acceptance.
 
 All 14 acceptance gates passed in job b76365ef. The refreshed compiler/archive, four real opaque executions, eight public combinations and the complete example all pass, with clean heap/owner assertions.
+
+### Verified200: reached global views replace old activation facts
+
+Global statement checking now lives in the focused assignments/global_bindings.rs module. A reached declaration replaces the activation's old environment view with the available program-source view, or Mixed for an unseen source. It clears stale local, callable and reference metadata plus displaced incoming/static roles, marks the new alias present and retains retirement exception tracking. It does not infer broader reference authorization from canonical storage.
+
+The baseline rejected a valid string program source as an int-to-string retype because an int parameter of the same name remained in the environment. The new shared fixture covers parameters passed by value, foreign int references whose callers remain1, ordinary locals, persistent statics across repeated calls, and declared mixed program sources whose displaced parameters were concrete. The inverse regression refuses a string store to an integer program source even when the displaced parameter was string.
+
+Acceptance covers the refreshed compiler/Magician archive, all five emitters and negative checker targets, native profiles/optimizers, both interpreter entries with zero retained owners, real opaque eval, directly affected existing global and publication controls, diff hygiene, eight public PHP/LFC/profile/optimizer combinations and the complete strict-locals example. PHP supplies the fixture oracle. Physical global leases and raw parameter ABIs retain the previously verified helpers.
+
+This step repairs reached source views. Original program producer contracts across narrowed/replaced views and conditional global binding ends remain active work. Nullability, Mixed, Initialization, ArrayTypes, Indexing and complete umbrella acceptance remain unadmitted.
+
+All 11 acceptance gates passed in job 6dc015b7. Every public executable and the complete example reports a clean heap.
