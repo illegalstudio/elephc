@@ -143,3 +143,6 @@ mod memoir_remaining_ownership_tests;
 
 #[cfg(test)]
 mod memoir_lifecycle_tests;
+
+#[cfg(test)]
+mod memoir_residual_tests;
