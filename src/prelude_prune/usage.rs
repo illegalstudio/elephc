@@ -128,6 +128,8 @@ pub(crate) struct Usage {
     pub(crate) callable_slot_literals: HashSet<String>,
     /// The program's own `callable` parameter table, built once per collection.
     user_callable_slots: Option<std::rc::Rc<super::callable_slots::UserCallableSlots>>,
+    /// Walk state: the import aliases in scope, scoped like the name resolver's imports.
+    callable_imports: super::callable_slots::CallableImports,
     /// Walk state: the callable being scanned declares a `callable` return type.
     returns_callable: bool,
 }
@@ -371,9 +373,7 @@ fn record_builtin_callbacks(usage: &mut Usage, name: &str, args: &[Expr]) -> boo
 /// Collects direct and literal-indirect function references from a program.
 pub(crate) fn collect(program: &[Stmt]) -> Usage {
     let mut usage = Usage { user_callable_slots: user_callable_slots(program), ..Usage::default() };
-    for stmt in program {
-        scan_stmt(stmt, &mut usage);
-    }
+    scan_program(program, &mut usage);
     usage
 }
 
@@ -393,23 +393,27 @@ fn record_user_callable_slots(expr: &Expr, usage: &mut Usage) {
     let Some(slots) = usage.user_callable_slots.clone() else {
         return;
     };
+    let imports = &usage.callable_imports;
     let out = &mut usage.callable_slot_literals;
     match &expr.kind {
-        ExprKind::FunctionCall { name, args } => slots.function_call(name.as_str(), args, out),
+        ExprKind::FunctionCall { name, args } => slots.function_call(name, imports, args, out),
         ExprKind::StaticMethodCall { receiver: StaticReceiver::Named(class), method, args } => {
-            slots.class_method_call(class.as_str(), method, args, out);
+            slots.class_method_call(class, imports, method, args, out);
         }
         ExprKind::MethodCall { method, args, .. }
         | ExprKind::NullsafeMethodCall { method, args, .. }
         | ExprKind::StaticMethodCall { method, args, .. } => slots.method_call(method, args, out),
         ExprKind::NewObject { class_name, args } => {
-            slots.class_method_call(class_name.as_str(), "__construct", args, out);
+            slots.class_method_call(class_name, imports, "__construct", args, out);
         }
         ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => slots.method_call("__construct", args, out),
-        ExprKind::ExprCall { callee, args } => record_named_value_call(&slots, callee, args, out),
+        ExprKind::ExprCall { callee, args } => {
+            record_named_value_call(&slots, imports, callee, args, out);
+        }
         ExprKind::Pipe { value, callable } => {
-            record_named_value_call(&slots, callable, std::slice::from_ref(value.as_ref()), out);
+            let args = std::slice::from_ref(value.as_ref());
+            record_named_value_call(&slots, imports, callable, args, out);
         }
         _ => {}
     }
@@ -419,13 +423,14 @@ fn record_user_callable_slots(expr: &Expr, usage: &mut Usage) {
 /// parameters: a first-class callable of a function or method, or a freshly built object.
 fn record_named_value_call(
     slots: &super::callable_slots::UserCallableSlots,
+    imports: &super::callable_slots::CallableImports,
     callee: &Expr,
     args: &[Expr],
     out: &mut HashSet<String>,
 ) {
     match &callee.kind {
         ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
-            slots.function_call(name.as_str(), args, out);
+            slots.function_call(name, imports, args, out);
         }
         ExprKind::FirstClassCallable(
             CallableTarget::Method { method, .. } | CallableTarget::StaticMethod { method, .. },
@@ -680,10 +685,15 @@ fn scan_class_const(constant: &ClassConst, usage: &mut Usage) {
 }
 
 /// Scans a statement list into an existing summary.
+///
+/// A `use` inside the list applies to the statements after it and ends with the list, as in the
+/// name resolver, so the import scope is restored on the way out.
 fn scan_program(program: &[Stmt], usage: &mut Usage) {
+    let imports = usage.callable_imports.clone();
     for stmt in program {
         scan_stmt(stmt, usage);
     }
+    usage.callable_imports = imports;
 }
 
 /// Scans every expression-bearing position of one statement.
@@ -862,7 +872,10 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             if usage.scanning_eval_fragment {
                 usage.introspects = true;
             }
-            scan_program(body, usage)
+            // A namespace block starts with no imports.
+            let imports = std::mem::take(&mut usage.callable_imports);
+            scan_program(body, usage);
+            usage.callable_imports = imports;
         }
         StmtKind::Synthetic(body)
         | StmtKind::IncludeOnceGuard { body, .. } => scan_program(body, usage),
@@ -1039,6 +1052,7 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             if usage.scanning_eval_fragment {
                 usage.introspects = true;
             }
+            usage.callable_imports.register(imports);
             for import in imports {
                 let name = import.name.as_canonical();
                 if usage.environment_mode && import.kind == crate::parser::ast::UseKind::Class {
@@ -1069,16 +1083,19 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
                 usage.callable_names.unknown_call();
             }
         }
-        StmtKind::NamespaceDecl { .. } if usage.scanning_eval_fragment => {
+        StmtKind::NamespaceDecl { .. } => {
             // A namespaced fragment resolves its names through aliases this walk does not perform.
-            usage.introspects = true;
+            if usage.scanning_eval_fragment {
+                usage.introspects = true;
+            }
+            // `namespace X;` drops the imports of the namespace before it.
+            usage.callable_imports = Default::default();
         }
         StmtKind::Return(None)
         | StmtKind::Break(_)
         | StmtKind::Goto(_)
         | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
-        | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantMark { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Global { .. }
