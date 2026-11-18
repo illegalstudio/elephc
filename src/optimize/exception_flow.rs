@@ -699,6 +699,20 @@ impl ExceptionFlowAnalysis {
         // the result is the full round-by-round recompute's; on the Symfony demo that recompute
         // re-walked every body of the program each round. `ELEPHC_EXCEPTION_FLOW_VERIFY` (always
         // on in tests) re-summarizes everything once converged and panics on a difference.
+        // Warm-up: summarizing a body can mark names reference-volatile in the optimizer's
+        // program-wide thread-local set (a closure whose by-reference captures are walked), and a
+        // later body reads that set. Whether a body ran before or after the mark depends on map
+        // order, so an unprimed first round and the final full re-summary could disagree. One
+        // discarded pass lets the set settle; marks only accumulate, so every later pass sees it.
+        {
+            #[cfg(test)]
+            let summaries = EXCEPTION_BODY_SUMMARIES.with(std::cell::Cell::get);
+            let _ = analysis.summarize_bodies(&function_bodies);
+            let _ = analysis.summarize_bodies(&static_method_bodies);
+            let _ = analysis.summarize_bodies(&instance_method_bodies);
+            #[cfg(test)]
+            EXCEPTION_BODY_SUMMARIES.with(|count| count.set(summaries));
+        }
         let mut readers: HashMap<SummaryKey, HashSet<SummaryKey>> = HashMap::default();
         let mut dirty: Option<HashSet<SummaryKey>> = None;
         for _ in 0..MAX_EXCEPTION_SUMMARY_ITERATIONS {
