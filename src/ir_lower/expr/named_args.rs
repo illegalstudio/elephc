@@ -34,6 +34,26 @@ pub(super) fn lower_named_builtin_args_with_signature(
     lower_args_with_signature(ctx, Some(&storage), args)
 }
 
+/// Returns the source expression a named-argument call binds to regular parameter `index`.
+///
+/// Leading positional arguments bind by position and named arguments by parameter name.
+/// Returns `None` when a default, a spread or the variadic tail supplies the parameter.
+pub(super) fn named_call_param_source<'a>(
+    sig: &FunctionSig, args: &'a [Expr], index: usize,
+) -> Option<&'a Expr> {
+    let positional = args.iter()
+        .take_while(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
+        .count();
+    if index < positional {
+        return args.get(index);
+    }
+    let (param_name, _) = sig.params.get(index)?;
+    args.iter().find_map(|arg| match &arg.kind {
+        ExprKind::NamedArg { name, value } if name == param_name => Some(value.as_ref()),
+        _ => None,
+    })
+}
+
 /// Lowers named arguments with caller-selected trailing-default preservation.
 pub(super) fn lower_named_args_with_signature_options(
     ctx: &mut LoweringContext<'_, '_>,
