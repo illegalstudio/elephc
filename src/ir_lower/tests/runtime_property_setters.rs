@@ -177,8 +177,17 @@ writeUnknownMixedProperty(new LiteralWriteOther(), 'unrelatedWriteSlot');
         let symbol = crate::names::function_symbol(name);
         let body = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
         let body = body.split("\n.globl ").next().unwrap();
-        assert!(body.contains("mixed_dyn_prop_set_chosen_"), "{target}: preserve matching slot dispatch");
-        assert_eq!(body.contains("mixed_dyn_prop_set_unrelatedWriteSlot_"), dynamic,
+        // A computed name reaches the program's shared dynamic-write helper (the merged shape: one
+        // body for every site); a literal name keeps its own ladder pruned to the slots it reaches.
+        assert_eq!(body.contains("_eir_shared_dyn_prop_set_"), dynamic,
+            "{target}: {name}: only computed names use the shared helper");
+        let scope = if dynamic {
+            let helper = assembly.split_once("\n_eir_shared_dyn_prop_set_").map(|(_, rest)| rest)
+                .expect("the shared dynamic-write helper is emitted");
+            helper.split("\n.globl ").next().unwrap()
+        } else { body };
+        assert!(scope.contains("mixed_dyn_prop_set_chosen_"), "{target}: preserve matching slot dispatch");
+        assert_eq!(scope.contains("mixed_dyn_prop_set_unrelatedWriteSlot_"), dynamic,
             "{target}: only computed names need unrelated declared candidates");
     }
 }

@@ -196,6 +196,18 @@ mod tests {
 
     /// Returns every `load_local` of the PHP local `$name` typed `null`, with its slot.
     fn null_typed_loads(function: &Function, name: &str) -> Vec<(InstId, LocalSlotId)> {
+        loads_typed(function, name, &[PhpType::Void])
+    }
+
+    /// Returns the loads of the null arm: typed `null`, or `mixed` where the merged lowering
+    /// hands a runtime call its `mixed` parameter type directly (the slot keeps pointer storage,
+    /// so the proof still has to show the read finds the stored null).
+    fn null_arm_loads(function: &Function, name: &str) -> Vec<(InstId, LocalSlotId)> {
+        loads_typed(function, name, &[PhpType::Void, PhpType::Mixed])
+    }
+
+    /// Returns every `load_local` of the PHP local `$name` whose result type is one of `types`.
+    fn loads_typed(function: &Function, name: &str, types: &[PhpType]) -> Vec<(InstId, LocalSlotId)> {
         let slot = function
             .locals
             .iter()
@@ -210,7 +222,7 @@ mod tests {
                 function.instruction(*inst_id).is_some_and(|inst| {
                     inst.op == Op::LoadLocal
                         && inst.immediate == Some(Immediate::LocalSlot(slot))
-                        && inst.result_php_type.codegen_repr() == PhpType::Void
+                        && types.contains(&inst.result_php_type.codegen_repr())
                 })
             })
             .map(|inst_id| (inst_id, slot))
@@ -227,7 +239,7 @@ jo($argc);
 "#,
         );
         let jo = function(&module, "jo");
-        let loads = null_typed_loads(jo, "o");
+        let loads = null_arm_loads(jo, "o");
         assert!(!loads.is_empty(), "the null arm reads $o typed null");
         for (load, slot) in loads {
             assert!(null_store_reaches_load(jo, load, slot, false));
@@ -244,7 +256,7 @@ nested($argc);
 "#,
         );
         let nested = function(&module, "nested");
-        let loads = null_typed_loads(nested, "o");
+        let loads = null_arm_loads(nested, "o");
         assert!(!loads.is_empty(), "the null arm reads $o typed null");
         for (load, slot) in loads {
             assert!(null_store_reaches_load(nested, load, slot, false));
@@ -302,7 +314,7 @@ jo($argc);
 "#,
         );
         let jo = function(&module, "jo");
-        for (load, slot) in null_typed_loads(jo, "o") {
+        for (load, slot) in null_arm_loads(jo, "o") {
             assert!(!null_store_reaches_load(jo, load, slot, true));
         }
     }

@@ -1727,7 +1727,11 @@ pub(super) fn lower_runtime_mixed_prop_set(
     known_name: Option<&str>,
     inst: &Instruction,
 ) -> Result<()> {
-    if try_lower_outlined_mixed_prop_set(ctx, object, property_value, value, inst)? {
+    // The shared helper probes every declared candidate; a literal name keeps its own ladder,
+    // pruned to the slots that name can reach.
+    if known_name.is_none()
+        && try_lower_outlined_mixed_prop_set(ctx, object, property_value, value, inst)?
+    {
         return Ok(());
     }
     // Inside a scoped shared helper only the pairs this scope resolves differently are probed;
