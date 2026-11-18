@@ -109,7 +109,7 @@ pub(super) fn alias_duplicate_method_ref_args(
             let Some(previous_target) = bound_args[previous_position].ref_target.as_ref() else {
                 continue;
             };
-            if !same_method_ref_target(target, previous_target, context.semantic_profile(), values)? {
+            if !same_method_ref_target(target, previous_target) {
                 continue;
             }
             if let Some(previous_param) = params.get(previous_position) {
@@ -129,10 +129,9 @@ pub(super) fn alias_duplicate_method_ref_args(
 
 /// Returns true when two evaluated arguments target the same caller-side variable.
 pub(super) fn same_method_ref_target(
-    left: &EvalReferenceTarget, right: &EvalReferenceTarget, profile: elephc_semantics::SemanticProfile,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    Ok(match (left, right) {
+    left: &EvalReferenceTarget, right: &EvalReferenceTarget,
+) -> bool {
+    match (left, right) {
         (
             EvalReferenceTarget::Variable {
                 scope: left_scope,
@@ -154,7 +153,7 @@ pub(super) fn same_method_ref_target(
                 array_name: right_name,
                 index: right_index,
             },
-        ) => left_scope == right_scope && left_name == right_name && same_reference_index(*left_index, *right_index, profile, values)?,
+        ) => left_scope == right_scope && left_name == right_name && left_index == right_index,
         (
             EvalReferenceTarget::NestedArrayElement {
                 array_target: left_target,
@@ -164,7 +163,7 @@ pub(super) fn same_method_ref_target(
                 array_target: right_target,
                 index: right_index,
             },
-        ) => same_reference_index(*left_index, *right_index, profile, values)? && same_method_ref_target(left_target, right_target, profile, values)?,
+        ) => left_index == right_index && same_method_ref_target(left_target, right_target),
         (
             EvalReferenceTarget::ObjectProperty {
                 object: left_object,
@@ -212,19 +211,7 @@ pub(super) fn same_method_ref_target(
                 && left_access_scope == right_access_scope
         }
         _ => false,
-    })
-}
-
-/// Compares normalized PHP array keys instead of the identity of their temporary boxes.
-fn same_reference_index(
-    left: RuntimeCellHandle, right: RuntimeCellHandle, profile: elephc_semantics::SemanticProfile,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    if left == right { return Ok(true); }
-    Ok(match (eval_array_reference_key(left, profile, values)?, eval_array_reference_key(right, profile, values)?) {
-        (Some(left), Some(right)) => left == right,
-        _ => false,
-    })
+    }
 }
 
 /// Writes completed by-reference method parameter values back to their caller-side variables.
@@ -337,20 +324,16 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             let Some(scope) = (unsafe { scope.as_mut() }) else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            write_back_method_array_element_ref_target(
-                scope, array_name, *index, value, context, values,
-            )
+            super::super::reference_keys::with_key(index, context, values, |index, context, values| {
+                write_back_method_array_element_ref_target(scope, array_name, index, value, context, values)
+            })
         }
         EvalReferenceTarget::NestedArrayElement {
             array_target,
             index,
-        } => write_back_method_nested_array_element_ref_target(
-            array_target,
-            *index,
-            value,
-            context,
-            values,
-        ),
+        } => super::super::reference_keys::with_key(index, context, values, |index, context, values| {
+            write_back_method_nested_array_element_ref_target(array_target, index, value, context, values)
+        }),
         EvalReferenceTarget::ObjectProperty {
             object,
             property,

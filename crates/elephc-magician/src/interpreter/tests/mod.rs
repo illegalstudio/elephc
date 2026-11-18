@@ -122,6 +122,7 @@ mod strict_static_locals;
 mod strict_foreach_bindings;
 
 mod exact_key_metadata;
+mod owned_reference_keys;
 
 mod exact_key_guards;
 

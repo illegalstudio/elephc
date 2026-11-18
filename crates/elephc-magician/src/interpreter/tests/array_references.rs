@@ -146,10 +146,10 @@ fn assert_array_element_writeback_preserves_metadata(through_cell: bool) {
     scope.set("array", reference, ScopeCellOwnership::Borrowed);
     let target = if through_cell {
         EvalReferenceTarget::NestedArrayElement {
-            array_target: Box::new(EvalReferenceTarget::Cell { cell: reference }), index,
+            array_target: Box::new(EvalReferenceTarget::Cell { cell: reference }), index: EvalArrayReferenceKey::Int(0),
         }
     } else {
-        EvalReferenceTarget::ArrayElement { scope: &mut scope, array_name: "array".into(), index }
+        EvalReferenceTarget::ArrayElement { scope: &mut scope, array_name: "array".into(), index: EvalArrayReferenceKey::Int(0) }
     };
     for cursor in [EvalArrayCursor::Position(1), EvalArrayCursor::Invalid] {
         context.set_array_cursor(reference, cursor);

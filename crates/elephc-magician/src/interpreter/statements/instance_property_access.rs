@@ -707,14 +707,16 @@ pub(super) fn eval_property_reference_bind_result(
         values,
     )?;
     let value = eval_reference_target_value(&target, context, values)?;
-    eval_validate_property_value(&declaring_class, &property, value, context, values)?;
-    context.bind_dynamic_property_alias(identity, &storage_property_name, target);
-    eval_with_native_property_storage_scope(
-        &object_class_name, &storage_property_name, context, values,
-        |values| values.property_set(object, &storage_property_name, value),
-    )?;
-    context.mark_dynamic_property_initialized(identity, &storage_property_name);
-    Ok(())
+    with_eval_value_lease(value, context, values, |value, context, values| {
+        eval_validate_property_value(&declaring_class, &property, value, context, values)?;
+        context.bind_dynamic_property_alias(identity, &storage_property_name, target);
+        eval_with_native_property_storage_scope(
+            &object_class_name, &storage_property_name, context, values,
+            |values| values.property_set(object, &storage_property_name, value),
+        )?;
+        context.mark_dynamic_property_initialized(identity, &storage_property_name);
+        Ok(())
+    })
 }
 
 /// Resolves a local by-reference source into a persistent property alias target.
@@ -786,14 +788,14 @@ pub(in crate::interpreter) fn eval_reference_target_value(
             };
             let array =
                 visible_scope_cell(context, scope, array_name).map_or_else(|| values.null(), Ok)?;
-            values.array_get(array, *index)
+            super::super::reference_keys::read(array, index, context, values)
         }
         EvalReferenceTarget::NestedArrayElement {
             array_target,
             index,
         } => {
             let array = eval_reference_target_value(array_target, context, values)?;
-            values.array_get(array, *index)
+            super::super::reference_keys::read(array, index, context, values)
         }
         EvalReferenceTarget::ObjectProperty {
             object,

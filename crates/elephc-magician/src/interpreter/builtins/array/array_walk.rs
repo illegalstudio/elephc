@@ -121,7 +121,7 @@ fn eval_array_walk_ref_result_from_scope(
             let value = values.array_get(current_array, key)?;
             let ref_target = EvalReferenceTarget::NestedArrayElement {
                 array_target: Box::new(array_target.clone()),
-                index: key,
+                index: eval_array_reference_key(key, context.semantic_profile(), values)?.ok_or(EvalStatus::RuntimeFatal)?,
             };
             let args = vec![
                 EvaluatedCallArg {

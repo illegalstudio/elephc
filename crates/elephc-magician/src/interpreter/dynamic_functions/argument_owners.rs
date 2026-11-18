@@ -152,17 +152,13 @@ pub(super) fn capture_argument_receiver_owners(
     }
 }
 
-/// Retires keys as well as receivers when reference metadata will never reach a consumer.
+/// Retires abandoned receiver owners; copied reference keys carry no runtime owners.
 pub(in crate::interpreter) fn capture_abandoned_reference_owners(
     target: Option<&mut EvalReferenceTarget>, owners: &mut Vec<RuntimeCellHandle>,
 ) {
     match target {
-        Some(EvalReferenceTarget::ArrayElement { index, .. }) => {
-            if !index.is_borrowed() { owners.push(*index); *index = index.borrowed(); }
-        }
-        Some(EvalReferenceTarget::NestedArrayElement { array_target, index }) => {
+        Some(EvalReferenceTarget::NestedArrayElement { array_target, .. }) => {
             capture_abandoned_reference_owners(Some(array_target.as_mut()), owners);
-            if !index.is_borrowed() { owners.push(*index); *index = index.borrowed(); }
         }
         target => capture_argument_receiver_owners(target, owners),
     }

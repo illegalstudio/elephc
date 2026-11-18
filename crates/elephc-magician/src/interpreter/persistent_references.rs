@@ -27,7 +27,8 @@ pub(in crate::interpreter) fn eval_persistent_variable_reference(
         },
         EvalReferenceTarget::Cell { cell } if values.is_reference(cell)? => cell,
         target if reference_target_has_object_root(&target)
-            || matches!(target, EvalReferenceTarget::StaticProperty { .. }) => {
+            || matches!(target, EvalReferenceTarget::StaticProperty { .. }
+                | EvalReferenceTarget::ArrayElement { .. } | EvalReferenceTarget::NestedArrayElement { .. }) => {
             let Some(cell) = scope.visible_cell(local) else { return Ok(None); };
             if !values.is_reference(cell)? { return Ok(None); }
             cell

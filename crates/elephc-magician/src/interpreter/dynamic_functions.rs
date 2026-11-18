@@ -332,12 +332,16 @@ fn eval_nested_array_element_call_arg_value(
     let result = (|| {
         let index = eval_expr(index, context, caller_scope, values)?;
         index_owner = Some(index);
+        let selected_key = if array_target.is_some() && values.is_array_like(array)? {
+            checked_array_keys::for_receiver(array, index, context, values)?;
+            Some(super::reference_keys::snapshot(index, context.semantic_profile(), values)?)
+        } else { None };
         let value = if by_reference {
             match runtime_ops::simplexml_properties::dimension(values, array.borrowed(),
                 elephc_builtin_contract::ObjectDimension::WriteSelect, vec![index.borrowed()])?
             {
                 Some(value) => value,
-                None => eval_array_get_result(array, index, context, values)?,
+                None => eval_array_get_reference_result(array, index, context, values)?,
             }
         } else { eval_array_get_result(array, index, context, values)? };
         let value = promote_borrowed_result(value, values)?;
@@ -356,13 +360,18 @@ fn eval_nested_array_element_call_arg_value(
             let target = native.then(|| EvalReferenceTarget::Cell { cell: value.borrowed() });
             return Ok((value, target));
         }
-        let Some(target) = array_target.take() else { return Ok((value, None)); };
-        index_owner = None;
-        let target = match target {
+        if array_target.is_none() { return Ok((value, None)); }
+        let key = match selected_key.map(Ok).unwrap_or_else(||
+            super::reference_keys::snapshot(index, context.semantic_profile(), values))
+        {
+            Ok(key) => key,
+            Err(status) => { let _ = release_expr_result(value, context, values); return Err(status); }
+        };
+        let target = match array_target.take().expect("reference target presence was checked") {
             EvalReferenceTarget::Variable { scope, name } => {
-                EvalReferenceTarget::ArrayElement { scope, array_name: name, index }
+                EvalReferenceTarget::ArrayElement { scope, array_name: name, index: key }
             }
-            target => EvalReferenceTarget::NestedArrayElement { array_target: Box::new(target), index },
+            target => EvalReferenceTarget::NestedArrayElement { array_target: Box::new(target), index: key },
         };
         Ok((value, Some(target)))
     })();

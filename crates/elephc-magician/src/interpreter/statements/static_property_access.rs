@@ -609,9 +609,11 @@ pub(super) fn eval_static_property_reference_bind_result(
             values,
         )?;
         let value = eval_reference_target_value(&target, context, values)?;
-        eval_validate_property_value(&declaring_class, &property, value, context, values)?;
-        context.bind_static_property_alias(&declaring_class, property.name(), target);
-        return store_borrowed_static_property(&declaring_class, property.name(), value, context, values);
+        return with_eval_value_lease(value, context, values, |value, context, values| {
+            eval_validate_property_value(&declaring_class, &property, value, context, values)?;
+            context.bind_static_property_alias(&declaring_class, property.name(), target);
+            store_borrowed_static_property(&declaring_class, property.name(), value, context, values)
+        });
     }
     if eval_static_member_context_owns_class(&class_name, context) {
         if let Some(parent) = context.class_native_parent_name(&class_name) {

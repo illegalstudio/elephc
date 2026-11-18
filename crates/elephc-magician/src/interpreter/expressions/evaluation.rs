@@ -118,14 +118,33 @@ pub(in crate::interpreter) fn eval_array_get_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if values.type_tag(array)? != EVAL_TAG_OBJECT {
+    eval_array_get_with_reference(array, index, false, context, values)
+}
+
+/// Selects an array argument without separating an already stored PHP reference cell.
+pub(in crate::interpreter) fn eval_array_get_reference_result(
+    array: RuntimeCellHandle, index: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_array_get_with_reference(array, index, true, context, values)
+}
+
+/// Shares original-key guards and alias resolution before choosing value or reference storage.
+fn eval_array_get_with_reference(
+    array: RuntimeCellHandle, index: RuntimeCellHandle, preserve: bool,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let tag = values.type_tag(array)?;
+    if tag != EVAL_TAG_OBJECT {
         checked_array_keys::for_receiver(array, index, context, values)?;
         if let Some(target) = eval_array_reference_key(index, context.semantic_profile(), values)?
             .and_then(|key| context.array_element_alias(array, &key).cloned())
         {
             return eval_reference_target_value(&target, context, values);
         }
-        return values.array_get(array, index);
+        return if preserve && matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            values.array_get_preserving_references(array, index)
+        } else { values.array_get(array, index) };
     }
     if !eval_array_access_object_matches(array, context, values)? {
         let class_name = eval_closure_bound_object_class_name(array, context, values)?;

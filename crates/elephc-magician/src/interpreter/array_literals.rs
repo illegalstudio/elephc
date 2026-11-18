@@ -224,6 +224,12 @@ pub(in crate::interpreter) fn eval_array_reference_key(
         }
         EVAL_TAG_NULL => EvalArrayReferenceKey::String(Vec::new()),
         EVAL_TAG_BOOL | EVAL_TAG_FLOAT => EvalArrayReferenceKey::Int(eval_int_value(key, values)?),
+        EVAL_TAG_RESOURCE => {
+            let integer = values.cast_int(key)?;
+            let result = eval_int_value(integer, values).map(EvalArrayReferenceKey::Int);
+            let released = values.release(integer);
+            result.and_then(|key| released.map(|()| key))?
+        }
         _ => return Ok(None),
     }))
 }

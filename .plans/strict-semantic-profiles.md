@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step173 (this commit). Remaining feature integration is active. Issue:
+Verified through step174 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -1649,3 +1649,44 @@ ArrayKeys remains staged pending its remaining producer/source/ownership and
 native strict-eval admission gates. GLOBALS indexed unset is an unsupported
 baseline PHP capability tracked separately in taske2e5a1f1; this step does not
 claim a positive fixture for that missing surface.
+
+### Verified174: copied reference keys and interpreter lookup ownership
+
+Generic ArrayElement and NestedArrayElement targets now own typed key data,
+not independently owned runtime key handles. Shared snapshot, materialization,
+lookup and writeback helpers keep integer/string distinctions and binary bytes,
+root temporary keys and retire them on every exit. Selection captures the key
+before lookup callbacks. Equality between argument targets compares the captured
+data directly. Abandoned or nonescaping targets retain their receiver cleanup;
+cloning escaping metadata no longer duplicates an untracked key obligation.
+
+The original regression retained a literal String("0") owner after a successful
+call. Owned literal, integer and NUL-containing keys now survive generic method
+calls and promoted-property aliases with full retirement. Nested target reads
+also retire their intermediate array results, and property/static reference
+binding leases their lookup results before validation or publication. Shared
+statement value leases now publish their actual owner slot across native calls.
+
+By-reference array reads preserve an already stored reference cell after the
+same original-key guards and alias lookup. Array-backed parameter captures reuse
+their owned formal cell under coordinated property policies, avoiding an earlier
+UnsupportedConstruct with Casts. The existing key fixture now uses owned literal
+arguments instead of unrelated key variables to keep operands alive. Selected
+float keys snapshot without repeating their conversion diagnostic, while ordinary
+metadata lookup keeps its established diagnostic behavior; resource identities
+can also be captured as normalized integer data.
+
+All twenty-two focused gates pass, including eight staged profile/engine cases,
+four argument-failure cases, copied-key lifetime controls, existing reference,
+COW, conversion-failure and parent-publication controls, five-target emission,
+and four real opaque eval programs with clean heaps in121.38s. The PHP8.5.12
+oracle agrees. The complete builtin exporter/generator/audit workflow passes
+without generated changes, and the default compiler build passes in34.96s.
+
+Two baseline controls remain explicit admission work. The existing settype
+collection test fails identically on exact signed173 (journal e7aeaa47). A native
+promoted-reference constructor fixture also retains five blocks after function
+exit and an explicit collection, reproduced with the pre-step174 compiler
+(journal6b64af5a). The full typed fixture passes with clean ownership in native
+eval; AOT retirement requires its dedicated repair. ArrayKeys remains staged,
+and neither baseline failure is reported as a passing product gate.

@@ -193,11 +193,11 @@ pub enum EvalReferenceTarget {
     ArrayElement {
         scope: *mut ElephcEvalScope,
         array_name: String,
-        index: RuntimeCellHandle,
+        index: EvalArrayReferenceKey,
     },
     NestedArrayElement {
         array_target: Box<EvalReferenceTarget>,
-        index: RuntimeCellHandle,
+        index: EvalArrayReferenceKey,
     },
     ObjectProperty {
         object: RuntimeCellHandle,

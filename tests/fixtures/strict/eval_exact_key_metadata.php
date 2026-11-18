@@ -10,8 +10,7 @@ function evalExactMetadataObservations(): void {
     foreach ($automatic as $key => $value) { echo gettype($key), ':', $key, ':', $value, '|'; }
     $left = 10; $right = 20; $references = ['0' => &$left, 1 => &$right, '01' => 30];
     $references[0] = 20; $references['0'] = 12; echo $left, '/', $right, '|';
-    $stringZero = '0'; $integerZero = 0;
-    $probe = new EvalExactPair(); $probe->update($references[$stringZero], $references[$integerZero]);
+    $probe = new EvalExactPair(); $probe->update($references['0'], $references[0]);
     echo $left, '/', $right, '/', $references['0'], '/', $references[0], '|';
     $owner = new EvalExactHolder(); $owner->items['0'] = 9; unset($owner->items[0]);
     foreach ($owner->items as $key => $value) { echo gettype($key), ':', $key, ':', $value, '|'; }
