@@ -96,6 +96,27 @@ pub fn emit_owned_pointer_from_slot(emitter: &mut impl Emitter, tag: ValueTag, s
     }
 }
 
+/// Adopts a pointer with a runtime tag already saved alongside it in the native frame.
+pub fn emit_owned_tagged_pointer_from_slots(emitter: &mut impl Emitter, tag: &str, payload: &str) {
+    emit_cell_allocation(emitter);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x9, {tag}"));                     // recover the staged runtime tag
+            emitter.instruction("str x9, [x0]");                                // publish the tag in the independent cell
+            emitter.instruction(&format!("ldr x1, {payload}"));                 // recover the owned pointer
+            emitter.instruction("str x1, [x0, #8]");                            // transfer the pointer to the cell
+            emitter.instruction("str xzr, [x0, #16]");                          // clear the unused high word
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov r10, {tag}"));                    // recover the staged runtime tag
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // publish the tag in the independent cell
+            emitter.instruction(&format!("mov r10, {payload}"));                // recover the owned pointer
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // transfer the pointer to the cell
+            emitter.instruction("mov QWORD PTR [rax + 16], 0");                 // clear the unused high word
+        }
+    }
+}
+
 /// Preserves the native string pair across cell allocation.
 fn spill_string(emitter: &mut (impl AssemblyEmitter + TargetAbi)) {
     match emitter.arch() {

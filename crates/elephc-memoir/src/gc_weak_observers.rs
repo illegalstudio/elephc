@@ -72,7 +72,7 @@ pub fn emit(emitter: &mut impl Emitter) {
     abi::store_at_offset(emitter, result, 40);
     abi::emit_call_label(emitter, "__rt_gc_destructor_begin");
     abi::load_at_offset(emitter, arg0, 40);
-    emitter.emit_guarded_cleanup_call( "__rt_weak_map_notify", arg0, 32);
+    crate::cleanup::invoke::emit_guarded_cleanup_call(emitter, "__rt_weak_map_notify", arg0, 32);
     abi::emit_call_label(emitter, "__rt_gc_destructor_end");
     abi::emit_load_int_immediate(emitter, result, 1);
     abi::store_at_offset(emitter, result, 24);

@@ -23,3 +23,6 @@ pub mod owner_pair;
 pub mod byte_view;
 
 pub mod concat_window;
+
+pub mod export_scratch;
+pub mod implode_buffer;

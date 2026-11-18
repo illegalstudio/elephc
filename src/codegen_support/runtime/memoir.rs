@@ -171,10 +171,6 @@ impl elephc_memoir::MemoryContext for Emitter {
             running: crate::ir::GcControlOp::Running.as_i64(),
             runs: crate::ir::GcControlOp::Runs.as_i64(),
         } }
-    /// Retains the existing protected weak-observer cleanup ABI.
-    fn emit_guarded_cleanup_call(&mut self, entry: &str, payload: &str, pending_offset: usize) {
-        super::exceptions::emit_guarded_cleanup_call(self, entry, payload, pending_offset);
-    }
     /// Supplies the existing scratch capacity selected for this compilation.
     fn concat_capacity(&self) -> usize { self.concat_capacity }
     /// Preserves compiler translation of native reference-source failures.

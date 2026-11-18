@@ -51,7 +51,7 @@ pub fn emit_body(emitter: &mut impl Emitter, context: Context<'_>) {
         abi::emit_call_label(emitter, take_owner);
     }
     // The generic release suppresses child decrefs for graph members swept by the collector.
-    emitter.emit_guarded_cleanup_call("__rt_decref_any", result, THROWN);
+    crate::cleanup::invoke::emit_guarded_cleanup_call(emitter, "__rt_decref_any", result, THROWN);
     abi::store_at_offset(emitter, result, CAUGHT);
     abi::load_at_offset(emitter, result, THROWN);
     abi::emit_branch_if_int_result_zero(emitter, &done);

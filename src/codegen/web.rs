@@ -82,7 +82,9 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // A request cannot legitimately finish inside a boxed-array callback or reference validation.
     // Clear both stack-backed registries before reset cleanup can run user destructors, so a
     // failed request never leaves readers scanning its retired native stack.
-    abi::emit_store_zero_to_symbol(emitter, "_rt_unmanaged_ref_borrow_top", 0);
+    abi::emit_store_zero_to_symbol(
+        emitter, elephc_memoir::reference_cells::unmanaged_borrows::HEAD_SYMBOL, 0,
+    );
     abi::emit_store_zero_to_symbol(emitter, "_rt_reference_validation_pins_top", 0);
     // A normal or throwing `__set` call unlinks its stack-backed recursion node locally. The web
     // reset is the final backstop for non-Throwable request escapes, before the retired request
