@@ -43,7 +43,8 @@ pub(super) fn lower(
     for name in ctx.module.class_infos.keys() {
         let same = php_symbol_key(name.trim_start_matches('\\')) == target_key;
         if (!exclude_self && same) || parent_chain_contains(ctx, name, &target_key)
-            || class_interfaces_contain(ctx, name, &target_key)
+            || (class_interfaces_contain(ctx, name, &target_key)
+                && interface_is_relation(ctx, name, target, exclude_self))
         { candidates.insert(name.trim_start_matches('\\').to_string()); }
     }
     for name in ctx.module.interface_infos.keys() {
@@ -507,6 +508,23 @@ fn emit_object_class_id(ctx: &mut FunctionContext<'_>, unrelated: &str) {
     }
 }
 
+/// Whether `class` implementing `interface` counts for the relation. A generic class template
+/// (`Box`) is a hidden marker interface of every instantiation, and php-src's `Box` is the one
+/// class those instantiations stand for: `is_a()` holds for an instantiation, `is_subclass_of()`
+/// only for a class extending one, so with `exclude_self` the marker counts only when the
+/// class's parent carries it. The literal-target path applies the same rule.
+fn interface_is_relation(ctx: &FunctionContext<'_>, class: &str, interface: &str, exclude_self: bool) -> bool {
+    let interface = interface.trim_start_matches('\\');
+    if !exclude_self || !super::super::class_relations::reflection_hidden_interface(ctx, interface) {
+        return true;
+    }
+    lookup_class(ctx, class.trim_start_matches('\\'))
+        .and_then(|info| info.parent.clone())
+        .is_some_and(|parent| {
+            class_interfaces_contain(ctx, parent.trim_start_matches('\\'), &php_symbol_key(interface))
+        })
+}
+
 /// Lists every compiled class and interface with the names it is related to: itself unless
 /// `exclude_self`, its parent classes and its interfaces (an interface's own parents). Sorted, so
 /// the emitted comparisons do not depend on hash order.
@@ -524,7 +542,9 @@ fn ancestor_table(
             current = lookup_class(ctx, &parent).and_then(|info| info.parent.clone());
             if !ancestors.insert(parent) { break; }
         }
-        ancestors.extend(info.interfaces.iter().map(|name| name.trim_start_matches('\\').to_string()));
+        ancestors.extend(info.interfaces.iter()
+            .filter(|interface| interface_is_relation(ctx, &name, interface, exclude_self))
+            .map(|name| name.trim_start_matches('\\').to_string()));
         if !ancestors.is_empty() { table.insert(name, ancestors); }
     }
     for name in ctx.module.interface_infos.keys() {
