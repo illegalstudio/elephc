@@ -813,3 +813,4 @@ mod reflection_array_evaluation;
 mod reflection_guarded_properties;
 
 mod constructor_string_owners;
+mod reflection_constructor_arrays;

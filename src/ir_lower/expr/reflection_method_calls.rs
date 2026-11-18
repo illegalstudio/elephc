@@ -24,7 +24,7 @@ pub(super) fn lower_reflection_method_invoke_call(
     let mut array_call = None;
     let Some((object_arg, forwarded_args)) = (match method_key.as_str() {
         "invoke" => reflection_method_invoke_args(args, ctx.semantic_profile),
-        "invokeargs" => begin_reflection_array_call(ctx, reflector, "ReflectionMethod", args, 1, expr)
+        "invokeargs" => begin_reflection_array_call(ctx, reflector, "ReflectionMethod", "invokeArgs", args, 1, expr)
             .map(|call| {
                 let object = call.argument(0);
                 let forwarded = vec![call.unpack(1, expr.span)];

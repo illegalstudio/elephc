@@ -1239,3 +1239,28 @@ reference writeback and four-string arguments overflowing native registers.
 The signed154 raw constructor string-owner diagnostic is closed. Constructor-array
 validation, dependency policies and the remaining ArrayKeys/Locals/six-family
 integrations remain open; public admission has not changed.
+
+### Verified157: shared reflected constructor array checks
+
+ReflectionClass and ReflectionObject newInstanceArgs reuse the evaluated-array
+planner, original array-kind validation, rooted parameters and independent result
+staging already shared by Function/Method invokeArgs. Traversable arguments raise
+TypeError instead of being converted to arrays. Constructor dispatch borrows the
+rooted reflector, so argument-side receiver rebinding cannot consume or replace
+its cleanup owner. Class-name operands retire with the other rooted arguments.
+The invocation example now also constructs a delivery from a runtime array.
+
+Joba443a7ec passes ten target/profile emissions49.44s and eight native
+mode/profile/optimizer variants55.94s with clean heaps. Runtime arrays, named and
+default arguments, inline/local reflectors, ReflectionObject, receiver rebinding,
+source/constructor throws and returned object owners match PHP. Finala398994c
+passes in3m27s, including compiler/bridge builds63.13s and six exact Reflection,
+unpack and independent Coercions controls. All8 unique gates, assembly comments
+and diff hygiene pass. Public CLIe034fd2f passes PHP with both optimizer settings,
+LFC with Coercions, and the updated example in27.11s, all with clean heaps.
+
+A separate receiver-rebinding constructor-dispatch failure reproduces on signed156
+without semantic flags and is tracked as task4aa3b0e9. It is not claimed fixed by
+array validation. ArrayKeys writes/producers/eval, dependency policies, remaining
+Locals flow and the six pending guarantees still require completion. Public
+admission is unchanged.

@@ -44,31 +44,17 @@ pub(super) fn lower_reflection_class_new_instance_args(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let Some(signature) = ctx.classes.get("ReflectionClass")
-        .and_then(|info| info.methods.get("newinstanceargs")).cloned()
+    let Some(mut call) = begin_reflection_array_call(
+        ctx, object, "ReflectionClass", "newInstanceArgs", args, 0, expr,
+    )
     else { return lower_reflection_class_new_instance_args_unsupported(ctx, expr); };
-    let staging = prepublish_call_result(ctx, &PhpType::Mixed, expr.span);
-    let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
-    let pins = pin_in_flight_owners(ctx, &[class_name.value], expr.span);
-    begin_call_argument_evaluation(ctx);
-    let mut values = lower_args_with_signature(ctx, Some(&signature), args);
-    let intermediates = finish_call_argument_evaluation(ctx, &mut values);
-    let source = lowered_value_from_id(ctx, values[0]);
-    let source_type = ctx.builder.value_php_type(source.value);
-    let source_name = ctx.declare_hidden_temp(source_type.clone());
-    store_value_into_temp(ctx, &source_name, source_type, source, expr.span);
-    let slot = ctx.local_slots[&source_name];
-    register_owned_call_operand(ctx, slot, expr.span);
-    let unpack = Expr::new(ExprKind::Spread(Box::new(Expr::new(
-        ExprKind::Variable(source_name), expr.span,
-    ))), expr.span);
+    let reflector = call.reflector(ctx, expr.span);
+    let class_name = lower_property_get_from_value(ctx, reflector, "__name", Op::PropGet, expr);
+    let class_name = call.root_value(ctx, class_name, expr.span);
+    let class_name = lower_expr(ctx, &class_name);
+    let unpack = call.unpack(0, expr.span);
     let result = lower_new_dynamic_generic(ctx, class_name, &[unpack], expr);
-    stage_call_result(ctx, staging.as_ref(), result, expr.span);
-    retire_owned_call_operand(ctx, slot, expr.span);
-    retire_call_argument_intermediates(ctx, &intermediates);
-    unpin_in_flight_owners(ctx, pins, expr.span);
-    crate::ir_lower::ownership::release_if_owned(ctx, class_name, Some(expr.span));
-    take_prepublished_call_result(ctx, staging, result, expr.span)
+    finish_reflection_array_call(ctx, call, result, expr.span)
 }
 
 /// Lowers `ReflectionClass::newInstanceWithoutConstructor()` to constructorless allocation.
@@ -240,7 +226,7 @@ pub(super) fn lower_reflection_function_invoke_call(
     let mut array_call = None;
     let Some(forwarded_args) = (match method_key.as_str() {
         "invoke" => Some(reflection_function_invoke_args(args, ctx.semantic_profile)),
-        "invokeargs" => begin_reflection_array_call(ctx, reflector, "ReflectionFunction", args, 0, expr)
+        "invokeargs" => begin_reflection_array_call(ctx, reflector, "ReflectionFunction", "invokeArgs", args, 0, expr)
             .map(|call| {
                 let forwarded = vec![call.unpack(0, expr.span)];
                 array_call = Some(call);
