@@ -15,10 +15,8 @@
 //! - Oversized output reservations stay transient until the helper adopts them into
 //!   independently owned string storage before returning.
 
-use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 
 mod aarch64;
 mod x86_64;
@@ -260,32 +258,10 @@ fn emit_strip_tags_count_x86_64(emitter: &mut Emitter) {
 }
 
 /// Marks only heap-backed reservations as temporary so final persistence can adopt them.
-pub(super) fn emit_mark_reserved_result_temporary(emitter: &mut Emitter) {
-    let ready = "__rt_strip_tags_reservation_ready";
-    // -- retain scratch semantics, but transfer oversized reservations to their consumer --
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, "x9", "_concat_buf");
-            emitter.instruction("sub x10, x0, x9");                             // classify the reservation by its unsigned offset from concat scratch
-            abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64);
-            emitter.instruction("cmp x10, x11");                                // scratch reservations do not own a heap header
-            emitter.instruction(&format!("b.lo {}", ready));                    // leave scratch storage untagged for ordinary persistence
-            abi::emit_load_int_immediate(emitter, "x9", CONCAT_TEMP_HEAP_KIND as i64);
-            emitter.instruction("str x9, [x0, #-8]");                           // let string persistence adopt this sole heap reservation instead of copying it
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-            emitter.instruction("mov r11, rax");                                // preserve the output pointer while classifying its reservation
-            emitter.instruction("sub r11, r10");                                // an unsigned out-of-window offset identifies owned heap fallback storage
-            crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", emitter.concat_capacity as i64); // load the shared scratch capacity
-            emitter.instruction("cmp r11, r9");                                 // scratch reservations do not own a heap header
-            emitter.instruction(&format!("jb {}", ready));                      // leave scratch storage untagged for ordinary persistence
-            abi::emit_load_int_immediate(emitter, "r10",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND) as i64);
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // let string persistence adopt the sole heap reservation with its required kind marker
-        }
-    }
-    emitter.label(ready);
+fn emit_mark_reserved_result_temporary(emitter: &mut Emitter) {
+    elephc_memoir::strings::concat_scratch::emit_mark_reserved_result_temporary(
+        emitter, "__rt_strip_tags_reservation_ready", ["r10", "r11", "r9"],
+    );
 }
 
 #[cfg(test)]

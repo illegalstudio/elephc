@@ -30,6 +30,39 @@ use crate::Arch;
 use crate::layout::CONCAT_TEMP_HEAP_KIND;
 use crate::diagnostics::{ALLOC_OVERFLOW_MSG, CONCAT_OVERFLOW_MSG};
 
+/// Marks only the heap fallback from concat reservation for later string adoption.
+/// The x86 scratch array holds the arena base, reservation offset and capacity registers.
+/// The pointer in the integer result register is preserved.
+pub fn emit_mark_reserved_result_temporary(
+    emitter: &mut impl Emitter, ready: &str, x86_scratch: [&str; 3],
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+            emitter.instruction("sub x10, x0, x9");                             // classify the reservation by unsigned offset
+            abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity() as i64);
+            emitter.instruction("cmp x10, x11");                                // scratch storage carries no heap header
+            emitter.instruction(&format!("b.lo {ready}"));                      // leave scratch storage untouched
+            emitter.instruction(&format!("mov x9, #{CONCAT_TEMP_HEAP_KIND}"));  // allow persistence to adopt the heap reservation
+            emitter.instruction("str x9, [x0, #-8]");                           // mark the heap reservation as a temporary
+        }
+        Arch::X86_64 => {
+            let [base, offset, capacity] = x86_scratch;
+            abi::emit_symbol_address(emitter, base, "_concat_buf");
+            emitter.instruction(&format!("mov {offset}, rax"));                 // preserve the output pointer
+            emitter.instruction(&format!("sub {offset}, {base}"));              // compute the unsigned candidate offset
+            abi::emit_load_int_immediate(emitter, capacity, emitter.concat_capacity() as i64);
+            emitter.instruction(&format!("cmp {offset}, {capacity}"));          // scratch storage carries no heap header
+            emitter.instruction(&format!("jb {ready}"));                        // leave scratch storage untouched
+            abi::emit_load_int_immediate(
+                emitter, base, crate::layout::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND) as i64,
+            );
+            emitter.instruction(&format!("mov QWORD PTR [rax - 8], {base}"));   // mark the heap reservation with the complete kind word
+        }
+    }
+    emitter.label(ready);
+}
+
 /// Bytes a float formatter may write at its destination: `snprintf`'s 48-byte cap plus headroom.
 pub const FLOAT_WINDOW_BYTES: usize = 64;
 
