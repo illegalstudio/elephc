@@ -937,6 +937,33 @@ fn test_filter_default_ini_get_uses_fixture_overrides() {
     );
     assert_eq!(output.stdout, "special_chars|4");
 }
+/// `FULL_SPECIAL_CHARS` rejects invalid UTF-8 and null string names raise PHP's deprecation.
+#[test]
+fn test_filter_sanitize_rejects_invalid_utf8_and_deprecates_null_names() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(filter_var("\xFF", FILTER_SANITIZE_FULL_SPECIAL_CHARS)), "\n";
+set_error_handler(function (int $errno, string $message): bool {
+    echo "DEP:", $message, "\n";
+    return true;
+});
+var_dump(filter_input(INPUT_GET, null));
+var_dump(filter_id(null));
+var_dump(filter_has_var(INPUT_GET, null));
+"#,
+    );
+    assert_eq!(
+        out,
+        "\n\
+DEP:filter_input(): Passing null to parameter #2 ($var_name) of type string is deprecated\n\
+NULL\n\
+DEP:filter_id(): Passing null to parameter #1 ($name) of type string is deprecated\n\
+bool(false)\n\
+DEP:filter_has_var(): Passing null to parameter #2 ($var_name) of type string is deprecated\n\
+bool(false)\n"
+    );
+}
+
 /// `filter_var_array()` with a scalar filter writes through referenced input elements, exactly
 /// like php-src's duplicate-then-filter-in-place behaviour.
 #[test]

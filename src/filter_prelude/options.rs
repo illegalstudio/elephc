@@ -582,7 +582,19 @@ fn string_arg_decl() -> Stmt {
             ),
             s_if(
                 e_call("is_null", vec![e_var("value")]),
-                vec![s_return(e_str(""))],
+                vec![
+                    s_expr(e_call("__elephc_builtin_deprecated", vec![
+                        e_concat_all(vec![
+                            e_var("caller"),
+                            e_str("(): Passing null to parameter #"),
+                            e_var("arg"),
+                            e_str(" ($"),
+                            e_var("param"),
+                            e_str(") of type string is deprecated"),
+                        ]),
+                    ])),
+                    s_return(e_str("")),
+                ],
                 vec![],
                 None,
             ),

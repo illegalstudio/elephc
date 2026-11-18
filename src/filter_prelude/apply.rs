@@ -847,14 +847,21 @@ fn full_special_chars_decl() -> Stmt {
                 vec![],
                 None,
             ),
-            s_assign("probe", e_call("htmlentities", vec![
-                e_var("value"), e_var("quotes"), e_str("UTF-8"),
-            ])),
+            // php-src returns an empty string when the input is not valid UTF-8. Probing with
+            // `htmlentities()` cannot decide this: the byte-oriented runtime leaves invalid
+            // bytes unchanged, so the bridge validates the encoding directly.
             s_if(
                 e_binop(
                     e_binop(e_var("value"), BinOp::StrictNotEq, e_str("")),
                     BinOp::And,
-                    e_binop(e_var("probe"), BinOp::StrictEq, e_str("")),
+                    e_binop(
+                        e_call("elephc_filter_valid_utf8", vec![e_call(
+                            "bin2hex",
+                            vec![e_var("value")],
+                        )]),
+                        BinOp::StrictEq,
+                        e_int(0),
+                    ),
                 ),
                 vec![s_return(e_str(""))],
                 vec![],

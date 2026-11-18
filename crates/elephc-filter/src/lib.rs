@@ -197,6 +197,17 @@ pub unsafe extern "C" fn elephc_filter_apply_sanitize(
     })
 }
 
+/// Reports whether a byte string is well-formed UTF-8, PHP's default filter charset.
+///
+/// `FILTER_SANITIZE_FULL_SPECIAL_CHARS` returns an empty string for input that is not valid
+/// UTF-8, so the prelude validates before delegating the escaping itself. The bridge keeps this
+/// check byte-exact instead of relying on the runtime's byte-oriented HTML escaper.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_filter_valid_utf8(value_hex: *const c_char) -> i64 {
+    let value = hex_arg(value_hex);
+    i64::from(std::str::from_utf8(&value).is_ok())
+}
+
 /// Returns FILTER_VALIDATE_EMAIL's result.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_filter_apply_email(flags: i64, value_hex: *const c_char) -> i64 {

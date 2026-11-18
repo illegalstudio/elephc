@@ -77,6 +77,10 @@ pub(super) fn declarations() -> Program {
             .param("value", CType::Str)
             .returns(CType::Int)
             .build(),
+        extern_fn("elephc_filter_valid_utf8", "elephc_filter")
+            .param("value", CType::Str)
+            .returns(CType::Int)
+            .build(),
         extern_fn("elephc_filter_result_kind", "elephc_filter")
             .returns(CType::Int)
             .build(),

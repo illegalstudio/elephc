@@ -11,8 +11,8 @@
 
 use crate::parser::ast::{BinOp, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    class, e_array, e_binop, e_bool, e_call, e_int, e_str, e_var, function, s_if, s_namespace,
-    s_return, s_throw, t_mixed, t_union,
+    class, e_array, e_binop, e_bool, e_call, e_int, e_str, e_var, function, s_assign, s_if,
+    s_namespace, s_return, t_mixed, t_union,
 };
 
 /// The ordered filter table exactly as php-src exposes it through filter_list().
@@ -75,49 +75,13 @@ fn filter_list_decl() -> Stmt {
 
 /// Builds `filter_id(mixed $name): mixed`.
 fn filter_id_decl() -> Stmt {
-    let mut body = vec![
-        s_if(
-            crate::synthetic_class::e_not(e_call("is_string", vec![e_var("name")])),
-            vec![s_if(
-                e_binop(
-                    e_call("is_int", vec![e_var("name")]),
-                    BinOp::Or,
-                    e_binop(
-                        e_call("is_float", vec![e_var("name")]),
-                        BinOp::Or,
-                        e_binop(
-                            e_call("is_bool", vec![e_var("name")]),
-                            BinOp::Or,
-                            e_call("is_null", vec![e_var("name")]),
-                        ),
-                    ),
-                ),
-                vec![crate::synthetic_class::s_assign(
-                    "name",
-                    crate::synthetic_class::e_cast(crate::parser::ast::CastType::String, e_var("name")),
-                )],
-                vec![],
-                Some(vec![s_if(
-                    crate::synthetic_class::e_instance_of(e_var("name"), "\\Stringable"),
-                    vec![crate::synthetic_class::s_assign(
-                        "name",
-                        crate::synthetic_class::e_cast(crate::parser::ast::CastType::String, e_var("name")),
-                    )],
-                    vec![],
-                    Some(vec![s_throw(crate::synthetic_class::e_new_fq(
-                        "TypeError",
-                        vec![crate::synthetic_class::e_concat_all(vec![
-                            e_str("filter_id(): Argument #1 ($name) must be of type string, "),
-                            e_call("__elephc_filter_type_name", vec![e_var("name")]),
-                            e_str(" given"),
-                        ])],
-                    ))]),
-                )]),
-            )],
-            vec![],
-            None,
+    let mut body = vec![s_assign(
+        "name",
+        e_call(
+            "__elephc_filter_string_arg",
+            vec![e_var("name"), e_str("filter_id"), e_int(1), e_str("name")],
         ),
-    ];
+    )];
     for (name, id) in FILTER_TABLE {
         body.push(s_if(
             e_binop(e_var("name"), BinOp::StrictEq, e_str(name)),
