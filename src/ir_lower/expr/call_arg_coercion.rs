@@ -1279,6 +1279,15 @@ pub(super) fn coerce_operands_to_params_guarded(
             operands[index] =
                 root_evaluated_call_argument(ctx, lowered, Span::dummy()).value;
         }
+        // The operands after the regular parameters (a variadic's collected array, built from
+        // extra named arguments after every source was evaluated) are owned too.
+        if !sig.ref_params.get(regular_param_count).copied().unwrap_or(false) {
+            for index in limit..operands.len() {
+                let lowered = lowered_value_from_id(ctx, operands[index]);
+                operands[index] =
+                    root_evaluated_call_argument(ctx, lowered, Span::dummy()).value;
+            }
+        }
     }
     // What each deferred guard's refusal must release besides its own operand: the other
     // guarded operands that are owned temporaries, plus, for an earlier string guard, the box it
