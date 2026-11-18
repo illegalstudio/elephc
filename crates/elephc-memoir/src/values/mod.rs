@@ -58,3 +58,4 @@ pub mod array_shift;
 pub mod array_unshift;
 pub mod hash_iter;
 pub mod hash_insert_owned;
+pub mod object_storage;

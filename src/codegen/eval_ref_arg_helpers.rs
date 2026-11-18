@@ -15,6 +15,8 @@
 //!   string, array, iterable, and object references use raw ABI storage that is
 //!   boxed again during writeback.
 
+use elephc_memoir::reference_cells::eval_writeback;
+
 use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, emit_box_current_value_as_mixed, runtime_value_tag};
 use crate::types::{FunctionSig, PhpType};
@@ -180,7 +182,7 @@ fn emit_aarch64_write_back_mixed_ref_arg(
     abi::emit_load_temporary_stack_slot(emitter, "x10", stack_offset + slot.raw_offset);
     emitter.instruction("cmp x9, x10");                                         // skip writeback when the native call kept the same Mixed cell
     emitter.instruction(&format!("b.eq {}", unchanged_label));                  // unchanged slots still own their native activation lease
-    emit_aarch64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "x9", "x10");
+    eval_writeback::emit_replace(emitter, label_prefix, slot.param_index, "x9", "x10");
     abi::emit_jump(emitter, &done_label);
     emitter.label(&unchanged_label);
     abi::emit_load_temporary_stack_slot(emitter, "x0", stack_offset + slot.raw_offset);
@@ -204,7 +206,7 @@ fn emit_x86_64_write_back_mixed_ref_arg(
     abi::emit_load_temporary_stack_slot(emitter, "r11", stack_offset + slot.raw_offset);
     emitter.instruction("cmp r10, r11");                                        // skip writeback when the native call kept the same Mixed cell
     emitter.instruction(&format!("je {}", unchanged_label));                    // unchanged slots still own their native activation lease
-    emit_x86_64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "r10", "r11");
+    eval_writeback::emit_replace(emitter, label_prefix, slot.param_index, "r10", "r11");
     abi::emit_jump(emitter, &done_label);
     emitter.label(&unchanged_label);
     abi::emit_load_temporary_stack_slot(emitter, "rax", stack_offset + slot.raw_offset);
@@ -234,7 +236,7 @@ fn emit_aarch64_write_back_typed_ref_arg(
     emit_box_current_value_as_mixed(emitter, &slot.param_ty);
     emitter.instruction("mov x10, x0");                                         // keep the newly boxed ref value available for cell replacement
     abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
-    emit_aarch64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "x9", "x10");
+    eval_writeback::emit_replace(emitter, label_prefix, slot.param_index, "x9", "x10");
     emit_aarch64_release_typed_ref_slot(emitter, slot, stack_offset, label_prefix);
     emitter.label(&done_label);
 }
@@ -261,7 +263,7 @@ fn emit_x86_64_write_back_typed_ref_arg(
     emit_box_current_value_as_mixed(emitter, &slot.param_ty);
     emitter.instruction("mov r11, rax");                                        // keep the newly boxed ref value available for cell replacement
     abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
-    emit_x86_64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "r10", "r11");
+    eval_writeback::emit_replace(emitter, label_prefix, slot.param_index, "r10", "r11");
     emit_x86_64_release_typed_ref_slot(emitter, slot, stack_offset, label_prefix);
     emitter.label(&done_label);
 }
@@ -295,9 +297,9 @@ fn emit_aarch64_write_back_refcounted_typed_ref_arg(
     emitter.instruction("mov x10, x0");                                         // keep the boxed replacement while updating the eval ref cell
     abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
     if slot.raw_refcounted_owned {
-        emit_aarch64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "x9", "x10");
+        eval_writeback::emit_replace(emitter, label_prefix, slot.param_index, "x9", "x10");
     } else {
-        emit_aarch64_replace_mixed_cell_without_releasing_old(emitter, "x9", "x10");
+        eval_writeback::emit_replace_retired(emitter, "x9", "x10");
     }
     emit_aarch64_release_refcounted_raw_slot_value(emitter, slot, stack_offset);
     emitter.instruction(&format!("b {}", done_label));                          // finish after transferring the changed raw ref payload
@@ -337,9 +339,9 @@ fn emit_x86_64_write_back_refcounted_typed_ref_arg(
     emitter.instruction("mov r11, rax");                                        // keep the boxed replacement while updating the eval ref cell
     abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
     if slot.raw_refcounted_owned {
-        emit_x86_64_replace_mixed_cell(emitter, label_prefix, slot.param_index, "r10", "r11");
+        eval_writeback::emit_replace(emitter, label_prefix, slot.param_index, "r10", "r11");
     } else {
-        emit_x86_64_replace_mixed_cell_without_releasing_old(emitter, "r10", "r11");
+        eval_writeback::emit_replace_retired(emitter, "r10", "r11");
     }
     emit_x86_64_release_refcounted_raw_slot_value(emitter, slot, stack_offset);
     emitter.instruction(&format!("jmp {}", done_label));                        // finish after transferring the changed raw ref payload
@@ -608,132 +610,6 @@ fn emit_x86_64_release_refcounted_raw_slot(
     abi::emit_load_temporary_stack_slot(emitter, "rax", stack_offset + slot.raw_offset);
     abi::emit_decref_if_refcounted(emitter, ty);
     emitter.label(&done_label);
-}
-
-/// Copies a replacement ARM64 Mixed cell into an existing target cell without releasing old payload.
-fn emit_aarch64_replace_mixed_cell_without_releasing_old(
-    emitter: &mut Emitter,
-    target_reg: &str,
-    replacement_reg: &str,
-) {
-    abi::emit_push_reg_pair(emitter, target_reg, replacement_reg);
-    emitter.instruction("ldr x9, [sp]");                                        // reload the original Mixed cell pointer for direct replacement
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the replacement Mixed cell pointer
-    emitter.instruction("ldr x11, [x10]");                                      // copy the replacement runtime tag
-    emitter.instruction("str x11, [x9]");                                       // overwrite the target cell tag
-    emitter.instruction("ldr x11, [x10, #8]");                                  // copy the replacement low payload word
-    emitter.instruction("str x11, [x9, #8]");                                   // overwrite the target cell low payload word
-    emitter.instruction("ldr x11, [x10, #16]");                                 // copy the replacement high payload word
-    emitter.instruction("str x11, [x9, #16]");                                  // overwrite the target cell high payload word
-    emitter.instruction("mov x0, x10");                                         // pass the now-empty replacement cell storage to heap_free
-    abi::emit_call_label(emitter, "__rt_heap_free");
-    abi::emit_release_temporary_stack(emitter, 16);
-}
-
-/// Copies a replacement x86_64 Mixed cell into an existing target cell without releasing old payload.
-fn emit_x86_64_replace_mixed_cell_without_releasing_old(
-    emitter: &mut Emitter,
-    target_reg: &str,
-    replacement_reg: &str,
-) {
-    abi::emit_push_reg_pair(emitter, target_reg, replacement_reg);
-    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // reload the original Mixed cell pointer for direct replacement
-    emitter.instruction("mov r11, QWORD PTR [rsp + 8]");                        // reload the replacement Mixed cell pointer
-    emitter.instruction("mov r9, QWORD PTR [r11]");                             // copy the replacement runtime tag
-    emitter.instruction("mov QWORD PTR [r10], r9");                             // overwrite the target cell tag
-    emitter.instruction("mov r9, QWORD PTR [r11 + 8]");                         // copy the replacement low payload word
-    emitter.instruction("mov QWORD PTR [r10 + 8], r9");                         // overwrite the target cell low payload word
-    emitter.instruction("mov r9, QWORD PTR [r11 + 16]");                        // copy the replacement high payload word
-    emitter.instruction("mov QWORD PTR [r10 + 16], r9");                        // overwrite the target cell high payload word
-    emitter.instruction("mov rax, r11");                                        // pass the now-empty replacement cell storage to heap_free
-    abi::emit_call_label(emitter, "__rt_heap_free");
-    abi::emit_release_temporary_stack(emitter, 16);
-}
-
-/// Copies one replacement ARM64 Mixed cell payload into an existing target cell.
-fn emit_aarch64_replace_mixed_cell(
-    emitter: &mut Emitter,
-    label_prefix: &str,
-    param_index: usize,
-    target_reg: &str,
-    replacement_reg: &str,
-) {
-    let release_string = format!("{}_ref_{}_release_string", label_prefix, param_index);
-    let copy_new = format!("{}_ref_{}_copy_new", label_prefix, param_index);
-    let done = format!("{}_ref_{}_assign_done", label_prefix, param_index);
-
-    abi::emit_push_reg_pair(emitter, target_reg, replacement_reg);
-    emitter.instruction("ldr x9, [sp]");                                        // reload the original Mixed cell pointer for old-payload inspection
-    emitter.instruction("ldr x11, [x9]");                                       // inspect the old payload tag before overwriting the cell
-    emitter.instruction("cmp x11, #1");                                         // strings own a persisted heap payload that needs safe free
-    emitter.instruction(&format!("b.eq {}", release_string));                   // release string payloads through the string-safe free path
-    emitter.instruction("cmp x11, #4");                                         // tags below array/hash/object/mixed are scalar payloads
-    emitter.instruction(&format!("b.lo {}", copy_new));                         // scalar payloads can be overwritten directly
-    emitter.instruction("cmp x11, #7");                                         // tags above the refcounted payload range are not released here
-    emitter.instruction(&format!("b.hi {}", copy_new));                         // unknown/null payload tags can be overwritten directly
-    emitter.instruction("ldr x0, [x9, #8]");                                    // pass the old refcounted child payload to the generic release helper
-    abi::emit_call_label(emitter, "__rt_decref_any");
-    emitter.instruction(&format!("b {}", copy_new));                            // continue with replacement after releasing the old child
-    emitter.label(&release_string);
-    emitter.instruction("ldr x9, [sp]");                                        // reload the original Mixed cell before reading its string payload
-    emitter.instruction("ldr x0, [x9, #8]");                                    // pass the old string payload pointer to the safe free helper
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
-    emitter.label(&copy_new);
-    emitter.instruction("ldr x9, [sp]");                                        // reload the original Mixed cell pointer for replacement
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the replacement Mixed cell pointer
-    emitter.instruction("ldr x11, [x10]");                                      // copy the replacement runtime tag
-    emitter.instruction("str x11, [x9]");                                       // overwrite the target cell tag
-    emitter.instruction("ldr x11, [x10, #8]");                                  // copy the replacement low payload word
-    emitter.instruction("str x11, [x9, #8]");                                   // overwrite the target cell low payload word
-    emitter.instruction("ldr x11, [x10, #16]");                                 // copy the replacement high payload word
-    emitter.instruction("str x11, [x9, #16]");                                  // overwrite the target cell high payload word
-    emitter.instruction("mov x0, x10");                                         // pass the now-empty replacement cell storage to heap_free
-    abi::emit_call_label(emitter, "__rt_heap_free");
-    emitter.label(&done);
-    abi::emit_release_temporary_stack(emitter, 16);
-}
-
-/// Copies one replacement x86_64 Mixed cell payload into an existing target cell.
-fn emit_x86_64_replace_mixed_cell(
-    emitter: &mut Emitter,
-    label_prefix: &str,
-    param_index: usize,
-    target_reg: &str,
-    replacement_reg: &str,
-) {
-    let release_string = format!("{}_ref_{}_release_string_x", label_prefix, param_index);
-    let copy_new = format!("{}_ref_{}_copy_new_x", label_prefix, param_index);
-    let done = format!("{}_ref_{}_assign_done_x", label_prefix, param_index);
-
-    abi::emit_push_reg_pair(emitter, target_reg, replacement_reg);
-    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // reload the original Mixed cell pointer for old-payload inspection
-    emitter.instruction("mov r9, QWORD PTR [r10]");                             // inspect the old payload tag before overwriting the cell
-    emitter.instruction("cmp r9, 1");                                           // strings own a persisted heap payload that needs safe free
-    emitter.instruction(&format!("je {}", release_string));                     // release string payloads through the string-safe free path
-    emitter.instruction("cmp r9, 4");                                           // tags below array/hash/object/mixed are scalar payloads
-    emitter.instruction(&format!("jl {}", copy_new));                           // scalar payloads can be overwritten directly
-    emitter.instruction("cmp r9, 7");                                           // tags above the refcounted payload range are not released here
-    emitter.instruction(&format!("jg {}", copy_new));                           // unknown/null payload tags can be overwritten directly
-    emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // pass the old refcounted child payload to the generic release helper
-    abi::emit_call_label(emitter, "__rt_decref_any");
-    emitter.instruction(&format!("jmp {}", copy_new));                          // continue with replacement after releasing the old child
-    emitter.label(&release_string);
-    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // reload the original Mixed cell before reading its string payload
-    emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // pass the old string payload pointer to the safe free helper
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
-    emitter.label(&copy_new);
-    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // reload the original Mixed cell pointer for replacement
-    emitter.instruction("mov r11, QWORD PTR [rsp + 8]");                        // reload the replacement Mixed cell pointer
-    emitter.instruction("mov r9, QWORD PTR [r11]");                             // copy the replacement runtime tag
-    emitter.instruction("mov QWORD PTR [r10], r9");                             // overwrite the target cell tag
-    emitter.instruction("mov r9, QWORD PTR [r11 + 8]");                         // copy the replacement low payload word
-    emitter.instruction("mov QWORD PTR [r10 + 8], r9");                         // overwrite the target cell low payload word
-    emitter.instruction("mov r9, QWORD PTR [r11 + 16]");                        // copy the replacement high payload word
-    emitter.instruction("mov QWORD PTR [r10 + 16], r9");                        // overwrite the target cell high payload word
-    emitter.instruction("mov rax, r11");                                        // pass the now-empty replacement cell storage to heap_free
-    abi::emit_call_label(emitter, "__rt_heap_free");
-    emitter.label(&done);
-    abi::emit_release_temporary_stack(emitter, 16);
 }
 
 #[cfg(test)]

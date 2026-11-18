@@ -128,6 +128,8 @@ impl elephc_memoir::TargetAbi for Emitter {
     /// Reserves aligned scratch through the host stack ABI.
     fn emit_reserve_temporary_stack(&mut self, amount: usize) { abi::emit_reserve_temporary_stack(self, amount) }
     /// Releases scratch through the host stack ABI.
+    fn emit_push_reg_pair(&mut self, low: &str, high: &str) { abi::emit_push_reg_pair(self, low, high) }
+
     fn emit_release_temporary_stack(&mut self, amount: usize) { abi::emit_release_temporary_stack(self, amount) }
     /// Restores a register from host temporary stack storage.
     fn emit_load_temporary_stack_slot(&mut self, reg: &str, offset: usize) { abi::emit_load_temporary_stack_slot(self, reg, offset) }

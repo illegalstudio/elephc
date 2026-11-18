@@ -47,10 +47,7 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter, na
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save payload size for allocation and dyn-prop detection
     abi::emit_symbol_address(emitter, "r11", "_class_object_allocation_sizes");
     emitter.instruction("mov rax, QWORD PTR [r11 + rax * 8]");                  // include ordinary Throwable construction metadata in the allocation
-    emitter.instruction("call __rt_heap_alloc");                                // allocate a clone object payload with the same byte size
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the x86_64 object heap kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform object heap header
-    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the source class id
     emitter.instruction("mov QWORD PTR [rax], rcx");                            // store the class id at the clone payload head
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the clone object payload pointer
