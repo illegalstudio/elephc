@@ -421,6 +421,29 @@ echo probe(['k' => 42]), "\n";
     assert_eq!(out, "take(): Argument #1 ($t) must be of type ?T, int given\n");
 }
 
+/// A deferred class check reads its `mixed` local after every later argument ran, so a later
+/// argument that overwrites that local must not free the value the check and callee receive.
+/// The local is the only owner here, with no `catch (TypeError)` elsewhere in the program.
+#[test]
+fn test_deferred_class_check_keeps_a_mixed_local_overwritten_by_a_later_argument() {
+    let out = compile_and_run(
+        r#"<?php
+final class Timer { public function __construct(public string $id) {} }
+function nul(?Timer $t, int $n): string { return $t?->id ?? "null"; }
+function raw(Timer $t, int $n): string { return $t->id; }
+function uni(Timer|ArrayObject $t, int $n): string { return $t instanceof Timer ? $t->id : "ao"; }
+function getMixed(mixed $v): mixed { return $v; }
+$a = getMixed(new Timer('a')); echo nul($a, ($a = 7)), "\n";
+$b = getMixed(new Timer('b')); echo nul(t: $b, n: ($b = 7)), "\n";
+$c = getMixed(new Timer('c')); echo raw(t: $c, n: ($c = 7)), "\n";
+$d = getMixed(new Timer('d')); echo uni($d, ($d = 7)), "\n";
+$e = getMixed(new Timer('e')); echo uni(t: $e, n: ($e = 7)), "\n";
+$f = getMixed(new Timer('f')); echo raw(n: ($f = 7), t: getMixed(new Timer('g'))), "\n";
+"#,
+    );
+    assert_eq!(out, "a\nb\nc\nd\ne\ng\n");
+}
+
 /// The optimizer must see the runtime class check of a by-value `?T`, union or `object`
 /// parameter: a call into an otherwise pure or non-throwing body keeps its `TypeError` and
 /// the `catch` that observes it.

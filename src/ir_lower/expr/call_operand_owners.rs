@@ -147,6 +147,31 @@ pub(super) fn root_evaluated_call_argument(
     value: LoweredValue,
     span: Span,
 ) -> LoweredValue {
+    root_call_argument(ctx, value, span, false)
+}
+
+/// Roots an evaluated argument like `root_evaluated_call_argument`, and also pins a borrowed
+/// `mixed` local load that rule leaves unpinned.
+///
+/// A deferred class-like parameter check reads its source after every later argument ran, so
+/// a later write to the same local must not free the boxed value that check inspects.
+pub(super) fn pin_evaluated_call_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let pinnable = Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(value.value))
+        && matches!(ctx.builder.value_defining_op(value.value), Some(Op::LoadLocal | Op::LoadStaticLocal));
+    root_call_argument(ctx, value, span, pinnable)
+}
+
+/// Shared body of the call-argument rooting helpers; `pin_borrowed` roots a borrowed load too.
+fn root_call_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+    pin_borrowed: bool,
+) -> LoweredValue {
     let php_type = ctx.builder.value_php_type(value.value);
     let borrowed_ref_cell_value = ctx.builder.value_defining_op(value.value) == Some(Op::LoadRefCell)
         && Ownership::php_type_needs_lifetime_tracking(&php_type);
@@ -154,7 +179,7 @@ pub(super) fn root_evaluated_call_argument(
         .call_argument_evaluation_scopes
         .last()
         .is_some_and(|scope| scope.expression_depth == ctx.expression_depth)
-        || (!ctx.value_needs_release_after_use(value) && !borrowed_ref_cell_value)
+        || (!pin_borrowed && !ctx.value_needs_release_after_use(value) && !borrowed_ref_cell_value)
     {
         return value;
     }

@@ -42,13 +42,16 @@ fn record_planned_object_param_source(
     plan: &crate::types::call_args::CallArgPlan,
     source_index: usize,
     value: crate::ir::ValueId,
-) {
+) -> crate::ir::ValueId {
     let Some(source) = plan.source_values.iter().find(|source| source.source_index() == source_index)
     else {
-        return;
+        return value;
     };
-    if let Some(param_index) = source.param_idx() {
-        super::call_arg_coercion::record_object_param_source(ctx, sig, param_index, value, source.expr());
+    match source.param_idx() {
+        Some(param_index) => super::call_arg_coercion::record_object_param_source(
+            ctx, sig, param_index, value, source.expr(),
+        ),
+        None => value,
     }
 }
 
@@ -192,8 +195,7 @@ fn lower_planned_source_arg(
     capture_values: bool,
 ) -> crate::ir::ValueId {
     let value = lower_planned_source_arg_value(ctx, sig, plan, source_index, capture_values);
-    record_planned_object_param_source(ctx, sig, plan, source_index, value);
-    value
+    record_planned_object_param_source(ctx, sig, plan, source_index, value)
 }
 
 /// Lowers one planned source argument without recording its class-like parameter check.
@@ -538,7 +540,7 @@ fn lower_named_args_with_spread_plan_impl(
                 .unwrap_or_else(|| lower_planned_source_arg(ctx, sig, plan, source_index, capture_values)),
             None => lower_planned_source_arg(ctx, sig, plan, source_index, capture_values),
         };
-        record_planned_object_param_source(ctx, sig, plan, source_index, value);
+        let value = record_planned_object_param_source(ctx, sig, plan, source_index, value);
         if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
         source_values[source_index] = Some(value);
     }

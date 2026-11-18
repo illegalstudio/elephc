@@ -940,7 +940,7 @@ fn guard_runtime_object_param(
         }
     }
     if defer_object_param_check(ctx, sig, index, arg.span) {
-        return Some(value);
+        return Some(pin_evaluated_call_argument(ctx, value, arg.span));
     }
     Some(emit_object_param_guard(ctx, sig, index, value, &boundary, arg.span))
 }
@@ -1017,23 +1017,28 @@ fn defer_object_param_check(
 /// Records the class check a named or unpacked source bound to parameter `index` needs.
 ///
 /// Called right after the source was evaluated, so a later argument that writes the same local
-/// cannot change the type the decision reads.
+/// cannot change the type the decision reads. Returns the operand to use: a deferred check pins
+/// a borrowed local load, so that write cannot free the value the check reads either.
 pub(super) fn record_object_param_source(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     index: usize,
     value: crate::ir::ValueId,
     source: &Expr,
-) {
+) -> crate::ir::ValueId {
     if sig.ref_params.get(index).copied().unwrap_or(false) {
-        return;
+        return value;
     }
     let Some((_, param_ty)) = sig.params.get(index) else {
-        return;
+        return value;
     };
-    if runtime_object_param_boundary(ctx, param_ty, value, source).is_some() {
-        defer_object_param_check(ctx, sig, index, source.span);
+    if runtime_object_param_boundary(ctx, param_ty, value, source).is_some()
+        && defer_object_param_check(ctx, sig, index, source.span)
+    {
+        let lowered = lowered_value_from_id(ctx, value);
+        return pin_evaluated_call_argument(ctx, lowered, source.span).value;
     }
+    value
 }
 
 /// Returns the runtime class check a `mixed` or `object|null` argument needs at `param_ty`.
