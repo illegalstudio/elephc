@@ -26,8 +26,10 @@ $copy = returnGlobalMixed(); $rowCopy = returnGlobalRows();
         );
         for name in ["returnGlobalMixed", "returnGlobalRows"] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            let global = function.instructions.iter().find(|inst| inst.op == Op::LoadGlobal)
-                .expect("the return must read global storage").result.unwrap();
+            assert!(function.instructions.iter().any(|inst| inst.op == Op::LoadGlobalRefCell),
+                "{target}: the local name must acquire a global reference lease");
+            let global = function.instructions.iter().find(|inst| inst.op == Op::LoadRefCell)
+                .expect("the return must read its attached global value").result.unwrap();
             if name == "returnGlobalMixed" {
                 assert!(function.instructions.iter().any(|inst| inst.op == Op::MixedClone && inst.operands == [global]),
                     "{target}: mutable global cells must detach before returning");

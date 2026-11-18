@@ -57,7 +57,7 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, name: &str, init: &Expr, 
             Ownership::NonHeap, Op::BindLocalRefContract.default_effects(), Some(span));
     }
     crate::ir_lower::local_binding_origins::end(ctx, name, Some(span));
-    ctx.bind_static_ref_cell_ptr(name, pointer, span);
+    ctx.bind_persistent_ref_cell_ptr(name, pointer, span);
     crate::ir_lower::local_binding_origins::start_reference_declaration(ctx, name,
         contract.map_or(PhpType::Mixed, |contract| contract.ty), span);
     if let Some(owner) = displaced { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }

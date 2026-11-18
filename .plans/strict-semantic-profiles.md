@@ -2322,3 +2322,17 @@ Coverage includes scalar and array statics, an older open parameter, escaped old
 No additional semantic family is admitted. Native global roles and Nullability, Mixed, Initialization, ArrayTypes and Indexing remain active work.
 
 All 12 acceptance gates passed. The public controls include four strict clean-heap runs, four preserved legacy diagnostics and the complete example.
+
+### Verified198: independent global activation leases
+
+Ordinary function globals now acquire an owned managed reference cell through typed LoadGlobalRefCell and guarded direct-producer adoption. The shared persistent-cell binder preserves earlier raw frame layouts. Unset and reference reassociation detach only the activation name; escaped references keep the program value, while value captures retain independent snapshots. Main, request superglobals and extern storage retain their existing boundaries. GLOBALS projection reads program symbols rather than detached local replacements.
+
+Mixed program reads dereference wrappers. Program stores and eval reload share swap_mixed_symbol, which publishes through an existing wrapper and prevents self-child publication before retiring the displaced owner. StoreGlobal declares PHP callback effects. Reached global statements are observable and may throw: retiring an older local precedes alias publication, while replacing a program value publishes the new value before retirement. The interpreter uses the same two orders and ends a named global alias before reference reassociation.
+
+Core analysis exposed a raw integer cell accessed using a stale Mixed payload after reassociation. Reference writes now consume current proven payload facts, retaining the instruction ABI only when proof is unavailable. Reference-bound facts are restored per branch and unioned across reachable predecessors, separately from definite initialization. The fixture covers integer, float and string reassociation, conditional detach, reference/value captures, arrays, objects, missing globals, explicit mixed reference updates, and caught destructor failures for both declaration and program publication.
+
+Acceptance covers a default compiler/Magician archive build, exact owned-transfer and borrowed-copy validator tests, all five emitters, native and real opaque-eval execution with both profiles and optimizer settings, both interpreter entries with zero retained owners, directly affected reference/global/static/foreach controls, assembly comments and diff hygiene. Public PHP and LFC cases exercise all eight profile/optimizer combinations with clean heaps; the complete strict-locals example also passes. A fixture helper was moved before use after a staged-entry undefined-function error, without weakening the mixed reference case.
+
+No additional semantic family is admitted. Global producer-origin enforcement, Nullability, Mixed, Initialization, ArrayTypes, Indexing and complete umbrella acceptance remain active.
+
+All 19 acceptance gates passed in job e0987ad4. PHP 8.5.12 produces the same complete fixture output; every public executable reports a clean heap.

@@ -250,10 +250,9 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
                     .unwrap_or(Effect::PURE),
             ),
         StmtKind::NamespaceBlock { body, .. } => block_effect(body),
-        // Declaring `global` conservatively counts as writing global storage
-        // (a declaration almost always precedes a write). The bit stays out of
-        // `is_observable`, so the declaration itself remains removable.
-        StmtKind::Global { .. } => Effect::PURE.with_writes_globals(),
+        // A reached declaration creates missing storage and retires the displaced local.
+        // Its destructor can execute PHP before the new alias is published.
+        StmtKind::Global { .. } => Effect::PURE.with_side_effects().with_may_throw().with_writes_globals(),
         StmtKind::FunctionDecl { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }

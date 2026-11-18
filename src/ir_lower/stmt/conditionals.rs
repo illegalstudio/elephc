@@ -69,6 +69,7 @@ fn lower_if_chain(
     lower_condition(ctx, condition, then_block, else_block);
     let split_initialized = ctx.initialized_slots_snapshot();
     let split_types = ctx.local_types_snapshot();
+    let split_ref_bound = ctx.ref_bound_locals_snapshot();
     let split_static_callables = ctx.static_callable_locals_snapshot();
     let split_reflection = ctx.reflection_bindings_snapshot();
     // Interior-alias markers are a MAY fact, so the arms are unioned rather than sequenced.
@@ -96,6 +97,7 @@ fn lower_if_chain(
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types);
+    ctx.restore_ref_bound_locals(split_ref_bound);
     ctx.restore_static_callable_locals(split_static_callables);
     ctx.restore_reflection_bindings(split_reflection);
     ctx.restore_borrowed_element_ref_locals(split_borrowed_refs);
@@ -213,6 +215,7 @@ pub(super) fn pending_join_edge(ctx: &LoweringContext<'_, '_>, tail: BlockId) ->
         tail,
         types: ctx.local_types_snapshot(),
         initialized: ctx.initialized_slots_snapshot(),
+        ref_bound: ctx.ref_bound_locals_snapshot(),
         static_callables: ctx.static_callable_locals_snapshot(),
         reflection: ctx.reflection_bindings_snapshot(),
     }
@@ -455,6 +458,8 @@ fn finish_type_join(
     span: Span,
     containers: ContainerJoin,
 ) {
+    let joined_ref_bound = arms.iter().flat_map(|arm| arm.ref_bound.iter().cloned()).collect();
+    ctx.restore_ref_bound_locals(joined_ref_bound);
     if arms.len() < 2 {
         if let Some(arm) = arms.first() {
             ctx.restore_local_types(arm.types.clone());
@@ -481,8 +486,10 @@ fn finish_type_join(
         joined_reflection.intersect(&arm.reflection);
     }
     let saved_types = ctx.local_types_snapshot();
+    let joined_ref_bound = ctx.ref_bound_locals_snapshot();
     for arm in &arms {
         ctx.restore_local_types(arm.types.clone());
+        ctx.restore_ref_bound_locals(arm.ref_bound.clone());
         let hash_conversions = arm_hash_conversions(arm, &joined);
         let conversions = arm_conversions(arm, &joined);
         let mixed_conversions = arm_mixed_conversions(arm, &edge_boxed);
@@ -496,6 +503,7 @@ fn finish_type_join(
         });
     }
     ctx.restore_local_types(saved_types);
+    ctx.restore_ref_bound_locals(joined_ref_bound);
     for (name, ty) in joined {
         if matches!(ty.codegen_repr(), PhpType::AssocArray { .. }) {
             ctx.set_retyped_container_local_type(&name, ty);
@@ -518,6 +526,8 @@ fn finish_type_join(
 pub(crate) struct ExprBranchJoin {
     /// Flow-sensitive local types at the split point, where every arm starts.
     split_types: TypeEnv,
+    /// Possible reference bindings at the split point.
+    split_ref_bound: HashSet<String>,
     /// Compile-time callable targets valid at the split point.
     split_static_callables: HashMap<String, StaticCallableBinding>,
     /// Reflection targets valid before either expression arm runs.
@@ -531,6 +541,7 @@ impl ExprBranchJoin {
     pub(crate) fn at_split(ctx: &LoweringContext<'_, '_>) -> Self {
         Self {
             split_types: ctx.local_types_snapshot(),
+            split_ref_bound: ctx.ref_bound_locals_snapshot(),
             split_static_callables: ctx.static_callable_locals_snapshot(),
             split_reflection: ctx.reflection_bindings_snapshot(),
             arms: Vec::new(),
@@ -540,6 +551,7 @@ impl ExprBranchJoin {
     /// Starts lowering one arm from the split point's flow facts.
     pub(crate) fn enter_arm(&self, ctx: &mut LoweringContext<'_, '_>) {
         ctx.restore_local_types(self.split_types.clone());
+        ctx.restore_ref_bound_locals(self.split_ref_bound.clone());
         ctx.restore_static_callable_locals(self.split_static_callables.clone());
         ctx.restore_reflection_bindings(self.split_reflection.clone());
     }

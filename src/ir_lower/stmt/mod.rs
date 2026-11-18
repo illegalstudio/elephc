@@ -66,6 +66,7 @@ mod exceptions;
 mod control_exit;
 mod declarations;
 mod static_bindings;
+mod global_bindings;
 mod instance_property_writes;
 mod readonly_receiver_guard;
 mod static_property_writes;
@@ -342,7 +343,7 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Return(value) => lower_return(ctx, value.as_ref(), stmt.span),
         StmtKind::ConstDecl { name, value } => lower_const_decl(ctx, name, value, stmt.span),
         StmtKind::ListUnpack { vars, value } => lower_list_unpack(ctx, vars, value, stmt.span),
-        StmtKind::Global { vars } => lower_global(ctx, vars),
+        StmtKind::Global { vars } => lower_global(ctx, vars, stmt.span),
         StmtKind::StaticVar { name, init } => lower_static_var(ctx, name, init, stmt.span),
         StmtKind::PropertyAssign {
             object,

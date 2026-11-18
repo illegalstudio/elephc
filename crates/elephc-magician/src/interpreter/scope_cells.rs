@@ -230,7 +230,7 @@ pub(in crate::interpreter) fn set_reference_alias(
         if current.is_none() { let released = eval_release_value(context, values, value); checked.and(released)?; }
         else { checked?; }
     }
-    if target != source && scope.is_static_binding(target) {
+    if target != source && (scope.is_static_binding(target) || scope.is_global_alias(target)) {
         if let Some(old) = unset_scope_cell(context, scope, target)? { eval_release_value(context, values, old)?; }
     }
     let mut types = generic_local_contracts(scope, source, context);
@@ -305,16 +305,7 @@ pub(in crate::interpreter) fn execute_global_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if context.global_scope_ptr().is_none() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    for name in vars {
-        if scope.is_static_binding(name) {
-            if let Some(old) = unset_scope_cell(context, scope, name.clone())? { eval_release_value(context, values, old)?; }
-        }
-        scope.mark_global_alias(name.clone());
-    }
-    Ok(())
+    super::global_bindings::bind(vars, context, scope, values)
 }
 
 /// Releases activation-owned cells after return, throw, static, and by-reference values escape.

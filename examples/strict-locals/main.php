@@ -257,3 +257,13 @@ function selectStoredQuantity(bool $reset): void {
 }
 selectStoredQuantity(true);
 selectStoredQuantity(false);
+
+// A detached global name becomes local while the program keeps its original quantity.
+function detachGlobalQuantity(): void {
+    global $globalQuantity;
+    unset($globalQuantity);
+    $globalQuantity = 3;
+    echo "Detached quantity: ", $globalQuantity, PHP_EOL;
+}
+detachGlobalQuantity();
+echo "Retained global quantity: ", $globalQuantity, PHP_EOL;

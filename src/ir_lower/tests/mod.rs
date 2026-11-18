@@ -868,3 +868,5 @@ mod foreach_binding_ends;
 mod global_value_snapshots;
 
 mod conditional_static_origins;
+
+mod global_binding_leases;

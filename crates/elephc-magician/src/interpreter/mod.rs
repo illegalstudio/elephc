@@ -58,6 +58,7 @@ mod local_binding_origins;
 use local_binding_origins::{bind_parameter_origin, local_producer_contract, store_local_with_origin};
 mod persistent_references;
 mod static_locals;
+mod global_bindings;
 mod superglobals;
 mod statements;
 #[cfg(not(test))]

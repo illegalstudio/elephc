@@ -955,6 +955,9 @@ pub enum Op {
     /// Detaches the named owner's record, preserving newer fixed return-lease records.
     PopCallOperandOwner,
     LoadGlobal,
+    /// Acquires a managed activation lease sharing the boxed program symbol's reference identity.
+    /// The result must be adopted into a guarded reference owner before replacing a local name.
+    LoadGlobalRefCell,
     StoreGlobal,
     LoadStaticLocal,
     /// Borrows the process-lifetime managed cell for an activation static binding.
@@ -1517,6 +1520,8 @@ impl Op {
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             LoadStaticLocalRefCell => E::READS_GLOBAL,
+            LoadGlobalRefCell => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
+                | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
             LoadRefCellValue => E::READS_LOCAL | E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             StoreLocal | SetLocalBindingState | UnsetLocal | ZeroLocalSlot | ListUnpack | FinallyEnter | FinallyExit => {
@@ -1558,8 +1563,9 @@ impl Op {
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
             // Declaration conversion and displaced-value cleanup can reenter arbitrary PHP.
             StoreStaticProperty | StoreReflectionStaticProperty => E::php_callback(),
-            StoreGlobal
-            | StoreStaticLocal
+            // Publishing a program value retires its previous owner and may execute PHP.
+            StoreGlobal => E::php_callback(),
+            StoreStaticLocal
             | IncludeOnceMark
             | FunctionVariantMark
             | TryPushHandler
@@ -1918,6 +1924,7 @@ impl Op {
             PushCallOperandOwner => "push_call_operand_owner",
             PopCallOperandOwner => "pop_call_operand_owner",
             LoadGlobal => "load_global",
+            LoadGlobalRefCell => "load_global_ref_cell",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",
             LoadStaticLocalRefCell => "load_static_local_ref_cell",

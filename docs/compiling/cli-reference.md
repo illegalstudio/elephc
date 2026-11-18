@@ -1012,6 +1012,13 @@ Unsetting or rebinding the local does not replace the persistent static value.
 An executed conditional `unset` starts a new activation-local binding with its
 replacement producer's contract. The other path keeps the static contract, and
 aliases captured before detachment still observe the persistent value.
+A reached `global` declaration connects the activation name to the program value.
+Unsetting or rebinding that local name leaves the program entry intact. References
+captured before detachment keep observing the program value; value captures keep
+an independent snapshot. A conditional detach affects only its executed path,
+including across runtime eval. Replacing an existing local during `global` can
+run its destructor before the alias is published. If that destructor throws, the
+local remains null and the program value stays intact.
 Reflection snapshots copy ordinary unescaped values and preserve references already
 shared with an activation or an escaping alias. Writes through a shared snapshot
 validate the same static contract before changing its value.

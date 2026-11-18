@@ -101,6 +101,7 @@ fn switch_dispatch_edge(ctx: &LoweringContext<'_, '_>, tail: BlockId) -> IfArmEx
         tail,
         types: ctx.local_types_snapshot(),
         initialized: ctx.initialized_slots_snapshot(),
+        ref_bound: ctx.ref_bound_locals_snapshot(),
         static_callables: HashMap::new(),
         reflection: ctx.reflection_bindings_snapshot(),
     }

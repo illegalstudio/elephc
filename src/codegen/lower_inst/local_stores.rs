@@ -120,7 +120,10 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
             RefCellStorePrevious::Retire
         }
     };
-    store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type, previous)?;
+    // Rebinding can replace a boxed alias with a concrete cell after this slot's layout widened.
+    // Keep the lowering's ABI fallback when a current binding proof is unavailable.
+    let payload = ctx.proven_ref_cell_payload_type(slot).unwrap_or_else(|| inst.result_php_type.clone());
+    store_value_through_ref_cell_slot(ctx, slot, value, &payload, previous)?;
     if let Some(done) = canonical_done { ctx.emitter.label(&done); }
     Ok(())
 }

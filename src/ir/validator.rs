@@ -823,7 +823,7 @@ fn validate_instruction_immediate(
         PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
-        EvalScopeGet | EvalScopeBindingType | EvalScopeEndBinding => require_immediate(inst_id, inst, "global name", |imm| {
+        LoadGlobalRefCell | EvalScopeGet | EvalScopeBindingType | EvalScopeEndBinding => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
         }),
         EvalScopeBindLocalType => require_immediate(inst_id, inst, "checked scope binding type", |imm| {
@@ -1118,7 +1118,7 @@ fn validate_opcode_rules(
             { return Err(ValidationError::ResultTypeMismatch(result)); }
             Ok(())
         }
-        LocalPlace | LoadStaticLocalRefCell => {
+        LocalPlace | LoadGlobalRefCell | LoadStaticLocalRefCell => {
             check_count(inst_id, inst, 0, "0")?;
             if inst.op == LoadStaticLocalRefCell {
                 let Some(Immediate::LocalSlot(slot)) = inst.immediate else { unreachable!() };

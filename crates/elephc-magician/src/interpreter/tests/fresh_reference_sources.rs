@@ -149,3 +149,10 @@ fn conditional_static_origins_eval_values_and_owners() {
     assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/conditional_static_origins.php"),
         "string:new|integer:1|string:new|integer:1|1|string:new|array:1|1:string:new|1:integer:1|Tinteger:1|Tstring:new|string:new|integer:1|", "string:new|integer:1|string:new|integer:1|1|string:new|array:1|1:string:new|1:integer:1|Wstring:bad|Winteger:2|string:new|integer:1|");
 }
+
+/// Global activation bindings detach without changing program owners or captured identities.
+#[test]
+fn global_binding_leases_eval_values_and_owners() {
+    let expected = "2|1|2:1|2:2|2|1|2:2|2:3|2|absent:created|present:created|after|2|3.5|1.5|after|before|double:2.5|DCNULL:|DCNULL:|";
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/global_binding_leases.php"), expected, expected);
+}

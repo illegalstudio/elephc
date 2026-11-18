@@ -47,7 +47,12 @@ pub(super) fn lower_globals_read(
         })
         .cloned()
         .collect::<Vec<_>>();
-    names.sort();
+    names.extend(ctx.builder.function().instructions.iter().filter_map(|inst| {
+        if inst.op != Op::LoadGlobalRefCell { return None; }
+        let Some(Immediate::GlobalName(data)) = inst.immediate else { return None; };
+        ctx.data.global_names.get(data.as_raw() as usize).cloned()
+    }));
+    names.sort(); names.dedup();
     let hash_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
@@ -61,7 +66,15 @@ pub(super) fn lower_globals_read(
         Some(expr.span),
     );
     for name in names {
-        insert_scope_binding(ctx, &name, hash, expr);
+        let key = lower_string_literal(ctx, &name, expr);
+        let data = ctx.intern_global_name(&name);
+        let ty = ctx.global_alias_type(&name);
+        let value = ctx.emit_value(Op::LoadGlobal, Vec::new(), Some(Immediate::GlobalName(data)),
+            ty, Op::LoadGlobal.default_effects(), Some(expr.span));
+        ctx.builder.set_value_ownership(value.value, Ownership::Borrowed);
+        let value = box_value_as_mixed(ctx, value, expr.span);
+        ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None,
+            Op::HashSet.default_effects(), Some(expr.span));
     }
     hash
 }

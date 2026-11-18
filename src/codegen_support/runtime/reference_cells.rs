@@ -49,7 +49,7 @@ pub(crate) use validation_pins::subtract as subtract_validation_pins;
 pub(crate) use canonical::resolve_property_payload_shape;
 pub(crate) use property_unset::emit_owned_property_unset;
 pub(crate) use mixed_payload::follow_mixed_reference_slot;
-pub(crate) use mixed_symbol::publish_mixed_symbol;
+pub(crate) use mixed_symbol::{publish_mixed_symbol, swap_mixed_symbol};
 pub(crate) use property_payload::resolve as resolve_property_payload;
 pub(crate) use iterable_payload::resolve as resolve_iterable_property_payload;
 

@@ -49,6 +49,8 @@ pub(crate) struct IfArmExit {
     pub types: TypeEnv,
     /// Definitely-initialized slots at the end of this edge.
     pub initialized: HashSet<LocalSlotId>,
+    /// Names that may still point to reference storage on this edge.
+    pub ref_bound: HashSet<String>,
     /// Compile-time callable targets that remain valid at the end of this edge.
     pub static_callables: HashMap<String, StaticCallableBinding>,
     /// Reflection targets that remain valid at the end of this edge.
@@ -1637,6 +1639,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn mark_ref_bound_local(&mut self, name: &str) {
         self.ref_bound_locals.insert(name.to_string());
     }
+
+    /// Captures possible reference bindings independently of narrowed value and presence facts.
+    pub(crate) fn ref_bound_locals_snapshot(&self) -> HashSet<String> { self.ref_bound_locals.clone() }
+
+    /// Restores one predecessor's possible reference bindings before lowering its sibling.
+    pub(crate) fn restore_ref_bound_locals(&mut self, names: HashSet<String>) { self.ref_bound_locals = names; }
 
     /// Clears the by-reference alias marker for a local after `unset()`.
     pub(crate) fn unmark_ref_bound_local(&mut self, name: &str) {
@@ -4132,8 +4140,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.bind_ref_cell_ptr_impl(target, cell_ptr, value_type, false, false, false, span);
     }
 
-    /// Retains a canonical static binding without changing an earlier raw frame payload ABI.
-    pub(crate) fn bind_static_ref_cell_ptr(&mut self, target: &str, cell_ptr: LoweredValue, span: Span) {
+    /// Retains canonical persistent storage without changing an earlier raw frame payload ABI.
+    pub(crate) fn bind_persistent_ref_cell_ptr(&mut self, target: &str, cell_ptr: LoweredValue, span: Span) {
         self.bind_ref_cell_ptr_impl(target, cell_ptr, PhpType::Mixed, true, false, true, Some(span));
     }
 
