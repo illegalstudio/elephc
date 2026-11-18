@@ -2271,3 +2271,25 @@ all-five-target emission and validator negatives, interleaved hidden descriptors
 string pairs spilling to the stack through callable descriptors, assembly comments, the default
 build and public PHP/LFC optimizer pairs. The example and its expected-output test
 show independent snapshot values and source values. No broad suite, push or PR.
+
+### Verified195: detached foreach values retire before the next reference binding
+
+Reference iteration now releases an owned raw value left by an earlier detach before
+replacing the local with the next array-element reference. The existing displaced
+pin preserves its payload until publication, while the existing runtime state test
+skips attached references. This reuses ReleaseRawLocalSlot and changes no cell or
+iterator layout. Baseline CLI probes leaked one 24-byte string and one 40-byte
+Mixed cell when the first replacement was overwritten on the next iteration.
+
+Focused tests cover unconditional and conditional unset/recreation, preserved source
+array contents and ordinary attached reference loops. Both optimizer modes and both
+permissive/StrictLocals profiles now retire every owner; all five targets emit the
+same path. The default build, assembly-comment check and diff hygiene pass. Eight
+public PHP/LFC profile/optimizer combinations and the complete example are clean.
+
+The added interpreter execution probe exposed an existing language-subset boundary:
+EvalStmt::Foreach has no reference role and the parser rejects reference targets.
+The native memory fix does not extend that language subset. The unsupported forms
+are now documented and tested as parse errors in both profiles, with implementation
+tracked separately as task a8e94959. No parser behavior or serialized cache shape
+changed. Acceptance is recorded in step195-evidence.json before the signed commit.

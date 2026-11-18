@@ -195,6 +195,9 @@ including PHP's distinct null and alphanumeric string behavior.
 associative arrays, plus eval-declared and generated/AOT `Iterator` and
 `IteratorAggregate` objects. Eval associative arrays preserve PHP insertion
 order for iteration.
+By-reference `foreach` targets (`as &$value` or `as $key => &$value`) are outside
+the interpreter fragment subset and produce a parse error in both permissive and
+strict profiles. Native compiled PHP supports these reference loops.
 
 Includes follow PHP's cwd-first lookup and then fall back to the eval call-site
 directory. Included PHP files may contain normal `<?php ... ?>` blocks, raw text

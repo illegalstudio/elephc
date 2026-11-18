@@ -862,3 +862,5 @@ mod captured_binding_origins;
 mod captured_reference_producers;
 
 mod captured_value_producers;
+
+mod foreach_binding_ends;
