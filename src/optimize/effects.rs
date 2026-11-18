@@ -502,7 +502,10 @@ fn expression_effect_without_binding(expr: &Expr) -> Effect {
         ExprKind::ShortTernary { value, default } => {
             condition_effect(value).combine(expr_effect(default))
         }
-        ExprKind::Closure { .. } => Effect::PURE,
+        ExprKind::Closure { capture_refs, .. } => {
+            // Reference formation creates missing bindings even when the descriptor is discarded.
+            if capture_refs.is_empty() { Effect::PURE } else { Effect::PURE.with_side_effects() }
+        },
         ExprKind::NamedArg { value, .. } => expr_effect(value),
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => expr_effect(object)

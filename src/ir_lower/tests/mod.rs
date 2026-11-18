@@ -842,3 +842,5 @@ mod escaped_reference_sources;
 mod array_key_admission;
 
 mod fresh_reference_sources;
+
+mod unused_reference_capture;

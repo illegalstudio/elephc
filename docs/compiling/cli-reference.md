@@ -1096,6 +1096,8 @@ to `use (&$value)` after `unset($value)`, to a contextual callback capture and t
 later stores can choose another value kind. Existing bindings keep their contracts:
 an explicit `$value = null` still has a null contract under `--strict-locals`.
 Escaped aliases retain the old binding after its original name is unset.
+Creating an unused closure still creates its reference-captured names, without
+running its body.
 
 **Migrating.** The `unset()` kill is the one shape that can reject code that
 compiled before. Reading a variable after a straight-line `unset()` of it is now

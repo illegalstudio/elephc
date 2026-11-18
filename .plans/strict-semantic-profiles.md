@@ -1929,3 +1929,27 @@ mixed reference parameter under Locals while permissive compilation accepts it.
 Integrate reference argument creation with the shared call planner next, preserving
 source order and ordinary-read diagnostics. Stronger Locals audits and the five
 pending guarantees remain active before full umbrella acceptance.
+
+### Verified183: discarded closures retain reference formation
+
+Reference-capturing closure creation is now an observable AST effect. The deferred
+body keeps its separate call effect, so creation does not execute or inherit the
+body's output/throw behavior. By-value closure creation retains its previous pure
+classification. DCE therefore preserves source binding formation even when the
+closure result is discarded. The signed182 CLI printed no for an expected visible
+name; Fact976f2b6e records why a successful null read with a clean heap missed it.
+
+All eight focused gates pass. The structural optimizer regression proves reference
+formation survives DCE without importing deferred body throws, while the by-value
+control remains removable. All five targets emit the retained source. Native PHP/
+LFC, both profiles and both optimizer settings preserve get_defined_vars visibility,
+null initialization and a subsequent open string store, with clean heaps and no
+undefined-variable warning. The complete fresh-reference native fixture remains
+green. The serial default compiler build and diff checks pass. Eight public CLI
+cases independently confirm the same scope observation across source modes and
+optimizer/profile choices. Six further CLI probes preserve optional binding
+presence in main and function scopes, including paths that never create it,
+matching PHP with clean heaps. The CLI reference explains unused-closure formation.
+
+Continue with call-planner reference arguments and the remaining stronger Locals
+and pending-family audits. This fix admits no additional registered guarantee.

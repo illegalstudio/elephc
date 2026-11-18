@@ -415,3 +415,18 @@ fn test_effect_analysis_preserves_static_binding_exception_boundaries() {
             "{optimized:?}");
     }
 }
+
+/// Reference formation survives DCE, while deferred body effects remain separate from creation.
+#[test]
+fn test_reference_capture_creation_survives_dead_expression_elimination() {
+    for (capture, observable) in [("&$missing", true), ("$existing", false)] {
+        let source = format!("<?php (function() use ({capture}) {{ echo 'deferred'; throw new Exception(); }});");
+        let program = crate::parser::parse(&crate::lexer::tokenize(&source).unwrap()).unwrap();
+        let StmtKind::ExprStmt(expr) = &program[0].kind else { panic!("expected closure creation") };
+        let effect = expr_effect(expr);
+        assert_eq!(effect.has_side_effects, observable);
+        assert!(!effect.may_throw, "a deferred body cannot throw at creation");
+        let optimized = eliminate_dead_code(program);
+        assert_eq!(optimized.iter().any(|statement| matches!(statement.kind, StmtKind::ExprStmt(_))), observable);
+    }
+}
