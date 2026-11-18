@@ -301,7 +301,30 @@ pub(super) fn expr_is_observable(expr: &Expr) -> bool {
 /// callee runs, even when the callee is pure.
 pub(super) fn scalar_guard_effect(args: &[Expr]) -> Effect {
     if super::binding_decisions::call_has_scalar_guard_arg(args) {
-        Effect::PURE.with_side_effects().with_may_throw().with_writes_globals()
+        scalar_binding_guard_effect()
+    } else {
+        Effect::PURE
+    }
+}
+
+/// What a runtime scalar-parameter check can do while it binds one value: throw `TypeError`,
+/// run the user error handler (the `int` precision deprecation) or a `Stringable`'s
+/// `__toString()`, either of which can write globals. Shared by direct calls, calls through
+/// a callable value and the callbacks a builtin invokes.
+pub(super) fn scalar_binding_guard_effect() -> Effect {
+    Effect::PURE.with_side_effects().with_may_throw().with_writes_globals()
+}
+
+/// The binding effect of calling `callable` with arguments: the runtime callable invoker
+/// checks a value bound to a declared scalar parameter (see [`scalar_binding_guard_effect`]).
+/// Only a value whose type is known at run time is checked, so a call whose arguments are all
+/// scalar literals binds without the check.
+pub(super) fn callable_value_binding_effect(callable: &Expr, args: &[Expr]) -> Effect {
+    let runtime_typed = args.iter().any(|arg| !matches!(arg.kind,
+        ExprKind::StringLiteral(_) | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_)));
+    if runtime_typed && calls::callback_binding_may_throw(callable) {
+        scalar_binding_guard_effect()
     } else {
         Effect::PURE
     }
@@ -417,11 +440,13 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             .combine(scalar_guard_effect(args)),
         ExprKind::ClosureCall { var, args } => combine_effects(args.iter().map(expr_effect))
             .combine(callable_alias_effect(var))
-            .combine(scalar_guard_effect(args)),
+            .combine(scalar_guard_effect(args))
+            .combine(callable_value_binding_effect(&Expr::var(var), args)),
         ExprKind::ExprCall { callee, args } => expr_effect(callee)
             .combine(combine_effects(args.iter().map(expr_effect)))
             .combine(expr_call_effect(callee))
-            .combine(scalar_guard_effect(args)),
+            .combine(scalar_guard_effect(args))
+            .combine(callable_value_binding_effect(callee, args)),
         ExprKind::NullsafeDynamicMethodCall {
             object,
             method,
