@@ -113,6 +113,68 @@ echo "static-forms "; var_dump($s1 === $s2);
     ));
 }
 
+/// Every conversion of a name, a method string or a static callable array creates a new
+/// closure, like PHP, while converting an existing closure keeps returning that closure.
+#[test]
+fn test_closure_factory_repeated_conversions_create_distinct_closures() {
+    assert_factory_output(r#"<?php
+function named(): int { return 1; }
+class K {
+    public static function s(): int { return 3; }
+    public function __invoke(): int { return 4; }
+}
+function make(): Closure { return Closure::fromCallable("K::s"); }
+function conv(callable $c): Closure { return Closure::fromCallable($c); }
+echo "literal-method-string "; var_dump(make() === make());
+$ms = $argc > 5 ? "named" : "K::s";
+$a = Closure::fromCallable($ms); $b = Closure::fromCallable($ms);
+echo "runtime-method-string "; var_dump($a === $b); echo $a(), $b(), "\n";
+$fn = $argc > 5 ? "K::s" : "named";
+$c = Closure::fromCallable($fn); $d = Closure::fromCallable($fn);
+echo "runtime-function-string "; var_dump($c === $d); echo $c(), $d(), "\n";
+$e = Closure::fromCallable(["K", "s"]); $f = Closure::fromCallable(["K", "s"]);
+echo "static-array "; var_dump($e === $f); echo $e(), $f(), "\n";
+$arr = [$argc > 5 ? "X" : "K", "s"];
+$g = Closure::fromCallable($arr); $h = Closure::fromCallable($arr);
+echo "runtime-static-array "; var_dump($g === $h);
+echo "callable-param-function "; var_dump(conv("named") === conv("named"));
+echo "callable-param-method-string "; var_dump(conv("K::s") === conv("K::s"));
+echo "callable-param-builtin "; var_dump(conv("strlen") === conv("strlen"));
+$bn = $argc > 5 ? "strtoupper" : "strlen";
+$l1 = Closure::fromCallable($bn); $l2 = Closure::fromCallable($bn);
+echo "runtime-builtin "; var_dump($l1 === $l2); echo $l1("abc"), $l2("de"), "\n";
+$k = new K();
+echo "invokable "; var_dump(conv($k) === conv($k));
+$cl = fn(): int => 9;
+echo "callable-param-closure "; var_dump(conv($cl) === $cl, conv($cl) === conv($cl));
+$dyn1 = $fn(...); $dyn2 = $fn(...);
+echo "dynamic-first-class "; var_dump($dyn1 === $dyn2); echo $dyn1(), $dyn2(), "\n";
+$dm1 = $ms(...); $dm2 = $ms(...);
+echo "dynamic-first-class-method-string "; var_dump($dm1 === $dm2);
+$x = Closure::fromCallable($ms); $y = Closure::fromCallable($x);
+echo "factory-of-factory "; var_dump($x === $y);
+$kept = [];
+for ($i = 0; $i < 3; $i++) { $kept[] = Closure::fromCallable($ms); }
+echo "loop "; var_dump($kept[0] === $kept[1], $kept[1] === $kept[2]); echo $kept[0](), $kept[2](), "\n";
+"#, concat!(
+        "literal-method-string bool(false)\n",
+        "runtime-method-string bool(false)\n33\n",
+        "runtime-function-string bool(false)\n11\n",
+        "static-array bool(false)\n33\n",
+        "runtime-static-array bool(false)\n",
+        "callable-param-function bool(false)\n",
+        "callable-param-method-string bool(false)\n",
+        "callable-param-builtin bool(false)\n",
+        "runtime-builtin bool(false)\n32\n",
+        "invokable bool(false)\n",
+        "callable-param-closure bool(true)\nbool(true)\n",
+        "dynamic-first-class bool(false)\n11\n",
+        "dynamic-first-class-method-string bool(false)\n",
+        "factory-of-factory bool(true)\n",
+        "loop bool(false)\nbool(false)\n33\n",
+    ));
+}
+
 /// Closures from the factory fill `Closure` and `?Closure` properties and array elements for
 /// every callable shape, and a target that is not callable throws `TypeError`.
 #[test]

@@ -380,8 +380,9 @@ A body that computes its own result keeps its inferred type (`function add($a, $
 `$callback(...)`. It accepts an existing closure or arrow function, a function name, a
 `"Class::method"` string, an `[$object, "method"]` or `[ClassName::class, "method"]` array
 and an invokable object. The argument may be a literal, a variable or a `callable`
-parameter. Passing a `Closure` returns that same closure (`===`). A value that is not
-callable throws a catchable `TypeError`. Private and protected methods are resolved from
+parameter. Passing a `Closure` returns that same closure (`===`); every other conversion
+creates a new closure, so two conversions of the same name are not identical. A value that
+is not callable throws a catchable `TypeError`. Private and protected methods are resolved from
 the class scope where the factory is called.
 
 The result owns its target: an array or method callable keeps its receiver alive, and a
