@@ -56,7 +56,7 @@ pub(in crate::interpreter) fn validate_generic_local_element(declared: Option<&E
     let normalized = match values.type_tag(index)? {
         EVAL_TAG_FLOAT | EVAL_TAG_BOOL => Some(values.cast_int(index)?),
         EVAL_TAG_NULL => Some(values.string("")?),
-        EVAL_TAG_STRING => eval_numeric_string_array_key(&values.string_bytes(index)?)
+        EVAL_TAG_STRING => eval_numeric_string_array_key(&values.string_bytes(index)?, context.semantic_profile())
             .map(|index| values.int(index)).transpose()?,
         _ => None,
     };

@@ -156,7 +156,7 @@ impl<V: RuntimeValueOps> Reducer<'_, V> {
             if elephc_semantics::numeric::checked_float_to_int(value).ok().is_none_or(|int| int as f64 != value) { return Ok(None); }
         }
         if !matches!(tag, EVAL_TAG_INT | EVAL_TAG_STRING | EVAL_TAG_NULL | EVAL_TAG_BOOL | EVAL_TAG_FLOAT) { return Ok(None); }
-        eval_array_reference_key(value, self.values)
+        eval_array_reference_key(value, self.context.semantic_profile(), self.values)
     }
 
     /// Constructs literal arrays with checked append keys and no reference entries.

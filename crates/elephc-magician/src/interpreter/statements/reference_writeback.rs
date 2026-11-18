@@ -109,7 +109,7 @@ pub(super) fn alias_duplicate_method_ref_args(
             let Some(previous_target) = bound_args[previous_position].ref_target.as_ref() else {
                 continue;
             };
-            if !same_method_ref_target(target, previous_target, values)? {
+            if !same_method_ref_target(target, previous_target, context.semantic_profile(), values)? {
                 continue;
             }
             if let Some(previous_param) = params.get(previous_position) {
@@ -128,7 +128,10 @@ pub(super) fn alias_duplicate_method_ref_args(
 }
 
 /// Returns true when two evaluated arguments target the same caller-side variable.
-pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalReferenceTarget, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
+pub(super) fn same_method_ref_target(
+    left: &EvalReferenceTarget, right: &EvalReferenceTarget, profile: elephc_semantics::SemanticProfile,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     Ok(match (left, right) {
         (
             EvalReferenceTarget::Variable {
@@ -151,7 +154,7 @@ pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalRef
                 array_name: right_name,
                 index: right_index,
             },
-        ) => left_scope == right_scope && left_name == right_name && same_reference_index(*left_index, *right_index, values)?,
+        ) => left_scope == right_scope && left_name == right_name && same_reference_index(*left_index, *right_index, profile, values)?,
         (
             EvalReferenceTarget::NestedArrayElement {
                 array_target: left_target,
@@ -161,7 +164,7 @@ pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalRef
                 array_target: right_target,
                 index: right_index,
             },
-        ) => same_reference_index(*left_index, *right_index, values)? && same_method_ref_target(left_target, right_target, values)?,
+        ) => same_reference_index(*left_index, *right_index, profile, values)? && same_method_ref_target(left_target, right_target, profile, values)?,
         (
             EvalReferenceTarget::ObjectProperty {
                 object: left_object,
@@ -213,9 +216,12 @@ pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalRef
 }
 
 /// Compares normalized PHP array keys instead of the identity of their temporary boxes.
-fn same_reference_index(left: RuntimeCellHandle, right: RuntimeCellHandle, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
+fn same_reference_index(
+    left: RuntimeCellHandle, right: RuntimeCellHandle, profile: elephc_semantics::SemanticProfile,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
     if left == right { return Ok(true); }
-    Ok(match (eval_array_reference_key(left, values)?, eval_array_reference_key(right, values)?) {
+    Ok(match (eval_array_reference_key(left, profile, values)?, eval_array_reference_key(right, profile, values)?) {
         (Some(left), Some(right)) => left == right,
         _ => false,
     })

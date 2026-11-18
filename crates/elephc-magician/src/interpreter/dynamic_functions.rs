@@ -459,7 +459,7 @@ fn append_ordered_call_arg_values(
     let len = values.array_len(array)?;
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
-        let ref_target = eval_array_reference_key(key, values)?
+        let ref_target = eval_array_reference_key(key, context.semantic_profile(), values)?
             .and_then(|key| context.array_element_alias(array, &key).cloned());
         let arg = match values.type_tag(key)? {
             EVAL_TAG_INT => {

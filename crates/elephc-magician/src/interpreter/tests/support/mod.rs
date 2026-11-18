@@ -262,10 +262,10 @@ impl FakeOps {
         let value = self.get(handle);
         match value {
             FakeValue::Int(value) => Ok(FakeKey::Int(value)),
-            FakeValue::String(value) => eval_numeric_string_array_key(value.as_bytes())
+            FakeValue::String(value) => eval_numeric_string_array_key(value.as_bytes(), self.fixed_profile.unwrap_or_default())
                 .map(FakeKey::Int)
                 .map_or_else(|| Ok(FakeKey::String(value.into_bytes())), Ok),
-            FakeValue::Bytes(value) => eval_numeric_string_array_key(&value)
+            FakeValue::Bytes(value) => eval_numeric_string_array_key(&value, self.fixed_profile.unwrap_or_default())
                 .map(FakeKey::Int)
                 .map_or_else(|| Ok(FakeKey::String(value)), Ok),
             FakeValue::Null => Ok(FakeKey::String(Vec::new())),

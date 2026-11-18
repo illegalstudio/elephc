@@ -93,7 +93,7 @@ fn eval_local_offset_write(
         };
         let declared = generic_local_contracts(scope, name, context);
         let replacement = if let Some(index) = index {
-            let index = match normalized_array_string_index(index, values)? {
+            let index = match normalized_array_string_index(index, context.semantic_profile(), values)? {
                 Some(normalized) => { operands.push(normalized); normalized }
                 None => index,
             };
@@ -139,10 +139,10 @@ pub(super) fn reject_weak_map_append(
 
 /// Allocates a normalized integer key only after the live receiver has selected array semantics.
 fn normalized_array_string_index(
-    index: RuntimeCellHandle, values: &mut impl RuntimeValueOps,
+    index: RuntimeCellHandle, profile: elephc_semantics::SemanticProfile, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if values.type_tag(index)? == EVAL_TAG_STRING {
-        if let Some(key) = eval_numeric_string_array_key(&values.string_bytes(index)?) {
+        if let Some(key) = eval_numeric_string_array_key(&values.string_bytes(index)?, profile) {
             return values.int(key).map(Some);
         }
     }

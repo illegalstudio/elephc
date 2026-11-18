@@ -1406,3 +1406,22 @@ emissions pass. All six focused gates pass, including compiler/bridge builds in5
 property-write and removal compatibility controls and existing nullable-read
 regressions. Three public CLI PHP/LFC variants also pass with clean heaps. ArrayKeys and the full umbrella remain pending while the
 remaining builtin, eval, dependency and binding/family work is completed.
+
+### Verified165: exact eval key metadata and automatic indexes
+
+Magician's array-key adapters receive the immutable semantic profile explicitly
+and delegate string classification to the shared neutral key policy. The duplicate
+integer-string parser is removed. Reference metadata, duplicate method-ref target
+comparison, nested/local/property mutations, generic key validation and automatic
+literal indexes now agree about exact string versus integer keys. Fake runtime
+primitives declare the same fixed profile as their context.
+
+Walker and VM regressions cover automatic indexes after a numeric string,
+independent aliases, by-reference method targets, nested writes, property unset,
+binary bytes and complete owner retirement under both exact and PHP-normalized
+policies. The permissive fixture matches the PHP oracle. Separate duplicate-ref
+literal alias behavior is recorded as fact815b580a and task792cad39; owned keys in
+escaping generic reference metadata still need their own ownership treatment.
+Compiler/bridge builds7.78s and all six exact compatibility gates pass in job
+2ad37022 (19s total), including existing alias, append-history and static-reflection
+owner regressions. No public feature admission changes in this step.

@@ -296,7 +296,7 @@ fn write_value_in_storage(
     }
     let index = match index {
         Some(index) if values.type_tag(index)? == EVAL_TAG_STRING => {
-            if let Some(key) = eval_numeric_string_array_key(&values.string_bytes(index)?) {
+            if let Some(key) = eval_numeric_string_array_key(&values.string_bytes(index)?, context.semantic_profile()) {
                 let key = values.int(key)?; operands.push(key); key
             } else { index }
         }

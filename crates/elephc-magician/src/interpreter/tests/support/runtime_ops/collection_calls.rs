@@ -17,7 +17,7 @@ macro_rules! impl_fake_collection_call_ops {
             FakeValue::Null => FakeValue::Array(Vec::new()),
             FakeValue::Object(properties) => FakeValue::Assoc(properties.into_iter()
                 .map(|(name, value)| {
-                    let key = eval_numeric_string_array_key(name.as_bytes()).map(FakeKey::Int)
+                    let key = eval_numeric_string_array_key(name.as_bytes(), self.fixed_profile.unwrap_or_default()).map(FakeKey::Int)
                         .unwrap_or_else(|| FakeKey::String(name.into_bytes()));
                     (key, value)
                 }).collect()),

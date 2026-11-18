@@ -255,7 +255,7 @@ pub(super) fn eval_array_unset_target_result(
     }
     let index = eval_owned_array_set_index(index, context, scope, values)?;
     let result = (|| {
-        let key = eval_array_reference_key(index, values)?;
+        let key = eval_array_reference_key(index, context.semantic_profile(), values)?;
         let replacement = eval_array_without_key_result(array, index, values)?;
         context.clone_array_element_aliases(array, replacement, key.as_ref());
         Ok(replacement)
@@ -338,7 +338,7 @@ pub(super) fn eval_array_element_reference_write(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let Some(key) = eval_array_reference_key(index, values)? else { return Ok(()); };
+    let Some(key) = eval_array_reference_key(index, context.semantic_profile(), values)? else { return Ok(()); };
     let Some(target) = context.array_element_alias(array, &key).cloned() else { return Ok(()); };
     match target {
         EvalReferenceTarget::Variable { scope, name } => {
@@ -365,11 +365,11 @@ fn eval_owned_array_set_index(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_operands(&[index], context, scope, values, |args, _, _, values| {
+    with_eval_operands(&[index], context, scope, values, |args, context, _, values| {
         let index = args[0];
         if values.type_tag(index)? == EVAL_TAG_STRING {
             let bytes = values.string_bytes(index)?;
-            if let Some(key) = eval_numeric_string_array_key(&bytes) {
+            if let Some(key) = eval_numeric_string_array_key(&bytes, context.semantic_profile()) {
                 return values.int(key);
             }
         }
