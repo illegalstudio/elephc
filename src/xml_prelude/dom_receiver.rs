@@ -354,10 +354,7 @@ impl DomReceiver {
                 if !visited.insert(class.clone()) { return false; }
                 let Some(parent) = self.declarations.parents.get(&class) else {
                     if let Some(builtin) = elephc_builtin_contract::lookup_class(&class) {
-                        // A DOM node class (a fragment's appendXML, a node's serializers) reaches the native
-                        // tree like a document does.
-                        return builtin.kind == elephc_builtin_contract::ClassKind::Interface
-                            || (self.dom_available && builtin.module == elephc_builtin_contract::PhpModule::Dom);
+                        return builtin.kind == elephc_builtin_contract::ClassKind::Interface;
                     }
                     return !self.declarations.classes.contains(&class) && self.dom_available;
                 };

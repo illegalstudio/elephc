@@ -51,7 +51,9 @@ fn xml_functions() -> &'static [&'static str] {
         elephc_builtin_contract::contracts()
             .iter()
             .filter(|contract| {
+                // The `libxml_*` functions belong to the DOM prelude (`Part::Libxml`), not to this bridge.
                 contract.area == elephc_builtin_contract::Area::Xml && !contract.internal
+                    && !contract.name.starts_with("libxml_")
             })
             .map(|contract| contract.name)
             .collect()
@@ -99,7 +101,7 @@ pub(super) fn program_uses_xml(program: &[Stmt]) -> bool {
 /// native serializer). A DOM-only program calling one of them pulls the bridge in by itself, with
 /// no `simplexml_*` call to name it.
 pub(super) fn is_xml_bridge_method(method: &str) -> bool {
-    ["loadXML", "load", "appendXML", "saveXML", "save", "saveHTML", "saveHTMLFile", "C14N", "C14NFile"]
+    ["loadXML", "load", "saveXML", "save", "saveHTML", "saveHTMLFile", "C14N", "C14NFile"]
         .iter()
         .any(|candidate| method.eq_ignore_ascii_case(candidate))
 }
@@ -237,7 +239,7 @@ impl Detector {
             CallableTarget::StaticMethod { receiver, method } =>
                 (is_xml_bridge_method(method) && self.dom.may_load_static(receiver)) || receiver_refs_xml(receiver),
             CallableTarget::Method { object, method } => {
-                (is_xml_bridge_method(method) && self.dom.may_load_xml(object)) || self.expr_refs_xml(object)
+                ((is_xml_bridge_method(method) && self.dom.may_load_xml(object)) || (method.eq_ignore_ascii_case("appendXML") && self.dom.dom_available())) || self.expr_refs_xml(object)
             },
         }
     }
@@ -419,12 +421,12 @@ impl Detector {
             }
             ExprKind::StaticPropertyAccess { receiver, .. } => receiver_refs_xml(receiver),
             ExprKind::MethodCall { object, method, args, .. } => {
-                (is_xml_bridge_method(method) && self.dom.may_load_xml(object))
+                ((is_xml_bridge_method(method) && self.dom.may_load_xml(object)) || (method.eq_ignore_ascii_case("appendXML") && self.dom.dom_available()))
                     || self.reflection_lookup_refs_xml(object, method, args)
                     || self.expr_refs_xml(object) || args.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::NullsafeMethodCall { object, method, args, .. } => {
-                (is_xml_bridge_method(method) && self.dom.may_load_xml(object))
+                ((is_xml_bridge_method(method) && self.dom.may_load_xml(object)) || (method.eq_ignore_ascii_case("appendXML") && self.dom.dom_available()))
                     || self.reflection_lookup_refs_xml(object, method, args)
                     || self.expr_refs_xml(object) || self.optional_args_refs_xml(args)
             }

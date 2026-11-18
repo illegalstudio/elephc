@@ -614,13 +614,15 @@ mod tests {
             "__ElephcHtmlParser",
             "__ElephcHtmlTables",
             "__elephc_dom_parse_html",
-            "__elephc_dom_make_children",
-            "__elephc_dom_make_node",
             "DOMDocument::loadhtml",
             "DOMDocument::loadhtmlfile",
         ] {
             assert!(!walker.iter().any(|name| name == wanted), "{wanted} must not cost a non-HTML program");
             assert!(html.iter().any(|name| name == wanted), "{wanted} missing from the HTML part");
+        }
+        // The eager-tree helpers stay in the walker: the SimpleXML DOM views build nodes with them.
+        for helper in ["__elephc_dom_make_children", "__elephc_dom_make_node", "__elephc_dom_link_siblings"] {
+            assert!(walker.iter().any(|name| name == helper), "{helper} missing from the walker");
         }
         // The Termwind scanner is gone; the attribute lookup `getAttribute` uses stays in the walker.
         assert!(!html.iter().any(|name| name == "__elephc_dom_token_stream"));
