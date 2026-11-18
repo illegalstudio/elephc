@@ -352,3 +352,71 @@ take(): Argument #1 ($o) must be of type object, Closure given
 ArrayObject
 "#);
 }
+
+/// PHP evaluates every argument before it checks a declared parameter type, so a rejected
+/// `mixed` argument still lets a later argument's side effects run, positional or named; a
+/// raw `object`/class declaration still receives the unboxed object when the check passes.
+#[test]
+fn test_mixed_class_parameter_checks_run_after_later_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class T { public string $tag = "t"; }
+function take(?T $t, mixed $later): string { return "body " . ($t?->tag ?? "null"); }
+function raw(T $t, mixed $later): string { return "raw " . $t->tag; }
+function getMixed(mixed $v): mixed { return $v; }
+function side(string $label): int { echo "side ", $label, "\n"; return 1; }
+function msg(TypeError $e): string { return explode(", called in", $e->getMessage())[0]; }
+try { echo take(getMixed(42), side("a")), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+try { echo take(later: side("b"), t: getMixed(42)), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+try { echo take(getMixed(new T()), side("c")), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+try { echo raw(getMixed("s"), side("d")), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+try { echo raw(getMixed(new T()), side("e")), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+"#,
+    );
+    assert_eq!(out, r#"side a
+take(): Argument #1 ($t) must be of type ?T, int given
+side b
+take(): Argument #1 ($t) must be of type ?T, int given
+side c
+body t
+side d
+raw(): Argument #1 ($t) must be of type T, string given
+side e
+raw t
+"#);
+}
+
+/// A statically unpacked string key binds a named parameter through the call planner, so a
+/// `mixed` element reaching a class-like parameter gets the same runtime check.
+#[test]
+fn test_unpacked_named_mixed_argument_reaches_class_parameter_check() {
+    let out = compile_and_run(
+        r#"<?php
+class T {}
+function take(?T $t): string { return $t === null ? "null" : get_class($t); }
+function getMixed(mixed $v): mixed { return $v; }
+function msg(TypeError $e): string { return explode(", called in", $e->getMessage())[0]; }
+try { echo take(...['t' => getMixed(42)]), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+echo take(...['t' => getMixed(new T())]), "\n";
+"#,
+    );
+    assert_eq!(out, "take(): Argument #1 ($t) must be of type ?T, int given\nT\n");
+}
+
+/// The check decision reads a named source's type when it is evaluated: a later argument that
+/// retypes the same local must not hide the `mixed` value already saved for the parameter.
+#[test]
+fn test_named_mixed_source_check_ignores_later_retyping_write() {
+    let out = compile_and_run(
+        r#"<?php
+class T {}
+function take(?T $t, mixed $later): string { return "body"; }
+function probe(array $a): string {
+    try { return take(t: $a['k'], later: $a = ['k' => new T()]); }
+    catch (TypeError $e) { return explode(", called in", $e->getMessage())[0]; }
+}
+echo probe(['k' => 42]), "\n";
+"#,
+    );
+    assert_eq!(out, "take(): Argument #1 ($t) must be of type ?T, int given\n");
+}
