@@ -215,10 +215,8 @@ managed PCRE2 package (10.47), not the PHP build's library.
   that can dynamically reference emitted SPL regex classes may link PCRE2 even
   when they do not call `preg_*` directly.
 - Only the pattern modifiers listed above are mapped to PCRE2 flags today.
-- The PCRE2 shim reports match errors as POSIX codes, so PCRE2's recursion-depth
-  limit and UTF-8 offset errors read as `PREG_BAD_UTF8_ERROR`, and running out of
-  memory reads as `PREG_BACKTRACK_LIMIT_ERROR`. PCRE2's own default match limit
-  (10,000,000) applies instead of PHP's `pcre.backtrack_limit` (1,000,000).
+- PCRE2's own default match limit (10,000,000) applies instead of PHP's
+  `pcre.backtrack_limit` (1,000,000).
 - Pattern and subject strings cross the current shim as NUL-terminated strings,
   preserving the existing embedded-NUL limitation.
 
