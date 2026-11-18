@@ -1610,9 +1610,20 @@ fn typed_boxed_property_container(
     let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
         return None;
     };
-    ctx.classes
-        .get(class_name.trim_start_matches('\\'))?
-        .declared_properties
+    let info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    // `?ArrayObject` and `?int` are boxed too but name no array member: php refuses to
+    // auto-initialize them, and the declared-slot guard throws that error.
+    fn admits_array(ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Mixed | PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+            PhpType::Union(members) => members.iter().any(admits_array),
+            _ => false,
+        }
+    }
+    if info.visible_property(property).is_some_and(|(_, (_, declared))| !admits_array(declared)) {
+        return None;
+    }
+    info.declared_properties
         .contains(property)
         .then(|| PhpType::Array(Box::new(PhpType::Mixed)))
 }

@@ -116,7 +116,8 @@ fn slot_guard(
             action: SlotAction::InitializeArray, nullable: false, object_only: false,
         });
     }
-    let nullable = matches!(storage, PhpType::Mixed | PhpType::TaggedScalar);
+    // A nullable object keeps its declared union as storage metadata; it is boxed all the same.
+    let nullable = matches!(storage.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar);
     let object_only = info.readonly_properties.contains(property) || inaccessible;
     if mode == FetchMode::ReadWrite && !nullable && !object_only { return None; }
     let (exception, message) = null_write_error(ctx, class, info, property, declared);
