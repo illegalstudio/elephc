@@ -718,6 +718,14 @@ fn emit_mixed_array_set_object_guard(
         "_spl_stack_class_id",
         "_spl_queue_class_id",
     ];
+    // SimpleXML classes carry no `ArrayAccess` interface table: their dimension writes are the
+    // `offsetSet` slot that `__rt_mixed_array_set` resolves by class id, so the interface scan
+    // below would find nothing and throw "Cannot use object of type SimpleXMLElement as array".
+    let mut native_dimension_ids: Vec<i64> = ctx.module.class_infos.iter()
+        .filter(|(name, _)| crate::types::builtin_classes::has_native_dimensions(name, &ctx.module.class_infos))
+        .map(|(_, info)| info.class_id as i64)
+        .collect();
+    native_dimension_ids.sort_unstable();
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(receiver, "x0")?;
@@ -733,6 +741,11 @@ fn emit_mixed_array_set_object_guard(
                 ctx.emitter.instruction("cmp x10, x11");                        // is the receiver that container?
                 ctx.emitter.instruction(&format!("b.eq {}", native_label));     // its runtime storage takes the write
             }
+            for class_id in &native_dimension_ids {
+                abi::emit_load_int_immediate(ctx.emitter, "x11", *class_id);
+                ctx.emitter.instruction("cmp x10, x11");                        // is the receiver a native-dimension (SimpleXML) class?
+                ctx.emitter.instruction(&format!("b.eq {}", native_label));     // its offsetSet slot takes the write
+            }
             abi::emit_jump(ctx.emitter, object_label);                          // call the concrete ArrayAccess::offsetSet implementation
         }
         Arch::X86_64 => {
@@ -746,6 +759,11 @@ fn emit_mixed_array_set_object_guard(
             for symbol in RUNTIME_SPL_CLASS_IDS {
                 ctx.emitter.instruction(&format!("cmp r10, QWORD PTR [rip + {symbol}]")); // is the receiver that runtime SPL container?
                 ctx.emitter.instruction(&format!("je {}", native_label));       // its runtime storage takes the write
+            }
+            for class_id in &native_dimension_ids {
+                abi::emit_load_int_immediate(ctx.emitter, "r11", *class_id);
+                ctx.emitter.instruction("cmp r10, r11");                        // is the receiver a native-dimension (SimpleXML) class?
+                ctx.emitter.instruction(&format!("je {}", native_label));       // its offsetSet slot takes the write
             }
             abi::emit_jump(ctx.emitter, object_label);                          // call the concrete ArrayAccess::offsetSet implementation
         }
