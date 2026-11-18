@@ -35,9 +35,17 @@ pub(crate) use storage::prove_integer_slots;
 #[derive(Default)]
 pub struct BoundedMixedCounter {
     mixed_parameters: HashMap<String, Vec<bool>>,
+    /// Set for the lowering's discarded storage trials: a proven counter is re-lowered from the
+    /// AST there, so a boxed-key read of it is replaced by the typed one rather than rewritten.
+    lowering_trial: bool,
 }
 
 impl BoundedMixedCounter {
+    /// The pass as the lowering's storage trials use it (see `lowering_trial`).
+    pub(super) fn lowering_trial() -> Self {
+        Self { lowering_trial: true, ..Self::default() }
+    }
+
     /// Captures physical Mixed by-value argument positions before function passes run.
     pub(super) fn new(module: &Module) -> Self {
         let mut mixed_parameters = HashMap::default();
@@ -63,7 +71,7 @@ impl BoundedMixedCounter {
                     .collect()
             });
         }
-        Self { mixed_parameters }
+        Self { mixed_parameters, lowering_trial: false }
     }
 
     /// Requires the exact called parameter to retain its ordinary boxed Mixed ABI.
@@ -349,6 +357,13 @@ impl CounterProof {
                     // the typed index path is strictly cheaper than a boxed-key lookup.
                     Op::ArrayGet | Op::ArrayGetSilent
                         if inst.operands.get(1) == Some(&value) => {}
+                    // The lowering trial reads the counter as boxed Mixed, so `$data[$i]` is a
+                    // boxed-key read there. Once the range proof holds, the replay lowers the
+                    // key as the integer it is and emits the typed read (the IR rewrite has no
+                    // such conversion, so only the trial accepts it).
+                    Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent
+                        if pass.lowering_trial && inst.operands.get(1) == Some(&value)
+                            && inst.operands.first() != Some(&value) => {}
                     // Numeric helpers borrow their inputs. The unchanged opcode accepts
                     // a raw integer after the recurrence's complete range proof succeeds.
                     Op::MixedNumericBinop if matches!(inst.immediate,

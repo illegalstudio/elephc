@@ -307,6 +307,19 @@ fn apply_assignment_evidence(
             AssignedValue::Expr(expr) => match infer_storage_value_type(expr, env, infer_value)
                 .or_else(|| precise_scalar_expr_type(expr))
             {
+                // `int + int` infers `mixed` only because PHP may overflow to float. On a
+                // local that already holds a number that is a checked update the counter and
+                // IntegerRange machinery owns, not a change of storage.
+                Some(PhpType::Mixed)
+                    if env.get(*name).is_some_and(|existing| {
+                        matches!(existing, PhpType::Int | PhpType::Float)
+                    }) =>
+                {
+                    match checked_scalar_arithmetic_type(expr, env, infer_value) {
+                        Some(ty) => (ty, true),
+                        None => (PhpType::Mixed, true),
+                    }
+                }
                 Some(ty) => (ty, true),
                 None => (PhpType::Mixed, false),
             },
@@ -374,6 +387,29 @@ fn apply_assignment_evidence(
             .unwrap_or(incoming);
         env.insert((*name).to_string(), merged);
     }
+}
+
+/// The numeric type of `int|float (+|-|*) int|float`: `float` when an operand is a float and
+/// `int` otherwise (the overflow-to-float case is the checked update's slow path, not a storage
+/// change). `None` for any other expression or a non-numeric operand.
+fn checked_scalar_arithmetic_type(
+    expr: &Expr,
+    env: &TypeEnv,
+    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+) -> Option<PhpType> {
+    let ExprKind::BinaryOp { left, op: BinOp::Add | BinOp::Sub | BinOp::Mul, right } = &expr.kind
+    else {
+        return None;
+    };
+    let mut result = PhpType::Int;
+    for operand in [left, right] {
+        match infer_value(operand, env)? {
+            PhpType::Int => {}
+            PhpType::Float => result = PhpType::Float,
+            _ => return None,
+        }
+    }
+    Some(result)
 }
 
 /// Joins the numeric alternatives of a tagged local without erasing its nullable read type.

@@ -442,7 +442,53 @@ fn is_gradual_bitwise_operand(
     matches!(
         ctx.builder.value_php_type(value.value).codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
-    )
+    ) && !is_numeric_only_reduction(ctx, value)
+}
+
+/// Returns whether a boxed value is provably an `int|float`, never a string or an array.
+///
+/// That is the result of `array_sum()`/`array_product()` and of checked integer arithmetic
+/// (`ichecked_add`, `mixed_numeric_binop` over numbers), seen through the ownership wrappers an
+/// assignment adds. A bitwise operator reads such a value as the number it is; taking the
+/// string-versus-integer dispatch for it hid the reduction and every checked integer from the
+/// optimizer's integer sinks and `IntegerRange`.
+fn is_numeric_only_reduction(ctx: &LoweringContext<'_, '_>, value: LoweredValue) -> bool {
+    value_is_numeric_only(ctx, value.value, 0)
+}
+
+fn value_is_numeric_only(ctx: &LoweringContext<'_, '_>, value: ValueId, depth: u8) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    if matches!(ctx.builder.value_php_type(value).codegen_repr(), PhpType::Int | PhpType::Float) {
+        return true;
+    }
+    let Some(producer) = ctx.builder.value_defining_instruction(value) else {
+        return false;
+    };
+    match producer.op {
+        Op::Acquire | Op::MixedClone | Op::Move | Op::Borrow | Op::EnsureOwned
+            if producer.immediate.is_none() =>
+        {
+            producer.operands.first().is_some_and(|&source| value_is_numeric_only(ctx, source, depth + 1))
+        }
+        Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => true,
+        Op::MixedNumericBinop => {
+            matches!(
+                producer.immediate,
+                Some(Immediate::MixedNumericOp(
+                    MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul
+                ))
+            ) && producer.operands.iter().all(|&operand| value_is_numeric_only(ctx, operand, depth + 1))
+        }
+        Op::RuntimeCall => matches!(
+            producer.immediate,
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::ArraySum | crate::ir::RuntimeFnId::ArrayProduct
+            )))
+        ),
+        _ => false,
+    }
 }
 
 /// Returns whether a lowered PHP type already has concrete array storage.

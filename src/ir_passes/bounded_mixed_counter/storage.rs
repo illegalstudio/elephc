@@ -61,7 +61,7 @@ pub(crate) fn prove_integer_slots(
         .filter(|slot| incrementing.contains(slot)).take(16).collect();
     if group.len() > 1 {
         if let Some(proof) = CounterProof::for_slots(
-            function, &group, &BoundedMixedCounter::default(), data, Some(readonly_calls),
+            function, &group, &BoundedMixedCounter::lowering_trial(), data, Some(readonly_calls),
         ) {
             if trial_safe(function, &group, &proof, data) {
                 result.record(&group, &proof, &incrementing);
@@ -72,7 +72,7 @@ pub(crate) fn prove_integer_slots(
     let mut trials = 0;
     for &slot in &candidates {
         let Some(proof) = CounterProof::with_readonly_calls(
-            function, slot, &BoundedMixedCounter::default(), data, Some(readonly_calls),
+            function, slot, &BoundedMixedCounter::lowering_trial(), data, Some(readonly_calls),
         ) else { continue; };
         if trials == 16 { break; }
         trials += 1;
@@ -93,7 +93,7 @@ pub(crate) fn prove_integer_slots(
         if slots.is_empty() { continue; }
         slots.insert(slot);
         let Some(proof) = CounterProof::for_slots(
-            function, &slots, &BoundedMixedCounter::default(), data, Some(readonly_calls),
+            function, &slots, &BoundedMixedCounter::lowering_trial(), data, Some(readonly_calls),
         ) else { continue; };
         joint_trials += 1;
         if trial_safe(function, &slots, &proof, data) {
