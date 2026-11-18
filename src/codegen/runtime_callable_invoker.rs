@@ -441,8 +441,12 @@ pub(super) fn prepare_invoker_owner_visitor(
     let (visitor, fresh) = data.invoker_owner_visitor(count, format!("{label}__gc_argument_owners"));
     if fresh {
         let scope = emitter.begin_out_of_line();
+        // Content-shared invoker bodies keep one name across parallel workers, and each worker's
+        // own data section files the visitor again under it: marked, the merge keeps one copy.
+        emitter.comment(&format!("{}{visitor}", crate::codegen::context::HELPER_MARKER_OPEN));
         InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, count)
             .emit_frame_visitor(emitter, &visitor);
+        emitter.comment(crate::codegen::context::HELPER_MARKER_CLOSE);
         emitter.end_out_of_line(scope);
     }
     visitor
