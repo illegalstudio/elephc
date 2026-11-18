@@ -2313,7 +2313,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
 /// one (`MT_RAND_PHP`) raises `E_DEPRECATED`, which a user error handler can turn into an
 /// exception, and anything else (an operator such as `1 % 0`, a `new`) may throw, so what the
 /// call already holds is rooted first.
-fn default_is_inert(default: &Expr) -> bool {
+pub(super) fn default_is_inert(default: &Expr) -> bool {
     match &default.kind {
         ExprKind::StringLiteral(_) | ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_) | ExprKind::Null | ExprKind::ClassConstant { .. }

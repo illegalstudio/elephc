@@ -112,6 +112,19 @@ pub(super) fn lower_named_args_with_signature_options(
         if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
     }
 
+    if plan.regular_args.iter()
+        .any(|arg| matches!(arg, crate::types::call_args::PlannedRegularArg::SpreadElement { .. }))
+    {
+        return lower_args(ctx, args);
+    }
+    // PHP binds the supplied parameters before it evaluates an omitted default, so a refused
+    // argument throws its `TypeError` before a throwing default (`int $n = 1 % 0`) runs.
+    let throwing_default = !capture_values && plan.regular_args.iter().any(|arg| matches!(arg,
+        crate::types::call_args::PlannedRegularArg::Default(default)
+            if !super::call_arg_coercion::default_is_inert(default)));
+    if throwing_default {
+        check_supplied_scalar_params_before_defaults(ctx, sig, &plan, &mut source_values);
+    }
     let mut operands = Vec::with_capacity(plan.regular_args.len() + usize::from(sig.variadic.is_some()));
     for (param_index, arg) in plan.regular_args.iter().enumerate() {
         match arg {
@@ -121,9 +134,7 @@ pub(super) fn lower_named_args_with_signature_options(
             crate::types::call_args::PlannedRegularArg::Default(default) => {
                 operands.push(lower_arg_with_signature(ctx, sig, param_index, default));
             }
-            crate::types::call_args::PlannedRegularArg::SpreadElement { .. } => {
-                return lower_args(ctx, args);
-            }
+            crate::types::call_args::PlannedRegularArg::SpreadElement { .. } => unreachable!(),
         }
     }
     if sig.variadic.is_some() {
@@ -149,6 +160,51 @@ pub(super) fn lower_named_args_with_signature_options(
         }
     }
     operands
+}
+
+/// Runs the runtime scalar-parameter checks of the supplied named arguments before an omitted
+/// default that can throw is evaluated.
+///
+/// Every supplied value is rooted first, so a refusal (or the throwing default afterwards)
+/// releases them through the unwind chain. An `int`/`float` check leaves the converted scalar
+/// in place; a `string`/`bool` operand stays boxed and the call's ordinary checks convert it.
+fn check_supplied_scalar_params_before_defaults(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    plan: &crate::types::call_args::CallArgPlan,
+    source_values: &mut [crate::ir::ValueId],
+) {
+    use super::scalar_param_guards::GuardSource;
+    let supplied = plan.regular_args.iter().enumerate().filter_map(|(param_index, arg)| match arg {
+        crate::types::call_args::PlannedRegularArg::Source { source_index, .. } => Some((param_index, *source_index)),
+        _ => None,
+    }).collect::<Vec<_>>();
+    if !supplied.iter().any(|(param_index, source_index)| super::scalar_param_guards::guarded_scalar_param(
+        ctx, sig, *param_index, source_values[*source_index], GuardSource::Unrecorded,
+    ).is_some()) {
+        return;
+    }
+    for (param_index, source_index) in &supplied {
+        if sig.ref_params.get(*param_index).copied().unwrap_or(false) {
+            continue;
+        }
+        let lowered = lowered_value_from_id(ctx, source_values[*source_index]);
+        source_values[*source_index] =
+            super::call_operand_owners::root_evaluated_call_argument(ctx, lowered, Span::dummy()).value;
+    }
+    let guard_span = ctx.call_site_span.unwrap_or_else(Span::dummy);
+    for (param_index, source_index) in supplied {
+        let value = source_values[source_index];
+        if super::scalar_param_guards::guarded_scalar_param(ctx, sig, param_index, value, GuardSource::Unrecorded).is_none() {
+            continue;
+        }
+        let lowered = lowered_value_from_id(ctx, value);
+        if let Some(converted) = super::scalar_param_guards::guard_scalar_param(
+            ctx, sig, param_index, lowered, GuardSource::Unrecorded, guard_span, false, &[],
+        ) {
+            source_values[source_index] = converted.value;
+        }
+    }
 }
 
 /// Lowers a plan's normalized arguments, giving each regular parameter's literal its declared type.
