@@ -1,5 +1,5 @@
 //! Purpose:
-//! Selects incoming parameter bindings whose names can be recreated by a plain unset.
+//! Selects incoming parameter and capture bindings whose names can be recreated by a plain unset.
 //!
 //! Called from:
 //! - The per-frame storage scan before checking the first user statement.
@@ -35,14 +35,14 @@ impl Checker {
     }
 
     /// Records entry contracts and store sites without conflating value and reference inputs.
-    pub(super) fn mark_parameter_binding_origins(&mut self, facts: &Facts, incoming: &crate::types::checker::PreBoundLocals) {
+    pub(super) fn mark_entry_binding_origins(&mut self, facts: &Facts, incoming: &crate::types::checker::PreBoundLocals) {
         if !self.strict_locals { return; }
         for (name, incoming) in incoming {
             let Some(source) = facts.names.get(name).filter(|source|
-                !source.disqualified && (source.conditional_unset || (facts.contains_eval && source.has_unset)))
+                !source.disqualified && (source.conditional_unset
+                    || (source.has_unset && (facts.contains_eval || !self.local_parameter_names.contains(name)))))
                 else { continue; };
-            if !self.local_parameter_names.contains(name)
-                || self.name_is_seeded_program_storage(name)
+            if name == "this" || self.name_is_seeded_program_storage(name)
                 || matches!(incoming.storage.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_)) {
                 continue;
             }

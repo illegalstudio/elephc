@@ -2199,3 +2199,27 @@ real opaque eval, with owner retirement checked, plus all-five-target emission,
 known-invalid diagnostics and previous detached parameter controls. Public PHP/LFC
 optimizer pairs and the complete example are required in step191-evidence.json,
 along with the default build and hygiene checks, before acceptance.
+
+### Verified192: captured binding ends preserve their incoming origins
+
+Incoming capture metadata now separates the enclosing producer contract from the
+capture snapshot layout. The checker saves these contracts while the enclosing
+frame is active and seeds them in the closure body independently of narrowed
+storage views. Shared entry-origin selection admits captured names with plain
+unset, including unconditional ends which cannot use ordinary parameter slot kills.
+
+The existing common function prefix initializes their owning value shadows or
+retained reference handles. A captured reference keeps its external pointee until
+the executed detach; the replacement stays local to that activation. Repeated
+invocations preserve the original closure environment. An outgoing old reference
+continues to observe its original cell, and known incompatible stores remain
+checker errors both before a future end and after the first fresh producer.
+
+Coverage includes both capture modes, conditional/unconditional unset, open Mixed
+inputs, old aliases and repeated invocation. The focused gates require emission on
+all five targets, native optimizer pairs, both eval entries/profiles with all owners
+retired, actual opaque source with native captured value/reference scopes, existing
+open-parameter/reference controls, the default build, assembly comments and public
+PHP/LFC optimizer pairs. The complete example demonstrates detaching a captured
+reference and retains its existing expected output. Acceptance evidence is stored
+in step192-evidence.json before the signed commit.

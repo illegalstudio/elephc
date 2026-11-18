@@ -1201,7 +1201,7 @@ fn merge_local_assignment_type(
         env.insert(name.to_string(), PhpType::Mixed);
         return Ok(());
     }
-    if let Some(view) = checker.open_parameter_store_view(name, ty) {
+    if let Some(view) = checker.open_binding_store_view(name, ty) {
         env.insert(name.to_string(), view);
         return Ok(());
     }

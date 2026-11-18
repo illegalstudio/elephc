@@ -178,11 +178,14 @@ function replaceSelectedValue(bool $numeric, mixed $replacement): void {
 replaceSelectedValue(true, 2.5);
 replaceSelectedValue(false, 'ready');
 
-// A conditional unset detaches a reference before creating a new local producer.
+// A captured reference detaches locally before creating a new producer.
 function resetSelectedValue(bool $reset, int &$value): void {
-    if ($reset) { unset($value); $value = 'reset'; }
-    eval('');
-    echo "Current value: ", $value, PHP_EOL;
+    $select = function(bool $reset) use (&$value): void {
+        if ($reset) { unset($value); $value = 'reset'; }
+        eval('');
+        echo "Current value: ", $value, PHP_EOL;
+    };
+    $select($reset);
 }
 $resetQuantity = 1;
 resetSelectedValue(true, $resetQuantity);

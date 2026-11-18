@@ -783,7 +783,7 @@ impl Checker {
         // enclosing scope, and keying on that silenced fresh closure locals that merely shared a
         // name with something outside. A marked name from this map is announced only when
         // `--strict-locals` would really reject the body; see `run_mixed_storage_scan`.
-        self.seed_parameter_binding_contracts(&pre_bound);
+        self.seed_entry_binding_contracts(&pre_bound);
         self.run_mixed_storage_scan(body, &pre_bound);
         let candidates = super::super::promotable_arrays::find_candidates(self, body);
         let saved_promotable_array_candidates =

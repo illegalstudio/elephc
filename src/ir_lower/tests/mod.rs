@@ -856,3 +856,5 @@ mod eval_binding_ends;
 mod eval_parameter_origins;
 mod conditional_reference_origins;
 mod open_parameter_contracts;
+
+mod captured_binding_origins;

@@ -108,3 +108,12 @@ fn open_parameter_contracts_eval_values_and_owners() {
         "integer:2|string:ready|double:2.5|double:3.5|integer:2|Tinteger:1|Tinteger:1|string:new|Tinteger:1|method|static|closure|local:1|stream|1|closed|merged|merged|",
         "integer:2|string:ready|double:2.5|double:3.5|integer:2|Wstring:bad|Wstring:bad|string:new|Wstring:new|method|static|closure|local:1|stream|1|closed|merged|merged|");
 }
+
+/// Captured values and references keep the incoming origin until the executed binding end.
+#[test]
+fn captured_binding_origins_eval_values_and_owners() {
+    let prefix = "string:new|integer:1|1|string:new|integer:1|1|string:new|string:new|1|string:new|string:new|1|";
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/captured_binding_origins.php"),
+        &format!("{prefix}Winteger|Tstring|W2:integer:2|2|T2:string:new|2|"),
+        &format!("{prefix}Winteger|Winteger|W2:integer:2|2|W2:integer:3|2|"));
+}
