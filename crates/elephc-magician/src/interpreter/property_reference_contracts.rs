@@ -11,15 +11,18 @@
 
 use super::*;
 
-/// Gives checked property sources stable cells without adding permanent local type constraints.
-pub(in crate::interpreter) fn checked_property_reference_source(
+/// Leases persistent property sources in every profile, requiring that capability when checked.
+pub(in crate::interpreter) fn owned_property_reference_source(
     source: &str, context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalReferenceTarget>, EvalStatus> {
-    if !context.semantic_profile().checked_property_references() { return Ok(None); }
-    let cell = eval_persistent_variable_reference(source, context, scope, values)?
-        .ok_or(EvalStatus::UnsupportedConstruct)?;
-    Ok(Some(EvalReferenceTarget::Cell { cell: cell.borrowed() }))
+    if let Some(cell) = eval_persistent_variable_reference(source, context, scope, values)? {
+        return Ok(Some(EvalReferenceTarget::Cell { cell: cell.borrowed() }));
+    }
+    if context.semantic_profile().checked_property_references() {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    Ok(None)
 }
 
 /// Refuses incompatible property candidates before the underlying cell or old value changes.

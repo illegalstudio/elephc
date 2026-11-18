@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step176 (this commit). Remaining feature integration is active. Issue:
+Verified through step177 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -1742,3 +1742,28 @@ directly to an array element can pass checking and then panic during lowering.
 Task29118b0b records that separate place-lowering/diagnostic work; AOT target
 coverage here uses supported mixed local/reference storage. ArrayKeys remains
 staged while escaped source lifetimes and its remaining admission gates continue.
+
+### Verified177: persistent property reference sources in every profile
+
+Instance and static property reference binding share owned_property_reference_source.
+It attempts the existing persistent-cell promotion independently of Casts and
+Coercions, so an escaped promoted array parameter uses its owned formal cell
+instead of retaining a raw caller-scope target. Checked profiles still require
+that capability; providers without a persistent result retain the existing
+permissive fallback. Managed-reference authentication, foreign-slot handling and
+the root classifier are unchanged. Existing local contract registration stays
+inside the reused promotion helper.
+
+The shared PHP fixture returns two aliases from scalar, array and nested array
+factories, then reads and writes them after factory teardown. PHP8.5.12 agrees
+with every expected observation. Sixteen staged walker/VM cases independently
+select ArrayKeys, Casts and Coercions and retire all activation owners. Four real
+opaque eval programs pass with clean heaps across Casts and optimizer settings
+in144.87s. Every supported target emits the factory fixture. Existing owned-key,
+persistent alias, by-value staging, checked property capture and static/nested
+property controls pass. All ten gates, including the default serial build and
+diff hygiene, are accepted.
+
+ArrayKeys remains staged while producer/source, host/cache/mode and the disabled
+strict native eval admission gate are completed. Stronger Locals and the other
+five pending families remain part of the authorized implementation.
