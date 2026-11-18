@@ -1791,11 +1791,14 @@ pub(super) fn lower_runtime_mixed_prop_set(
 
     // Eval subclasses can retain any native parent's physical class id. Claim their
     // writes by object identity before declared slots, magic methods or property hashes.
-    emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
-    let value_ty = ctx.value_php_type(value)?.codegen_repr();
-    emit_runtime_property_set_for_stacked_name_after_eval_probe(
-        ctx, value, &value_ty, 16, 0, 32, Some(&done_label),
-    )?;
+    // A scoped helper has no stdClass arm of its own: the global helper it delegates to claims them.
+    if delegate.is_none() {
+        emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
+        let value_ty = ctx.value_php_type(value)?.codegen_repr();
+        emit_runtime_property_set_for_stacked_name_after_eval_probe(
+            ctx, value, &value_ty, 16, 0, 32, Some(&done_label),
+        )?;
+    }
 
     let class_names = ctx
         .module

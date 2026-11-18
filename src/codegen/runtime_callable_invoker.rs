@@ -441,8 +441,18 @@ pub(super) fn prepare_invoker_owner_visitor(
     let (visitor, fresh) = data.invoker_owner_visitor(count, format!("{label}__gc_argument_owners"));
     if fresh {
         let scope = emitter.begin_out_of_line();
-        InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, count)
-            .emit_frame_visitor(emitter, &visitor);
+        // Keyed by the visitor's label: parallel workers each hold a DataSection of their own, so
+        // two chunks that reach the same shared invoker both file its visitor, and the merge
+        // keeps one copy of every keyed region.
+        emitter.emit_keyed_once(
+            &format!("owner_visitor:{visitor}"),
+            crate::codegen::context::HELPER_MARKER_OPEN,
+            crate::codegen::context::HELPER_MARKER_CLOSE,
+            |emitter| {
+                InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, count)
+                    .emit_frame_visitor(emitter, &visitor);
+            },
+        );
         emitter.end_out_of_line(scope);
     }
     visitor
