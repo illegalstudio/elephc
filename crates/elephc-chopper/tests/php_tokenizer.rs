@@ -1730,7 +1730,7 @@ fn tokenizer_nested_heredocs_stay_linear() {
     source.push_str("H0;\n");
     let started = std::time::Instant::now();
     // The parser rejects the nesting after lexing; heredoc validation itself must stay linear.
-    let _ = crate::lex::scan(source.as_bytes());
+    let _ = elephc_chopper::scanner::scan(source.as_bytes());
     assert!(
         started.elapsed() < std::time::Duration::from_secs(10),
         "nested heredoc validation took {:?}",
