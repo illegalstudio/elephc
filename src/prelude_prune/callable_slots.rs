@@ -16,7 +16,9 @@
 //!   call that names its class (`Text::take(...)`, `new Text(...)`) binds that class's own
 //!   declaration; a call on an object (`$o->take(...)`) matches methods by name across every
 //!   class. That over-approximates only for calls that pass a builtin's exact name as a string
-//!   to a parameter declared `callable` somewhere under the same name.
+//!   to a parameter declared `callable` somewhere under the same name. An import alias
+//!   (`use A\Runner as Alias`, `use function A\apply as run`) is not resolved here, so a class
+//!   called through one matches methods by name and a function alias also counts its targets.
 //! - Only callees named before types count: a call through a variable (`$f("x")`) may pass
 //!   ordinary text, so it injects nothing; such a prelude-backed name stops with the runtime-only
 //!   builtin error and must be named directly or as `gmp_abs(...)`.
@@ -26,7 +28,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, TypeExpr};
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, TypeExpr, UseKind};
 
 /// One callee's declared `callable` parameters.
 #[derive(Clone, Debug, Default)]
@@ -73,6 +75,12 @@ pub(crate) struct UserCallableSlots {
     /// callable slots when it has any: a call that names its class (`Text::take(...)`,
     /// `new Text(...)`) binds that declaration, not a same-named method of another class.
     class_methods: HashMap<(String, String), Option<Slots>>,
+    /// Class import aliases (`use A\Runner as Alias`) whose alias differs from the imported
+    /// class's last segment. Imports are not resolved yet, so a call through such a name has no
+    /// known class and matches methods by name.
+    class_aliases: HashSet<String>,
+    /// Function import aliases (`use function A\apply as run`), alias key to imported keys.
+    function_aliases: HashMap<String, HashSet<String>>,
 }
 
 impl UserCallableSlots {
@@ -118,6 +126,24 @@ impl UserCallableSlots {
                         }
                     }
                 }
+                StmtKind::UseDecl { imports } => {
+                    for import in imports {
+                        let alias = php_symbol_key(&import.alias);
+                        let target = callee_key(import.name.as_str());
+                        if alias == target {
+                            continue;
+                        }
+                        match import.kind {
+                            UseKind::Class => {
+                                self.class_aliases.insert(alias);
+                            }
+                            UseKind::Function => {
+                                self.function_aliases.entry(alias).or_default().insert(target);
+                            }
+                            UseKind::Const => {}
+                        }
+                    }
+                }
                 StmtKind::NamespaceBlock { body, .. }
                 | StmtKind::Synthetic(body)
                 | StmtKind::IncludeOnceGuard { body, .. } => self.collect(body),
@@ -126,10 +152,15 @@ impl UserCallableSlots {
         }
     }
 
-    /// Records the literals one call hands to callable parameters of a user function.
+    /// Records the literals one call hands to callable parameters of a user function. A name
+    /// that is also a function import alias counts every function it may import as well.
     pub(crate) fn function_call(&self, name: &str, args: &[Expr], out: &mut HashSet<String>) {
-        if let Some(slots) = self.functions.get(&callee_key(name)) {
-            record_arguments(slots, args, out);
+        let key = callee_key(name);
+        let imported = self.function_aliases.get(&key).into_iter().flatten();
+        for key in std::iter::once(&key).chain(imported) {
+            if let Some(slots) = self.functions.get(key) {
+                record_arguments(slots, args, out);
+            }
         }
     }
 
@@ -143,8 +174,8 @@ impl UserCallableSlots {
 
     /// Records the literals one call with a named class (`Text::take(...)`, `new Text(...)`)
     /// hands to callable parameters. When that class declares the method itself, only its own
-    /// declaration counts; an inherited or trait method, or `self`/`static`/`parent`, falls back
-    /// to every method of that name.
+    /// declaration counts; an inherited or trait method, `self`/`static`/`parent`, or a name that
+    /// is also a class import alias falls back to every method of that name.
     pub(crate) fn class_method_call(
         &self,
         class: &str,
@@ -153,7 +184,9 @@ impl UserCallableSlots {
         out: &mut HashSet<String>,
     ) {
         let class_key = callee_key(class);
-        if !matches!(class_key.as_str(), "self" | "static" | "parent") {
+        if !matches!(class_key.as_str(), "self" | "static" | "parent")
+            && !self.class_aliases.contains(&class_key)
+        {
             if let Some(slots) = self.class_methods.get(&(class_key, php_symbol_key(method))) {
                 if let Some(slots) = slots {
                     record_arguments(slots, args, out);
@@ -372,6 +405,28 @@ $o->take("gmp_sub");
         }
         for name in ["xml_parse_into_struct", "gmp_add"] {
             assert!(!found.contains(name), "unexpected {name} in {found:?}");
+        }
+    }
+
+    /// Verifies a class or function called through an import alias still binds the imported
+    /// declaration's callable slots, even when an unrelated declaration shares the alias name.
+    #[test]
+    fn import_aliases_keep_the_imported_callable_slots() {
+        let found = literals(
+            r#"<?php
+namespace A { class Runner { public static function take(callable $f) {} public function __construct(callable $f) {} } function apply(callable $f) {} }
+namespace B { class Alias { public static function take(string $s) { return $s; } public function __construct(string $s) {} } function run(string $s) {} }
+namespace C {
+use A\Runner as Alias;
+use function A\apply as run;
+Alias::take("gmp_abs");
+new Alias("gmp_neg");
+run("gmp_sqrt");
+}
+"#,
+        );
+        for name in ["gmp_abs", "gmp_neg", "gmp_sqrt"] {
+            assert!(found.contains(name), "missing {name} in {found:?}");
         }
     }
 

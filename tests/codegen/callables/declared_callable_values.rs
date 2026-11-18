@@ -783,3 +783,31 @@ try { prop($h); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 prop(): Return value must be of type callable, int returned\n"
     );
 }
+
+/// A failing declared `callable` return check must release an owning temporary it was handed.
+///
+/// The property read (`return $h->cb`) owns one reference; the check copied it and threw, so a
+/// caught `TypeError` left every previous heap string stored in `$h->cb` alive, by value and by
+/// reference.
+#[test]
+fn test_declared_callable_failed_return_check_releases_the_value() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Holder { public $cb; }
+function &byref(Holder $h): callable { return $h->cb; }
+function byval(Holder $h): callable { return $h->cb; }
+$h = new Holder();
+$caught = 0;
+for ($i = 0; $i < 3; $i++) {
+    $h->cb = str_repeat("x", 64) . $i;
+    try { $r = &byref($h); } catch (TypeError $e) { $caught++; }
+    try { byval($h); } catch (TypeError $e) { $caught++; }
+}
+$h->cb = null;
+echo $caught, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "6\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
