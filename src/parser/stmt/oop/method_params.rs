@@ -155,6 +155,25 @@ pub(super) fn parse_method_params(
                     span: property_span,
                 }) = promotion
                 {
+                    // A promoted parameter is not implicitly nullable: php-src rejects the
+                    // `null` default outright, since the property's type would not accept it.
+                    if let (Some(declared), Some(ExprKind::Null)) =
+                        (type_ann.as_ref(), default.as_ref().map(|default| &default.kind))
+                    {
+                        // An intersection rejects null too; it is only never widened.
+                        if declared.implicitly_nullable().is_some()
+                            || matches!(declared, TypeExpr::Intersection(_))
+                        {
+                            return Err(CompileError::new(
+                                param_span,
+                                &format!(
+                                    "Cannot use null as default value for parameter ${} of type {}",
+                                    n,
+                                    crate::generics::describe_written_type(declared)
+                                ),
+                            ));
+                        }
+                    }
                     if readonly && is_ref {
                         return Err(CompileError::new(
                             ref_span.unwrap_or(property_span),
