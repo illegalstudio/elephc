@@ -54,3 +54,30 @@ echo ConditionalAssignmentOwner::$destroyed;
 fn test_overlapping_conditionals_retire_previous_local_owners_no_ir_opt() {
     without_ir_opt(test_overlapping_conditionals_retire_previous_local_owners);
 }
+
+/// A `??` result narrowed to a class at a property store hands its boxed owner back, so a
+/// parent/child pair that points at each other through such stores is fully released.
+#[test]
+fn test_coalesce_object_property_store_retires_the_boxed_owner() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class CoalesceNode {
+    public $parent = null;
+    public $kids = null;
+    public $doc = null;
+    public function add(CoalesceNode $child): void {
+        $this->kids = [$child];
+        $child->parent = $this;
+        $child->doc = $this->doc ?? $this;
+    }
+}
+$root = new CoalesceNode();
+$leaf = new CoalesceNode();
+$root->add($leaf);
+unset($root, $leaf);
+gc_collect_cycles();
+echo "done";
+"#);
+    assert!(out.success, "stdout={:?}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
