@@ -143,6 +143,7 @@ pub(super) fn collect_object_reference_entry_checks(
 /// A class-typed parameter runs the `Class|false` / `Class|null` union guard whether it is
 /// by-value or by-reference, and a by-reference `array` / `?array` / `array|Class` parameter
 /// checks a boxed (`mixed`) argument at the boundary too; a fresh `new` argument passes both.
+/// A by-value `object`, `?object` or class union checks a `mixed` argument at run time as well.
 /// A `callable` parameter checks `is_callable`, which a fresh object can fail, so it throws
 /// for every call, as does each element of a `callable ...$xs` variadic. Checker metadata
 /// narrows this down; without it the declaration is the conservative source.
@@ -192,7 +193,7 @@ fn type_hint_is_class(hint: &TypeExpr) -> bool {
                 .trim_start_matches('\\')
                 .to_ascii_lowercase()
                 .as_str(),
-            "mixed" | "callable" | "closure" | "array" | "object" | "iterable"
+            "mixed" | "callable" | "closure" | "array" | "iterable"
                 | "string" | "int" | "float" | "bool" | "null" | "true"
                 | "void" | "never"
         ),
