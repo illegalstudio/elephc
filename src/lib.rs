@@ -65,6 +65,13 @@ pub mod ir_passes;
 /// Ordered typed final-link inputs shared with integration-test providers.
 #[doc(hidden)]
 pub mod link_plan;
+// Staged native fixtures share production link planning without widening the library API.
+#[cfg(test)]
+#[allow(dead_code)]
+mod link_planning;
+#[cfg(test)]
+#[allow(dead_code)]
+mod linker;
 /// Lexer for tokenizing PHP source.
 pub mod lexer;
 /// Conditionally-injected `DateTimeZone::listIdentifiers` filtering prelude.

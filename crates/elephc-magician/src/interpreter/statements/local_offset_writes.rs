@@ -93,6 +93,7 @@ fn eval_local_offset_write(
         };
         let declared = generic_local_contracts(scope, name, context);
         let replacement = if let Some(index) = index {
+            checked_array_keys::for_receiver(array, index, context, values)?;
             let index = match normalized_array_string_index(index, context.semantic_profile(), values)? {
                 Some(normalized) => { operands.push(normalized); normalized }
                 None => index,

@@ -109,6 +109,12 @@ pub(super) fn execute_link_command(rendered: RenderedCommand) {
     run_tool("Linker", &mut command);
 }
 
+/// Returns real linker output to a fixture that owns its cleanup and failure reporting.
+#[cfg(test)]
+pub(super) fn capture_link_command(rendered: RenderedCommand) -> process::Output {
+    rendered.into_command().output().expect("run staged native fixture linker")
+}
+
 /// Executes a prepared external tool and exits with a concise failure diagnostic.
 pub(super) fn run_tool(name: &str, command: &mut Command) {
     match command.status() {

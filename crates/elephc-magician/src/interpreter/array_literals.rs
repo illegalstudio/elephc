@@ -111,6 +111,7 @@ pub(super) fn eval_assoc_array(
             };
             operands.push(value);
             if explicit_key.is_none() { validate_array_append_key(key, context, values)?; }
+            checked_array_keys::for_receiver(array, key, context, values)?;
             array = values.array_set(array, key, value)?;
             if let Some(target) = target {
                 bind_array_element_reference(context, array, key, target, values)?;

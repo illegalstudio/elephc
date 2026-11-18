@@ -92,6 +92,7 @@ fn unset_value(
             Ok(None)
         }
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
+            checked_array_keys::for_receiver(array, index, context, values)?;
             let normalized = if values.type_tag(index)? == EVAL_TAG_STRING {
                 eval_numeric_string_array_key(&values.string_bytes(index)?, context.semantic_profile()).map(|key| values.int(key)).transpose()?
             } else { None };

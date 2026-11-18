@@ -255,6 +255,7 @@ pub(super) fn eval_array_unset_target_result(
     }
     let index = eval_owned_array_set_index(index, context, scope, values)?;
     let result = (|| {
+        checked_array_keys::for_receiver(array, index, context, values)?;
         let key = eval_array_reference_key(index, context.semantic_profile(), values)?;
         let replacement = eval_array_without_key_result(array, index, values)?;
         context.clone_array_element_aliases(array, replacement, key.as_ref());

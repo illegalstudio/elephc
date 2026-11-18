@@ -35,6 +35,7 @@ mod operands;
 mod checked_numeric;
 mod checked_comparisons;
 mod checked_strings;
+mod checked_array_keys;
 mod checked_cast;
 mod native_results;
 mod numeric_domains;

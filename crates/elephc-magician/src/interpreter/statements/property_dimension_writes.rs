@@ -334,6 +334,7 @@ fn write_value_in_storage(
         context.clone_array_element_aliases(array, promoted, None);
     }
     let array = promoted;
+    checked_array_keys::for_receiver(array, index, context, values)?;
     let value = compound_value(array, index, op, assigned, operands, context, values)?;
     for declared in context.local_reference_types(current) {
         validate_generic_local_element(Some(&declared), array, index, value, context, values)?;

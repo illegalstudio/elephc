@@ -1425,3 +1425,29 @@ escaping generic reference metadata still need their own ownership treatment.
 Compiler/bridge builds7.78s and all six exact compatibility gates pass in job
 2ad37022 (19s total), including existing alias, append-history and static-reflection
 owner regressions. No public feature admission changes in this step.
+
+### Verified166: eval array key membership boundaries
+
+A shared borrowed-handle guard checks original int|string membership only after
+an eval operation selects a PHP array. Reads, explicit literal keys, local/property
+stores and removals reuse it before key coercion or alias writeback. ArrayAccess
+keeps its original keys. Staged walker/VM tests cover bool, float, null, array and
+object rejection, valid scalar controls and complete exceptional owner cleanup.
+
+The native fixture helper now uses production runtime requirements and link
+planning for eval. Link preparation shares bridge resolution, SDK selection,
+archive handling and cleanup; captured execution returns diagnostics to the
+fixture instead of exiting its owning test process. Ordinary reference-only
+fixtures retain their existing linker path.
+
+Five-target staged emission passes in78.83s. Real native permissive eval passes
+both optimization modes in58.46s with clean heaps. Public interpreter and FFI
+entry points intentionally reject pending ArrayKeys: the separate strict native
+gate is retained as ignored and MUST be enabled and passed before ArrayKeys
+admission. This step does not claim strict native runtime admission. All nine focused gates pass, including compiler/bridge builds48.50s,
+metadata/append controls and Linux, macOS and iOS linker regressions. Assembly
+comments and diff hygiene pass.
+
+Builtin/probe consumers, key producers, false/null parent parity and generic
+escaped-reference key owners remain pending, followed by dependency profiles,
+binding-flow alternatives and the other five unintegrated families.
