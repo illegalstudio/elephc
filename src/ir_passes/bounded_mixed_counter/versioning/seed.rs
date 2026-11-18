@@ -99,6 +99,13 @@ fn candidate(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Boun
     let block = function.block(preheader)?;
     let split = block.instructions.iter().position(|id| *id == producer_id)?;
     // Skipping may omit numeric bookkeeping only. Other initialization effects must still run.
+    // A representation conversion the loop contract placed after the seed (a `$count = 0` boxed
+    // for the loop that follows) belongs to the path that skips the loop too. It does not read the
+    // seed, so it moves ahead of the producer instead of being skipped with it.
+    let suffix_values: HashSet<ValueId> = block.instructions[split..].iter()
+        .filter_map(|id| function.instruction(*id).and_then(|inst| inst.result)).collect();
+    let mut hoisted: Vec<InstId> = Vec::new();
+    let mut hoisted_values: HashSet<ValueId> = HashSet::default();
     for &id in &block.instructions[split..] {
         let inst = function.instruction(id)?;
         if id == producer_id || proof.releases.contains(&id) { continue; }
@@ -106,6 +113,18 @@ fn candidate(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Boun
         if inst.op == Op::StoreLocal && inst.immediate == Some(Immediate::LocalSlot(slot)) { continue; }
         if matches!(inst.op, Op::Acquire | Op::MixedClone | Op::Borrow | Op::Move)
             && inst.result.is_some_and(|value| proof.scalar_values.contains(&value)) { continue; }
+        let other_slot = match (&inst.op, &inst.immediate) {
+            (Op::LoadLocal | Op::StoreLocal | Op::ReleaseLocalSlot, Some(Immediate::LocalSlot(other))) => *other != slot,
+            (Op::MixedBox | Op::Acquire | Op::Release | Op::MixedClone | Op::Borrow | Op::Move, _) => true,
+            _ => false,
+        };
+        let independent = inst.operands.iter()
+            .all(|operand| !suffix_values.contains(operand) || hoisted_values.contains(operand));
+        if other_slot && independent {
+            hoisted.push(id);
+            hoisted_values.extend(inst.result);
+            continue;
+        }
         return None;
     }
     let mut trial = function.clone();
@@ -115,6 +134,19 @@ fn candidate(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Boun
     for id in &proof.updates {
         let inst = &mut trial.instructions[id.as_raw() as usize];
         inst.op = Op::IAdd; inst.effects = Op::IAdd.default_effects();
+    }
+    if !hoisted.is_empty() {
+        let list = &mut trial.blocks[preheader.as_raw() as usize].instructions;
+        let at = list.iter().position(|id| *id == producer_id)?;
+        list.retain(|id| !hoisted.contains(id));
+        list.splice(at..at, hoisted.iter().copied());
+        let moved = list.clone();
+        for (index, &id) in moved.iter().enumerate() {
+            if let Some(value) = trial.instructions[id.as_raw() as usize].result {
+                trial.values[value.as_raw() as usize].def =
+                    ValueDef::Instruction { block: preheader, index: index as u32, inst: id };
+            }
+        }
     }
     let split = trial.blocks[preheader.as_raw() as usize].instructions.iter().position(|id| *id == producer_id)?;
     let suffix = trial.blocks[preheader.as_raw() as usize].instructions.split_off(split);
