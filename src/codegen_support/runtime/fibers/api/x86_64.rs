@@ -14,12 +14,9 @@ use crate::codegen_support::emit::Emitter;
 use super::common::emit_box_null_mixed;
 use super::super::switch::{fiber_initial_entry_offset, fiber_initial_stack_frame_bytes};
 use super::super::{
-    FIBER_CALLABLE_OFFSET, FIBER_CALLABLE_WRAPPER_OFFSET, FIBER_CALLER_OFFSET,
-    FIBER_DEFAULT_STACK_SIZE, FIBER_OBJECT_SIZE, FIBER_PENDING_THROW_OFFSET,
-    FIBER_SAVED_SP_OFFSET, FIBER_STACK_BASE_OFFSET, FIBER_STACK_SIZE_OFFSET,
-    FIBER_STACK_TOP_OFFSET, FIBER_START_ARGS_MAX, FIBER_STATE_NOT_STARTED,
-    FIBER_STATE_OFFSET, FIBER_STATE_RUNNING, FIBER_STATE_SUSPENDED,
-    FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET, FIBER_USER_ARG_MAX_OFFSET,
+    FIBER_CALLER_OFFSET, FIBER_DEFAULT_STACK_SIZE, FIBER_PENDING_THROW_OFFSET,
+    FIBER_STATE_NOT_STARTED, FIBER_STATE_OFFSET, FIBER_STATE_RUNNING, FIBER_STATE_SUSPENDED,
+    FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
 };
 
 
@@ -72,50 +69,9 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r13, rsi");                                        // r13 = Fiber class_id
     emitter.instruction("mov r15, rdx");                                        // r15 = generated Fiber wrapper pointer
 
-    // -- allocate the Fiber object payload --
-    emitter.instruction(&format!("mov rax, {}", FIBER_OBJECT_SIZE));            // size in bytes for the Fiber object payload
-    emitter.instruction("call __rt_heap_alloc");                                // rax = pointer to the object payload
-    emitter.instruction("mov r14, rax");                                        // r14 = Fiber object pointer kept until return
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the object heap kind word
-    emitter.instruction("mov QWORD PTR [r14 - 8], r10");                        // stamp the allocation as an object instance
-    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new Fiber object to its PHP object handle (rax still holds it)
-    emitter.instruction("mov QWORD PTR [r14], r13");                            // store the runtime class_id at the object header
-
-    // -- zero-initialise every Fiber field before populating meaningful ones --
-    emitter.instruction("lea r10, [r14 + 8]");                                  // r10 = first runtime-managed Fiber field after class_id
-    emitter.instruction(&format!("mov r11, {}", (FIBER_OBJECT_SIZE - 8) / 8));  // r11 = number of qword fields to clear
-    emitter.label("__rt_fiber_construct_zero_object_loop");
-    emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the current runtime-managed Fiber qword field
-    emitter.instruction("add r10, 8");                                          // advance to the next qword field
-    emitter.instruction("sub r11, 1");                                          // consume one field from the clear count
-    emitter.instruction("jne __rt_fiber_construct_zero_object_loop");           // continue until every runtime-managed field is zeroed
-
-    emitter.instruction(&format!("mov r10, {}", FIBER_START_ARGS_MAX));         // default user_arg_max = full slot count
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r10", FIBER_USER_ARG_MAX_OFFSET)); // user_arg_max stored on the freshly built fiber
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r12", FIBER_CALLABLE_OFFSET)); // callable.lo = descriptor pointer
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r15", FIBER_CALLABLE_WRAPPER_OFFSET)); // callable wrapper = Fiber entry ABI adapter
-
-    // -- allocate the per-fiber stack via mmap; alloc returns base/top/total --
-    emitter.instruction(&format!("mov edi, {}", FIBER_DEFAULT_STACK_SIZE));     // request the default usable fiber stack size in bytes
-    emitter.instruction("call __rt_fiber_alloc_stack");                         // rax = stack_base, rdx = stack_top, rcx = total mapped length
-    emitter.instruction("test rax, rax");                                       // did mmap return a real stack mapping?
-    emitter.instruction("jz __rt_fiber_construct_stack_failed");                // abort construction before writing a fake frame at NULL
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], rax", FIBER_STACK_BASE_OFFSET)); // stack_base = mmap mapping start
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], rdx", FIBER_STACK_TOP_OFFSET)); // stack_top = initial SP target
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], rcx", FIBER_STACK_SIZE_OFFSET)); // stack_size = total mapped length
-
-    // -- carve out and zero a fake initial frame at the top of the stack --
-    emitter.instruction(&format!("lea r10, [rdx - {}]", initial_frame_bytes));  // r10 = initial saved_sp for the switch restore path
-    emitter.instruction(&format!("mov QWORD PTR [r14 + {}], r10", FIBER_SAVED_SP_OFFSET)); // saved_sp points at the fake switch frame
-    emitter.instruction("mov r11, r10");                                        // r11 = cursor through the fake frame
-    emitter.instruction(&format!("mov rcx, {}", initial_frame_bytes / 8));      // rcx = number of qwords to zero in the fake frame
-    emitter.label("__rt_fiber_construct_zero_frame_loop");
-    emitter.instruction("mov QWORD PTR [r11], 0");                              // zero one saved-register or saved-return slot
-    emitter.instruction("add r11, 8");                                          // advance to the next fake-frame qword
-    emitter.instruction("sub rcx, 1");                                          // consume one fake-frame qword
-    emitter.instruction("jne __rt_fiber_construct_zero_frame_loop");            // continue until the fake frame is zeroed
-    abi::emit_symbol_address(emitter, "r11", "__rt_fiber_entry");              // r11 = absolute address of the entry trampoline
-    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", initial_entry_offset)); // saved return address = entry trampoline
+    elephc_memoir::coroutine_storage::emit_payload_and_stack(
+        emitter, FIBER_DEFAULT_STACK_SIZE, initial_frame_bytes, initial_entry_offset,
+    );
 
     // -- finish: state = NotStarted and return the new Fiber pointer --
     emitter.instruction(&format!("mov QWORD PTR [r14 + {}], {}", FIBER_STATE_OFFSET, FIBER_STATE_NOT_STARTED)); // state = NotStarted

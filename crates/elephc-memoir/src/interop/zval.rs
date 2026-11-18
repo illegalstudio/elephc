@@ -9,6 +9,8 @@
 //! - Object and resource payloads remain borrowed native pointers and are never released here.
 //! - PHP value conversion and pack/unpack orchestration stay in the compiler.
 
+pub mod array_storage;
+
 use crate::{Arch, Emitter};
 
 /// zval_string_new: allocate a zend_string and copy bytes from an elephc string.

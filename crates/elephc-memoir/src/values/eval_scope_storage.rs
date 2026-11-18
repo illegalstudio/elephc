@@ -171,3 +171,51 @@ fn x86_64_insert(emitter: &mut impl Emitter, visible_flags: i64) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the previous-next pointer
     emitter.instruction("mov QWORD PTR [r11], rax");                            // link the new entry through the previous-next pointer
 }
+
+/// Replaces the current node, retiring an old owned cell when its identity changes.
+/// The setter supplies its ownership and visible ABI flags.
+pub fn emit_replace(emitter: &mut impl Emitter, owned_flag: i64, visible_flags: i64) {
+    match emitter.arch() {
+        Arch::AArch64 => replace_aarch64(emitter, owned_flag, visible_flags),
+        Arch::X86_64 => replace_x86_64(emitter, owned_flag, visible_flags),
+    }
+}
+
+/// Replaces the selected node using the setter's existing saved state.
+fn replace_aarch64(emitter: &mut impl Emitter, owned_flag: i64, visible_flags: i64) {
+    emitter.label("__elephc_eval_scope_set_update");
+    emitter.instruction("ldr x9, [x25, #32]");                                  // load old entry flags
+    emitter.instruction(&format!("tst x9, #{}", owned_flag));                   // check whether the old cell is scope-owned
+    emitter.instruction("b.eq __elephc_eval_scope_set_store");                  // borrowed old cells do not need release
+    emitter.instruction("ldr x0, [x25, #24]");                                  // load the old Mixed cell pointer
+    emitter.instruction("cmp x0, x22");                                         // compare old and replacement cells
+    emitter.instruction("b.eq __elephc_eval_scope_set_store");                  // retaining the same cell must not decref it
+    emitter.instruction("cbz x0, __elephc_eval_scope_set_store");               // tolerate null old cells defensively
+    emitter.instruction("bl __rt_decref_mixed");                                // release the overwritten owned Mixed cell
+    emitter.label("__elephc_eval_scope_set_store");
+    emitter.instruction("str x22, [x25, #24]");                                 // store the replacement Mixed cell
+    emitter.instruction(&format!("mov x9, #{}", visible_flags));                // materialize visible and dirty ABI bits
+    emitter.instruction("orr x9, x23, x9");                                     // merge caller ownership flags with core visibility flags
+    emitter.instruction("str x9, [x25, #32]");                                  // publish the updated ABI flags
+}
+
+/// Replaces the selected node using the setter's existing saved state.
+fn replace_x86_64(emitter: &mut impl Emitter, owned_flag: i64, visible_flags: i64) {
+    emitter.label("__elephc_eval_scope_set_update");
+    emitter.instruction("mov r10, QWORD PTR [r9 + 32]");                        // load old entry flags
+    emitter.instruction(&format!("test r10, {}", owned_flag));                  // check whether the old cell is scope-owned
+    emitter.instruction("jz __elephc_eval_scope_set_store");                    // borrowed old cells do not need release
+    emitter.instruction("mov rax, QWORD PTR [r9 + 24]");                        // load the old Mixed cell pointer
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 32]");                       // compare old and replacement cells
+    emitter.instruction("je __elephc_eval_scope_set_store");                    // retaining the same cell must not decref it
+    emitter.instruction("test rax, rax");                                       // tolerate null old cells defensively
+    emitter.instruction("jz __elephc_eval_scope_set_store");                    // skip release when the old cell is null
+    emitter.instruction("call __rt_decref_mixed");                              // release the overwritten owned Mixed cell
+    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload current entry after the runtime call
+    emitter.label("__elephc_eval_scope_set_store");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the replacement Mixed cell
+    emitter.instruction("mov QWORD PTR [r9 + 24], r10");                        // store the replacement Mixed cell
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload caller-provided ABI flags
+    emitter.instruction(&format!("or r10, {}", visible_flags));                 // mark the entry visible and dirty
+    emitter.instruction("mov QWORD PTR [r9 + 32], r10");                        // publish the updated ABI flags
+}

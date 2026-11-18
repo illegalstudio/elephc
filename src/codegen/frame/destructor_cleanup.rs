@@ -11,6 +11,11 @@
 //! - Tracked Mixed references release their managed wrapper, preserving any other identity owners.
 
 use super::*;
+use elephc_memoir::FrameOffset;
+use elephc_memoir::frame_owners::{
+    emit_raw_ref_payload_callback, emit_release_borrowed_raw_ref_cell, emit_take_reference_owner,
+};
+pub(super) use elephc_memoir::frame_owners::{enter_borrowed_frame, leave_borrowed_frame};
 
 /// One owner whose cleanup can execute PHP code while the abandoned frame remains readable.
 enum Owner {
@@ -83,79 +88,26 @@ pub(super) fn emit_callback(ctx: &mut FunctionContext<'_>, entry: &str) {
     }
 }
 
-/// Preserves the caller's real stack while selecting a borrowed PHP frame for ordinary slot helpers.
-pub(super) fn enter_borrowed_frame(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::AArch64 {
-        emitter.instruction("sub sp, sp, #48");                                 // reserve cleanup state and saved linkage outside the borrowed PHP frame
-        emitter.instruction("stp x29, x30, [sp, #32]");                         // preserve caller linkage across protected cleanup calls
-        emitter.instruction("str x19, [sp, #16]");                              // retain the caller's callee-saved stack anchor
-        emitter.instruction("mov x19, sp");                                     // remember this helper's actual stack independently of the borrowed frame
-        emitter.instruction("mov x29, x0");                                     // address the abandoned frame's original owned local slots
-    } else {
-        emitter.instruction("push rbp");                                        // retain the caller's frame pointer before borrowing the abandoned frame
-        emitter.instruction("push r12");                                        // preserve the register used to anchor this helper's real stack
-        emitter.instruction("sub rsp, 24");                                     // align nested calls and reserve cleanup state outside the PHP frame
-        emitter.instruction("mov r12, rsp");                                    // remember the real helper stack across slot-based cleanup calls
-        emitter.instruction("mov rbp, rdi");                                    // address the abandoned frame's original owned local slots
-    }
-}
-
-/// Restores actual helper storage and caller registers while preserving the cleanup result.
-pub(super) fn leave_borrowed_frame(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::AArch64 {
-        emitter.instruction("mov sp, x19");                                     // leave any borrowed-frame addressing behind before restoring linkage
-        emitter.instruction("ldr x19, [sp, #16]");                              // restore the caller's stack-anchor register
-        emitter.instruction("ldp x29, x30, [sp, #32]");                         // restore the caller's frame and return address
-        emitter.instruction("add sp, sp, #48");                                 // release only this helper's cleanup state
-    } else {
-        emitter.instruction("mov rsp, r12");                                    // recover this helper's real stack after borrowed-frame cleanup
-        emitter.instruction("add rsp, 24");                                     // release aligned cleanup state
-        emitter.instruction("pop r12");                                         // restore the caller's callee-saved stack anchor
-        emitter.instruction("pop rbp");                                         // restore the caller's frame pointer
-    }
-    emitter.instruction("ret");                                                 // return without propagating a pending exception through the cleanup walker
-}
-
 /// Releases a managed reference or frees raw storage after protected payload destruction.
 fn emit_reference_cleanup(ctx: &mut FunctionContext<'_>, ty: &PhpType, offset: usize, step: &str) {
-    let arm = ctx.emitter.target.arch == Arch::AArch64;
     let done = ctx.next_label("destructor_reference_cleanup_done");
     let result = abi::int_result_reg(ctx.emitter);
-    abi::load_at_offset(ctx.emitter, result, offset);
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
-    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    emit_take_reference_owner(ctx.emitter, FrameOffset::new(offset), &done);
     if ty.codegen_repr() == PhpType::Mixed {
         abi::emit_release_local_ref_cell(ctx.emitter, result, ty);
         ctx.emitter.label(&done);
         return;
     }
-    ctx.emitter.instruction(if arm { "str x0, [sp]" } else { "mov QWORD PTR [rsp], rax" }); // retain the raw cell owner until its payload cleanup finishes
-    ctx.emitter.instruction(if arm { "str xzr, [sp, #8]" } else { "mov QWORD PTR [rsp + 8], 0" }); // keep this cell's pending flag separate from the enclosing owner walk
-    if matches!(ty.codegen_repr(), PhpType::Str | PhpType::Callable) || ty.codegen_repr().is_refcounted() {
-        ctx.emitter.instruction(if arm { "mov x1, x0" } else { "mov rsi, rax" }); // borrow the cell only while the payload step reads its owned value
-        abi::emit_symbol_address(ctx.emitter, if arm { "x0" } else { "rdi" }, &format!("{step}_payload"));
-        ctx.emitter.instruction(if arm { "add x2, sp, #8" } else { "lea rdx, [rsp + 8]" }); // contain a payload exception without abandoning the raw cell
-        abi::emit_call_label(ctx.emitter, "__rt_cleanup_call");
-    }
-    ctx.emitter.instruction(if arm { "ldr x0, [sp]" } else { "mov rax, QWORD PTR [rsp]" }); // recover the raw cell after its payload owner was consumed
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
-    ctx.emitter.instruction(if arm { "ldr x0, [sp, #8]" } else { "mov rax, QWORD PTR [rsp + 8]" }); // propagate payload failure only after the cell storage is freed
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
-    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+    let payload_entry = (matches!(ty.codegen_repr(), PhpType::Str | PhpType::Callable)
+        || ty.codegen_repr().is_refcounted()).then(|| format!("{step}_payload"));
+    emit_release_borrowed_raw_ref_cell(ctx.emitter, payload_entry.as_deref(), &done);
     ctx.emitter.label(&done);
 }
 
 /// Releases one borrowed raw reference cell's payload using the authoritative target-aware value ABI.
 fn emit_reference_payload(emitter: &mut Emitter, ty: &PhpType, symbol: &str) {
-    emitter.label(symbol);
-    let arm = emitter.target.arch == Arch::AArch64;
-    emitter.instruction(if arm { "stp x29, x30, [sp, #-16]!" } else { "sub rsp, 8" }); // preserve linkage and align payload cleanup calls
-    let result = abi::int_result_reg(emitter);
-    abi::emit_load_from_address(emitter, result, result, 0);
-    match ty.codegen_repr() {
+    emit_raw_ref_payload_callback(emitter, symbol, |emitter| match ty.codegen_repr() {
         PhpType::Str => abi::emit_call_label(emitter, "__rt_heap_free_safe"),
         other => abi::emit_decref_if_refcounted(emitter, &other),
-    }
-    emitter.instruction(if arm { "ldp x29, x30, [sp], #16" } else { "add rsp, 8" }); // restore linkage after successful payload cleanup
-    emitter.instruction("ret");                                                 // transfer any exceptional exit to the enclosing protected caller
+    });
 }

@@ -93,3 +93,5 @@ pub mod frame_owners;
 pub mod arena_reset;
 pub mod deferred_owners;
 pub mod handler_owners;
+
+pub mod coroutine_storage;
