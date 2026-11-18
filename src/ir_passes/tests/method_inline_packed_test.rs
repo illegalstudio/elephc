@@ -109,7 +109,7 @@ echo $counter->post(), $counter->pre(), $counter->postdec(), $counter->predec();
                 && local.php_type == crate::types::PhpType::Mixed
                 && local.name.as_deref().is_some_and(crate::names::is_generated_local_name)),
                 "{target}, xml={xml}, {name}: scalar property updates must not gain Mixed PHP locals\n{}",
-                { let n: Vec<_> = function.locals.iter().map(|l| (l.name.clone(), l.kind, l.php_type.clone())).collect(); format!("{n:?}") });
+                crate::ir::print_function(function));
             if matches!(name, "optionalfloatpost" | "optionalfloatpre" | "numericpost" | "numericpre") {
                 let slot = function.locals.iter().find(|local| local.kind == crate::ir::LocalKind::HiddenTemp
                     && local.name.as_deref().is_some_and(|name| name.contains("__elephc_incdec_old_")))
