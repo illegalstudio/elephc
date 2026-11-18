@@ -48,6 +48,7 @@ pub mod object_clone_slots;
 pub mod eval_scope_storage;
 pub mod reference_registry;
 pub mod reference_snapshot;
+pub mod stack_registry_snapshot;
 
 pub mod array_set_int;
 pub mod array_set_str;
