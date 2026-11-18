@@ -1942,6 +1942,7 @@ fn decl_class_domnode() -> Stmt {
         .prop("parentNode", t_mixed(), Some(e_null()))
         .hooked(true, true, true)
         .prop("ownerDocument", t_mixed(), Some(e_null()))
+        .hooked(true, true, true)
         .prop("__attrs", t_mixed(), Some(e_array(vec![])))
         .prop("__elephc_dom_xmlns", t_nullable(TypeExpr::Str), Some(e_null()))
         .method(
@@ -2177,6 +2178,26 @@ fn decl_class_domnode() -> Stmt {
                 .returns(TypeExpr::Void)
                 .body(vec![
                     s_prop_assign(e_this(), "parentNode", e_ternary(e_call("is_object", vec![e_this_prop("__elephc_simplexml")]), e_null(), e_ternary(e_instance_of(e_var("value"), "DOMNode"), e_static_call("WeakReference", "create", vec![e_var("value")]), e_var("value")))),
+                ]),
+        )
+        .method(
+            method("__propget_ownerDocument")
+                .returns(t_mixed())
+                .body(vec![
+                    s_assign("_raw", e_this_prop("ownerDocument")),
+                    s_if(e_instance_of(e_var("_raw"), "WeakReference"), vec![s_return(e_method_call(e_var("_raw"), "get", vec![]))], vec![], None),
+                    s_return(e_var("_raw")),
+                ]),
+        )
+        .method(
+            // A node attached to a tree holds its document weakly: the document owns the tree, so a
+            // strong link back would be a reference cycle that is never freed.
+            method("__propset_ownerDocument")
+                .param("value", t_mixed())
+                .returns(TypeExpr::Void)
+                .body(vec![
+                    s_assign("_weak", e_binop(e_binop(e_instance_of(e_var("value"), "DOMDocument"), BinOp::And, e_not(e_call("is_object", vec![e_this_prop("__elephc_simplexml")]))), BinOp::And, e_binop(e_this_prop("parentNode"), BinOp::StrictNotEq, e_null()))),
+                    s_prop_assign(e_this(), "ownerDocument", e_ternary(e_var("_weak"), e_static_call("WeakReference", "create", vec![e_var("value")]), e_var("value"))),
                 ]),
         )
         .method(

@@ -355,7 +355,11 @@ fn document_fragment() -> Stmt {
                         e_var("_moved"),
                         None,
                         "_child",
-                        vec![s_expr(e_method_call(e_this(), "appendChild", vec![e_var("_child")]))],
+                        vec![
+                            // The parsed nodes belong to a scratch document: adopt them before the wrong-document check.
+                            s_prop_assign(e_var("_child"), "ownerDocument", e_this_prop("ownerDocument")),
+                            s_expr(e_method_call(e_this(), "appendChild", vec![e_var("_child")])),
+                        ],
                     ),
                     s_return(e_bool(true)),
                 ]),

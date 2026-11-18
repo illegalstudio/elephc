@@ -1,0 +1,28 @@
+a,p:b,#text,c
+c,a,p:b,#text same p
+c,p:b,#text NULL same
+c,p:b,#text,a 1 x
+c,p:b,#text,n,a p hi ns
+c,p:b,#text,w,a same NULL
+ab|cdef|linked|6
+c|def|linked|7
+c,p:b,#text,w,a 5
+http://u '' r
+http://v p b p:b
+string(8) "http://u"
+string(8) "http://v"
+NULL
+string(1) "p"
+NULL
+bool(true)
+string(8) "http://v"
+string(8) "http://v"
+line
+/* /*/*[1] /*/*[1]/*
+c1 NULL od
+c,p:b,#text,w,a,c
+f1,f2,c,p:b,#text,w,a,c
+4Wrong Document Error
+8Not Found Error
+<?xml version="1.0"?>
+<r xmlns="http://u" xmlns:p="http://v"><f1/><f2/><c><d/></c><p:b/>abcdef<w/><a id="1">x</a><c><d/></c></r>

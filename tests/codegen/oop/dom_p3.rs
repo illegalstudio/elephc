@@ -18,7 +18,7 @@ fn check(name: &str, source: &str, expected: &str) {
 }
 
 /// `check`, with the leak summary optional: a free-standing tree leaks through the parent/child
-/// cycle of the base DOM model (a bare `createElement` + `appendChild` program leaks too).
+/// cycle of the base DOM model (fixed by package P4: attached nodes hold their parent, siblings and document weakly).
 fn check_leaks(name: &str, source: &str, expected: &str, leak_clean: bool) {
     let out = compile_and_run_with_heap_debug(source);
     assert!(out.success, "{name}: stdout={:?}\nstderr={}", out.stdout, out.stderr);
@@ -49,10 +49,9 @@ fn test_dom_p3_free_standing_node_constructors() {
     check("t2", include_str!("dom_p3/t2.php"), include_str!("dom_p3/t2.out"));
 }
 
-/// `splitText` on a text node bound to the native tree needs a native "insert after sibling",
-/// which is `DOMNode::insertBefore` of package P4 (appending merges adjacent text in libxml2).
+/// `splitText` on a text node bound to the native tree links the tail after the node through
+/// `DOMNode::insertBefore` (package P4).
 #[test]
-#[ignore = "needs DOMNode::insertBefore (package P4)"]
 fn test_dom_p3_split_text_on_bound_nodes() {
     if skip_without_xml_native("test_dom_p3_split_text_on_bound_nodes") { return; }
     check("t3", &with_opaque_eval(include_str!("dom_p3/t3.php")), include_str!("dom_p3/t3.out"));
@@ -69,5 +68,5 @@ fn test_dom_p3_named_node_map_doctype_and_fragment() {
 /// `splitText` and `wholeText` on free-standing nodes.
 #[test]
 fn test_dom_p3_split_text_and_whole_text() {
-    check_leaks("t4", include_str!("dom_p3/t4.php"), include_str!("dom_p3/t4.out"), false);
+    check_leaks("t4", include_str!("dom_p3/t4.php"), include_str!("dom_p3/t4.out"), true);
 }

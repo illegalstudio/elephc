@@ -1,0 +1,38 @@
+a,b,c
+acac
+c,a,b
+b c,a,z NULL
+DOMException: Not Found Error [8]
+c,z true
+c,z,a root
+DOMException: Hierarchy Request Error [3]
+DOMException: Not Found Error [8]
+Error: Cannot add newnode as the previous sibling of refnode [0]
+DOMException: Hierarchy Request Error [3]
+DOMException: Wrong Document Error [4]
+193811
+f1 c,z,f1,f2,a empty
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+53abc
+root0NULL
+c,z,f1,f2,a ok distinct
+bool(true)
+bool(false)
+string(1) "v"
+string(1) "t"
+bool(false)
+/root /root/a /
+/root/p/s[2] /root/p/text() /root/p/comment()
+string(1) "p"
+string(0) ""
+NULL
+NULL
+NULL
+string(36) "http://www.w3.org/XML/1998/namespace"
+bool(false)

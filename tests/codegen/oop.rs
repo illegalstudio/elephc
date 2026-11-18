@@ -67,6 +67,8 @@ mod datetime;
 mod dom;
 #[path = "oop/dom_p3.rs"]
 mod dom_p3;
+#[path = "oop/dom_p4.rs"]
+mod dom_p4;
 #[path = "oop/datetime_lazy_evaluation.rs"]
 mod datetime_lazy_evaluation;
 #[path = "oop/reflection_properties.rs"]

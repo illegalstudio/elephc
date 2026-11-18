@@ -307,6 +307,8 @@ fn tree() -> ClassBuilder {
                             s_prop_assign(e_var("node"), "parentNode", e_null()),
                             s_prop_assign(e_var("node"), "previousSibling", e_null()),
                             s_prop_assign(e_var("node"), "nextSibling", e_null()),
+                            // A detached node anchors its document again (attached nodes hold it weakly).
+                            s_prop_assign(e_var("node"), "ownerDocument", e_prop(e_var("node"), "ownerDocument")),
                         ]),
                 )
                 .method(
@@ -346,6 +348,12 @@ fn tree() -> ClassBuilder {
                                             ),
                                             s_expr(e_method_call(e_var("bound"), "__elephc_dom_append_child", vec![e_this(), e_var("node")])),
                                             s_assign("nodeBound", e_prop(e_var("node"), "__elephc_simplexml")),
+                                            s_if(
+                                                e_binop(e_var("mine"), BinOp::StrictNotEq, e_null()),
+                                                vec![s_prop_assign(e_var("node"), "ownerDocument", e_var("mine"))],
+                                                vec![],
+                                                None,
+                                            ),
                                             s_if(
                                                 e_not(e_call("is_object", vec![e_var("child")])),
                                                 vec![
@@ -439,6 +447,8 @@ fn tree() -> ClassBuilder {
                                 vec![],
                                 None,
                             ),
+                            // An attached node holds its document weakly (the document owns the tree).
+                            s_prop_assign(e_var("node"), "ownerDocument", e_prop(e_var("node"), "ownerDocument")),
                         ]),
                 )
                 .method(
@@ -1213,9 +1223,13 @@ fn tree() -> ClassBuilder {
                                 vec![],
                                 None,
                             ),
-                            s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_var("i"), BinOp::Lt, e_call("count", vec![e_var("left")]))), Some(s_expr(e_post_inc("i"))), vec![
+                            // Locals, not `$left[$i]->isEqualNode($right[$i])`: that spelling leaks the pair.
+                            s_assign("i", e_int(0)),
+                            s_foreach(e_var("left"), None, "one", vec![
+                                s_assign("two", e_index(e_var("right"), e_var("i"))),
+                                s_expr(e_post_inc("i")),
                                 s_if(
-                                    e_not(e_method_call(e_index(e_var("left"), e_var("i")), "isEqualNode", vec![e_index(e_var("right"), e_var("i"))])),
+                                    e_not(e_method_call(e_var("one"), "isEqualNode", vec![e_var("two")])),
                                     vec![
                                         s_return(e_bool(false)),
                                     ],
