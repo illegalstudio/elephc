@@ -164,8 +164,11 @@ fn test_builtin_error_is_not_caught_by_exception() {
 #[test]
 fn test_builtin_exception_message_api() {
     let out = compile_and_run(
-        "<?php $e = new Exception(\"boom\"); echo $e->message; echo \":\"; echo $e->getMessage();",
+        "<?php class Boom extends Exception { public function raw(): string { return $this->message; } } \
+         $e = new Boom(\"boom\"); echo $e->raw(); echo \":\"; echo $e->getMessage();",
     );
+    // php: `message` is protected, so reading it from outside a subclass is a fatal error; a
+    // subclass reads it through `$this->message`.
     assert_eq!(out, "boom:boom");
 }
 

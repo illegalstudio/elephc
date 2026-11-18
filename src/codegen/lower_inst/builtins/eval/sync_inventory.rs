@@ -329,6 +329,12 @@ fn flush_eval_scope_locals_with_mask(
 
 /// Marks one statically named local as absent from the materialized eval scope.
 pub(super) fn emit_eval_scope_unset_name(ctx: &mut FunctionContext<'_>, name: &str) {
+    // `__elephc_eval_scope_unset` is the bridge's adapter. A scope-only program (every fragment
+    // compiled ahead of time) links the runtime's own scope helpers instead, which keep no
+    // unset entry: the name was never written to a scope that is built fresh for the barrier.
+    if !ctx.module.required_runtime_features.eval_bridge {
+        return;
+    }
     let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
     load_eval_scope_to_arg(ctx, 0);
     abi::emit_symbol_address(

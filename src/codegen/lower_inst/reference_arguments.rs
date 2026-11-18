@@ -1371,6 +1371,38 @@ fn emit_typed_array_ref_writeback_payload(ctx: &mut FunctionContext<'_>, element
 /// Mixed-to-typed runtime conversion already applies.
 fn emit_heap_ref_writeback(ctx: &mut FunctionContext<'_>, writeback: &RefArgWriteback) -> Result<()> {
     let source_ty = writeback.source_ty.codegen_repr();
+    // A hash of mixed values handed to a `mixed &` parameter may come back as a packed list (the
+    // gradual `sort()` assigns `array_values()` order): `__rt_mixed_to_owned_hash` turns either
+    // array shape into an owned hash, so the caller's hash slot never receives an indexed array.
+    let hash_of_mixed = matches!(
+        &source_ty,
+        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed
+    );
+    let converted = ctx.next_label("ref_writeback_hash_converted");
+    if hash_of_mixed {
+        let direct = ctx.next_label("ref_writeback_hash_direct");
+        let hash_tag = crate::codegen_support::runtime_value_tag(&source_ty);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp x0, #{}", hash_tag));     // did the callee leave a hash?
+                ctx.emitter.instruction(&format!("b.eq {}", direct));           // yes: the ordinary typed writeback applies
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp rax, {}", hash_tag));     // did the callee leave a hash?
+                ctx.emitter.instruction(&format!("je {}", direct));             // yes: the ordinary typed writeback applies
+            }
+        }
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+        abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
+        if arg_reg != result_reg {
+            abi::emit_reg_move(ctx.emitter, arg_reg, result_reg);
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash");
+        abi::emit_jump(ctx.emitter, &converted);
+        ctx.emitter.label(&direct);
+    }
     emit_ref_writeback_tag_guard(ctx, crate::codegen_support::runtime_value_tag(&source_ty));
     move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
     match &source_ty {
@@ -1393,6 +1425,7 @@ fn emit_heap_ref_writeback(ctx: &mut FunctionContext<'_>, writeback: &RefArgWrit
         }
         _ => abi::emit_incref_if_refcounted(ctx.emitter, &source_ty),
     }
+    ctx.emitter.label(&converted);
     // The result register holds an owned reference to the new value, and the caller pushed
     // the cell. Release the cell lease first (nothing of the old value runs yet), publish the
     // new value in the local, and only then release the old one: its destructor may throw,
