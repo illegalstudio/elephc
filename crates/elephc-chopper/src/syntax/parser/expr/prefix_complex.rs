@@ -798,6 +798,7 @@ pub(super) fn parse_function_call_or_callable(
                 validate_language_construct(construct, &args, tokens, *pos, span)?;
             }
         }
+        let span = crate::syntax::parser::expr::span_through_prev_token(tokens, *pos, span);
         Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
     }
 }
