@@ -535,6 +535,12 @@ pub(super) fn promote_eval_bridge_method_argument_locals(
     }
     for argument in bridge_args {
         if let ExprKind::Variable(name) = &argument.kind {
+            // A compiler temporary (`__eir_tmpN`, `__eir_place0#gen`) is no PHP variable the
+            // interpreter can bind: its slot keeps the type its owner gave it. Retyping the
+            // hidden name of `--$object->{$name}` to mixed handed `dynamic_prop_set` a mixed name.
+            if name.starts_with("__eir_") || crate::names::is_generated_local_name(name) {
+                continue;
+            }
             // A reference-bound name's representation is its CELL's, which this body does not
             // own: a by-reference parameter's cell is the caller's slot. Retyping `int &$cursor`
             // to `mixed` read the caller's raw int as a box pointer from here on, and the next
