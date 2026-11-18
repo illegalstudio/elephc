@@ -98,6 +98,12 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
         while let Some(child) = self.references.get(&(value.as_ptr() as usize)) { value = *child; }
         self.retain(value)
     }
+
+    /// Models native closure and callable edges without adding fake activation owners.
+    fn retain_object_children(&mut self, object: RuntimeCellHandle, children: &[RuntimeCellHandle]) -> Result<(), EvalStatus> {
+        self.object_children.entry(object.as_ptr() as usize).or_default().extend_from_slice(children);
+        Ok(())
+    }
     /// Creates a stable fake reference holding one detached value.
     fn reference_new(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         let value = self.copy_value(value)?;

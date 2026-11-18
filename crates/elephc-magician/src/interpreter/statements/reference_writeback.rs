@@ -618,7 +618,15 @@ pub(super) fn write_back_method_static_property_ref_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let previous_scope = context.replace_execution_scope(access_scope);
-    let result = eval_static_property_set_result(class_name, property, value, context, values);
+    let result = (|| {
+        if values.supports_persistent_references() && values.is_reference(value)?
+            && values.reference_is_shared(value)?
+            && super::property_reference_owners::bind_escaped_static_cell(class_name, property, value, context, values)?
+        {
+            return Ok(());
+        }
+        eval_static_property_set_result(class_name, property, value, context, values)
+    })();
     context.replace_execution_scope(previous_scope);
     result
 }

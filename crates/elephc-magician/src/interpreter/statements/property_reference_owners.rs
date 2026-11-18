@@ -92,3 +92,22 @@ pub(super) fn bind_escaped_cell(
     context.mark_dynamic_property_initialized(identity, &storage_name);
     Ok(true)
 }
+
+/// Publishes an escaping static parameter cell before its creating activation is retired.
+pub(super) fn bind_escaped_static_cell(
+    class_name: &str, property_name: &str, reference: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+    let Some((owner, property)) = context.class_property(&class_name, property_name) else { return Ok(false); };
+    if !property.is_static() || property.has_get_hook() || property.has_set_hook() || property.is_virtual() {
+        return Ok(false);
+    }
+    validate_eval_property_write_access(&owner, &property, context)?;
+    if property.is_readonly() { return Err(EvalStatus::RuntimeFatal); }
+    eval_validate_property_value(&owner, &property, reference, context, values)?;
+    context.bind_static_property_alias(&owner, property.name(),
+        EvalReferenceTarget::Cell { cell: reference.borrowed() });
+    store_borrowed_static_property(&owner, property.name(), reference, context, values)?;
+    Ok(true)
+}

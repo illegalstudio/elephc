@@ -37,7 +37,7 @@ impl FakeOps {
         let mut visited = HashSet::new();
         while let Some(id) = pending.pop() {
             if !visited.insert(id) { continue; }
-            let children = if let Some(value) = self.references.get(&id) {
+            let mut children = if let Some(value) = self.references.get(&id) {
                 vec![*value]
             } else {
                 match self.values.get(&id) {
@@ -47,6 +47,7 @@ impl FakeOps {
                     _ => Vec::new(),
                 }
             };
+            children.extend(self.object_children.get(&id).into_iter().flatten().copied());
             for child in children {
                 let child = child.as_ptr() as usize;
                 if child == sought { count += 1; }
@@ -62,6 +63,23 @@ impl FakeOps {
         assert!(*owners > 0, "a reference wrapper consumes one copied value owner");
         *owners -= 1;
     }
+}
+
+/// Escaping closure edges count as physical reference owners until their object becomes unreachable.
+#[test]
+fn fake_reference_sharing_tracks_hidden_object_children() {
+    let mut values = FakeOps::default();
+    let original = values.int(1).unwrap();
+    let reference = values.reference_new(original).unwrap();
+    let closure = values.alloc(FakeValue::Object(Vec::new()));
+    values.retain_object_children(closure, &[reference]).unwrap();
+    assert!(values.reference_is_shared(reference).unwrap());
+    values.release(reference).unwrap();
+    assert_eq!(values.reference_owner_count(reference), 1);
+    values.release(closure).unwrap();
+    assert_eq!(values.reference_owner_count(reference), 0);
+    values.release(original).unwrap();
+    assert!(values.cell_owners.values().all(|count| *count == 0));
 }
 
 /// Dereferencing a stored reference retires the temporary wrapper read on success and failure.

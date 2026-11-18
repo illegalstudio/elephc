@@ -8,9 +8,8 @@ function placeDescribe(mixed $parent): void {
         foreach ($parent as $key => $value) { echo gettype($key), ':', $key, ':', $value, '|'; }
     }
 }
-function placeBindAlias(mixed &$value): void {
-    global $placeAlias;
-    $placeAlias =& $value;
+function placeBindAlias(mixed &$value): callable {
+    return function () use (&$value): mixed { return $value; };
 }
 function placeWrite(bool $static, bool $falseParent, mixed $key, int $mutation): void {
     global $placeAlias;
@@ -18,8 +17,10 @@ function placeWrite(bool $static, bool $falseParent, mixed $key, int $mutation):
     $holder->value = $falseParent ? false : null;
     ParentPlace::$shared = $falseParent ? false : null;
     if ($mutation >= 3) {
-        if ($static) { placeBindAlias(ParentPlace::$shared); }
-        else { placeBindAlias($holder->value); }
+        if ($mutation !== 7) {
+            if ($static) { $placeAlias = placeBindAlias(ParentPlace::$shared); }
+            else { $placeAlias = placeBindAlias($holder->value); }
+        }
         $mutation -= 3;
     }
     set_error_handler(function (int $severity, string $message) use ($static, $holder, $mutation): bool {
@@ -35,6 +36,7 @@ function placeWrite(bool $static, bool $falseParent, mixed $key, int $mutation):
                 if ($static) { ParentPlace::$shared['h'] = 7; }
                 else { $holder->value['h'] = 7; }
             }
+            if ($mutation === 3 || $mutation === 4) { unset($holder->value); }
         }
         return true;
     });
@@ -45,7 +47,11 @@ function placeWrite(bool $static, bool $falseParent, mixed $key, int $mutation):
     } catch (TypeError $error) { echo 'T|'; unset($error); }
     restore_error_handler();
     if ($static) { placeDescribe(ParentPlace::$shared); }
-    else { placeDescribe($holder->value); }
+    else {
+        if (isset($holder->value)) { placeDescribe($holder->value); }
+        else { echo 'absent|'; }
+    }
+    if (isset($placeAlias)) { placeDescribe($placeAlias()); }
     ParentPlace::$shared = null;
-    unset($placeAlias);
+    $placeAlias = null;
 }

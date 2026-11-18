@@ -1582,3 +1582,32 @@ heap in112.73s. Default builds pass in39.43s with one Cargo job after the prior
 parallel link received an unexplained SIGKILL. No new compiler warnings; diff and
 assembly-comment hygiene pass. Callback unsets and pending handler exceptions
 remain explicitly scheduled before ArrayKeys admission.
+
+### Verified172: captured parent stores and escaping static references
+
+Plain eval property stores now mutate the published value cell selected before the
+false-conversion callback. They complete against that retained cell without replaying
+an unset or rebound parent slot. Surviving aliases observe the completed write while
+removed properties remain absent. Compound updates retain their separate snapshot
+and attachment checks; post-callback probes use quiet presence checks.
+
+The strengthened fixture retains an actual alias in an escaping closure and reads
+it back for instance/static parents, replacements, in-place changes and unsets.
+Fake reference sharing now traverses hidden closure object edges as well as visible
+container fields, matching the native GC contract without phantom activation owners.
+
+The alias readback exposed two static paths. Eval StaticProperty parameter captures
+now escape through their owned formal cell and publish that same cell into static
+alias metadata. This removes the retired-scope Variable target seen in the symbolized
+SIGSEGV stack (PID1451676). Native ordinary Mixed static arguments now use live boxed
+reference storage without requiring Casts/Coercions; other reviewed payloads keep
+those gates. The managed reference authentication rules remain intact.
+
+All seven focused gates pass: eight staged profile/engine cases with full retirement
+in0.50s, hidden-child owner regression in0.14s, native PHP/exact optimizer cases
+in4.63s, five-target emission in2.23s, four real eval programs with clean heap
+in118.41s, default serialized compiler/bridge builds in112.99s and the existing
+five-target declared static reference payload control in0.79s. No new compiler
+warnings; diff hygiene passes. ArrayKeys remains staged while local/global unset
+completion, compound contexts, pending callback throws and the other tracked
+producer/source/owner boundaries continue.

@@ -82,12 +82,12 @@ pub(super) fn live_mixed_property_argument(
             && crate::types::canonical_property_reference_payload(&ty).is_some()))
 }
 
-/// Selects reviewed static declarations whose checked physical storage is boxed.
+/// Selects ordinary Mixed static storage and reviewed checked declarations with boxed payloads.
 pub(super) fn live_boxed_static_property(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
-    crate::types::checked_property_references(ctx.semantic_profile)
-        && matches!(arg.kind, ExprKind::StaticPropertyAccess { .. })
-        && static_place_type(ctx, arg).is_some_and(|ty|
-            crate::types::canonical_property_reference_payload(&ty).is_some())
+    matches!(arg.kind, ExprKind::StaticPropertyAccess { .. })
+        && static_place_type(ctx, arg).is_some_and(|ty| ty == PhpType::Mixed
+            || (crate::types::checked_property_references(ctx.semantic_profile)
+                && crate::types::canonical_property_reference_payload(&ty).is_some()))
 }
 
 /// Resolves an owned writable physical cell using the caller's lexical property scope.

@@ -46,11 +46,27 @@ fn exact_eval_parent_places_walker_vm_publication_and_owners() {
                 if vm { call = format!("if(false){{function placeWrite($static,$falseParent,$key,$mutation){{}}}} {call}"); }
                 staged_numeric_execution(&call, vm, &mut context, &mut scope, &mut values).unwrap();
                 expected.push_str("K|R|F|array:0|ok|array:1|integer:0:9|");
+                expected.push_str("array:1|integer:0:9|");
                 for mutation in [1, 2, 4, 5] {
                     let mut call = format!("placeWrite({static_parent}, true, 0, {mutation});");
                     if vm { call = format!("if(false){{function placeWrite($static,$falseParent,$key,$mutation){{}}}} {call}"); }
                     staged_numeric_execution(&call, vm, &mut context, &mut scope, &mut values).unwrap();
                     expected.push_str("K|R|F|array:0|ok|array:1|string:h:7|");
+                    if mutation >= 4 { expected.push_str("array:1|string:h:7|"); }
+                }
+            }
+            for mutation in [6, 7] {
+                for (key, text) in [("0", "0"), ("true", "1")] {
+                    let mut call = format!("placeWrite(false, true, {key}, {mutation});");
+                    if vm { call = format!("if(false){{function placeWrite($static,$falseParent,$key,$mutation){{}}}} {call}"); }
+                    staged_numeric_execution(&call, vm, &mut context, &mut scope, &mut values).unwrap();
+                    let rejected = exact && key == "true";
+                    expected.push_str("K|R|F|array:0|");
+                    expected.push_str(if rejected { "T|absent|" } else { "ok|absent|" });
+                    if mutation == 6 {
+                        if rejected { expected.push_str("array:0|"); }
+                        else { expected.push_str(&format!("array:1|integer:{text}:9|")); }
+                    }
                 }
             }
             assert_eq!(values.output, expected, "exact={exact} casts={coordinated} vm={vm}");

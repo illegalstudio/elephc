@@ -126,6 +126,8 @@ pub(super) struct FakeOps {
     pub(super) retains: Vec<RuntimeCellHandle>,
     /// Explicit owners; reference-sharing queries also count edges from live fake containers.
     pub(super) cell_owners: HashMap<usize, usize>,
+    /// Hidden GC children contribute stored reference edges without arena activation owners.
+    pub(super) object_children: HashMap<usize, Vec<RuntimeCellHandle>>,
     pub(super) warnings: Vec<String>,
     pub(super) pending_runtime_throwable: Option<RuntimeCellHandle>,
     pub(super) fail_array_set_call: Option<usize>,

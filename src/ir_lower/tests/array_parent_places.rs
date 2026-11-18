@@ -30,9 +30,23 @@ fn source(exact: bool) -> (String, String) {
         }
         source.push_str(&format!("placeWrite({static_parent}, true, 0, 3);\n"));
         expected.push_str("K|R|F|array:0|ok|array:1|integer:0:9|");
+        expected.push_str("array:1|integer:0:9|");
         for mutation in [1, 2, 4, 5] {
             source.push_str(&format!("placeWrite({static_parent}, true, 0, {mutation});\n"));
             expected.push_str("K|R|F|array:0|ok|array:1|string:h:7|");
+            if mutation >= 4 { expected.push_str("array:1|string:h:7|"); }
+        }
+    }
+    for mutation in [6, 7] {
+        for (key, text) in [("0", "0"), ("true", "1")] {
+            source.push_str(&format!("placeWrite(false, true, {key}, {mutation});\n"));
+            let rejected = exact && key == "true";
+            expected.push_str("K|R|F|array:0|");
+            expected.push_str(if rejected { "T|absent|" } else { "ok|absent|" });
+            if mutation == 6 {
+                if rejected { expected.push_str("array:0|"); }
+                else { expected.push_str(&format!("array:1|integer:{text}:9|")); }
+            }
         }
     }
     (source, expected)

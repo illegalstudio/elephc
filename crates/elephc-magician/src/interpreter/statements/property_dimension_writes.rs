@@ -11,6 +11,7 @@
 //! - Eval-owned static arrays detach their boxed cell before runtime payload COW writes.
 
 use super::*;
+use super::array_parent_publication::{ArrayParentPlace, PreparedArrayParent, prepare_empty_array_parent};
 use super::property_write_receivers::{PreparedPropertyName, prepare_index, finish_name};
 
 /// Supplies a literal property or a computed member name at its original source position.
@@ -158,15 +159,18 @@ fn write_selected(
         return Ok(());
     }
     let index = finish_dimension_index(index, late_index, operands, context, scope, values)?;
-    let (current, attached) = if !dynamic
+    let prepared = if !dynamic
         && property_dimension_guards::has_ordinary_backing_slot(object, property, context, values)?
     {
-        super::array_parent_publication::prepare_empty_array_parent(
-            super::array_parent_publication::ArrayParentPlace::Instance(object, property),
-            current, index.is_none(), operands, context, values)?
-    } else { (current, true) };
-    if let Some(array) = write_value(current, index, op, assigned, operands, context, values)? {
-        if !attached { return Ok(()); }
+        prepare_empty_array_parent(
+            ArrayParentPlace::Instance(object, property),
+            current, index.is_none(), op.is_some(), operands, context, values)?
+    } else { PreparedArrayParent::Snapshot(current) };
+    let storage = if matches!(prepared, PreparedArrayParent::Captured(_)) {
+        ArrayWriteStorage::Captured
+    } else { ArrayWriteStorage::Snapshot };
+    if let Some(array) = write_value_in_storage(prepared.value(), index, op, assigned, storage, operands, context, values)? {
+        if matches!(prepared, PreparedArrayParent::Detached(_)) { return Ok(()); }
         if dynamic {
             super::property_append_fetch::write(object, property, array, context, values)?;
         } else {
@@ -243,6 +247,7 @@ enum ArrayWriteStorage {
     Snapshot,
     Published,
     Attached,
+    Captured,
 }
 
 /// Shares dimension semantics while preserving published or attached runtime storage identity.
@@ -276,6 +281,7 @@ fn write_value_in_storage(
         return Ok(None);
     }
     let attached = matches!(storage, ArrayWriteStorage::Attached);
+    let captured = matches!(storage, ArrayWriteStorage::Captured);
     if values.type_tag(current)? == EVAL_TAG_STRING {
         if let Some(index) = index {
             if op.is_some() {
@@ -317,7 +323,7 @@ fn write_value_in_storage(
             operands.push(key); key
         },
     };
-    let reuse = attached
+    let reuse = attached || captured
         || matches!(storage, ArrayWriteStorage::Published) && values.is_array_like(current)?;
     let array = if reuse { current }
         else if values.is_array_like(current)? { values.array_clone_shallow(current)? }
@@ -333,9 +339,9 @@ fn write_value_in_storage(
         }
         context.clone_array_element_aliases(current, array, None);
     }
-    let promoted = if attached {
+    let promoted = if attached || captured {
         // The runtime setter promotes the payload through this installed Mixed cell. Building
-        // an independent associative box here would detach the write from its SPL parent.
+        // an independent associative box here would detach the write from its captured parent.
         array
     } else {
         eval_array_set_target_for_index(array, index, values)?
@@ -357,7 +363,7 @@ fn write_value_in_storage(
     } else {
         values.array_set(array, index, value)?;
     }
-    Ok((!attached).then_some(array))
+    Ok((!attached && !captured).then_some(array))
 }
 
 /// Delays direct static-property append until the RHS has selected the live static slot.
@@ -387,10 +393,13 @@ fn static_write(
         let current = eval_static_property_get_result(class_name, property, context, values)?;
         let current = if current.is_borrowed() { values.retain(current)? } else { current };
         operands.push(current);
-        let (current, attached) = super::array_parent_publication::prepare_empty_array_parent(
-            super::array_parent_publication::ArrayParentPlace::Static(class_name, property),
-            current, key.is_none(), &mut operands, context, values)?;
-        let (current, storage) = match detach_live_static_array(
+        let prepared = prepare_empty_array_parent(
+            ArrayParentPlace::Static(class_name, property),
+            current, key.is_none(), op.is_some(), &mut operands, context, values)?;
+        let current = prepared.value();
+        let (current, storage) = if matches!(prepared, PreparedArrayParent::Captured(_)) {
+            (current, ArrayWriteStorage::Captured)
+        } else { match detach_live_static_array(
             class_name, property, current, &mut operands, context, values,
         )? {
             Some(current) => {
@@ -398,11 +407,13 @@ fn static_write(
                 (current, ArrayWriteStorage::Published)
             }
             None => (current, ArrayWriteStorage::Snapshot),
-        };
+        } };
         if let Some(array) = write_value_in_storage(
             current, key, op, assigned, storage, &mut operands, context, values,
         )? {
-            if attached { eval_static_property_set_result(class_name, property, array, context, values)?; }
+            if !matches!(prepared, PreparedArrayParent::Detached(_)) {
+                eval_static_property_set_result(class_name, property, array, context, values)?;
+            }
         }
         Ok(())
     })();
