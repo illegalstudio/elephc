@@ -267,12 +267,20 @@ fn analyze(function: &Function) -> Vec<Plan> {
             *claims.entry(compare.compare).or_default() += 1;
         }
     }
+    let has_handler = function.instructions.iter().any(|inst| inst.op == Op::TryPushHandler);
     let mut plans = Vec::new();
     for (slot, sites, mut modeled, mut compares) in drafts {
         compares.retain(|compare| claims[&compare.compare] == 1);
         modeled.extend(compares.iter().map(|compare| compare.load));
-        let syncs: Vec<InstId> =
+        let mut syncs: Vec<InstId> =
             references[&slot].iter().copied().filter(|id| !modeled.contains(id)).collect();
+        // A reference no update can reach sees the BOXED tag it starts with: the seed
+        // statement ahead of the loop. A sync there is a dead test that only splits the
+        // producer of the seed box from its user, which costs the box its frame cell.
+        if !has_handler {
+            let tainted = reached_from(function, sites.iter().map(|site| index.position[&site.binop].0));
+            syncs.retain(|sync| tainted.contains(&index.position[sync].0));
+        }
         let profitable = sites.iter().any(|site| {
             let block = index.position[&site.binop].0;
             loops.innermost_loop(block).is_some_and(|lp| {
@@ -284,6 +292,21 @@ fn analyze(function: &Function) -> Vec<Plan> {
         }
     }
     plans
+}
+
+/// Returns the blocks that execute after, or are, one of `starts` over terminator edges.
+fn reached_from(function: &Function, starts: impl Iterator<Item = BlockId>) -> HashSet<BlockId> {
+    let mut seen: HashSet<BlockId> = HashSet::default();
+    let mut stack: Vec<BlockId> = starts.collect();
+    while let Some(block) = stack.pop() {
+        if !seen.insert(block) {
+            continue;
+        }
+        if let Some(term) = function.block(block).and_then(|b| b.terminator.as_ref()) {
+            stack.extend(super::cfg::successors(term));
+        }
+    }
+    seen
 }
 
 /// Recognizes the update that ends in `store`, a `StoreLocal` of `slot`.
@@ -409,6 +432,18 @@ fn local_load(function: &Function, slot: LocalSlotId, value: ValueId) -> Option<
     let producer = function.instruction(inst)?;
     (producer.op == Op::LoadLocal && producer.immediate == Some(Immediate::LocalSlot(slot)))
         .then_some(inst)
+}
+
+/// Returns the slot a value was loaded from, when a `LoadLocal` defines it.
+fn loaded_slot(function: &Function, value: ValueId) -> Option<LocalSlotId> {
+    let ValueDef::Instruction { inst, .. } = function.value(value)?.def else {
+        return None;
+    };
+    let producer = function.instruction(inst)?;
+    match (&producer.op, &producer.immediate) {
+        (Op::LoadLocal, Some(Immediate::LocalSlot(slot))) => Some(*slot),
+        _ => None,
+    }
 }
 
 /// Classifies the operand of an update or compare that is not the local.
@@ -653,9 +688,19 @@ fn emit_sync(builder: &mut Builder<'_>, local: Companions, block: BlockId, next:
 
 /// Makes the mixed slot current right before `inst`.
 fn sync_before(function: &mut Function, local: Companions, inst: InstId) {
-    let Some((block, at)) = locate(function, inst) else {
+    let Some((block, mut at)) = locate(function, inst) else {
         return;
     };
+    // Publishing earlier is invisible: only an instruction naming the slot can tell. Moving the
+    // split up to the block start (or the previous reference) keeps a read beside its user, as
+    // `a + b` over two synced locals would otherwise cut the first read from the add.
+    while at > 0 {
+        let previous = function.blocks[block.as_raw() as usize].instructions[at - 1];
+        if slots_of(function, previous).contains(&local.slot) {
+            break;
+        }
+        at -= 1;
+    }
     let tail = split_at(function, block, at);
     emit_sync(&mut Builder::new(function), local, block, tail);
 }
@@ -728,6 +773,12 @@ fn rewrite_update(function: &mut Function, local: Companions, site: &Site) {
         Other::One => builder.emit_const_i64(1),
         Other::Int(value) => value,
         Other::Mixed(value) => {
+            // The operand's own slot is read again beside each consumer, as for the local itself.
+            let operand_slot = loaded_slot(builder.function(), value);
+            let value = match operand_slot {
+                Some(slot) => load_mixed(&mut builder, slot),
+                None => value,
+            };
             let is_int = emit_int_test(&mut builder, value);
             let unbox_other = builder.create_named_block("lazy.operand", vec![]);
             builder.terminate(Terminator::CondBr {
@@ -738,6 +789,10 @@ fn rewrite_update(function: &mut Function, local: Companions, site: &Site) {
                 else_args: vec![],
             });
             builder.position_at_end(unbox_other);
+            let value = match operand_slot {
+                Some(slot) => load_mixed(&mut builder, slot),
+                None => value,
+            };
             emit(&mut builder, Op::MixedUnbox, vec![value], None, IrType::I64, PhpType::Int)
         }
     };
@@ -778,11 +833,19 @@ fn rewrite_update(function: &mut Function, local: Companions, site: &Site) {
             load_inst.result_ownership,
         )
         .expect("local load produces a value");
+    let fresh_other = match site.other {
+        Other::Mixed(value) => loaded_slot(builder.function(), value).map(|slot| (value, load_mixed(&mut builder, slot))),
+        _ => None,
+    };
     drop(builder);
 
     for operand in &mut function.instructions[site.binop.as_raw() as usize].operands {
         if *operand == stale_load {
             *operand = fresh;
+        } else if let Some((stale, fresh_other)) = fresh_other {
+            if *operand == stale {
+                *operand = fresh_other;
+            }
         }
     }
     let original_block = &mut function.blocks[original.as_raw() as usize];
@@ -838,6 +901,12 @@ fn rewrite_compare(function: &mut Function, local: Companions, site: &Compare) {
         Other::One => builder.emit_const_i64(1),
         Other::Int(value) => value,
         Other::Mixed(value) => {
+            // The operand's own slot is read again beside each consumer, as for the local itself.
+            let operand_slot = loaded_slot(builder.function(), value);
+            let value = match operand_slot {
+                Some(slot) => load_mixed(&mut builder, slot),
+                None => value,
+            };
             let is_int = emit_int_test(&mut builder, value);
             let unbox_other = builder.create_named_block("lazy.operand", vec![]);
             builder.terminate(Terminator::CondBr {
@@ -848,6 +917,10 @@ fn rewrite_compare(function: &mut Function, local: Companions, site: &Compare) {
                 else_args: vec![],
             });
             builder.position_at_end(unbox_other);
+            let value = match operand_slot {
+                Some(slot) => load_mixed(&mut builder, slot),
+                None => value,
+            };
             emit(&mut builder, Op::MixedUnbox, vec![value], None, IrType::I64, PhpType::Int)
         }
     };
