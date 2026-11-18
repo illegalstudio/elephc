@@ -12,6 +12,7 @@ use super::*;
 
 /// An already authorized ordinary backing slot whose parent can become an array.
 pub(super) enum ArrayParentPlace<'a> {
+    Variable(&'a str),
     Instance(RuntimeCellHandle, &'a str),
     Static(&'a str, &'a str),
 }
@@ -25,6 +26,14 @@ pub(super) enum PreparedArrayParent {
 }
 
 impl PreparedArrayParent {
+    /// Dispatches a plain false-parent warning with deferred completion on its captured cell.
+    pub(super) fn finish_write<V: RuntimeValueOps>(
+        self, index: Option<RuntimeCellHandle>, context: &mut ElephcEvalContext, values: &mut V,
+        write: impl FnOnce(&mut ElephcEvalContext, &mut V) -> Result<(), EvalStatus>,
+    ) -> Result<(), EvalStatus> {
+        super::false_array_completion::with_completion(matches!(self, Self::Captured(_)), index, context, values, write)
+    }
+
     /// Returns the selected cell while the caller's operand list retains its owner.
     pub(super) fn value(self) -> RuntimeCellHandle {
         match self { Self::Snapshot(value) | Self::Captured(value) | Self::Detached(value) => value }
@@ -34,8 +43,12 @@ impl PreparedArrayParent {
 impl ArrayParentPlace<'_> {
     /// Publishes an independent value through the slot's existing declaration checks.
     fn publish(&self, value: RuntimeCellHandle, context: &mut ElephcEvalContext,
-        values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
+        scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
         match self {
+            Self::Variable(name) => {
+                validate_generic_local_contracts(scope, name, value, context, values)?;
+                write_back_owned_variable_ref_target(scope, name, value, context, values)
+            }
             Self::Instance(object, property) => eval_property_set_result(*object, property, value, context, values),
             Self::Static(class, property) => eval_static_property_set_result(class, property, value, context, values),
         }
@@ -43,13 +56,15 @@ impl ArrayParentPlace<'_> {
 
     /// Roots the slot's current cell so a callback cannot recycle its identity.
     fn capture(&self, owners: &mut Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext,
-        values: &mut impl RuntimeValueOps) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         let present = match self {
+            Self::Variable(name) => visible_scope_cell(context, scope, name).is_some(),
             Self::Instance(object, property) => eval_property_isset_result(*object, property, context, values)?,
             Self::Static(class, property) => eval_static_property_isset_result(class, property, context, values)?,
         };
         if !present { return Ok(None); }
         let current = match self {
+            Self::Variable(name) => visible_scope_cell(context, scope, name).ok_or(EvalStatus::RuntimeFatal)?.borrowed(),
             Self::Instance(object, property) => eval_property_get_result(*object, property, context, values)?,
             Self::Static(class, property) => eval_static_property_get_result(class, property, context, values)?,
         };
@@ -65,25 +80,24 @@ impl ArrayParentPlace<'_> {
 pub(super) fn prepare_empty_array_parent(
     place: ArrayParentPlace<'_>, current: RuntimeCellHandle, append: bool, update: bool,
     owners: &mut Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
+    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<PreparedArrayParent, EvalStatus> {
     let tag = values.type_tag(current)?;
     let was_false = tag == EVAL_TAG_BOOL && !values.truthy(current)?;
     if tag != EVAL_TAG_NULL && !was_false { return Ok(PreparedArrayParent::Snapshot(current)); }
     let empty = eval_array_autovivification(Some(current), append, context, values)?;
     owners.push(empty);
-    place.publish(empty, context, values)?;
+    place.publish(empty, context, scope, values)?;
     if !was_false { return Ok(PreparedArrayParent::Snapshot(empty)); }
     if !update {
-        let captured = place.capture(owners, context, values)?.ok_or(EvalStatus::RuntimeFatal)?;
-        eval_false_array_parent_diagnostic(true, context, values)?;
+        let captured = place.capture(owners, context, scope, values)?.ok_or(EvalStatus::RuntimeFatal)?;
         return Ok(PreparedArrayParent::Captured(captured));
     }
     let captured = values.copy_value(empty)?;
     owners.push(captured);
-    let before = place.capture(owners, context, values)?;
+    let before = place.capture(owners, context, scope, values)?;
     eval_false_array_parent_diagnostic(true, context, values)?;
-    let after = place.capture(owners, context, values)?;
+    let after = place.capture(owners, context, scope, values)?;
     Ok(if before == after { PreparedArrayParent::Snapshot(captured) }
         else { PreparedArrayParent::Detached(captured) })
 }

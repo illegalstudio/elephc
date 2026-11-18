@@ -119,6 +119,12 @@ macro_rules! impl_lifecycle_scalar_ops {
         crate::runtime_hooks::object_owners::retain_object_children(self, object, children)
     }
 
+    /// Chains borrowed Throwable objects below Rust through the shared protected native boundary.
+    fn chain_throwables(&mut self, current: RuntimeCellHandle, previous: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        let status = unsafe { __elephc_eval_throwable_chain_v1(current.as_ptr(), previous.as_ptr()) };
+        self.handle_native_cleanup_status(status)
+    }
+
     /// Uses the runtime's GC-traced persistent reference cells.
     fn supports_persistent_references(&self) -> bool { true }
 

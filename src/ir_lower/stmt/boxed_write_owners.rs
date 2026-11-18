@@ -34,6 +34,22 @@ pub(super) fn lower_set(
     })
 }
 
+/// Borrows rooted caller operands through the shared captured boxed append kernel.
+pub(super) fn lower_append(
+    ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, value: LoweredValue, span: Span,
+) {
+    let value = ctx.borrow_write_operand_if_needed(value, span);
+    ctx.with_independent_write_receiver(|ctx| {
+        let pins = crate::ir_lower::expr::protect_additional_pending_operands(ctx, &[array, value], &[], span);
+        let array = crate::ir_lower::ownership::borrow_value(ctx, array, Some(span));
+        let value = crate::ir_lower::ownership::borrow_value(ctx, value, Some(span));
+        super::nested_plain_writes::append_prepared(ctx, array, value, span);
+        if !ctx.builder.insertion_block_is_terminated() {
+            crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+        }
+    });
+}
+
 /// Retires a source whose borrowed store took a separate owner, respecting borrowed RHS mode.
 pub(super) fn release_value(
     ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span,

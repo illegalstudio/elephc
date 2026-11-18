@@ -104,6 +104,13 @@ fn lower_captured_append(
     let parent =
         super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, &target, span);
     if ctx.builder.insertion_block_is_terminated() { return; }
+    append_prepared(ctx, parent, value, span);
+}
+
+/// Completes one boxed append through a captured writable cell with deferred callback failure.
+pub(super) fn append_prepared(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, value: LoweredValue, span: Span,
+) {
     let parent = resolve_parent_for_write(ctx, parent, span);
     let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
     let pending = super::nested_false_errors::capture(ctx, parent, span);

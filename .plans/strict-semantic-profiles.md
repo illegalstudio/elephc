@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step138 (this commit). Remaining feature integration is active. Issue:
+Verified through step173 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -1611,3 +1611,41 @@ five-target declared static reference payload control in0.79s. No new compiler
 warnings; diff hygiene passes. ArrayKeys remains staged while local/global unset
 completion, compound contexts, pending callback throws and the other tracked
 producer/source/owner boundaries continue.
+
+### Verified173: pending conversion errors and shared boxed append completion
+
+Plain eval writes now park a false-conversion handler Throwable while completing
+only PHP's eligible original-key paths. Int, string and bool dimensions and
+appends finish before rethrow; null and float dimensions stop, and array/object
+key errors retain the callback exception in their previous chain. A shared
+completion adapter owns the parked exception. The versioned protected native
+Throwable-chain bridge borrows both boxed inputs and delegates identity, existing
+links and cycle prevention to the established target-aware runtime helper.
+
+Ordinary local and property writes share empty-parent publication. Captured
+plain local writes mutate the selected current cell, preserving aliases without
+replaying a callback's replacement binding. Compound local updates publish their
+empty parent before immediate callback failure. Fake Throwable construction and
+chain lookup now model existing previous links and borrowed graph edges.
+
+The native controls exposed two older direct boxed paths: appends skipped false
+conversion and compound assignments converted only during their final plain
+store. Direct boxed appends now reuse the captured nested append kernel with
+caller-owned operand protection. Boxed local, instance and static compounds use
+the existing attached nested-update protocol, so pending conversion exceptions
+stop their storage. Typed array and native object paths keep their established
+selection boundaries.
+
+All eighteen focused gates pass. Forty PHP8.5.12 oracle cases verify conversion
+completion and exact Throwable identity. Eight staged profile/engine cases pass
+in0.56s, five-target program emission in1.88s, PHP/exact native programs with both
+optimizers in3.82s and four opaque native eval programs in122.63s with clean heaps.
+The protected chaining ABI covers every target. Existing parent publication,
+reference/string append ownership, ArrayAccess/SPL, COW and compound evaluation
+order controls pass; the default serial compiler build passes in165.15s. Only the
+inherited compiler warnings remain. No full suite, push or PR was run.
+
+ArrayKeys remains staged pending its remaining producer/source/ownership and
+native strict-eval admission gates. GLOBALS indexed unset is an unsupported
+baseline PHP capability tracked separately in taske2e5a1f1; this step does not
+claim a positive fixture for that missing surface.

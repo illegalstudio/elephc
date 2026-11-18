@@ -137,6 +137,14 @@ pub(super) fn lower_array_assign(
     let update = desugared_element_update(value, span, |read| {
         reads_local_array_element(read, array, index)
     });
+    if matches!(&update, Some(ElementUpdate::Compound)) && ctx.local_type(array).codegen_repr() == PhpType::Mixed {
+        let target = Expr::new(ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(ExprKind::Variable(array.into()), span)),
+            index: Box::new(index.clone()),
+        }, span);
+        super::nested_array_writes::lower_nested_array_assign(ctx, &target, value, span);
+        return;
+    }
     if matches!(&update, Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }))
         && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
     {

@@ -11,6 +11,7 @@
 
 use super::*;
 use super::property_dimension_writes::{stage_operands, write_attached_value, write_value};
+use super::array_parent_publication::{ArrayParentPlace, PreparedArrayParent, prepare_empty_array_parent};
 use super::property_dimension_guards::{DimensionFetchMode, selected_property};
 use super::property_write_receivers::{PreparedWriteReceiver, finish_index, finish_name};
 
@@ -40,7 +41,15 @@ pub(super) fn eval_dimension_write(
         let (key, assigned) = stage_operands(index, value, &mut owners, context, scope, values)?;
         let mut parents = Vec::new();
         let mode = if op.is_some() { DimensionFetchMode::ReadWrite } else { DimensionFetchMode::Write };
-        let current = resolve(plan, &mut parents, &mut owners, mode, true, context, scope, values)?;
+        let mut current = resolve(plan, &mut parents, &mut owners, mode, true, context, scope, values)?;
+        if op.is_some() {
+            if let [Parent::Variable(name)] = parents.as_slice() {
+                let prepared = prepare_empty_array_parent(ArrayParentPlace::Variable(name), current.value,
+                    key.is_none(), true, &mut owners, context, scope, values)?;
+                current.value = prepared.value();
+                if matches!(prepared, PreparedArrayParent::Detached(_)) { parents[0] = Parent::Discard; }
+            }
+        }
         if values.type_tag(current.value)? != EVAL_TAG_OBJECT
             && !parents.iter().any(|parent| !matches!(parent, Parent::Index { .. })) {
             return eval_throw_error("Unsupported dimension write: temporary arrays have no attached storage", context, values);

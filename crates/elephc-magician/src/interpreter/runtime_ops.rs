@@ -1033,6 +1033,12 @@ pub trait RuntimeValueOps {
     /// Retains one runtime cell so the eval caller receives an independent owner.
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Appends a borrowed Throwable at an existing chain's tail, preserving identity and avoiding cycles.
+    /// Both arguments remain owned by the caller on success and failure.
+    fn chain_throwables(&mut self, _current: RuntimeCellHandle, _previous: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
     /// Reports whether the host stores PHP references independently of eval scope metadata.
     fn supports_persistent_references(&self) -> bool { false }
 

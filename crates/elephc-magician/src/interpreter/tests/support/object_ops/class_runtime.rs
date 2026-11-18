@@ -52,6 +52,10 @@ impl FakeOps {
                     properties.push(("code".to_string(), code));
                 }
             }
+            if let Some(previous) = args.get(2).copied() {
+                if let Some((_, value)) = properties.iter_mut().find(|(name, _)| name == "previous") { *value = previous; }
+                else { properties.push(("previous".into(), previous)); }
+            }
             return Ok(());
         }
         if class_name

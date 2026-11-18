@@ -52,6 +52,7 @@ unsafe extern "C" {
     /// Reports whether a persistent reference has another physical owner.
     pub(super) fn __elephc_eval_value_reference_is_shared(value: *mut RuntimeCell) -> u64;
     /// Pins the current dereferenced cell without making a PHP value copy.
+    pub(super) fn __elephc_eval_throwable_chain_v1(current: *mut RuntimeCell, previous: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_retain_value_cell_v1(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Validates the original replacement and returns owned previous/Throwable cells through outputs.
     pub(super) fn __elephc_eval_value_reference_replace_v2(reference: *mut RuntimeCell,

@@ -112,6 +112,32 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
         self.transfer_reference_value_owner(value);
         Ok(reference)
     }
+    /// Models the native previous-chain tail append with borrowed operands and cycle prevention.
+    fn chain_throwables(&mut self, mut current: RuntimeCellHandle, previous: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        let mut older = std::collections::HashSet::new();
+        let mut cursor = previous;
+        loop {
+            if !older.insert(cursor.as_ptr() as usize) { return Ok(()); }
+            let FakeValue::Object(properties) = self.get(cursor) else { return Err(EvalStatus::RuntimeFatal); };
+            let Some(next) = Self::object_property(&properties, "previous") else { break; };
+            if self.is_null(next)? { break; }
+            cursor = next;
+        }
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            let id = current.as_ptr() as usize;
+            if older.contains(&id) || !seen.insert(id) { return Ok(()); }
+            let FakeValue::Object(properties) = self.get(current) else { return Err(EvalStatus::RuntimeFatal); };
+            if let Some(next) = Self::object_property(&properties, "previous") {
+                if !self.is_null(next)? { current = next; continue; }
+            }
+            let Some(FakeValue::Object(properties)) = self.values.get_mut(&id) else { return Err(EvalStatus::RuntimeFatal); };
+            if let Some((_, value)) = properties.iter_mut().find(|(name, _)| name == "previous") { *value = previous; }
+            else { properties.push(("previous".into(), previous)); }
+            return Ok(());
+        }
+    }
+
     /// Replaces the fake current value and returns its previous owner for explicit release.
     fn reference_replace(&mut self, reference: RuntimeCellHandle, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         let value = self.copy_value(value)?;

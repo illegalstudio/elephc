@@ -190,13 +190,7 @@ pub(super) fn lower_static_property_array_push(
     if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &source, value, span) { return; }
     let value = lower_expr(ctx, value);
     if let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) {
-        ctx.emit_void(
-            Op::MixedArrayAppend,
-            vec![array.value, value.value],
-            None,
-            Op::MixedArrayAppend.default_effects(),
-            Some(span),
-        );
+        super::boxed_write_owners::lower_append(ctx, array, value, span);
         if ctx.value_is_owning_temporary(value) {
             crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
         }
@@ -225,8 +219,7 @@ pub(super) fn lower_static_property_array_push(
     } else { load_static_property(ctx, receiver, property, span) };
     if super::native_dimension_append::lower(ctx, property_value, value, span, |ctx, array, value| {
         if boxed_property.is_some() || static_property_may_be_eval_dynamic(ctx, receiver) {
-            ctx.emit_void(Op::MixedArrayAppend, vec![array.value, value.value], None,
-                Op::MixedArrayAppend.default_effects(), Some(span));
+            super::boxed_write_owners::lower_append(ctx, array, value, span);
         } else {
             ctx.emit_void(Op::RuntimeCall, vec![array.value, value.value], None,
                 effects_lookup::runtime_effects(), Some(span));
@@ -239,13 +232,7 @@ pub(super) fn lower_static_property_array_push(
         return;
     }
     if boxed_property.is_some() || static_property_may_be_eval_dynamic(ctx, receiver) {
-        ctx.emit_void(
-            Op::MixedArrayAppend,
-            vec![property_value.value, value.value],
-            None,
-            Op::MixedArrayAppend.default_effects(),
-            Some(span),
-        );
+        super::boxed_write_owners::lower_append(ctx, property_value, value, span);
         if boxed_property.is_none() {
             store_static_property(ctx, receiver, property, property_value.value, span);
         }
@@ -289,6 +276,17 @@ pub(super) fn lower_static_property_array_assign(
             lower_expr(ctx, value)
         };
         raise_deferred_default_error(ctx, receiver, &[index, value], span);
+        return;
+    }
+    if matches!(&update, Some(ElementUpdate::Compound))
+        && static_property_type(ctx, receiver, property).is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
+    {
+        let target = Expr::new(ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(ExprKind::StaticPropertyAccess {
+                receiver: receiver.clone(), property: property.into(),
+            }, span)), index: Box::new(index.clone()),
+        }, span);
+        super::nested_array_writes::lower_nested_array_assign(ctx, &target, value, span);
         return;
     }
     if matches!(&update, Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }))

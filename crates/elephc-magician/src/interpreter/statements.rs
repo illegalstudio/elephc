@@ -53,6 +53,7 @@ mod abstract_setter;
 mod readonly_property_writes;
 mod reference_writeback;
 mod scalar_offsets;
+mod false_array_completion;
 mod reflection_instantiation;
 mod static_method_dispatch;
 mod static_property_access;

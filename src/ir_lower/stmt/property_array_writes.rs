@@ -231,6 +231,17 @@ pub(super) fn lower_property_array_assign(
     let update = desugared_element_update(value, span, |read| {
         reads_property_array_element(read, object, property, index)
     });
+    if matches!(&update, Some(ElementUpdate::Compound)) {
+        let target = Expr::new(ExprKind::ArrayAccess {
+            array: Box::new(Expr::new(ExprKind::PropertyAccess {
+                object: Box::new(object.clone()), property: property.into(),
+            }, span)), index: Box::new(index.clone()),
+        }, span);
+        if super::nested_property_updates::attached_property_root(ctx, &target) {
+            super::nested_array_writes::lower_nested_array_assign(ctx, &target, value, span);
+            return;
+        }
+    }
     if matches!(&update, Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }))
         && crate::ir_lower::expr::lower_weak_map_incdec_stmt(ctx, value, span)
     {
@@ -889,13 +900,7 @@ fn lower_php_array_property_write(
         );
         release_persisted_string_operand(ctx, index, span);
     } else {
-        ctx.emit_void(
-            Op::MixedArrayAppend,
-            vec![array.value, value.value],
-            None,
-            Op::MixedArrayAppend.default_effects(),
-            Some(span),
-        );
+        super::boxed_write_owners::lower_append(ctx, array, value, span);
     }
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));

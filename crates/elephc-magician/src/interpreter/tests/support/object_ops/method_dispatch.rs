@@ -464,6 +464,11 @@ impl FakeOps {
                 Self::object_property(&properties, "__attrs")
                     .map_or_else(|| self.runtime_array_new(0), Ok)
             }
+            (FakeValue::Object(properties), "getprevious") if args.is_empty() => {
+                match Self::object_property(&properties, "previous") {
+                    Some(previous) => self.retain(previous), None => self.null(),
+                }
+            }
             (FakeValue::Object(properties), "getmessage") if args.is_empty() => {
                 Self::object_property(&properties, "message").map_or_else(|| self.string(""), Ok)
             }

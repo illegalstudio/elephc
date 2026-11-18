@@ -84,6 +84,7 @@ fn eval_local_offset_write(
             }
         }
         let mut published_generation = None;
+        let mut captured_parent = false;
         let array = match current {
             Some(cell) if matches!(tag, Some(EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)) => cell,
             _ => {
@@ -93,42 +94,47 @@ fn eval_local_offset_write(
                 operands.push(array);
                 write_back_owned_variable_ref_target(scope, name, array, context, values)?;
                 published_generation = scope_entry(context, scope, name).map(|entry| entry.generation());
-                // The warning callback may detach or replace the published receiver. Keep
-                // this in-flight write on its own PHP value and preserve the callback's binding.
-                let captured = values.copy_value(array)?;
-                operands.push(captured);
-                eval_false_array_parent_diagnostic(was_false, context, values)?;
-                captured
+                if was_false {
+                    let published = visible_scope_cell(context, scope, name).ok_or(EvalStatus::RuntimeFatal)?;
+                    let captured = values.retain_value_cell(published)?;
+                    operands.push(captured);
+                    captured_parent = true;
+                    captured
+                } else { array }
             }
         };
-        let declared = generic_local_contracts(scope, name, context);
-        let replacement = if let Some(index) = index {
-            checked_array_keys::for_receiver(array, index, context, values)?;
-            let index = match normalized_array_string_index(index, context.semantic_profile(), values)? {
-                Some(normalized) => { operands.push(normalized); normalized }
-                None => index,
+        super::false_array_completion::with_completion(captured_parent, index, context, values, |context, values| {
+            let declared = generic_local_contracts(scope, name, context);
+            let replacement = if let Some(index) = index {
+                checked_array_keys::for_receiver(array, index, context, values)?;
+                let index = match normalized_array_string_index(index, context.semantic_profile(), values)? {
+                    Some(normalized) => { operands.push(normalized); normalized }
+                    None => index,
+                };
+                for ty in &declared { validate_generic_local_element(Some(ty), array, index, value, context, values)?; }
+                let replacement = if captured_parent { array }
+                    else { eval_array_set_target_for_index(array, index, values)? };
+                if replacement != array {
+                    operands.push(replacement);
+                    context.clone_array_element_aliases(array, replacement, None);
+                }
+                eval_array_element_reference_write(replacement, index, value, context, values)?;
+                values.array_set(replacement, index, value)?;
+                replacement
+            } else {
+                eval_array_append_owned_value_with_type(array, value, &declared, context, values)?
             };
-            for ty in &declared { validate_generic_local_element(Some(ty), array, index, value, context, values)?; }
-            let replacement = eval_array_set_target_for_index(array, index, values)?;
-            if replacement != array {
-                operands.push(replacement);
-                context.clone_array_element_aliases(array, replacement, None);
+            if captured_parent { return Ok(()); }
+            if published_generation.is_some_and(|generation|
+                scope_entry(context, scope, name).map(|entry| entry.generation()) != Some(generation)) {
+                return Ok(());
             }
-            eval_array_element_reference_write(replacement, index, value, context, values)?;
-            values.array_set(replacement, index, value)?;
-            replacement
-        } else {
-            eval_array_append_owned_value_with_type(array, value, &declared, context, values)?
-        };
-        if published_generation.is_some_and(|generation|
-            scope_entry(context, scope, name).map(|entry| entry.generation()) != Some(generation)) {
-            return Ok(());
-        }
-        if visible_scope_cell(context, scope, name) == Some(replacement) {
-            mark_scope_binding_changed(context, scope, name)?;
-            return Ok(());
-        }
-        write_back_owned_variable_ref_target(scope, name, replacement, context, values)
+            if visible_scope_cell(context, scope, name) == Some(replacement) {
+                mark_scope_binding_changed(context, scope, name)?;
+                return Ok(());
+            }
+            write_back_owned_variable_ref_target(scope, name, replacement, context, values)
+        })
     })();
     for operand in operands.into_iter().rev() {
         let released = eval_release_value(context, values, operand);
