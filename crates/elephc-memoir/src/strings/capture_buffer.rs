@@ -169,3 +169,55 @@ pub fn emit_pr_finish<E: Emitter>(emitter: &mut E, reset_mode: fn(&mut E)) {
     abi::emit_frame_restore(emitter, 48);
     abi::emit_return(emitter);
 }
+
+
+/// One physical field of a suspended print_r capture.
+#[derive(Clone, Copy)]
+pub enum CaptureField {
+    /// The owned raw byte allocation.
+    Buffer,
+    /// The allocation capacity.
+    Capacity,
+    /// The accumulated byte count.
+    Length,
+    /// The capture mode saved alongside the storage.
+    Mode,
+}
+
+impl CaptureField {
+    /// Resolves the storage symbol for the selected field.
+    fn symbol(self) -> &'static str {
+        match self {
+            Self::Buffer => "_print_r_ptr",
+            Self::Capacity => "_print_r_cap",
+            Self::Length => "_print_r_off",
+            Self::Mode => "_print_r_mode",
+        }
+    }
+}
+
+/// Parks the outer capture in the caller's frame before PHP can reenter the renderer.
+pub fn emit_save_state(emitter: &mut impl Emitter, fields: &[(CaptureField, usize); 4]) {
+    let result = emitter.int_result_reg();
+    for &(field, offset) in fields {
+        let symbol = field.symbol();
+        emitter.emit_load_symbol_to_reg(result, symbol, 0);
+        emitter.store_at_offset(result, offset);
+        emitter.emit_store_zero_to_symbol(symbol, 0);
+    }
+}
+
+/// Retires any abandoned inner capture, then transfers the saved owner back to the live symbols.
+pub fn emit_restore_state(
+    emitter: &mut impl Emitter, fields: &[(CaptureField, usize); 4], scratch: &str,
+) {
+    emitter.emit_call_label("__rt_pr_abort");
+    for &(field, offset) in fields {
+        emitter.load_at_offset(scratch, offset);
+        emitter.emit_store_reg_to_symbol(scratch, field.symbol(), 0);
+    }
+    let offset = fields.iter().find_map(|(field, offset)| {
+        matches!(field, CaptureField::Buffer).then_some(*offset)
+    }).expect("saved capture has a buffer owner");
+    emitter.emit_store_zero_to_local_slot(offset);
+}

@@ -49,6 +49,8 @@
 //!   arg2 register = tag (0 = class has no run-time `__debugInfo()`, 1 = null/empty
 //!   result, 4 = indexed array, 5 = hash).
 
+use elephc_memoir::strings::capture_buffer::{self, CaptureField};
+
 use crate::codegen_support::runtime::data::{DEBUGINFO_NULL_PREFIX, DEBUGINFO_NULL_SUFFIX};
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -286,29 +288,25 @@ fn emit_guard_push(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, scratch, "_debuginfo_call_line", 0);   // the dump call's line: the user method's own calls overwrite the diagnostic line before a fatal can name it
 }
 
+
+const CAPTURE_FIELDS: [(CaptureField, usize); 4] = [
+    (CaptureField::Buffer, SAVE_PTR),
+    (CaptureField::Capacity, SAVE_CAP),
+    (CaptureField::Length, SAVE_LEN),
+    (CaptureField::Mode, SAVE_MODE),
+];
+
 /// Moves an in-flight print_r capture out of the way while `__debugInfo()` runs.
 ///
 /// Moves an outer print_r capture aside so PHP hooks can echo or start nested captures.
 fn emit_print_r_capture_save(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    for (offset, symbol) in [(SAVE_PTR, "_print_r_ptr"), (SAVE_CAP, "_print_r_cap"),
-        (SAVE_LEN, "_print_r_off"), (SAVE_MODE, "_print_r_mode")] {
-        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
-        abi::store_at_offset(emitter, result, offset);
-        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
-    }
+    capture_buffer::emit_save_state(emitter, &CAPTURE_FIELDS);
 }
 
 /// Puts back the print_r capture parked by `emit_print_r_capture_save` after a normal return.
 fn emit_print_r_capture_restore(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    abi::emit_call_label(emitter, "__rt_pr_abort");
-    for (offset, symbol) in [(SAVE_PTR, "_print_r_ptr"), (SAVE_CAP, "_print_r_cap"),
-        (SAVE_LEN, "_print_r_off"), (SAVE_MODE, "_print_r_mode")] {
-        abi::load_at_offset(emitter, result, offset);
-        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
-    }
-    abi::emit_store_zero_to_local_slot(emitter, SAVE_PTR);
+    let scratch = abi::int_result_reg(emitter);
+    capture_buffer::emit_restore_state(emitter, &CAPTURE_FIELDS, scratch);
 }
 
 /// Restores the caller's `_debuginfo_guard`, `_debuginfo_pad` and `_debuginfo_call_line` after a
