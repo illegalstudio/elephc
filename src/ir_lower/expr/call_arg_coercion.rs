@@ -2201,6 +2201,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     capture_values: bool,
     capture_output_index: Option<(usize, PhpType)>,
 ) -> Vec<crate::ir::ValueId> {
+    let unrecorded_sources = std::mem::take(&mut ctx.scalar_guards_unrecorded);
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
@@ -2257,7 +2258,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     let expanded_spread = static_spread_args.is_some();
     let guard_sources = (0..regular_param_count)
         .map(|index| match args.get(index) {
-            Some(_) if expanded_spread => super::scalar_param_guards::GuardSource::Unrecorded,
+            Some(_) if expanded_spread || unrecorded_sources => super::scalar_param_guards::GuardSource::Unrecorded,
             Some(arg) => super::scalar_param_guards::GuardSource::Recorded(arg.span),
             None => super::scalar_param_guards::GuardSource::Skip,
         })
@@ -2265,7 +2266,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     // Check scalar parameters after every argument was evaluated, as PHP does at the callee.
     let previous_deferral = ctx.scalar_guard_deferral;
     if !capture_values {
-        ctx.scalar_guard_deferral = Some((ctx.expression_depth, expanded_spread));
+        ctx.scalar_guard_deferral = Some((ctx.expression_depth, expanded_spread || unrecorded_sources));
     }
     let operands = lower_positional_operands(
         ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
