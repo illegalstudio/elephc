@@ -6550,10 +6550,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         // The cell is the argument's own when the expression minted it: a fresh box, or the
         // owned Mixed result of a call (`f($e->getPrevious())` against `?Throwable $p` left the
-        // previous exception one reference high, so it was never destroyed).
+        // previous exception one reference high, so it was never destroyed). An array-element read
+        // (`$l[$i]->isEq($r[$i])` against `?Node`) is the owned result of a runtime call too.
         if !matches!(
             self.builder.value_defining_op(source),
-            Some(Op::MixedBox | Op::MethodCall | Op::Call | Op::StaticMethodCall | Op::PropGet)
+            Some(Op::MixedBox | Op::MethodCall | Op::Call | Op::StaticMethodCall | Op::PropGet | Op::RuntimeCall)
         ) {
             return None;
         }

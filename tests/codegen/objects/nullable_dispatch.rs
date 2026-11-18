@@ -661,3 +661,39 @@ echo 'after';
 "#);
     assert_eq!(out, "Call to a member function run() on null|finally|after");
 }
+
+/// Verifies an array-element argument handed to a nullable object parameter retires its owned box.
+///
+/// `$left[$i]->isEq($right[$i])` against `?Node $other` reads the element into a fresh owned Mixed
+/// cell, and the forwarding nominal guard must leave that cell to the call's cleanup: it leaked one
+/// box and one object per call (php-src DOM `isEqualNode` over two child lists).
+#[test]
+fn test_nullable_object_parameter_releases_an_array_element_argument_box() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Node {
+    public function __construct(public int $v) {}
+    public function isEq(?Node $other): bool {
+        return $other !== null && $this->v === $other->v;
+    }
+}
+function same(array $left, array $right): bool {
+    for ($i = 0; $i < count($left); $i++) {
+        if (!$left[$i]->isEq($right[$i])) { return false; }
+    }
+    return true;
+}
+function plain(?Node $n): bool { return $n !== null; }
+function viaFunction(array $items): bool { return plain($items[0]); }
+var_dump(same([new Node(1), new Node(2)], [new Node(1), new Node(2)]));
+var_dump(viaFunction([new Node(3)]));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "heap not clean: {}",
+        out.stderr
+    );
+}
