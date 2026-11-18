@@ -567,4 +567,35 @@ mod tests {
             }
         }
     }
+
+    /// Baseline of the injected prelude, printed for the migration packages to compare against
+    /// (`cargo test --lib prelude_size_baseline -- --nocapture`). The walker part must never
+    /// shrink below what a part adds on top of it, and a bare `DOMDocument` + `loadXML` program
+    /// must not receive the HTML part.
+    #[test]
+    fn prelude_size_baseline() {
+        let count = |program: &Program| {
+            let (mut stmts, mut exprs) = (0usize, 0usize);
+            crate::parser::ast::visit::walk_nodes(program, &mut |node| match node {
+                crate::parser::ast::visit::Node::Stmt(_) => stmts += 1,
+                crate::parser::ast::visit::Node::Expr(_) => exprs += 1,
+            });
+            (stmts, exprs)
+        };
+        let walker = extend::build(PartSet::of(Part::Walker));
+        let with_html = extend::build(PartSet::of(Part::Walker).with(Part::Html));
+        let all = extend::build(PartSet::ALL);
+        for (label, program) in [("walker", &walker), ("walker+html", &with_html), ("all", &all)] {
+            let (stmts, exprs) = count(program);
+            println!("dom-html prelude {label}: {} top-level, {stmts} stmts, {exprs} exprs", program.len());
+        }
+        assert!(count(&walker).0 <= count(&with_html).0 && count(&with_html).0 <= count(&all).0);
+        let source = "<?php $d = new DOMDocument(); $d->loadXML('<a/>'); echo $d->saveXML();";
+        let program = crate::parser::parse_test_source(source).unwrap();
+        let started = std::time::Instant::now();
+        let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+        let injected = inject_if_used(program, false, &mut inventory);
+        println!("dom-html bare loadXML program: {} top-level after injection in {:?}", injected.len(), started.elapsed());
+        assert!(!inventory.groups.contains_key(extend::part_marker(Part::Html)));
+    }
 }
