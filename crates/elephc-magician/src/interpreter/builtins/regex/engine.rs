@@ -11,16 +11,18 @@
 //! - Subject and pattern bytes are passed through the registered provider as C strings.
 //! - Match offsets are byte offsets into the original subject, matching PHP capture arrays.
 //! - A global iterator keeps its C-string allocation alive across native continuation calls.
-//! - The eval `preg_last_error()` code lives in a thread-local slot: the pattern entry
-//!   points in `pattern` (the first step of every eval `preg_*` call) clear it, and a
-//!   match status other than "no match" records PHP's code for it.
+//! - The eval `preg_last_error()` code lives in the compiled program's `_preg_last_error`
+//!   once the regex provider registered it, so eval and compiled code share PHP's single
+//!   state; before that (and in unit tests) it lives in a thread-local slot. The pattern
+//!   entry points in `pattern` (the first step of every eval `preg_*` call) clear it, and
+//!   a match status other than "no match" records PHP's code for it.
 
 use std::cell::Cell;
 use std::ffi::{c_int, c_void, CStr, CString};
 use std::marker::PhantomData;
 
 use super::super::super::EvalStatus;
-use crate::regex_provider::{regex_provider, RegexProvider};
+use crate::regex_provider::{regex_provider, shared_preg_last_error_slot, RegexProvider};
 
 const REG_ICASE: c_int = 0x0001;
 const REG_NEWLINE: c_int = 0x0002;
@@ -42,14 +44,23 @@ thread_local! {
     static EVAL_PREG_LAST_ERROR: Cell<i64> = const { Cell::new(0) };
 }
 
-/// Returns the `PREG_*_ERROR` code of the last eval regex call.
+/// Returns the `PREG_*_ERROR` code of the last regex call, compiled or eval.
 pub(in crate::interpreter) fn eval_preg_last_error_code() -> i64 {
-    EVAL_PREG_LAST_ERROR.with(Cell::get)
+    match shared_preg_last_error_slot() {
+        // SAFETY: the slot is the compiled program's 8-byte `_preg_last_error` global,
+        // which lives for the whole process.
+        Some(slot) => unsafe { slot.read_volatile() },
+        None => EVAL_PREG_LAST_ERROR.with(Cell::get),
+    }
 }
 
 /// Records the `PREG_*_ERROR` code for the current eval regex call.
 pub(in crate::interpreter) fn eval_preg_set_last_error(code: i64) {
-    EVAL_PREG_LAST_ERROR.with(|slot| slot.set(code));
+    match shared_preg_last_error_slot() {
+        // SAFETY: see `eval_preg_last_error_code`.
+        Some(slot) => unsafe { slot.write_volatile(code) },
+        None => EVAL_PREG_LAST_ERROR.with(|slot| slot.set(code)),
+    }
 }
 
 /// Returns true when the current eval regex call hit a match error.

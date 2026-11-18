@@ -1022,8 +1022,7 @@ echo preg_last_error();
 }
 
 /// Verifies that an eval regex error recorded by one request is not reported by the next one:
-/// the runtime-built eval keeps its own `preg_last_error()` slot, which the request boundary
-/// must clear as well.
+/// the request boundary clears the `preg_last_error()` state eval shares with compiled code.
 #[test]
 fn web_reset_clears_eval_preg_last_error_between_requests() {
     let dir = make_test_dir("web_reset_eval_preg_error");

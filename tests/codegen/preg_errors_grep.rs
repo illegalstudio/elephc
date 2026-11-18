@@ -294,6 +294,16 @@ echo json_encode([preg_match_all($heap, $long, $all), preg_last_error_msg()]);
 echo json_encode([preg_match('/(*NO_START_OPT)(*LIMIT_MATCH=10)(a|b)*c/', $s), preg_last_error()]), "\n";
 "#;
 
+/// Fixture: eval and compiled code share one `preg_last_error()` state, both ways, like PHP.
+const SHARED_EVAL_STATE: &str = r#"<?php
+eval('preg_match("/./u", "\xff");' . ' // ' . $argc);
+echo preg_last_error(), ':', preg_last_error_msg(), "|";
+preg_match('/./u', "\xff");
+eval('echo preg_last_error(), ":", preg_last_error_msg(), "|";' . ' // ' . $argc);
+eval('preg_match("/a/", "a");' . ' // ' . $argc);
+echo preg_last_error(), "\n";
+"#;
+
 /// Fixture: in eval, a `$matches` destructor whose nested `preg_match()` succeeds does not
 /// clear the outer call's own error, like php-src (which empties `$matches` before matching).
 const EVAL_MATCHES_DESTRUCTOR: &str = r#"class EvalMatchesDtor { public function __destruct() { preg_match("/a/", "a"); } }
@@ -325,6 +335,8 @@ fn test_preg_errors_compiled_and_eval_bundle() {
     ];
     let categories_expected = "[false,3][false,[],3][false,3][null,3][false,3][null,\"Recursion limit exhausted\"]\n\
         [false,1][false,\"Internal error\"][false,2]\n";
+    let malformed = "Malformed UTF-8 characters, possibly incorrectly encoded";
+    let shared_expected = format!("4:{malformed}|4:{malformed}|0\n");
     let destructor_expected = "bool(false)\narray(0) {\n}\nint(4)\nbool(false)\nint(4)\n";
     assert_bundle_with(
         &[
@@ -346,6 +358,7 @@ fn test_preg_errors_compiled_and_eval_bundle() {
             BundleCase { name: "pcre2_error_categories_aot", source: &sources[10], expected: categories_expected },
             BundleCase { name: "pcre2_error_categories_eval", source: &sources[11], expected: categories_expected },
             BundleCase { name: "eval_matches_destructor", source: &sources[12], expected: destructor_expected },
+            BundleCase { name: "shared_eval_state", source: SHARED_EVAL_STATE, expected: &shared_expected },
         ],
         compile_and_run_with_regex,
     );

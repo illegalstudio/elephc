@@ -476,7 +476,7 @@ Elephc\Web\Worker::register(new Application());
 }
 
 /// An eval regex error recorded by one worker request does not leak into the next request's
-/// eval `preg_last_error()`, which lives in its own slot on the reused worker thread.
+/// eval `preg_last_error()` on the reused worker thread.
 #[test]
 fn web_application_review_request_begin_clears_eval_preg_last_error() {
     let fixture = Fixture(make_test_dir("web_application_review_eval_preg_error"));

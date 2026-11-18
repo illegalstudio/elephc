@@ -524,7 +524,8 @@ fn emit_opcache_directive_swap(ctx: &mut FunctionContext<'_>, id: i64, value: i6
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 
-/// Registers managed PCRE2 shim callbacks when regex is enabled for this binary.
+/// Registers managed PCRE2 shim callbacks when regex is enabled for this binary, with the
+/// `_preg_last_error` slot so eval and compiled code share one `preg_last_error()` state.
 pub(super) fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
     if ctx.module.required_runtime_features.mbregex {
         abi::emit_call_label(ctx.emitter, "__rt_mbregex_init");
@@ -544,6 +545,8 @@ pub(super) fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
         let symbol = ctx.emitter.target.extern_symbol(provider_symbol);
         abi::emit_symbol_address(ctx.emitter, arg_reg, &symbol);
     }
+    let slot_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    abi::emit_symbol_address(ctx.emitter, slot_reg, "_preg_last_error");
     let register = ctx
         .emitter
         .target
