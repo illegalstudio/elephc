@@ -15,8 +15,7 @@
 //!   are scratch strings that codegen never releases, so `__rt_str_persist` adopts the block
 //!   in place instead of duplicating it.
 
-use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Longest pointer spelling: `0x` plus sixteen hexadecimal digits.
 const PTOA_MAX_LEN: usize = 18;
@@ -56,16 +55,9 @@ pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
     // -- reserve bounded storage instead of appending blindly at _concat_off --
     emitter.instruction(&format!("mov x0, #{}", PTOA_MAX_LEN));                 // request room for the longest pointer spelling
     emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or heap storage for the digits
-
-    // -- stamp heap-backed results so __rt_str_persist can take them over in place --
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
-    emitter.instruction("sub x10, x0, x9");                                     // compute the candidate scratch offset of the reservation
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64); // load the concat scratch capacity in bytes
-    emitter.instruction("cmp x10, x11");                                        // is the reservation outside the shared scratch window (unsigned)?
-    emitter.instruction("b.lo __rt_ptoa_dest_ready");                           // scratch-backed reservations carry no heap header to stamp
-    emitter.instruction(&format!("mov x9, #{}", CONCAT_TEMP_HEAP_KIND));        // heap kind 7 = transient string temporary
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the heap reservation as a transient string
-    emitter.label("__rt_ptoa_dest_ready");
+    elephc_memoir::strings::concat_scratch::emit_mark_reserved_result_temporary(
+        emitter, "__rt_ptoa_dest_ready", ["r10", "r11", "r9"],
+    );
     emitter.instruction("mov x1, x0");                                          // x1 = output start
     emitter.instruction("mov x3, x0");                                          // x3 = write cursor
     emitter.instruction("ldr x0, [sp]");                                        // reload the pointer value to format
@@ -146,18 +138,9 @@ fn emit_ptoa_linux_x86_64(emitter: &mut Emitter) {
     // -- reserve bounded storage instead of appending blindly at _concat_off --
     emitter.instruction(&format!("mov eax, {}", PTOA_MAX_LEN));                 // request room for the longest pointer spelling
     emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or heap storage for the digits
-
-    // -- stamp heap-backed results so __rt_str_persist can take them over in place --
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("mov r11, rax");                                        // copy the reservation before deriving its scratch offset
-    emitter.instruction("sub r11, r10");                                        // compute the candidate scratch offset of the reservation
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", emitter.concat_capacity as i64); // load the shared scratch capacity
-    emitter.instruction("cmp r11, r9");                                         // is the reservation outside the shared scratch window?
-    emitter.instruction("jb __rt_ptoa_dest_ready_linux_x86_64");                // scratch reservations carry no heap header to stamp
-    abi::emit_load_int_immediate(emitter, "r10",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND) as i64);
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap reservation as a transient string
-    emitter.label("__rt_ptoa_dest_ready_linux_x86_64");
+    elephc_memoir::strings::concat_scratch::emit_mark_reserved_result_temporary(
+        emitter, "__rt_ptoa_dest_ready_linux_x86_64", ["r10", "r11", "r9"],
+    );
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the pointer value to format
     emitter.instruction("mov rsi, rax");                                        // seed the write cursor from the output start
     emitter.instruction("mov BYTE PTR [rsi], 0x30");                            // write the leading '0' of the hexadecimal pointer prefix
@@ -214,6 +197,7 @@ fn emit_ptoa_linux_x86_64(emitter: &mut Emitter) {
 
 #[cfg(test)]
 mod tests {
+    use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
     use super::*;
     use crate::codegen_support::platform::Target;
 
