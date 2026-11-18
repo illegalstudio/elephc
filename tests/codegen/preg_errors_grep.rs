@@ -294,6 +294,15 @@ echo json_encode([preg_match_all($heap, $long, $all), preg_last_error_msg()]);
 echo json_encode([preg_match('/(*NO_START_OPT)(*LIMIT_MATCH=10)(a|b)*c/', $s), preg_last_error()]), "\n";
 "#;
 
+/// Fixture: in eval, a `$matches` destructor whose nested `preg_match()` succeeds does not
+/// clear the outer call's own error, like php-src (which empties `$matches` before matching).
+const EVAL_MATCHES_DESTRUCTOR: &str = r#"class EvalMatchesDtor { public function __destruct() { preg_match("/a/", "a"); } }
+$m = [new EvalMatchesDtor];
+var_dump(preg_match("/./u", "\xff", $m), $m, preg_last_error());
+$all = [new EvalMatchesDtor];
+var_dump(preg_match_all("/./u", "\xff", $all), preg_last_error());
+"#;
+
 /// The stdout-only regex error fixtures, each in compiled code and through a runtime-built
 /// `eval()`, share one compile: every opaque eval lowers the whole builtin catalog.
 #[test]
@@ -312,9 +321,11 @@ fn test_preg_errors_compiled_and_eval_bundle() {
         aot(CALLBACK_LATER_ERRORS), opaque_eval(CALLBACK_LATER_ERRORS),
         aot(GREP_MATCH_ERROR), opaque_eval(GREP_MATCH_ERROR),
         aot(PCRE2_ERROR_CATEGORIES), opaque_eval(PCRE2_ERROR_CATEGORIES),
+        opaque_eval(EVAL_MATCHES_DESTRUCTOR),
     ];
     let categories_expected = "[false,3][false,[],3][false,3][null,3][false,3][null,\"Recursion limit exhausted\"]\n\
         [false,1][false,\"Internal error\"][false,2]\n";
+    let destructor_expected = "bool(false)\narray(0) {\n}\nint(4)\nbool(false)\nint(4)\n";
     assert_bundle_with(
         &[
             BundleCase {
@@ -334,6 +345,7 @@ fn test_preg_errors_compiled_and_eval_bundle() {
             BundleCase { name: "grep_match_error_eval", source: &sources[9], expected: grep_error_expected },
             BundleCase { name: "pcre2_error_categories_aot", source: &sources[10], expected: categories_expected },
             BundleCase { name: "pcre2_error_categories_eval", source: &sources[11], expected: categories_expected },
+            BundleCase { name: "eval_matches_destructor", source: &sources[12], expected: destructor_expected },
         ],
         compile_and_run_with_regex,
     );

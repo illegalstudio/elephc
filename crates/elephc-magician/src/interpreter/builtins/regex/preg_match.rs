@@ -37,7 +37,11 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+    // Releasing the previous `$matches` (at the write, or when the argument owners drop after
+    // the call) can run a destructor whose nested `preg_*` call resets the error state. php-src
+    // empties `$matches` before matching, so the call's own outcome is restored last.
+    let mut outcome = None;
+    let result = with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
         let (bound, _) = bind_evaluated_ref_builtin_args(
             &["pattern", "subject", "matches", "flags"],
             &evaluated_args,
@@ -55,9 +59,14 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_call(
             .ok_or(EvalStatus::RuntimeFatal)?;
         let (result, matches_array) =
             eval_preg_match_capture_result(pattern.value, subject.value, flags, values)?;
+        outcome = Some(eval_preg_last_error_code());
         eval_write_preg_matches_target(&target, matches_array, context, values)?;
         Ok(result)
-    })
+    });
+    if let (Some(code), Ok(_)) = (outcome, &result) {
+        eval_preg_set_last_error(code);
+    }
+    result
 }
 
 /// Returns whether one regex matches the subject string.
