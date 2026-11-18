@@ -741,7 +741,7 @@ pub(super) fn lower_load_array_elem_ref_cell(
         super::iterators::convert_loaded_indexed_source_to_hash(ctx);
         ctx.store_result_value(array)?;
         receiver.store_back_container_writeback(ctx, array)?;
-        return lower_hash_elem_ref_cell(ctx, inst, array, index, true);
+        return lower_current_hash_elem_ref_cell(ctx, inst, array, index, &receiver, true);
     }
     if matches!(array_ty.codegen_repr(), PhpType::AssocArray { .. }) {
         return lower_hash_elem_ref_cell(ctx, inst, array, index, create_missing);
@@ -782,12 +782,24 @@ fn lower_hash_elem_ref_cell(
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
     receiver.require_writable("hash element reference")?;
     receiver.reload_local_value(ctx, hash)?;
+    lower_current_hash_elem_ref_cell(ctx, inst, hash, key, &receiver, create_missing)
+}
+
+/// Promotes an entry after its receiver has already been refreshed and published.
+fn lower_current_hash_elem_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    hash: ValueId,
+    key: ValueId,
+    receiver: &ReceiverPlace,
+    create_missing: bool,
+) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            lower_hash_elem_ref_cell_aarch64(ctx, hash, key, &receiver, create_missing)?
+            lower_hash_elem_ref_cell_aarch64(ctx, hash, key, receiver, create_missing)?
         }
         Arch::X86_64 => {
-            lower_hash_elem_ref_cell_x86_64(ctx, hash, key, &receiver, create_missing)?
+            lower_hash_elem_ref_cell_x86_64(ctx, hash, key, receiver, create_missing)?
         }
     }
     store_ref_cell_pointer_result(ctx, inst)

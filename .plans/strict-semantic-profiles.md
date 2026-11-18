@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step174 (this commit). Remaining feature integration is active. Issue:
+Verified through step175 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -1690,3 +1690,26 @@ exit and an explicit collection, reproduced with the pre-step174 compiler
 (journal6b64af5a). The full typed fixture passes with clean ownership in native
 eval; AOT retirement requires its dedicated repair. ArrayKeys remains staged,
 and neither baseline failure is reported as a passing product gate.
+
+### Verified175: refreshed boxed receiver ownership
+
+The native retained-hash control is repaired. A later nested write can widen the
+final frame slot to Mixed, so an earlier concrete LoadLocal already carries an
+unboxed owner. Refreshing that receiver previously acquired a second lease and
+overwrote the first. The shared ReceiverPlace refresh now retires the old concrete
+lease, while borrowed ref-cell views keep their existing ownership rules. The
+packed Mixed-entry conversion chain uses an already refreshed entry helper after
+publication, avoiding a second retirement of a transferred owner.
+
+The original full PHP/exact-key fixture passes with clean heaps with both
+optimizer settings. Two additional packed/typed receiver controls preserve their
+by-value copies, reference updates and clean heaps with both optimizers, and emit
+on every supported target. The full exact-key fixture also emits on all five
+targets. The default serial compiler build, assembly-comment check and diff
+hygiene pass. Journal e0ccd124 records the GDB evidence; e416bbf1 records the
+minimal nested-write isolation. This supersedes the earlier constructor-owner
+hypothesis: heap kind3 denotes hashes, and object cleanup was already balanced.
+
+ArrayKeys admission remains staged. The preexisting checked settype collection
+failure and Casts-off escaped array-parameter lifetime control remain active work,
+followed by the outstanding ArrayKeys admission gates and other strict families.
