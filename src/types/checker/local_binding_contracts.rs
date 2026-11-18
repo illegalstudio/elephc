@@ -17,7 +17,8 @@ impl Checker {
     pub(crate) fn runtime_local_binding_origin(&self, name: &str) -> bool {
         self.semantic_profile.contains(StrictFeature::Locals)
             && !self.body_contains_eval && !self.typed_local_names.contains_key(name)
-            && !self.local_parameter_names.contains(name)
+            && (!self.local_parameter_names.contains(name)
+                || self.local_store_contracts.entry_origin(&self.current_loop_storage_scope, name).is_some())
             && !self.by_ref_captured_locals.contains(name)
             && !self.active_globals.contains(name) && !self.static_local_names.contains(name)
             && (self.mixed_storage_locals.contains(name) || self.local_store_contracts.has_runtime_origin(&self.current_loop_storage_scope, name))

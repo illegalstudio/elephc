@@ -1489,6 +1489,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.store_local(name, value, php_type.clone(), span);
     }
 
+    /// Moves a recreatable by-value parameter into an owned cell without changing its input ABI.
+    pub(crate) fn privatize_recreatable_parameter(&mut self, name: &str, incoming: &PhpType) {
+        let borrowed = self.load_local(name, None);
+        let value = self.box_value_as_mixed(borrowed, PhpType::Mixed, None);
+        let shadow = self.builder.add_local(Some(format!("{name}#binding")), value_ir_type(&PhpType::Mixed),
+            PhpType::Mixed, LocalKind::PhpLocal);
+        self.local_slots.insert(name.into(), shadow);
+        self.local_kinds.insert(name.into(), LocalKind::PhpLocal);
+        self.set_local_type(name, PhpType::Mixed);
+        self.prepare_eval_native_binding_store(name, Span::dummy());
+        super::local_binding_origins::prepare_entry(self, name);
+        self.store_local(name, value, PhpType::Mixed, None);
+        self.set_local_type(name, incoming.clone());
+    }
+
     /// Marks a local slot as initialized by caller or synthetic setup.
     pub(crate) fn mark_local_initialized(&mut self, name: &str) {
         if let Some(slot) = self.local_slots.get(name).copied() {

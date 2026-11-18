@@ -597,13 +597,15 @@ impl Checker {
         // `closure_sig.env`, which `prepare_closure_signature_context_with_param_hints` builds by
         // cloning the whole enclosing scope — keying on that made every enclosing local look
         // pre-bound, and silenced a FRESH closure local whose name merely collided with one.
-        // Parameters are added too, so the map means "the frame's own pre-bound storage"; the
-        // marking excludes them anyway.
-        let pre_bound_own_storage: std::collections::HashMap<String, PhpType> = captures
-            .iter()
-            .chain(params.iter().map(|(name, _, _, _)| name))
-            .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))
-            .collect();
+        // Parameters use the resolved closure environment, where their own hints override any
+        // same-named outer variable. Their entry contracts can request an owning recreation slot.
+        let mut pre_bound_own_storage: crate::types::checker::PreBoundLocals = captures.iter()
+            .filter_map(|name| env.get(name).map(|ty|
+                (name.clone(), crate::types::checker::PreBoundLocal::capture(ty)))).collect();
+        pre_bound_own_storage.extend(params.iter().map(|(name, hint, ..)| (name, hint.is_some()))
+            .chain(variadic.iter().map(|name| (name, true))).filter_map(|(name, declared)|
+                closure_sig.env.get(name).map(|ty|
+                    (name.clone(), crate::types::checker::PreBoundLocal::parameter(ty, declared)))));
         let return_facts = crate::optimize::ReturnBoundaryFacts::new(return_type.as_ref(),
             params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
         let body_result = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(

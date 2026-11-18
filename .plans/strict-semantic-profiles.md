@@ -2053,3 +2053,42 @@ no permissive scan eligibility and admits no additional strict feature.
 
 Conditional parameter unset and eval-containing unset remain active, alongside the
 five pending guarantees. Plain straight-line parameter unset already works.
+
+### Verified187: conditional recreation of by-value parameters
+
+Eligible native parameters now retain their declared incoming contract until an
+executed conditional unset starts a new local binding. The checker records entry
+origins separately from assignment spans; repeated body walks replace those entry
+facts. A focused entry_origins helper selects actual owned parameters, preserving
+foreign aliases, raw layouts and trusted-source exclusions. Only selected inputs
+acquire an owning boxed shadow after the contiguous ABI parameter prefix. The
+existing producer-start path seeds that shadow and ordinary source stores establish
+replacement contracts after an executed binding end. The input ABI remains intact.
+
+Incoming storage and semantic contracts are distinct PreBoundLocal facts. Explicit
+hints retain their declaration, unannotated parameters stay open, and variadic
+collectors retain an array contract. Legacy storage replay, numeric regions and
+promotable parameter analysis still receive the original physical types. The first
+prototype incorrectly closed an inferred resource parameter; the eval comparison
+and existing strict_parameter_locals test established the open-input rule. Closure
+parameters now read their resolved environment instead of the enclosing scope;
+a same-named outer string no longer supplies an int parameter's entry metadata.
+
+All twelve gates pass. Five-target emission and native optimizer pairs cover
+integers, nullable and numeric union parameters, explicit Mixed, unannotated
+resource inputs, base-class/subclass acceptance and unrelated-class refusal,
+arrays, methods, static methods, constructors, closure name collisions, variadics
+and skipped/taken scope presence. Rejected stores retain old values. Caller arrays
+remain unchanged, and the original resource remains writable and closes once.
+Walker and normal dispatcher agree in both profiles and drain all Fake owners.
+Known invalid stores remain diagnostics. Isolated unannotated scalar and open-only
+scope programs preserve open inputs without depending on another typed origin.
+The existing parameter policy regression, prior reference/nullable-pointer controls,
+default serial build and diff hygiene pass. Four public strict PHP/LFC optimizer
+cases and the complete updated example pass with clean heaps; that example also
+exercises the linked interpreter context. Its conditional reset now uses an int
+parameter rather than an ordinary local, without changing its output.
+
+This step admits no additional guarantee. Eval-containing bodies, foreign reference
+parameters, escaping aliases and remaining capture/global/static joins stay active,
+alongside Nullability, Mixed, Initialization, ArrayTypes and Indexing.

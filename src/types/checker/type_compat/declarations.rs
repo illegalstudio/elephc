@@ -728,13 +728,15 @@ impl Checker {
         &mut self,
         ref_param_names: Vec<String>,
         param_names: Vec<String>,
-        pre_bound_own_storage: std::collections::HashMap<String, crate::types::PhpType>,
+        pre_bound: crate::types::checker::PreBoundLocals,
         body: &[crate::parser::ast::Stmt],
         f: F,
     ) -> Result<T, CompileError>
     where
         F: FnOnce(&mut Self) -> Result<T, CompileError>,
     {
+        let pre_bound_own_storage: crate::types::TypeEnv = pre_bound.iter()
+            .map(|(name, entry)| (name.clone(), entry.storage.clone())).collect();
         let saved_local_binding_scope = self.enter_local_binding_scope(param_names);
         self.definitely_bound_locals.extend(pre_bound_own_storage.keys().cloned());
         if self.current_class.is_some() { self.definitely_bound_locals.insert("this".to_string()); }
@@ -781,7 +783,7 @@ impl Checker {
         // enclosing scope, and keying on that silenced fresh closure locals that merely shared a
         // name with something outside. A marked name from this map is announced only when
         // `--strict-locals` would really reject the body; see `run_mixed_storage_scan`.
-        self.run_mixed_storage_scan(body, &pre_bound_own_storage);
+        self.run_mixed_storage_scan(body, &pre_bound);
         let candidates = super::super::promotable_arrays::find_candidates(self, body);
         let saved_promotable_array_candidates =
             std::mem::replace(&mut self.promotable_array_candidates, candidates);

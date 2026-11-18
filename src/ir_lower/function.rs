@@ -2039,6 +2039,10 @@ fn lower_body_into_function(
         if name == "this" {
             continue;
         }
+        if ctx.local_store_contracts.entry_origin(&ctx.loop_storage_scope, name).is_some() {
+            ctx.privatize_recreatable_parameter(name, php_type);
+            continue;
+        }
         if !FunctionSig::parameter_needs_owned_shadow(
             php_type, by_ref_params.get(index).copied().unwrap_or(false),
         ) {

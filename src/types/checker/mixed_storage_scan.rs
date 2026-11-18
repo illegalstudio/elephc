@@ -83,6 +83,8 @@ struct GuardRegion {
     sites: Vec<usize>,
 }
 
+mod entry_origins;
+
 /// Everything the scan learned about one name in one body.
 #[derive(Default)]
 struct NameFacts {
@@ -98,11 +100,15 @@ struct NameFacts {
     passed_by_ref: bool,
     /// Dynamic call metadata may require a raw nullable pointer, so null-only slots stay natural.
     preserve_null_storage: bool,
+    /// A conditional binding end can recreate an owned incoming parameter in this frame.
+    conditional_unset: bool,
 }
 
 /// Everything one scan of one body collects.
 #[derive(Default)]
 struct Facts {
+    /// Physical source of the current statement, restored after nested syntax.
+    trusted_source: bool,
     /// Immutable semantics used by every syntactic assignment fact.
     semantic_profile: elephc_semantics::SemanticProfile,
     /// Per-name evidence for the body being scanned, ordered so warnings are deterministic.
@@ -159,11 +165,12 @@ impl Checker {
     pub(crate) fn run_mixed_storage_scan(
         &mut self,
         body: &[Stmt],
-        pre_bound_own_storage: &HashMap<String, PhpType>,
+        pre_bound_own_storage: &super::PreBoundLocals,
     ) {
         // The marking describes ONE frame. The caller saves and restores the enclosing body's
         // set, but clear it here too so the scan owns the whole decision for this body.
         self.mixed_storage_locals.clear();
+        self.local_store_contracts.clear_entry_origins(&self.current_loop_storage_scope);
 
         let mut facts = Facts { semantic_profile: self.semantic_profile, ..Facts::default() };
         collect_block(self, body, 0, &mut facts);
@@ -222,6 +229,8 @@ impl Checker {
 
         if self.strict_locals && facts.contains_eval { return; }
 
+        self.mark_recreatable_parameter_origins(&facts, pre_bound_own_storage);
+
         // Collected before pushing so the warnings come out in source order regardless of the
         // name ordering the evidence map imposes. The flag is "say it out loud".
         let mut marks: Vec<(Span, String, String, bool)> = Vec::new();
@@ -231,7 +240,7 @@ impl Checker {
             if !self.name_is_markable(name, name_facts) {
                 continue;
             }
-            let incoming = pre_bound_own_storage.get(name);
+            let incoming = pre_bound_own_storage.get(name).map(|entry| &entry.storage);
             if self.strict_locals && incoming.is_some() { continue; }
             // A guard region holding the name's FIRST in-body assignment is transparent for a
             // PRE-BOUND name and not for a fresh one, so the vector depends on which this is.
@@ -862,9 +871,12 @@ fn guarded_variable_name(expr: &Expr) -> Option<&str> {
 /// (conditions, `for` update and loop subjects included). The one exception is a `for`
 /// initializer, which runs unconditionally and is checked at the statement's own depth.
 fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
+    let trusted = facts.trusted_source;
+    facts.trusted_source = stmt.source_mode == crate::source::SourceMode::Internal;
     crate::php_only::with_source_mode(stmt.source_mode, || {
         collect_stmt_in_current_source_mode(checker, stmt, depth, facts);
     });
+    facts.trusted_source = trusted;
 }
 
 /// Collects one statement after installing the same physical source profile as the checker.
@@ -1108,6 +1120,11 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
                 // Native strict origins distinguish an ended local from its next binding.
                 // Other lvalue shapes keep their existing storage and ownership path.
                 for arg in args {
+                    if depth > 0 && !facts.trusted_source {
+                        if let ExprKind::Variable(name) = &arg.kind {
+                            facts.names.entry(name.clone()).or_default().conditional_unset = true;
+                        }
+                    }
                     if !facts.semantic_profile.contains(crate::semantics::StrictFeature::Locals)
                         || !matches!(arg.kind, ExprKind::Variable(_)) {
                         disqualify_root(facts, arg);

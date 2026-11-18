@@ -47,6 +47,18 @@ pub(super) fn prepare(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span)
 fn prepare_producer(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span) {
     let Some(contract) = ctx.local_store_contracts.origins.get(
         &(ctx.loop_storage_scope.clone(), span, name.into())).cloned() else { return; };
+    start_producer(ctx, name, contract, span);
+}
+
+/// Seeds a by-value parameter's declared origin before its owned shadow receives the input.
+pub(super) fn prepare_entry(ctx: &mut LoweringContext<'_, '_>, name: &str) {
+    let Some(contract) = ctx.local_store_contracts.entry_origin(&ctx.loop_storage_scope, name).cloned()
+        else { return; };
+    start_producer(ctx, name, contract, Span::dummy());
+}
+
+/// Publishes a fresh producer without replacing the contract of an already live binding.
+fn start_producer(ctx: &mut LoweringContext<'_, '_>, name: &str, contract: PhpType, span: Span) {
     let Some(owner) = ctx.ref_cell_owner_slot(name) else { return; };
     let destination = ctx.local_slots[name];
     super::local_binding_state::when_unbound(ctx, destination, span, |ctx| {

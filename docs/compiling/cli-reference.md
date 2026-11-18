@@ -1020,6 +1020,13 @@ constructor. An inferred integer binding stays integer, and an inferred float
 binding stays float. A branch initialized from an explicitly mixed producer stays
 open. A rejected reference write leaves the current value intact.
 
+An ordinary conditional `unset()` of a native parameter passed by value can start
+a new local binding. The path that keeps the parameter retains its declared
+contract; the path that unsets it uses the replacement producer's contract.
+Parameters without an annotation stay open even when native inference specializes
+their input representation. Variadic collectors keep their array contract until
+unset, and caller-owned objects, arrays and resources keep their own lifetimes.
+
 Explicit `int|float` declarations accept both numeric kinds, and explicit `mixed`
 declarations remain open. Nullable numeric bindings keep their declared null
 alternative: an `int|null` binding accepts null and integers, and rejects float.

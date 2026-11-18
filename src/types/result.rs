@@ -72,11 +72,27 @@ pub struct LocalStoreContracts {
     stores: HashMap<(String, Span, String), LocalStoreContract>,
     pub(crate) copies: HashMap<(String, Span, String), LocalCopyContract>,
     pub(crate) origins: HashMap<(String, Span, String), PhpType>,
+    entry_origins: HashMap<(String, String), PhpType>,
     origin_bindings: HashSet<(String, String)>,
     origin_scopes: HashSet<String>,
 }
 
 impl LocalStoreContracts {
+    /// Replaces incoming contracts when a frame is checked again with its final signature.
+    pub(crate) fn clear_entry_origins(&mut self, scope: &str) {
+        self.entry_origins.retain(|(owner, _), _| owner != scope);
+    }
+
+    /// Gives a recreatable owned parameter its declared incoming source contract.
+    pub(crate) fn record_entry_origin(&mut self, scope: String, name: String, contract: PhpType) {
+        self.entry_origins.insert((scope, name), contract);
+    }
+
+    /// Reads an incoming contract without conflating it with an assignment source position.
+    pub(crate) fn entry_origin(&self, scope: &str, name: &str) -> Option<&PhpType> {
+        self.entry_origins.get(&(scope.to_string(), name.to_string()))
+    }
+
     /// Records immutable source metadata and indexes its body/name without scanning other stores.
     pub(crate) fn record_origin(&mut self, key: (String, Span, String), contract: PhpType) {
         self.origin_bindings.insert((key.0.clone(), key.2.clone()));
@@ -87,11 +103,13 @@ impl LocalStoreContracts {
     /// Tests a binding's runtime-origin transport independently from its current source span.
     pub(crate) fn has_runtime_origin(&self, scope: &str, name: &str) -> bool {
         self.origin_bindings.contains(&(scope.to_string(), name.to_string()))
+            || self.entry_origin(scope, name).is_some()
     }
 
     /// Includes lexical loop scopes belonging to the same native frame.
     pub(crate) fn has_runtime_origins_in_scope(&self, scope: &str) -> bool {
         self.origin_scopes.iter().any(|candidate| crate::types::loop_storage_scope_is_within(candidate, scope))
+            || self.entry_origins.keys().any(|(candidate, _)| crate::types::loop_storage_scope_is_within(candidate, scope))
     }
 }
 

@@ -172,8 +172,12 @@ impl Checker {
         // The storage this frame already holds on entry: the parameters, with the types this
         // call site specialized them to. The superglobals `local_env` also carries are not the
         // frame's own storage and are excluded from marking outright, so they are left out.
-        let pre_bound_own_storage: std::collections::HashMap<String, PhpType> =
-            param_types.iter().cloned().collect();
+        let pre_bound_own_storage: crate::types::checker::PreBoundLocals = param_types.iter()
+            .enumerate().map(|(index, (name, ty))| {
+                let declared = decl.variadic.as_ref() == Some(name)
+                    || decl.param_types.get(index).is_some_and(Option::is_some);
+                (name.clone(), crate::types::checker::PreBoundLocal::parameter(ty, declared))
+            }).collect();
         let return_facts = crate::optimize::ReturnBoundaryFacts::new(decl.return_type.as_ref(),
             decl.params.iter().zip(&decl.param_types).map(|(name, hint)| (name.as_str(), hint.as_ref())), &decl.body);
         let body_check_result = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(

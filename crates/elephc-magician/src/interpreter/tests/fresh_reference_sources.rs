@@ -64,3 +64,11 @@ fn reference_binding_alternatives_eval_values_and_owners() {
         "Tinteger:1|Tstring:before|Winteger:2|Wstring:after|Tinteger:1|Tstring:before|Tinteger:1|Tstring:before|Tinteger:1|Tstring:before|Tinteger:1|Tdouble:2.5|Wdouble:3.5|Wstring:after|Tinteger:1|Tinteger:1|Tstring:before|Winteger:2|",
         "Wstring:after|Winteger:2|Winteger:2|Wstring:after|Wstring:after|Winteger:2|Wstring:after|Winteger:2|Wstring:after|Winteger:2|Wdouble:2.5|Winteger:1|Wdouble:3.5|Wstring:after|Wstring:after|Wstring:after|Winteger:2|Winteger:2|");
 }
+
+/// Incoming parameter contracts end only on the executed unset path in either eval entry point.
+#[test]
+fn conditional_parameter_origins_eval_values_and_owners() {
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/conditional_parameter_origins.php"),
+        "Tstring:after|Tinteger:1|Wstring:ready|Winteger:3|Winteger|TNULL|Tstring|Wdouble|Tstring|Wstring|Tstring|Wobject|Tobject|Tstring|Warray|Tstring|1|Winteger|1|Tstring|closed|Tstring|Tinteger|Tstring|Tinteger|outer|present|absent|Warray|Tstring|",
+        "Winteger:2|Wstring:bad|Wstring:ready|Winteger:3|Winteger|Wdouble|Winteger|Wdouble|Wdouble|Wstring|Winteger|Wobject|Wobject|Wobject|Warray|Warray|1|Winteger|1|Winteger|closed|Winteger|Wstring|Winteger|Wstring|outer|present|absent|Warray|Warray|");
+}

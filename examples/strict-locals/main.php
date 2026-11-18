@@ -179,8 +179,7 @@ replaceSelectedValue(true, 2.5);
 replaceSelectedValue(false, 'ready');
 
 // A conditional unset permits a new producer on the path that ends the old binding.
-function resetSelectedValue(bool $reset): void {
-    $value = 1;
+function resetSelectedValue(bool $reset, int $value = 1): void {
     if ($reset) { unset($value); $value = 'reset'; }
     echo "Current value: ", $value, PHP_EOL;
 }
