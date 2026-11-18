@@ -855,6 +855,29 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
     if let Some(class_name) = union_object_member_class(ctx, object)? {
         return lower_boxed_prop_initialized(ctx, inst, object, &class_name, &property);
     }
+    // An interface or a bare `object` has no slot layout: the runtime class decides in the read that follows, so the
+    // probe only answers false for the null sentinel of a missed element read.
+    let generic_object = matches!(ctx.value_php_type(object)?.codegen_repr(),
+        PhpType::Object(name) if name.trim_start_matches('\\').is_empty());
+    if generic_object || receiver_is_interface(ctx, object)? {
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        ctx.load_value_to_reg(object, base_reg)?;
+        let null_label = ctx.next_label("prop_initialized_null_receiver");
+        let done_label = ctx.next_label("prop_initialized_done");
+        let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+        crate::codegen::sentinels::emit_branch_if_null_container(
+            ctx.emitter,
+            base_reg,
+            scratch_reg,
+            &null_label,
+        );
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&null_label);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        ctx.emitter.label(&done_label);
+        return store_if_result(ctx, inst);
+    }
     // A receiver with no single object layout — an untyped parameter, a `mixed` local, a union of
     // two classes — has no slot to read here; its class is settled by runtime dispatch instead.
     if !matches!(
