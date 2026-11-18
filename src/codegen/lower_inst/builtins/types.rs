@@ -545,9 +545,11 @@ pub(crate) fn lower_class_name_lookup(
         }
         PhpType::Mixed | PhpType::Union(_) if super::has_eval_context(ctx) => {
             // The eval bridge names an object (tag 6, which an eval-declared class or closure is)
-            // and answers "" for anything else. A callable descriptor (tag 10) is a native
-            // Closure, invokable object or implicit callable, and `::class` rejects every
-            // non-object with its own TypeError, so those take the native lookup.
+            // and answers "" for anything else. Every other value takes the native lookup: it
+            // names a callable descriptor's Closure or invokable class, and get_class() and
+            // `::class` reject any other non-object (a declared callable keeps its string or
+            // array) with PHP's TypeError. get_parent_class() accepts a class name, which may
+            // name an eval-declared class, so only a callable descriptor leaves the bridge there.
             let eval_object = ctx.next_label("get_class_mixed_eval_object");
             let done = ctx.next_label("get_class_mixed_eval_done");
             ctx.load_value_to_result(value)?;
@@ -556,17 +558,17 @@ pub(crate) fn lower_class_name_lookup(
                 Arch::AArch64 => {
                     ctx.emitter.instruction("cmp x0, #6");                      // runtime tag 6 is an object, native or eval-declared
                     ctx.emitter.instruction(&format!("b.eq {eval_object}"));    // the eval bridge knows every object's class
-                    if !class_constant {
+                    if name != "get_class" {
                         ctx.emitter.instruction("cmp x0, #10");                 // runtime tag 10 is a callable descriptor
-                        ctx.emitter.instruction(&format!("b.ne {eval_object}")); // other values keep the eval bridge's answer
+                        ctx.emitter.instruction(&format!("b.ne {eval_object}")); // a class name may name an eval-declared class
                     }
                 }
                 Arch::X86_64 => {
                     ctx.emitter.instruction("cmp rax, 6");                      // runtime tag 6 is an object, native or eval-declared
                     ctx.emitter.instruction(&format!("je {eval_object}"));      // the eval bridge knows every object's class
-                    if !class_constant {
+                    if name != "get_class" {
                         ctx.emitter.instruction("cmp rax, 10");                 // runtime tag 10 is a callable descriptor
-                        ctx.emitter.instruction(&format!("jne {eval_object}")); // other values keep the eval bridge's answer
+                        ctx.emitter.instruction(&format!("jne {eval_object}")); // a class name may name an eval-declared class
                     }
                 }
             }

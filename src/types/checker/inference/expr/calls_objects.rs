@@ -362,8 +362,9 @@ impl Checker {
                 let object_only = match &object_type {
                     // A callable is a Closure object (or an invokable object) at runtime;
                     // get_class() answers for it, and refuses an implicit string or array
-                    // callable the way PHP does.
-                    PhpType::Object(_) | PhpType::Callable => true,
+                    // callable the way PHP does. A declared `callable` keeps the value it was
+                    // given, so the same runtime lookup answers for it.
+                    PhpType::Object(_) | PhpType::Callable | PhpType::DeclaredCallable => true,
                     // PHP allows `$value::class` through a nullable object type; a null value
                     // raises the same runtime error `get_class(null)` does, which the lowering
                     // already reaches. A union with any other non-object member stays refused.
