@@ -1019,11 +1019,28 @@ thread_local! {
     /// the declaration that owns the list; see [`param_lines`].
     static PARAM_LINES: std::cell::RefCell<std::collections::HashMap<(u32, u32, u32), Vec<u32>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Set while a parse only discovers declarations (see [`without_recording_param_lines`]).
+    static PARAM_LINES_SUSPENDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Records the start line of each parameter of the function, method or closure at `span`.
 pub(crate) fn record_param_lines(span: Span, lines: Vec<u32>) {
+    if PARAM_LINES_SUSPENDED.with(std::cell::Cell::get) {
+        return;
+    }
     PARAM_LINES.with(|table| table.borrow_mut().insert((span.source_id(), span.line, span.col), lines));
+}
+
+/// Runs a parse that only discovers declarations without recording parameter lines.
+///
+/// The Composer classmap scan parses files under the entry file's source identity 0 and never
+/// compiles them, so its records would replace the entry's own at the same line and column (a
+/// one-line classmap function at line 2 gave an entry function there its parameter line).
+pub(crate) fn without_recording_param_lines<T>(parse: impl FnOnce() -> T) -> T {
+    let previous = PARAM_LINES_SUSPENDED.with(|flag| flag.replace(true));
+    let result = parse();
+    PARAM_LINES_SUSPENDED.with(|flag| flag.set(previous));
+    result
 }
 
 /// Forgets the parameter lines recorded for included files, whose source identities a new

@@ -519,7 +519,12 @@ fn scan_classmap_file(path: &Path, index: &mut HashMap<String, PathBuf>) {
     let Ok(tokens) = crate::lexer::tokenize_with_mode(&content, mode) else {
         return;
     };
-    let Ok(ast) = crate::parser::parse_with_mode(&tokens, mode) else {
+    // Discovery only: the file is never compiled from this parse, and it shares the entry
+    // file's source identity, so it must not record parameter lines over the entry's.
+    let parsed = crate::parser::stmt::params::without_recording_param_lines(|| {
+        crate::parser::parse_with_mode(&tokens, mode)
+    });
+    let Ok(ast) = parsed else {
         return;
     };
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
