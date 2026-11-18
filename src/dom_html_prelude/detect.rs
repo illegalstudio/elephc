@@ -50,6 +50,8 @@ const DOM_HTML_CLASSES: &[&str] = &[
     "DOMDocumentFragment",
     "DOMDocumentType",
     "DOMNamedNodeMap",
+    "DOMEntityReference",
+    "DOMImplementation",
     "DOMXPath",
     "LibXMLError",
     "Dom\\XMLDocument",

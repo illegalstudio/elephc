@@ -8,6 +8,7 @@
 //! - Declarations are built directly as AST nodes (no PHP source text is parsed here) and
 //!   compile through the ordinary EIR pipeline.
 
+mod dom_element;
 mod dom_tree;
 mod generated;
 use crate::parser::ast::Program;
@@ -20,6 +21,7 @@ pub(crate) fn declarations() -> Program {
         .get_or_init(|| {
             let mut program = generated::declarations();
             dom_tree::extend(&mut program);
+            dom_element::extend(&mut program);
             program
         })
         .clone()

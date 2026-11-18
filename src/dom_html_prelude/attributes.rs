@@ -16,6 +16,8 @@ use crate::synthetic_class::*;
 fn decl_class_domexception() -> Stmt {
     class("DOMException")
         .extends("Exception")
+        // php redeclares `$code` public.
+        .untyped_prop("code", Some(e_int(0)))
         .build()
 }
 

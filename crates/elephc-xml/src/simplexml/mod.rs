@@ -16,6 +16,7 @@ mod diagnostics;
 mod ffi;
 mod iteration;
 mod dom_tree;
+mod dom_element;
 mod mutation;
 mod query;
 mod retirement;

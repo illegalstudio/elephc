@@ -498,6 +498,9 @@ mod tests {
                 "DOMAttr",
                 "DOMDocumentFragment",
                 "DOMDocumentType",
+                // package P5
+                "DOMEntityReference",
+                "DOMImplementation",
             ]
         );
     }

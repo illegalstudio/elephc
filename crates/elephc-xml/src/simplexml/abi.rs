@@ -35,7 +35,7 @@ pub(super) fn output(value: impl AsRef<[u8]>) -> *const c_char {
     OUTPUT.with(|cell| { let mut out = cell.borrow_mut(); *out = cstring(value.as_ref()); out.as_ptr() })
 }
 /// Encodes arbitrary bytes for the NUL-terminated string boundary without changing their contents.
-fn encode_hex(bytes: &[u8]) -> String {
+pub(super) fn encode_hex(bytes: &[u8]) -> String {
     let mut hex = String::with_capacity(bytes.len().saturating_mul(2));
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     for byte in bytes { hex.push(DIGITS[(byte >> 4) as usize] as char); hex.push(DIGITS[(byte & 15) as usize] as char); }

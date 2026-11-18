@@ -289,7 +289,25 @@ fn attr() -> Stmt {
             method("__propset_value")
                 .param("value", TypeExpr::Str)
                 .returns(TypeExpr::Void)
-                .body(vec![s_prop_assign(e_this(), "nodeValue", e_var("value"))]),
+                .body(vec![
+                    s_prop_assign(e_this(), "nodeValue", e_var("value")),
+                    // An attribute node of an element writes through to it (php shares the native node).
+                    s_assign("_owner", e_this_prop("ownerElement")),
+                    s_if(
+                        e_instance_of(e_var("_owner"), "DOMElement"),
+                        vec![
+                            s_assign("_uri", e_this_prop("__elephc_dom_ns")),
+                            s_if(
+                                e_binop(e_var("_uri"), BinOp::StrictEq, e_null()),
+                                vec![s_expr(e_method_call(e_var("_owner"), "setAttribute", vec![e_this_prop("nodeName"), e_var("value")]))],
+                                vec![],
+                                Some(vec![s_expr(e_method_call(e_var("_owner"), "setAttributeNS", vec![e_var("_uri"), e_this_prop("nodeName"), e_var("value")]))]),
+                            ),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ]),
         )
         .method(
             method("__construct")
@@ -311,7 +329,14 @@ fn attr() -> Stmt {
         .method(
             // True only for an attribute declared as an ID (DTD or setIdAttribute()), which the
             // element package records; a free-standing attribute is never one.
-            method("isId").returns(TypeExpr::Bool).body(vec![s_return(e_bool(false))]),
+            method("isId").returns(TypeExpr::Bool).body(vec![
+                s_assign("_owner", e_this_prop("ownerElement")),
+                s_return(e_binop(
+                    e_instance_of(e_var("_owner"), "DOMElement"),
+                    BinOp::And,
+                    e_method_call(e_var("_owner"), "__elephc_dom_is_id_name", vec![e_this_prop("nodeName")]),
+                )),
+            ]),
         )
         .build()
 }

@@ -1,0 +1,43 @@
+r|r|own
+DOMAttr
+12|truefalsetrue
+["a","b","c"]
+3|a=DOMAttr:a:1:2;b=DOMAttr:b:2:2;c=DOMAttr:c:3:2;
+DOMAttr2ownerfalse
+B
+true
+false
+ValueError: DOMElement::setAttribute(): Argument #1 ($qualifiedName) must not be empty [0]
+DOMException: Invalid Character Error [5]
+<r b="B" c="3"/>
+truefalsefalsetrue
+<r b="B" c="3" y=""/>
+"val"
+true
+false
+"val"
+DOMException: Namespace Error [14]
+DOMException: Namespace Error [14]
+ValueError: DOMElement::setAttributeNS(): Argument #2 ($qualifiedName) must not be empty [0]
+false
+null
+true
+"Q"
+true
+null
+DOMException: Not Found Error [8]
+true
+true
+DOMException: Not Found Error [8]
+223
+cx2xNULL
+plaintextNULL
+p:namenamepurn:ns
+DOMException: Invalid Character Error [5]
+DOMException: Invalid Character Error [5]
+DOMException: Namespace Error [14]
+<r b="B" c="3" y="">s0<c>one</c><x><c>two</c></x>s1<ap/></r>
+<r b="B" c="3" y="">s0<c>one</c><x><c>two</c></x>s1b1b2<ap/><af/></r>
+<r b="B" c="3" y="">s0<c>one</c><x><c>two</c></x>s1b1b2R<rw/><af/></r>
+<r b="B" c="3" y="">s0<c>one</c><x><c>two</c></x>s1b1b2R<af/></r>
+<r b="B" c="3" y="">only<last/></r>

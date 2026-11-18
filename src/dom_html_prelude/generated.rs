@@ -1966,6 +1966,14 @@ fn decl_class_domnode() -> Stmt {
                         vec![],
                         None,
                     ),
+                    s_if(
+                        e_instance_of(e_this(), "DOMElement"),
+                        vec![
+                            s_return(e_call("__elephc_dom_descendant_text", vec![e_this()])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_return(e_this_prop("nodeValue")),
                 ]),
         )
@@ -2201,149 +2209,6 @@ fn decl_class_domnode() -> Stmt {
                 ]),
         )
         .method(
-            method("getAttribute")
-                .param("name", TypeExpr::Str)
-                .returns(TypeExpr::Str)
-                .body(vec![
-                    s_assign("nul", e_call("strpos", vec![e_var("name"), e_str("\0")])),
-                    s_if(
-                        e_binop(e_var("nul"), BinOp::StrictNotEq, e_bool(false)),
-                        vec![
-                            s_assign("name", e_call("substr", vec![e_var("name"), e_int(0), e_var("nul")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("bound", e_this_prop("__elephc_simplexml")),
-                    s_if(
-                        e_call("is_object", vec![e_var("bound")]),
-                        vec![
-                            s_return(e_method_call(e_var("bound"), "__elephc_dom_attribute", vec![e_var("name")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("name"), BinOp::StrictEq, e_str("xmlns")),
-                        vec![
-                            s_return(e_null_coalesce(e_this_prop("__elephc_dom_xmlns"), e_str(""))),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_call("str_starts_with", vec![e_var("name"), e_str("xmlns:")]),
-                        vec![
-                            s_return(e_str("")),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_return(e_call("__elephc_dom_attr_get", vec![e_this_prop("__attrs"), e_var("name")])),
-                ]),
-        )
-        .method(
-            method("setAttribute")
-                .param("qualifiedName", TypeExpr::Str)
-                .param("value", TypeExpr::Str)
-                .returns(TypeExpr::Bool)
-                .body(vec![
-                    s_if(
-                        e_binop(e_var("qualifiedName"), BinOp::StrictEq, e_str("")),
-                        vec![
-                            s_throw(e_new("ValueError", vec![e_str("DOMElement::setAttribute(): Argument #1 ($qualifiedName) must not be empty")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("nul", e_call("strpos", vec![e_var("qualifiedName"), e_str("\0")])),
-                    s_if(
-                        e_binop(e_var("nul"), BinOp::StrictNotEq, e_bool(false)),
-                        vec![
-                            s_assign("qualifiedName", e_call("substr", vec![e_var("qualifiedName"), e_int(0), e_var("nul")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_not(e_call("__elephc_dom_valid_attribute_name", vec![e_var("qualifiedName")])),
-                        vec![
-                            s_throw(e_new("DOMException", vec![e_str("Invalid Character Error"), e_int(5)])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("nul", e_call("strpos", vec![e_var("value"), e_str("\0")])),
-                    s_if(
-                        e_binop(e_var("nul"), BinOp::StrictNotEq, e_bool(false)),
-                        vec![
-                            s_assign("value", e_call("substr", vec![e_var("value"), e_int(0), e_var("nul")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("bound", e_this_prop("__elephc_simplexml")),
-                    s_if(
-                        e_call("is_object", vec![e_var("bound")]),
-                        vec![
-                            s_return(e_method_call(e_var("bound"), "__elephc_dom_set_attribute", vec![e_var("qualifiedName"), e_var("value")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("qualifiedName"), BinOp::StrictEq, e_str("xmlns")),
-                        vec![
-                            s_if(
-                                e_binop(e_this_prop("__elephc_dom_xmlns"), BinOp::StrictNotEq, e_null()),
-                                vec![
-                                    s_return(e_bool(false)),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_prop_assign(e_this(), "__elephc_dom_xmlns", e_var("value")),
-                            s_return(e_bool(true)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("attrs", e_this_prop("__attrs")),
-                    s_assign("updated", e_array(vec![])),
-                    s_assign("found", e_bool(false)),
-                    s_if(
-                        e_call("is_array", vec![e_var("attrs")]),
-                        vec![
-                            s_foreach(e_var("attrs"), None, "pair", vec![
-                                s_if(
-                                    e_binop(e_call("is_array", vec![e_var("pair")]), BinOp::And, e_binop(e_cast(CastType::String, e_index(e_var("pair"), e_int(0))), BinOp::StrictEq, e_var("qualifiedName"))),
-                                    vec![
-                                        s_array_push("updated", e_array(vec![e_var("qualifiedName"), e_var("value")])),
-                                        s_assign("found", e_bool(true)),
-                                    ],
-                                    vec![],
-                                    Some(vec![
-                                    s_array_push("updated", e_var("pair")),
-                                ]),
-                                ),
-                            ]),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_not(e_var("found")),
-                        vec![
-                            s_array_push("updated", e_array(vec![e_var("qualifiedName"), e_var("value")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_prop_assign(e_this(), "__attrs", e_var("updated")),
-                    s_return(e_bool(true)),
-                ]),
-        )
-        .method(
             method("append")
                 .variadic("nodes", Some(t_union(vec![TypeExpr::Str, t_class("DOMNode")])))
                 .returns(TypeExpr::Void)
@@ -2552,56 +2417,6 @@ fn decl_class_domdocument() -> Stmt {
                 ]),
         )
         .method(
-            method("__construct")
-                .param_default("version", TypeExpr::Str, e_str("1.0"))
-                .param_default("encoding", TypeExpr::Str, e_str(""))
-                .body(vec![
-                    s_assign("_unused_version", e_var("version")),
-                    s_assign("_unused_encoding", e_var("encoding")),
-                    s_prop_assign(e_this(), "nodeName", e_str("#document")),
-                    s_prop_assign(e_this(), "nodeValue", e_null()),
-                    s_prop_assign(e_this(), "childNodes", e_new("DOMNodeList", vec![e_array(vec![])])),
-                    s_prop_assign(e_this(), "ownerDocument", e_null()),
-                ]),
-        )
-        .method(
-            method("createElement")
-                .param("localName", TypeExpr::Str)
-                .param_default("value", TypeExpr::Str, e_str(""))
-                .returns(t_class("DOMElement"))
-                .body(vec![
-                    s_if(
-                        e_binop(e_binop(e_var("localName"), BinOp::StrictEq, e_str("")), BinOp::Or, e_not(e_call("__elephc_dom_valid_attribute_name", vec![e_var("localName")]))),
-                        vec![
-                            s_throw(e_new("DOMException", vec![e_str("Invalid Character Error"), e_int(5)])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("element", e_new("DOMElement", vec![])),
-                    s_prop_assign(e_var("element"), "nodeName", e_var("localName")),
-                    s_prop_assign(e_var("element"), "ownerDocument", e_this()),
-                    s_prop_assign(e_var("element"), "__attrs", e_array(vec![])),
-                    s_prop_assign(e_var("element"), "childNodes", e_new("DOMNodeList", vec![e_array(vec![])])),
-                    s_if(
-                        e_binop(e_var("value"), BinOp::StrictNotEq, e_str("")),
-                        vec![
-                            s_assign("text", e_new("DOMText", vec![])),
-                            s_prop_assign(e_var("text"), "nodeName", e_str("#text")),
-                            s_prop_assign(e_var("text"), "nodeValue", e_var("value")),
-                            s_prop_assign(e_var("text"), "ownerDocument", e_this()),
-                            s_prop_assign(e_var("text"), "parentNode", e_var("element")),
-                            s_prop_assign(e_var("text"), "childNodes", e_new("DOMNodeList", vec![e_array(vec![])])),
-                            s_prop_assign(e_var("element"), "childNodes", e_new("DOMNodeList", vec![e_array(vec![e_var("text")])])),
-                            s_prop_assign(e_var("element"), "nodeValue", e_var("value")),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_return(e_var("element")),
-                ]),
-        )
-        .method(
             method("loadHTML")
                 .param("source", TypeExpr::Str)
                 .param_default("options", TypeExpr::Int, e_int(0))
@@ -2634,7 +2449,17 @@ fn decl_class_domdocument() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_return(e_method_call(e_this(), "loadXML", vec![e_var("source"), e_var("options")])),
+                    s_assign("loaded", e_method_call(e_this(), "loadXML", vec![e_var("source"), e_var("options")])),
+                    s_if(
+                        e_var("loaded"),
+                        vec![
+                            s_assign("real", e_call("realpath", vec![e_var("filename")])),
+                            s_prop_assign(e_this(), "__elephc_dom_uri", e_ternary(e_binop(e_var("real"), BinOp::StrictEq, e_bool(false)), e_var("filename"), e_var("real"))),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_var("loaded")),
                 ]),
         )
         .method(
@@ -2652,6 +2477,12 @@ fn decl_class_domdocument() -> Stmt {
                         None,
                     ),
                     s_prop_assign(e_this(), "__elephc_dom_html", e_bool(false)),
+                    s_prop_assign(e_this(), "__elephc_dom_decl", e_null()),
+                    s_prop_assign(e_this(), "__elephc_dom_uri", e_null()),
+                    // php maps the document's parse switches onto libxml2 options.
+                    s_if(e_not(e_this_prop("preserveWhiteSpace")), vec![s_assign("options", e_binop(e_var("options"), BinOp::BitOr, e_int(256)))], vec![], None),
+                    s_if(e_this_prop("recover"), vec![s_assign("options", e_binop(e_var("options"), BinOp::BitOr, e_int(1)))], vec![], None),
+                    s_if(e_this_prop("substituteEntities"), vec![s_assign("options", e_binop(e_var("options"), BinOp::BitOr, e_int(2)))], vec![], None),
                     s_return(e_expr_call(e_str("__elephc_simplexml_load_dom"), vec![e_this(), e_var("source"), e_var("options")])),
                 ]),
         )

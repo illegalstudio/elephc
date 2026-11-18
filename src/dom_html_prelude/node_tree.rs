@@ -32,7 +32,8 @@ fn tree() -> ClassBuilder {
                             s_if(
                                 e_instance_of(e_this(), "DOMDocument"),
                                 vec![
-                                    s_return(e_int(9)),
+                                    // An HTML document is XML_HTML_DOCUMENT_NODE (13).
+                                    s_return(e_ternary(e_prop(e_this(), "__elephc_dom_html"), e_int(13), e_int(9))),
                                 ],
                                 vec![],
                                 None,
@@ -97,6 +98,14 @@ fn tree() -> ClassBuilder {
                                 e_instance_of(e_this(), "DOMDocumentType"),
                                 vec![
                                     s_return(e_int(10)),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_if(
+                                e_instance_of(e_this(), "DOMEntityReference"),
+                                vec![
+                                    s_return(e_int(5)),
                                 ],
                                 vec![],
                                 None,
@@ -460,7 +469,7 @@ fn tree() -> ClassBuilder {
                         .body(vec![
                             s_assign("kind", e_this_prop("nodeType")),
                             s_if(
-                                e_binop(e_binop(e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(1)), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(9))), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(11))),
+                                e_binop(e_binop(e_binop(e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(1)), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(9))), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(13))), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(11))),
                                 vec![
                                     s_throw(e_new("DOMException", vec![e_str("Hierarchy Request Error"), e_int(3)])),
                                 ],
@@ -469,7 +478,7 @@ fn tree() -> ClassBuilder {
                             ),
                             s_assign("nodeKind", e_prop(e_var("node"), "nodeType")),
                             s_if(
-                                e_binop(e_binop(e_var("nodeKind"), BinOp::StrictEq, e_int(2)), BinOp::Or, e_binop(e_var("nodeKind"), BinOp::StrictEq, e_int(9))),
+                                e_binop(e_binop(e_binop(e_var("nodeKind"), BinOp::StrictEq, e_int(2)), BinOp::Or, e_binop(e_var("nodeKind"), BinOp::StrictEq, e_int(9))), BinOp::Or, e_binop(e_var("nodeKind"), BinOp::StrictEq, e_int(13))),
                                 vec![
                                     s_throw(e_new("DOMException", vec![e_str("Hierarchy Request Error"), e_int(3)])),
                                 ],
@@ -600,7 +609,7 @@ fn tree() -> ClassBuilder {
                         .body(vec![
                             s_assign("kind", e_this_prop("nodeType")),
                             s_if(
-                                e_binop(e_binop(e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(1)), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(9))), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(11))),
+                                e_binop(e_binop(e_binop(e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(1)), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(9))), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(13))), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(11))),
                                 vec![
                                     s_throw(e_new("DOMException", vec![e_str("Hierarchy Request Error"), e_int(3)])),
                                 ],
@@ -1040,9 +1049,17 @@ fn tree() -> ClassBuilder {
                                     s_assign("copy", e_new("DOMElement", vec![])),
                                     s_prop_assign(e_var("copy"), "nodeName", e_this_prop("nodeName")),
                                     s_prop_assign(e_var("copy"), "childNodes", e_new("DOMNodeList", vec![e_array(vec![])])),
-                                    s_foreach(e_method_call(e_this(), "__elephc_dom_attr_pairs", vec![]), None, "pair", vec![
-                                        s_expr(e_method_call(e_var("copy"), "setAttribute", vec![e_cast(CastType::String, e_index(e_var("pair"), e_int(0))), e_cast(CastType::String, e_index(e_var("pair"), e_int(1)))])),
+                                    // The attribute slots keep their namespace URI (element package P5).
+                                    s_assign("pairs", e_array(vec![])),
+                                    s_foreach(e_method_call(e_this(), "__elephc_dom_attr_records", vec![e_bool(false)]), None, "record", vec![
+                                        s_if(
+                                            e_binop(e_index(e_var("record"), e_int(4)), BinOp::StrictEq, e_str("")),
+                                            vec![s_array_push("pairs", e_array(vec![e_index(e_var("record"), e_int(1)), e_index(e_var("record"), e_int(5))]))],
+                                            vec![],
+                                            Some(vec![s_array_push("pairs", e_array(vec![e_index(e_var("record"), e_int(1)), e_index(e_var("record"), e_int(5)), e_index(e_var("record"), e_int(4))]))]),
+                                        ),
                                     ]),
+                                    s_prop_assign(e_var("copy"), "__attrs", e_var("pairs")),
                                     s_assign("declared", e_this_prop("__elephc_dom_xmlns")),
                                     s_if(
                                         e_binop(e_binop(e_var("declared"), BinOp::StrictNotEq, e_null()), BinOp::And, e_not(e_call("is_object", vec![e_this_prop("__elephc_simplexml")]))),
@@ -1160,7 +1177,7 @@ fn tree() -> ClassBuilder {
                                 None,
                             ),
                             s_if(
-                                e_binop(e_binop(e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(1)), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(9))), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(11))),
+                                e_binop(e_binop(e_binop(e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(1)), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(9))), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(13))), BinOp::And, e_binop(e_var("kind"), BinOp::StrictNotEq, e_int(11))),
                                 vec![
                                     s_return(e_binop(e_this_prop("nodeValue"), BinOp::StrictEq, e_prop(e_var("otherNode"), "nodeValue"))),
                                 ],
