@@ -819,3 +819,5 @@ mod array_key_write_guards;
 mod array_access_write_kinds;
 
 mod boolean_offset_writes;
+
+mod property_key_writes;

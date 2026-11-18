@@ -523,6 +523,7 @@ pub(super) fn lower_concrete_array_set_values(
     index_pins: Vec<crate::ir_lower::expr::PinnedInFlightOwner>,
     span: Span, key_already_diagnosed: bool,
 ) {
+    crate::ir_lower::array_key_guards::for_write(ctx, array, index, value, &index_pins, span);
     let op = array_set_op(array.ir_type);
     ctx.emit_void(
         op,
@@ -553,20 +554,24 @@ pub(super) fn lower_boxed_array_set(
     let array = boxed_invalid_scalar_receiver(ctx, array, span);
     let (array, receiver_owner) = super::nested_array_writes::root_static_update_receiver(ctx, array, span);
     if let Some(owner) = receiver_owner { roots.push(owner); }
-    let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr| {
-        let value = lower_expr(ctx, expr);
-        let (value, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, expr.span);
-        if let Some(root) = root { roots.push(root); }
-        value
+    let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr, key: bool| {
+        let mut lower = |ctx: &mut LoweringContext<'_, '_>| {
+            let value = lower_expr(ctx, expr);
+            let (value, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, expr.span);
+            if let Some(root) = root { roots.push(root); }
+            value
+        };
+        if key { ctx.with_independent_write_receiver(lower) } else { lower(ctx) }
     };
     // Preserve the existing PHP ordering for bare variable keys versus computed keys.
     let (index, value) = if matches!(index.kind, ExprKind::Variable(_)) {
-        let value = lower_operand(ctx, value);
-        (lower_operand(ctx, index), value)
+        let value = lower_operand(ctx, value, false);
+        (lower_operand(ctx, index, true), value)
     } else {
-        let index = lower_operand(ctx, index);
-        (index, lower_operand(ctx, value))
+        let index = lower_operand(ctx, index, true);
+        (index, lower_operand(ctx, value, false))
     };
+    let index = super::boxed_write_owners::prepare_key(ctx, index, span, &mut roots);
     super::boxed_write_parents::lower(
         ctx, array, index, value, span, key_already_diagnosed,
     );
@@ -596,8 +601,9 @@ pub(super) fn lower_boxed_array_set_values(
         }
         operand
     };
-    let index = root(ctx, index);
+    let index = ctx.with_independent_write_receiver(|ctx| root(ctx, index));
     let value = root(ctx, value);
+    let index = super::boxed_write_owners::prepare_key(ctx, index, span, &mut roots);
     super::boxed_write_parents::lower(
         ctx, array, index, value, span, key_already_diagnosed,
     );

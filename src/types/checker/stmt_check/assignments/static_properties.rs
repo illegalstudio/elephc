@@ -175,9 +175,9 @@ pub(super) fn check_static_property_array_assign(
         PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
         _ => false,
     };
-    if target.dynamic_eval_target || target.prop_ty.is_php_array() || mixed_elements
-        || target.prop_ty == PhpType::Mixed
-    {
+    // An erased target can contain ArrayAccess, whose original keys reach its own signature.
+    if target.dynamic_eval_target || target.prop_ty == PhpType::Mixed { return Ok(()); }
+    if target.prop_ty.is_php_array() || mixed_elements {
         if !is_dynamic_eval_static_property_array_key_type(&normalized_idx_ty) {
             return Err(CompileError::new(span, "Array index must be integer"));
         }

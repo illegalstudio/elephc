@@ -46,6 +46,7 @@ mod conditionals;
 mod loops;
 mod array_write_core;
 mod boxed_write_parents;
+mod boxed_write_owners;
 mod dimension_incdec_results;
 pub(crate) use dimension_incdec_results::{ValueIncDecLocals, value_incdec_locals, publish_value_incdec};
 mod buffer_element_updates;

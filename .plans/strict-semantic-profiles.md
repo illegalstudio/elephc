@@ -1315,3 +1315,58 @@ ArrayAccess key normalization gaps, recorded as fact3b17799e. Those runtime path
 logical null keys from typed missing reads, remaining property/static writers,
 unset, producers/eval, dependency profiles and outstanding binding/family work
 remain pending. Public admission is unchanged.
+
+### Verified160: original ArrayAccess write arguments
+
+Erased ArrayAccess stores use the existing signature-aware EIR interface method
+planner. Independent snapshots preserve original boolean, float, null, numeric
+string, embedded-NUL, array, object and closure keys; native SPL and WeakMap
+methods retain their own contracts. The shared borrow helper leaves ordinary
+scalars Plain. Receiver detachment and call snapshots classify their leases
+independently of the borrowed RHS of a null-coalescing assignment.
+
+Signed commit `5c6e9f4e83` passes nine unique focused gates, compiler/bridge builds,
+five-target emission and twelve native source/profile/optimizer combinations.
+Public CLI PHP with both optimizer settings and LFC with Coercions match PHP with
+clean heaps. The new null-coalescing object result regression closes the detached
+receiver-clone leak without changing the assignment result's ownership.
+
+### Verified161: boolean parents at boxed offset writes
+
+Local boxed setters share the scalar-parent guard and reuse the existing nested
+false-conversion helpers. A false parent becomes an empty array before its
+warning. Returning handlers can replace the PHP variable; throwing handlers
+complete int/string/bool dimensions, stop float/null dimensions, and chain their
+exception beneath an invalid-key TypeError. Only actual array parents reject
+array/object keys; ArrayAccess receives its original arguments.
+
+Signed commit `f5fcf3ea5a` passes eight unique focused gates, compiler/bridge builds,
+five-target emission, twelve native combinations and three public CLI variants,
+all with clean heaps. The strengthened oracle distinguishes empty-array
+publication from the later element insertion. Public admission remains ten
+integrated families and six pending.
+
+### Verified162: property, static and nested write boundaries
+
+Property and nested stores use the shared boxed writer.
+`boxed_write_owners` separates borrowed operand leases, representation-only key
+boxing and caller retirement from the parent dispatcher. Concrete writers check
+original keys before conversion. Mixed property targets defer their key contract
+until the runtime array or ArrayAccess receiver is selected. Static writers retire
+owned boxed keys and values while preserving borrowed assignment results.
+
+A managed static store can consume its submitted clone and publish a different
+cell. COW mutation reloads that published value rather than borrowing the retired
+input; combined Coercions coverage closes the resulting stale-cell errors and
+dropped static stores.
+
+Ten focused gates pass, including compiler/bridge builds56.70s, twenty target/profile
+emissions21.46s and twenty-four native variants86.29s with clean heaps. Exact
+numeric-string keys, COW snapshots, source effects, owned key/RHS cleanup, setter
+exceptions and assignment results pass across the supported targets and both
+optimization settings, with ArrayKeys and Coercions independently enabled.
+Public CLI PHP with both optimizer settings and LFC with Coercions also pass with
+clean heaps. Throwable trace argument retention is a separate baseline
+feature tracked as taskf82cb27c; this step does not claim default PHP trace-owner
+lifetime parity. Unset, typed-miss null provenance, producers/eval, dependency
+profiles and the remaining binding/family integrations remain open.

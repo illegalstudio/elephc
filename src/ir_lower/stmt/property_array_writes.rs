@@ -662,7 +662,6 @@ fn lower_property_array_assign_value_direct(
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
-        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -674,6 +673,10 @@ fn lower_property_array_assign_value_direct(
         );
         let property_value =
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
+        crate::ir_lower::array_key_guards::for_write(
+            ctx, property_value, index, value, &[], span,
+        );
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         // PHP reads a plain-variable index at STORE time, after the right-hand side, so
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
         // rule; sharing the helper is what keeps the two from answering differently for
@@ -707,7 +710,6 @@ fn lower_property_array_assign_value_direct(
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_assoc_array_type)
     {
-        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
             Op::PropGet,
@@ -719,6 +721,10 @@ fn lower_property_array_assign_value_direct(
         );
         let property_value =
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
+        crate::ir_lower::array_key_guards::for_write(
+            ctx, property_value, index, value, &[], span,
+        );
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
         // PHP reads a plain-variable index at STORE time, after the right-hand side, so
         // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
         // rule; sharing the helper is what keeps the two from answering differently for
@@ -873,12 +879,8 @@ fn lower_php_array_property_write(
     );
     ctx.builder.set_value_ownership(array.value, Ownership::Borrowed);
     if let Some(index) = index {
-        ctx.emit_void(
-            Op::RuntimeCall,
-            vec![array.value, index.value, value.value],
-            key_already_diagnosed.then_some(Immediate::Bool(true)),
-            effects_lookup::runtime_effects(),
-            Some(span),
+        super::boxed_write_owners::lower_set(
+            ctx, array, index, value, &[], span, key_already_diagnosed,
         );
         release_persisted_string_operand(ctx, index, span);
     } else {

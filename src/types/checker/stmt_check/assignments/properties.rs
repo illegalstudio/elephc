@@ -232,9 +232,7 @@ pub(super) fn check_property_array_assign(
             || checker.interfaces.contains_key(name)
             || crate::types::checker::builtin_stdclass::is_stdclass(name))
     {
-        if !is_php_array_key_type(&normalized_idx_ty) {
-            return Err(CompileError::new(span, "Array index must be integer"));
-        }
+        // An erased property may contain ArrayAccess, whose key contract belongs to its method.
         return Ok(());
     }
     match &obj_ty {
@@ -249,7 +247,7 @@ pub(super) fn check_property_array_assign(
                     super::arrays::STRING_OFFSET_ON_PROPERTY_UNSUPPORTED,
                 ));
             }
-            if property_supports_object_dimensions(checker, &prop_ty) {
+            if prop_ty == PhpType::Mixed || property_supports_object_dimensions(checker, &prop_ty) {
                 return Ok(());
             }
             if let PhpType::Buffer(elem_ty) = &prop_ty {

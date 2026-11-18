@@ -284,9 +284,9 @@ fn replace_cell(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, value: 
 /// Uses the unchanged native array/object setter for a non-string parent.
 fn emit_set(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
     key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool) {
-    ctx.emit_void(Op::RuntimeCall, vec![parent.value, key.value, value.value],
-        key_already_diagnosed.then_some(Immediate::Bool(true)),
-        effects_lookup::runtime_effects(), Some(span));
+    super::boxed_write_owners::lower_set(
+        ctx, parent, key, value, &[], span, key_already_diagnosed,
+    );
 }
 
 /// Borrows a constant complete diagnostic and forwards it to PHP's shared warning channel.
