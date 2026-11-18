@@ -1512,7 +1512,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots.contains(&slot)
     }
 
-    /// Returns definitely visible PHP locals in declaration order for scope introspection.
+    /// Returns PHP scope candidates, including conditional bindings when presence is tracked.
     ///
     /// Compiler-generated frame and parser temporaries are `PhpLocal`s like any other by the
     /// time lowering sees them, so they are excluded by the one shared name predicate rather
@@ -1554,8 +1554,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     .copied()
                     .unwrap_or(LocalKind::PhpLocal);
                 (kind == LocalKind::PhpLocal
-                    && self.initialized_slots.contains(slot)
-                    && !matches!(self.local_types.get(name), Some(PhpType::Void | PhpType::Never)))
+                    && (self.builder.function().flags.tracks_local_binding_state
+                        || (self.initialized_slots.contains(slot)
+                            && !matches!(self.local_types.get(name), Some(PhpType::Void | PhpType::Never)))))
                 .then(|| {
                     let position = first_slots.get(name.as_str()).copied();
                     (position.unwrap_or(slot.as_raw()), name.clone())

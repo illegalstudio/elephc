@@ -1930,10 +1930,11 @@ fn lower_body_into_function(
         let index = signature.params.iter().position(|(candidate, _)| candidate == name)?;
         signature.ref_params.get(index).copied().unwrap_or(false).then(|| name.clone())
     });
-    function.flags.tracks_local_binding_state = semantic_profile.contains(
+    function.flags.tracks_local_binding_state = super::scope_introspection::body_needs_binding_presence(body)
+        || (semantic_profile.contains(
         elephc_semantics::StrictFeature::Locals) && !function.flags.is_internal
         && (crate::ir_lower::body_contains_eval_call(body)
-            || local_store_contracts.has_runtime_origins_in_scope(&loop_storage_scope));
+            || local_store_contracts.has_runtime_origins_in_scope(&loop_storage_scope)));
     let mut builder = Builder::new(function);
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);

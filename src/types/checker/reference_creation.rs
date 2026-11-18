@@ -2,7 +2,7 @@
 //! Plans plain-local reference formation before source-order call argument effects.
 //!
 //! Called from:
-//! - Argument effects for declared free functions and tracked closure values.
+//! - Argument effects for declared functions, members, constructors and tracked callables.
 //!
 //! Key details:
 //! - The shared argument planner owns matching, unpack provenance and source indices.
@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 use super::Checker;
-use crate::{parser::ast::{Expr, ExprKind}, span::Span, types::{FunctionSig, PhpType, TypeEnv}};
+use crate::{errors::CompileError, parser::ast::{Expr, ExprKind}, span::Span, types::{FunctionSig, PhpType, TypeEnv}};
 
 /// Source-order arguments paired with the planner's directly supplied reference positions.
 pub(crate) struct ReferenceCallArguments {
@@ -27,6 +27,47 @@ impl ReferenceCallArguments {
 }
 
 impl Checker {
+    /// Reads method and constructor shapes without creating a descriptor or specializing a body.
+    pub(crate) fn member_call_reference_arguments(&self, call: &Expr, receiver: Option<&PhpType>,
+        args: &[Expr], env: &TypeEnv,
+    ) -> Result<ReferenceCallArguments, CompileError> {
+        let (class, method, is_static) = match &call.kind {
+            ExprKind::MethodCall { method, .. } | ExprKind::NullsafeMethodCall { method, .. } => {
+                let class = receiver.and_then(|ty| match ty {
+                    PhpType::Object(name) if !name.is_empty() => Some(name.clone()),
+                    PhpType::Union(_) => self.union_single_object_class(ty),
+                    _ => None,
+                });
+                (class, method.as_str(), false)
+            }
+            ExprKind::StaticMethodCall { receiver, method, .. } =>
+                (self.resolve_static_method_metadata_class(receiver)?, method.as_str(), true),
+            ExprKind::NewObject { class_name, .. } =>
+                (self.resolve_class_name_for_metadata(class_name.as_str()), "__construct", false),
+            ExprKind::NewScopedObject { receiver, .. } =>
+                (self.resolve_static_method_metadata_class(receiver)?, "__construct", false),
+            _ => return Ok(ReferenceCallArguments::ordinary(args, self.semantic_profile)),
+        };
+        let method = crate::names::php_symbol_key(method);
+        let signature = class.as_ref().and_then(|class| {
+            if let Some(class) = self.classes.get(class) {
+                if is_static { class.static_methods.get(&method) } else { class.methods.get(&method) }
+            } else {
+                self.interfaces.get(class).and_then(|interface|
+                    if is_static { interface.static_methods.get(&method) } else { interface.methods.get(&method) })
+            }
+        });
+        Ok(self.reference_arguments_for_signature(signature, args, call.span, env))
+    }
+
+    /// Uses the authoritative callable resolver after evaluating the callee expression once.
+    pub(crate) fn expression_call_reference_arguments(&mut self, callee: &Expr, args: &[Expr],
+        span: Span, env: &TypeEnv,
+    ) -> Result<ReferenceCallArguments, CompileError> {
+        let signature = self.resolve_expr_callable_sig(callee, env)?;
+        Ok(self.reference_arguments_for_signature(signature.as_ref(), args, span, env))
+    }
+
     /// Reads a declared reference shape without walking the deferred body or specializing values.
     pub(crate) fn declared_call_reference_arguments(&self, name: &str, args: &[Expr], span: Span,
         env: &TypeEnv,

@@ -11,11 +11,9 @@ use super::super::*;
 use super::{support::*, strict_semantics::staged_numeric_execution};
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
-/// Both execution entry points preserve new null sources, old aliases and balanced owners.
-#[test]
-fn fresh_reference_sources_eval_values_and_owners() {
-    let source = include_str!("../../../../../tests/fixtures/strict/fresh_reference_sources.php")
-        .strip_prefix("<?php").unwrap();
+/// Checks both eval entry points, profiles and complete scope-owner retirement.
+fn assert_reference_fixture(source: &str, checked: &str, permissive: &str) {
+    let source = source.strip_prefix("<?php").unwrap();
     for dispatch in [false, true] {
         for locals in [false, true] {
             let mut context = ElephcEvalContext::new();
@@ -28,38 +26,33 @@ fn fresh_reference_sources_eval_values_and_owners() {
             } else {
                 staged_numeric_execution(source, false, &mut context, &mut scope, &mut values).unwrap();
             }
-            let expected = if locals { "NULL|old|NULL|old:new|Tstring|integer|old:4|NULL|alias|NULL:alias|9|sorted|NULL|self|NULL:NULL|seen|TNULL|" }
-                else { "NULL|old|NULL|old:new|integer|integer|3:4|NULL|alias|NULL:alias|9|sorted|NULL|self|NULL:NULL|seen|Wstring|" };
-            assert_eq!(values.output, expected, "locals={locals} dispatch={dispatch}");
+            assert_eq!(values.output, if locals { checked } else { permissive }, "locals={locals} dispatch={dispatch}");
             for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
             for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "locals={locals} dispatch={dispatch}: {:?}", values.values[id]); }
         }
     }
+}
+
+/// Both execution entry points preserve new null sources, old aliases and balanced owners.
+#[test]
+fn fresh_reference_sources_eval_values_and_owners() {
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/fresh_reference_sources.php"),
+        "NULL|old|NULL|old:new|Tstring|integer|old:4|NULL|alias|NULL:alias|9|sorted|NULL|self|NULL:NULL|seen|TNULL|",
+        "NULL|old|NULL|old:new|integer|integer|3:4|NULL|alias|NULL:alias|9|sorted|NULL|self|NULL:NULL|seen|Wstring|");
 }
 
 /// Known reference arguments publish their source before subsequent operands in both engines.
 #[test]
 fn fresh_reference_arguments_eval_values_and_owners() {
-    let source = include_str!("../../../../../tests/fixtures/strict/fresh_reference_arguments.php")
-        .strip_prefix("<?php").unwrap();
-    for dispatch in [false, true] {
-        for locals in [false, true] {
-            let mut context = ElephcEvalContext::new();
-            context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, locals)).unwrap();
-            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
-            if dispatch {
-                let program = crate::parser::parse_fragment_with_semantics(source.as_bytes(), context.semantic_profile()).unwrap();
-                let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
-                values.release(result).unwrap();
-            } else {
-                staged_numeric_execution(source, false, &mut context, &mut scope, &mut values).unwrap();
-            }
-            let prefix = "bound|bound|bound|closure|NULL:NULL|observed|present:NULL|observed|formed|closure-formed|later:string|observed|positional:named|NULL|private|NULL|";
-            assert_eq!(values.output, format!("{prefix}{}", if locals { "Tinteger|" } else { "Wstring|" }),
-                "locals={locals} dispatch={dispatch}");
-            for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
-            for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "locals={locals} dispatch={dispatch}: {:?}", values.values[id]); }
-        }
-    }
+    let prefix = "bound|bound|bound|closure|NULL:NULL|observed|present:NULL|observed|formed|closure-formed|later:string|observed|positional:named|NULL|private|NULL|";
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/fresh_reference_arguments.php"),
+        &format!("{prefix}Tinteger|"), &format!("{prefix}Wstring|"));
 }
 
+/// Member, constructor and expression calls preserve skipped scopes and reference identities.
+#[test]
+fn fresh_member_reference_arguments_eval_values_and_owners() {
+    let prefix = "method|static|present:NULL|seen|constructor|immediate|constructor|method|method|absent|present|first:last|formed|changed:string|seen|null:absent|null:present|";
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/fresh_member_reference_arguments.php"),
+        &format!("{prefix}Tinteger|"), &format!("{prefix}Wstring|"));
+}

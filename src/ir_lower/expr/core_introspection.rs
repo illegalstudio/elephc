@@ -61,18 +61,20 @@ pub(super) fn lower_globals_read(
         Some(expr.span),
     );
     for name in names {
-        let key = lower_string_literal(ctx, &name, expr);
-        let value = ctx.load_local(&name, Some(expr.span));
-        let value = box_value_as_mixed(ctx, value, expr.span);
-        ctx.emit_void(
-            Op::HashSet,
-            vec![hash.value, key.value, value.value],
-            None,
-            Op::HashSet.default_effects(),
-            Some(expr.span),
-        );
+        insert_scope_binding(ctx, &name, hash, expr);
     }
     hash
+}
+
+/// Loads a live scope binding only inside the predecessor that proves its presence.
+fn insert_scope_binding(ctx: &mut LoweringContext<'_, '_>, name: &str,
+    hash: LoweredValue, expr: &Expr,
+) {
+    let key = lower_string_literal(ctx, name, expr);
+    let value = ctx.load_local(name, Some(expr.span));
+    let value = box_value_as_mixed(ctx, value, expr.span);
+    ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None,
+        Op::HashSet.default_effects(), Some(expr.span));
 }
 
 /// Builds the associative array of locals visible at the current lexical call site.
@@ -97,16 +99,13 @@ pub(super) fn lower_visible_defined_vars(
         Some(expr.span),
     );
     for name in names {
-        let key = lower_string_literal(ctx, &name, expr);
-        let value = ctx.load_local(&name, Some(expr.span));
-        let value = box_value_as_mixed(ctx, value, expr.span);
-        ctx.emit_void(
-            Op::HashSet,
-            vec![hash.value, key.value, value.value],
-            None,
-            Op::HashSet.default_effects(),
-            Some(expr.span),
-        );
+        let slot = ctx.local_slots[&name];
+        if ctx.builder.function().flags.tracks_local_binding_state {
+            crate::ir_lower::local_binding_state::when_bound(ctx, slot, expr.span,
+                |ctx| insert_scope_binding(ctx, &name, hash, expr));
+        } else {
+            insert_scope_binding(ctx, &name, hash, expr);
+        }
     }
     hash
 }

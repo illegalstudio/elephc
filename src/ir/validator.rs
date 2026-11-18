@@ -136,7 +136,7 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
                 }
             }
             let mut required = inst.arithmetic_policy().requirements().bits();
-            if matches!(inst.op, Op::BindLocalRefContract | Op::SetLocalBindingState | Op::GetNativeBindingState | Op::GetEvalBindingState | Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding | Op::EvalScopeEndBinding | Op::EvalScopeCopyBindingType) || matches!(&inst.immediate,
+            if matches!(inst.op, Op::BindLocalRefContract | Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding | Op::EvalScopeEndBinding | Op::EvalScopeCopyBindingType) || matches!(&inst.immediate,
                 Some(Immediate::EvalScopeStore(metadata)) if metadata.contract.is_some()) {
                 required |= elephc_semantics::StrictFeature::Locals.bit();
             }

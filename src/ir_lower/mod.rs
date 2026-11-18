@@ -28,6 +28,7 @@ mod function;
 mod integer_local_contracts;
 mod local_binding_state;
 mod local_binding_origins;
+mod scope_introspection;
 mod loop_closures;
 mod numeric_storage;
 /// The padding-thunk symbol codegen calls for a dynamic `new` that omits defaulted arguments.

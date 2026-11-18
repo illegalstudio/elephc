@@ -623,7 +623,7 @@ impl Checker {
     }
 
     /// Resolves the concrete class whose method metadata should be inspected.
-    fn resolve_static_method_metadata_class(
+    pub(crate) fn resolve_static_method_metadata_class(
         &self,
         receiver: &StaticReceiver,
     ) -> Result<Option<String>, CompileError> {
@@ -653,7 +653,7 @@ impl Checker {
     }
 
     /// Resolves a class name case-insensitively for metadata lookups.
-    fn resolve_class_name_for_metadata(&self, class_name: &str) -> Option<String> {
+    pub(crate) fn resolve_class_name_for_metadata(&self, class_name: &str) -> Option<String> {
         let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
         self.classes
             .keys()

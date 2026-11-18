@@ -5,7 +5,7 @@
 //! - Lowering context initialization, alias binding and binding retirement.
 //!
 //! Key details:
-//! - Only user frames that synchronize eval locals need these EIR state writes.
+//! - Eval synchronization and scope enumeration select frames needing these state writes.
 //! - Representation-only stores preserve presence and cannot invent an imported binding.
 
 use super::context::LoweringContext;
@@ -51,13 +51,28 @@ fn with_origin_condition(ctx: &mut LoweringContext<'_, '_>, slot: LocalSlotId,
 pub(super) fn when_unbound(ctx: &mut LoweringContext<'_, '_>, slot: LocalSlotId,
     span: crate::span::Span, body: impl FnOnce(&mut LoweringContext<'_, '_>),
 ) {
+    let present = binding_is_present(ctx, slot, span);
+    with_condition(ctx, present, false, body);
+}
+
+/// Runs an observable scope read only when a native or eval binding is currently present.
+pub(super) fn when_bound(ctx: &mut LoweringContext<'_, '_>, slot: LocalSlotId,
+    span: crate::span::Span, body: impl FnOnce(&mut LoweringContext<'_, '_>),
+) {
+    let present = binding_is_present(ctx, slot, span);
+    with_condition(ctx, present, true, body);
+}
+
+/// Combines the existing provenance bits without conflating an allocated slot with a binding.
+fn binding_is_present(ctx: &mut LoweringContext<'_, '_>, slot: LocalSlotId,
+    span: crate::span::Span,
+) -> super::context::LoweredValue {
     let native = ctx.emit_value(Op::GetNativeBindingState, Vec::new(),
         Some(Immediate::LocalSlot(slot)), PhpType::Bool, Op::GetNativeBindingState.default_effects(), Some(span));
     let eval = ctx.emit_value(Op::GetEvalBindingState, Vec::new(),
         Some(Immediate::LocalSlot(slot)), PhpType::Bool, Op::GetEvalBindingState.default_effects(), Some(span));
-    let present = ctx.emit_value(Op::IBitOr, vec![native.value, eval.value], None,
-        PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
-    with_condition(ctx, present, false, body);
+    ctx.emit_value(Op::IBitOr, vec![native.value, eval.value], None,
+        PhpType::Bool, Op::IBitOr.default_effects(), Some(span))
 }
 
 /// Shares the guarded CFG and initialization join for single-bit and combined presence tests.

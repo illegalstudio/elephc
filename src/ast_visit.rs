@@ -40,6 +40,11 @@ pub fn walk_program(program: &Program, visitor: &mut impl AstVisitor) {
     walk_stmts(program, visitor);
 }
 
+/// Visits a borrowed statement body without cloning its nested syntax into a program.
+pub(crate) fn walk_statements(statements: &[Stmt], visitor: &mut impl AstVisitor) {
+    walk_stmts(statements, visitor);
+}
+
 /// Forwards one extension observation to the policy-specific visitor.
 fn extension(visitor: &mut impl AstVisitor, span: Span, description: &str) {
     visitor.extension(span, description);

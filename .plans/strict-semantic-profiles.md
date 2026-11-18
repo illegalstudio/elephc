@@ -1984,3 +1984,37 @@ optimizer settings, prior reference formation controls, pure-call controls, the
 default serial compiler build, PHP/LFC CLI combinations and the complete updated
 strict-locals example. All focused gates and diff hygiene pass. PHP confirms the
 permissive fixture output. This step admits no additional strict guarantee.
+
+### Verified185: known member reference sources and actual scope presence
+
+The shared source-index projection now covers concrete instance/static methods,
+interface and inherited signatures, constructors including new self, nullsafe
+method arms and expression callees with authoritative callable signatures. Pure
+metadata queries reuse existing class resolution without descriptor specialization.
+Receiver effects precede argument selection, and each selected plain name is
+created at its source position. Earlier ordinary reads still diagnose undefined
+variables. Known callee validation retains its own diagnostics.
+
+The extended nullsafe native fixture exposed a separate presence error: a skipped
+reference argument appeared in get_defined_vars with a clean heap, even without
+strict flags or AST optimization. The reference call itself remained in the correct
+branch. Scope enumeration used compile-time initialized slots, and the nullsafe
+continuation retained operand-only initialized facts. Fact588ddb63 records that
+baseline. Frames containing direct or explicit call_user_func scope introspection
+now opt into the existing native/eval provenance words. Enumeration guards each
+candidate before loading it, preserving explicit null bindings and excluding
+unexecuted/future names. A scoped AST visitor ignores deferred frames and borrows
+the existing traversal without cloning syntax. Binding presence operations are
+profile-independent infrastructure; strict producer operations retain their profile
+gates. Nullsafe local joins also retain conservative initialized-slot facts.
+
+Focused verification covers five-target emission and validation, native profile/
+optimizer pairs with clean heaps, skipped/taken nullsafe receivers, interface and
+inherited dispatch, constructors, immediate/empty closures, variadics, later
+reference writes, old closed origins, explicit null and conditional scope names,
+source-order diagnostics, scanner frame isolation, actual switch scope outputs,
+walker/normal dispatcher parity with complete Fake owner retirement, real opaque
+eval, prior free-reference and discarded-capture controls, nullable result storage,
+the default serial build, PHP/LFC public CLI combinations and the complete updated
+example. PHP confirms the permissive fixture. No additional strict guarantee is
+admitted by this step.

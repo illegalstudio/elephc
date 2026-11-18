@@ -575,9 +575,11 @@ impl Checker {
                 }
                 Ok(ty)
             }
-            ExprKind::NewObject { args, .. } | ExprKind::StaticMethodCall { args, .. } => {
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args, self.semantic_profile);
-                for arg in &expanded_args {
+            ExprKind::NewObject { args, .. } | ExprKind::StaticMethodCall { args, .. }
+            | ExprKind::NewScopedObject { args, .. } => {
+                let prepared = self.member_call_reference_arguments(expr, None, args, env)?;
+                for (index, arg) in prepared.args.iter().enumerate() {
+                    self.prepare_reference_source_argument(arg, index, &prepared.reference_sources, env);
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
@@ -617,10 +619,12 @@ impl Checker {
             }
             ExprKind::ExprCall { callee, args } => {
                 self.infer_type_with_assignment_effects(callee, env)?;
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args, self.semantic_profile);
+                let prepared = self.expression_call_reference_arguments(callee, args, expr.span, env)?;
+                let expanded_args = prepared.args;
                 let skip_contextual_callback = self
                     .expr_targets_preg_replace_callback(callee);
                 for (idx, arg) in expanded_args.iter().enumerate() {
+                    self.prepare_reference_source_argument(arg, idx, &prepared.reference_sources, env);
                     if skip_contextual_callback && idx == 1 {
                         self.infer_contextual_callback_effects(arg, env)?;
                         continue;
@@ -656,10 +660,12 @@ impl Checker {
                 method,
                 args,
             } => {
-                self.infer_type_with_assignment_effects(object, env)?;
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args, self.semantic_profile);
+                let object_ty = self.infer_type_with_assignment_effects(object, env)?;
+                let prepared = self.member_call_reference_arguments(expr, Some(&object_ty), args, env)?;
+                let expanded_args = prepared.args;
                 self.promote_pdo_binding_ref_storage(object, method, &expanded_args, env)?;
-                for arg in &expanded_args {
+                for (index, arg) in expanded_args.iter().enumerate() {
+                    self.prepare_reference_source_argument(arg, index, &prepared.reference_sources, env);
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
@@ -669,15 +675,6 @@ impl Checker {
             ExprKind::BufferNew { len, .. } => {
                 self.infer_type_with_assignment_effects(len, env)?;
                 self.infer_type(expr, env)
-            }
-            ExprKind::NewScopedObject { args, .. } => {
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args, self.semantic_profile);
-                for arg in &expanded_args {
-                    self.infer_type_with_assignment_effects(arg, env)?;
-                }
-                let ty = self.infer_type(expr, env)?;
-                self.purge_property_narrowings_after_call(env);
-                Ok(ty)
             }
             _ => {
                 self.infer_fallback_operand_effects(expr, env)?;

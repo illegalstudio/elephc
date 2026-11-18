@@ -203,3 +203,11 @@ function createQuantityArgument(): void {
     echo "Reference argument: ", $newQuantity, PHP_EOL;
 }
 createQuantityArgument();
+
+// A method can initialize a fresh label through the same reference argument rules.
+class QuantityLabels {
+    public function initialize(mixed &$label): void { $label = 'Quantity'; }
+}
+$labels = new QuantityLabels();
+$labels->initialize($newLabel);
+echo "Reference label: ", $newLabel, PHP_EOL;
