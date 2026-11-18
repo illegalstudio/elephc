@@ -116,6 +116,21 @@ macro_rules! xml_contract {
 
 /// The `ext/xml` and `ext/xmlwriter` function contracts, in PHP's stub order.
 pub(crate) static CONTRACTS: &[BuiltinContract] = &[
+    // -- ext/libxml (the shared error state is declared by the DOM prelude's `Libxml` part) --
+    xml_contract!("libxml_clear_errors", Libxml, PreludeProvided, [], TypeSpec::Void,
+        "Clears the libxml error buffer and the last error."),
+    xml_contract!("libxml_disable_entity_loader", Libxml, PreludeProvided,
+        [param!("disable", Bool = DefaultSpec::Bool(true))], TypeSpec::Bool,
+        "Records whether the external entity loader is disabled and answers the previous flag.",
+        deprecation: "Function libxml_disable_entity_loader() is deprecated since 8.0, as external entity loading is disabled by default"),
+    xml_contract!("libxml_get_errors", Libxml, PreludeProvided, [], TypeSpec::Array,
+        "Returns the buffered libxml errors as a list of LibXMLError."),
+    xml_contract!("libxml_get_last_error", Libxml, PreludeProvided, [],
+        TypeSpec::Union(&[TypeSpec::Object, TypeSpec::False]),
+        "Returns the last libxml error or false."),
+    xml_contract!("libxml_use_internal_errors", Libxml, PreludeProvided,
+        [param!("use_errors", ?Bool = DefaultSpec::Null)], TypeSpec::Bool,
+        "Switches libxml error buffering on or off and answers the previous setting."),
     xml_contract!("simplexml_import_dom", Simplexml, PreludeProvided,
         [param!("node", Object), param!("class_name", ?Str = DefaultSpec::Str("SimpleXMLElement"))],
         TypeSpec::Mixed, "Imports a DOM node as a SimpleXML element."),

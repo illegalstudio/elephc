@@ -1393,3 +1393,87 @@ var_dump((new ReflectionProperty('DOMException', 'code'))->isPublic());
     );
     assert_eq!(out, "5\nbool(false)\nbool(true)\n");
 }
+
+/// The libxml state machine matches php 8.5: the previous flag is answered, switching internal
+/// errors off drops the buffered list but not the last error, `libxml_clear_errors()` drops both,
+/// and the version / node / error constants carry php's values. A parser reports through
+/// `__elephc_libxml_record` (php -n measured: errors after `<a><b></a>` are level 3, code 76).
+#[test]
+fn test_dom_libxml_state_and_constants_match_php() {
+    let out = compile_and_run(
+        r####"<?php
+var_dump(libxml_use_internal_errors(true));
+var_dump(libxml_use_internal_errors());
+var_dump(libxml_get_last_error());
+__elephc_libxml_record(LIBXML_ERR_FATAL, 76, 11, "Opening and ending tag mismatch: b line 1 and a\n", "", 1);
+__elephc_libxml_record(LIBXML_ERR_FATAL, 77, 11, "Premature end of data in tag a line 1\n", "", 1);
+var_dump(count(libxml_get_errors()));
+$last = libxml_get_last_error();
+var_dump($last->code, $last->level, $last->column, $last->line, $last->file === "");
+var_dump(libxml_get_errors()[0]->code);
+var_dump(libxml_use_internal_errors(false));
+var_dump(libxml_get_errors());
+var_dump(libxml_get_last_error()->code);
+libxml_clear_errors();
+var_dump(libxml_get_last_error());
+var_dump(libxml_use_internal_errors(null));
+var_dump(LIBXML_VERSION, LIBXML_DOTTED_VERSION, LIBXML_LOADED_VERSION, LIBXML_XINCLUDE, LIBXML_NOEMPTYTAG, LIBXML_SCHEMA_CREATE, LIBXML_HTML_NOIMPLIED);
+var_dump(XML_ENTITY_REF_NODE, XML_ENTITY_NODE, XML_NOTATION_NODE, XML_DTD_NODE, XML_ELEMENT_DECL_NODE, XML_ATTRIBUTE_DECL_NODE, XML_ENTITY_DECL_NODE, XML_NAMESPACE_DECL_NODE, XML_LOCAL_NAMESPACE);
+var_dump(XML_ATTRIBUTE_CDATA, XML_ATTRIBUTE_ID, XML_ATTRIBUTE_IDREF, XML_ATTRIBUTE_IDREFS, XML_ATTRIBUTE_ENTITY, XML_ATTRIBUTE_NMTOKEN, XML_ATTRIBUTE_NMTOKENS, XML_ATTRIBUTE_ENUMERATION, XML_ATTRIBUTE_NOTATION);
+var_dump(DOM_PHP_ERR, DOMSTRING_SIZE_ERR, DOM_NO_DATA_ALLOWED_ERR, DOM_NO_MODIFICATION_ALLOWED_ERR, DOM_INVALID_STATE_ERR, DOM_INVALID_MODIFICATION_ERR, DOM_NAMESPACE_ERR, DOM_INVALID_ACCESS_ERR);
+"####,
+    );
+    assert_eq!(
+        out,
+        r####"bool(false)
+bool(true)
+bool(false)
+int(2)
+int(77)
+int(3)
+int(11)
+int(1)
+bool(true)
+int(76)
+bool(true)
+array(0) {
+}
+int(77)
+bool(false)
+bool(false)
+int(20913)
+string(6) "2.9.13"
+string(5) "20913"
+int(1024)
+int(4)
+int(1)
+int(8192)
+int(5)
+int(6)
+int(12)
+int(14)
+int(15)
+int(16)
+int(17)
+int(18)
+int(18)
+int(1)
+int(2)
+int(3)
+int(4)
+int(6)
+int(7)
+int(8)
+int(9)
+int(10)
+int(0)
+int(2)
+int(6)
+int(7)
+int(11)
+int(13)
+int(14)
+int(15)
+"####
+    );
+}

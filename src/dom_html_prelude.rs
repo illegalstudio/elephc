@@ -346,7 +346,7 @@ mod tests {
                 }
             }).collect();
         let catalogued: BTreeSet<String> = elephc_builtin_contract::classes().iter()
-            .filter(|class| class.module == PhpModule::Dom)
+            .filter(|class| matches!(class.module, PhpModule::Dom | PhpModule::Libxml))
             .map(|class| {
                 assert_eq!(class.aot, ClassRoute::Prelude, "{}", class.name);
                 assert!(!class.internal && !class.extension, "{}", class.name);
@@ -489,12 +489,18 @@ mod tests {
                 "DOMComment",
                 "DOMProcessingInstruction",
                 "Dom\\XMLDocument",
+<<<<<<< HEAD
                 // package P3
                 "DOMNamedNodeMap",
                 "DOMCdataSection",
                 "DOMAttr",
                 "DOMDocumentFragment",
                 "DOMDocumentType",
+=======
+                // Part::Libxml (package P2)
+                "__ElephcDomState",
+                "LibXMLError",
+>>>>>>> 0d2e7ac2fc (feat(dom): libxml state, LibXMLError, libxml_* functions and the missing LIBXML/XML/DOM constants with contract rows)
             ]
         );
     }

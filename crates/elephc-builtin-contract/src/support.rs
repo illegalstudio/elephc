@@ -483,7 +483,7 @@ mod tests {
         // sodium/password/array/preg prelude surfaces, and the eleven array names no longer
         // eval-pending): main's 792 + the branch's +90 over the merge base. Estimated at the
         // merge; re-measure when the merged catalogs compile.
-        assert_eq!(eval_registry, 882 + curl_surface);
+        assert_eq!(eval_registry, 878 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -512,7 +512,7 @@ mod tests {
         // Registry builtins awaiting eval homes, plus the PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         // Estimated at the merge (main's 381 + the branch's -19); re-measure when it compiles.
-        assert_eq!(eval_pending, 362);
+        assert_eq!(eval_pending, 359);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -526,12 +526,12 @@ mod tests {
         // contracts, two internal setlocale helpers, the internal nl_langinfo helper, and
         // the random prelude's `__elephc_call_strict_types` reader join the AOT registry.
         // Estimated at the merge (main's 839 + the branch's +47); re-measure when it compiles.
-        assert_eq!(aot_registry, 886);
+        assert_eq!(aot_registry, 878);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry. The two
         // PHP-visible locale functions are prelude-provided.
         // Estimated at the merge (main's 476 + the branch's +38); re-measure when it compiles.
-        assert_eq!(aot_external, 514 + curl_surface);
+        assert_eq!(aot_external, 515 + curl_surface);
         // The two tick registrars (`AOT_IMPLEMENTATION_PENDING`).
         assert_eq!(aot_unsupported, 2);
     }
@@ -589,14 +589,14 @@ mod tests {
         // interpreter adapters, plus the GMP, SimpleXML, tidy, ctype, and locale
         // forwarding homes. `serialize` / `unserialize` are among them (see `eval_execution`).
         // Estimated at the merge (main's 697 + the branch's +89); re-measure when it compiles.
-        assert_eq!(interpreter_adapter, 786 + curl_surface);
+        assert_eq!(interpreter_adapter, 782 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
         // the internal nl_langinfo helper, and the random prelude's
         // `__elephc_call_strict_types` reader.
         // Estimated at the merge (main's 523 + the branch's -3); re-measure when it compiles.
-        assert_eq!(unsupported, 520);
+        assert_eq!(unsupported, 517);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {
