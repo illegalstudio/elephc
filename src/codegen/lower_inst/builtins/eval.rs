@@ -375,7 +375,7 @@ pub(super) use introspection::{
 pub(in crate::codegen::lower_inst) use introspection::lower_callable_parameter_is_by_ref;
 pub(in crate::codegen::lower_inst) use introspection::emit_object_relation_target;
 pub(super) use scope_access::{lower_eval_scope_get, lower_eval_scope_set};
-pub(super) use native_local_contracts::lower_eval_scope_bind_local_type;
+pub(super) use native_local_contracts::{lower_eval_scope_bind_local_type, lower_eval_scope_end_binding};
 pub(super) use native_copy_origins::lower_eval_scope_copy_binding_type;
 pub(super) use symbol_queries::{
     has_eval_context, lower_eval_class_constant_fetch, lower_eval_class_exists,

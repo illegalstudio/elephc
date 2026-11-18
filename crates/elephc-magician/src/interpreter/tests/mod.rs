@@ -69,6 +69,7 @@ mod closures;
 mod control_flow;
 mod strict_semantics;
 mod strict_local_origins;
+mod strict_binding_alternatives;
 mod strict_structural_locals;
 mod strict_resource_locals;
 mod strict_parameter_locals;

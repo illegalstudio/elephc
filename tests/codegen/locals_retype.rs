@@ -861,7 +861,7 @@ fn test_mixed_local_survives_a_thrown_and_caught_exception() {
     assert_eq!(
         warnings,
         vec![
-            "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)".to_string(),
+            "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to enforce binding contracts)".to_string(),
         ],
     );
 
@@ -2120,7 +2120,7 @@ fn test_require_once_scopes_the_depth_rule_to_top_level_statements() {
     assert_eq!(
         warnings,
         vec![
-            "$q is assigned incompatible types (string and int); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)".to_string(),
+            "$q is assigned incompatible types (string and int); it is compiled as boxed mixed storage (compile with --strict-locals to enforce binding contracts)".to_string(),
             "$r changes type from string to int; the previous value is discarded (compile with --strict-locals to make this an error)".to_string(),
         ],
         "the guarded top level must take the MIXED shape and the function body the RETYPE shape"
@@ -2235,19 +2235,22 @@ fn test_marked_local_assigned_across_switch_arms() {
     assert_eq!(out, ["0|int(0)\n", "ciao|string(4) \"ciao\"\n"]);
 }
 
-/// The mixed-storage WARNING the `switch` shape produces, and its `--strict-locals` rejection.
+/// Switch first bindings keep their own strict origins, while a live null origin rejects both stores.
 #[test]
-fn test_marked_local_across_switch_arms_warns_and_is_strict_rejected() {
+fn test_marked_switch_bindings_warn_and_keep_strict_origins() {
     for initial in ["", "$a = null;"] {
         let source = format!("<?php {initial} switch ($argc) {{ case 1: $a = 0; break; default: $a = \"ciao\"; }} echo $a;");
         let warnings = check_files_diagnostics(&[("main.php", &source)], "main.php", false)
             .expect("the switch fixture must type-check");
         assert_eq!(warnings, vec![
-            "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)".to_string(),
+            "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to enforce binding contracts)".to_string(),
         ]);
-        let error = check_files_diagnostics(&[("main.php", &source)], "main.php", true)
-            .expect_err("--strict-locals must reject the marked switch local");
-        assert!(error.contains("cannot reassign $a"), "expected the strict rejection, got: {error}");
+        let strict = check_files_diagnostics(&[("main.php", &source)], "main.php", true);
+        if initial.is_empty() {
+            assert!(strict.expect("exclusive first bindings are valid").is_empty());
+        } else {
+            assert!(strict.expect_err("a live null origin cannot become int/string").contains("cannot reassign $a"));
+        }
     }
     let guarded = "<?php function guarded(mixed $value, int $key): void { switch ($key) { case 1: if (!is_int($value)) { return; } break; default: if (!is_string($value)) { return; } } } guarded($argc, $argc);";
     assert!(check_files_diagnostics(&[("main.php", guarded)], "main.php", true)
@@ -2275,7 +2278,7 @@ fn test_marked_local_stored_in_a_fallthrough_switch_default() {
     assert_eq!(
         warnings,
         vec![
-            "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)".to_string(),
+            "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to enforce binding contracts)".to_string(),
         ],
     );
 
@@ -2484,19 +2487,15 @@ fn test_marked_local_piped_into_a_known_by_value_target() {
     const PIPED: &str =
         "<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a |> strval(...);";
     const PLAIN: &str = "<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo strval($a);";
-    const WARNING: &str = "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)";
+    const WARNING: &str = "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to enforce binding contracts)";
 
     for source in [PIPED, PLAIN] {
         let warnings = check_files_diagnostics(&[("main.php", source)], "main.php", false)
             .expect("the piped fixture must type-check");
         assert_eq!(warnings, vec![WARNING.to_string()], "source: {source}");
 
-        let error = check_files_diagnostics(&[("main.php", source)], "main.php", true)
-            .expect_err("--strict-locals must reject the marked local either way");
-        assert!(
-            error.contains("cannot reassign $a"),
-            "expected the strict rejection for {source}, got: {error}"
-        );
+        assert!(check_files_diagnostics(&[("main.php", source)], "main.php", true)
+            .expect("first-path contracts also permit by-value consumers").is_empty());
 
         let runs = compile_and_run_with_heap_debug_per_argv(source, &[&[], &["x"]]);
         for (out, expected) in runs.iter().zip(["ciao", "0"]) {

@@ -71,6 +71,28 @@ pub(crate) struct LocalCopyContract {
 pub struct LocalStoreContracts {
     stores: HashMap<(String, Span, String), LocalStoreContract>,
     pub(crate) copies: HashMap<(String, Span, String), LocalCopyContract>,
+    pub(crate) origins: HashMap<(String, Span, String), PhpType>,
+    origin_bindings: HashSet<(String, String)>,
+    origin_scopes: HashSet<String>,
+}
+
+impl LocalStoreContracts {
+    /// Records immutable source metadata and indexes its body/name without scanning other stores.
+    pub(crate) fn record_origin(&mut self, key: (String, Span, String), contract: PhpType) {
+        self.origin_bindings.insert((key.0.clone(), key.2.clone()));
+        self.origin_scopes.insert(key.0.clone());
+        self.origins.insert(key, contract);
+    }
+
+    /// Tests a binding's runtime-origin transport independently from its current source span.
+    pub(crate) fn has_runtime_origin(&self, scope: &str, name: &str) -> bool {
+        self.origin_bindings.contains(&(scope.to_string(), name.to_string()))
+    }
+
+    /// Includes lexical loop scopes belonging to the same native frame.
+    pub(crate) fn has_runtime_origins_in_scope(&self, scope: &str) -> bool {
+        self.origin_scopes.iter().any(|candidate| crate::types::loop_storage_scope_is_within(candidate, scope))
+    }
 }
 
 impl std::ops::Deref for LocalStoreContracts {
@@ -314,6 +336,7 @@ impl CheckResult {
             .chain(self.local_ref_detach_sites.keys())
             .chain(self.local_retype_sites.keys())
             .chain(self.mixed_storage_store_sites.keys())
+            .chain(self.local_store_contracts.origins.keys().map(|(_, span, _)| span))
             .chain(
                 self.boxed_reference_promotion_sites
                     .keys()
@@ -337,6 +360,7 @@ impl CheckResult {
         self.mixed_storage_store_sites
             .values()
             .flatten()
+            .chain(self.local_store_contracts.origins.keys().map(|(_, _, name)| name))
             .cloned()
             .collect()
     }

@@ -818,7 +818,9 @@ compile error:
   never run. The name must also be never reference-aliased. A later read of a
   killed `$a` is an `Undefined variable: $a` error, and a later assignment
   binds `$a` fresh, at any type, with no warning. This is
-  **mode-independent** — it behaves identically under `--strict-locals`.
+  **mode-independent** for these straight-line bindings. Strict ordinary conditional
+  locals additionally track binding presence: an executed `unset` ends their logical
+  contract without requiring this physical slot-retirement optimization.
 - **Straight-line retype.** A plain statement-form reassignment at the same
   eligibility (`$a = 0; $a = "ciao";`, and a compound form that parses as a
   plain assignment, such as `$x = 1; $x .= "a";`) re-binds the name to a fresh
@@ -839,7 +841,7 @@ compile error:
   heterogeneous loop-carried local — compiles instead of failing, as
   whole-frame boxed `Mixed` storage for that local, with a warning:
   ```text
-  $a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)
+  $a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to enforce binding contracts)
   ```
   The warning is a performance signal as much as a correctness one: every read
   of a `Mixed`-storage local goes through boxed dispatch instead of a plain
@@ -949,11 +951,20 @@ Beyond those shared exclusions the shapes are gated differently:
   already absorbs every assignment, since the advice to compile with
   `--strict-locals` would be false there.
 
-`--strict-locals` restores the hard error for the two warning shapes above:
+`--strict-locals` rejects a known incompatible write to a live binding:
 
 ```text
-Type error: cannot reassign $a from int to string
+--strict-locals: cannot reassign $a from int to string
 ```
+
+Fresh ordinary frame locals can start with different contracts on exclusive paths.
+The first producer on the executed path fixes the binding's contract. After a join,
+a dynamic write checks that actual contract before changing the value and throws
+`TypeError` if it fails. An executed `unset` ends that binding, including inside a
+branch or loop; a later assignment creates a fresh contract. Independent copies
+retain the source contract after the original name is unset. An explicitly mixed
+producer remains open. These source facts also survive constant propagation and
+other optimizations; boxed storage alone never makes a binding open.
 
 Numeric bindings also retain their original PHP kinds. `$count = $argc;
 $count = 1.5;` is rejected with `--strict-locals`. A dynamic assignment is checked

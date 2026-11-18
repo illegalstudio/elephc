@@ -1345,6 +1345,10 @@ pub enum Op {
     EvalScopeSet,
     /// Publishes a checked native binding type independently from its snapshot storage shape.
     EvalScopeBindLocalType,
+    /// Records the first executed native producer without changing an existing binding's contract.
+    EvalScopeStartBinding,
+    /// Ends an inferred scope origin before another native binding reuses the same name.
+    EvalScopeEndBinding,
     /// Copies immutable producer metadata while retaining independent value/reference ownership.
     EvalScopeCopyBindingType,
     EvalFunctionCall,
@@ -1748,8 +1752,9 @@ impl Op {
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
             GetNativeBindingState | GetEvalBindingState => E::READS_LOCAL,
-            EvalScopeBindLocalType => E::READS_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
+            EvalScopeBindLocalType | EvalScopeStartBinding => E::READS_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
             EvalScopeCopyBindingType => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
+            EvalScopeEndBinding => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
             EvalScopeGet => E::READS_HEAP | E::MAY_FATAL,
             EvalScopeSet => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
             EvalConstantFetch => {
@@ -2108,6 +2113,8 @@ impl Op {
             LanguageConstructCall => "language_construct_call",
             EvalLiteralCall => "eval_literal_call",
             EvalScopeBindLocalType => "eval_scope_bind_local_type",
+            EvalScopeStartBinding => "eval_scope_start_binding",
+            EvalScopeEndBinding => "eval_scope_end_binding",
             EvalScopeCopyBindingType => "eval_scope_copy_binding_type",
             EvalScopeGet => "eval_scope_get",
             EvalScopeSet => "eval_scope_set",

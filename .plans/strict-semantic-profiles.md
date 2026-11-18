@@ -1825,3 +1825,38 @@ An extra CLI control found an existing checker refusal for by-reference closure
 capture immediately after unset (Undefined variable in use()). Reinitializing the
 local first succeeds. That refusal is not claimed as fixed by this promotion repair;
 include it when checking initialization and binding-creation exceptions.
+
+### Verified180: first-path native local binding origins
+
+Ordinary inferred frame locals now preserve the producer that actually creates the
+binding, including exclusive branches, optional births, numeric/null alternatives,
+independent copies and legitimate unset/rebirth. The checker reuses its conditional
+flow snapshots to merge possible source contracts for diagnostics. Known impossible
+writes still fail statically; uncertain writes use the existing authenticated
+reference coordinator. Mixed physical storage does not create an open contract.
+Indexed per-scope/name origin metadata avoids repeated whole-program scans.
+
+One local_binding_origins helper owns first-producer registration, independent copy
+metadata and origin retirement. Typed EIR start/end operations share the existing
+native/interpreter scope coordinators. Their runtime adapter respects both scope
+layouts. Physical reset after unset cannot recreate source presence, and reference
+storage detaches before a throwing displaced-object destructor can interrupt cleanup.
+The observed failures and fixes are recorded in facts87ea6880 and5dd9b3bb.
+
+All thirty-three focused gates pass, including native PHP/LFC alternatives with both
+optimizer settings, core/interpreter scope layouts, throwing-destructor ownership,
+all-five-target emission and complete runtime assembly, staged walker/dispatcher and
+primitive VM execution, thirteen directly affected native controls, two error controls,
+four EIR controls, the default serial build, assembly comments and diff hygiene.
+Public CLI cases verify independent flags, explicit overrides in either order,
+PHP-only policy, the admitted umbrella subset, source refusal within functions and
+new binding contracts after repeated unset. All successful native cases have clean
+heaps. The example and CLI reference describe the actual first-path contract.
+
+The complete CLI probe additionally exposed a pre-existing early source transformation:
+autoload rule collection flattens every constant top-level If before the checker.
+Thus top-level dead-branch refusal is not included in the accepted source-refusal gate;
+function-local source checks are covered. Correct that source preservation next,
+without weakening or duplicating the semantic checker. Eval-containing bodies,
+pre-bound/exposed storage and stronger Locals joins still require their own audit.
+Nullability, Mixed, Initialization, ArrayTypes and Indexing remain unadmitted.

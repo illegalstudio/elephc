@@ -138,7 +138,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     } else {
         php_type
     };
-    crate::ir_lower::local_copy_origins::prepare(ctx, name, span);
+    crate::ir_lower::local_binding_origins::prepare(ctx, name, span);
     ctx.store_local(name, lowered, php_type, Some(span));
     if carries_reference_markers {
         ctx.mark_reference_marker_array_local(name);

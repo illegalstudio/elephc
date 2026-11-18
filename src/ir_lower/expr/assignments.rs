@@ -221,7 +221,7 @@ fn lower_ordinary_assignment_expr(
         let (lowered, php_type) =
             crate::ir_lower::stmt::retype_value_for_pointer_local(ctx, name, lowered, expr.span)
                 .unwrap_or((lowered, php_type));
-        crate::ir_lower::local_copy_origins::prepare(ctx, name, expr.span);
+        crate::ir_lower::local_binding_origins::prepare(ctx, name, expr.span);
         ctx.store_local(name, lowered, php_type, Some(expr.span));
         result = ctx.load_local(name, Some(expr.span));
         let static_callable = callable_array

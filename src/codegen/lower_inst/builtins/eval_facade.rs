@@ -362,3 +362,10 @@ pub(in crate::codegen::lower_inst) fn emit_borrowed_eval_object_is_a(
     eval::emit_object_relation_target(ctx, target, false);
     Ok(())
 }
+
+/// Retires the old scope origin through the shared protected scope-unset ABI.
+pub(in crate::codegen::lower_inst) fn lower_eval_scope_end_binding(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_scope_end_binding(ctx, inst)
+}

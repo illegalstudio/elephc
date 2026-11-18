@@ -16,12 +16,18 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
 mod reference_assignment;
+mod end_binding;
 mod origin_bindings;
 mod owner_visitor;
 
 /// Shares checked origin publication and retirement with native and Magician scope implementations.
 pub(crate) fn emit_scope_origin_bindings(emitter: &mut Emitter, enabled: bool) {
     origin_bindings::emit(emitter, enabled);
+}
+
+/// Retires source metadata through the scope representation selected for this runtime object.
+pub(crate) fn emit_scope_end_binding(emitter: &mut Emitter, interpreter_scope: bool) {
+    end_binding::emit(emitter, interpreter_scope);
 }
 
 const EVAL_STATUS_OK: i64 = 0;

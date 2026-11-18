@@ -480,6 +480,9 @@ impl Checker {
                             // assignment must establish fresh cell provenance for the new binding.
                             let static_binding = self.local_has_canonical_static_binding(var);
                             let detaches_reference = self.local_reference_is_detachable(var);
+                            if self.runtime_local_binding_origin(var) {
+                                self.inferred_local_contracts.remove(var);
+                            }
                             self.definitely_bound_locals.remove(var);
                             self.invalidate_boxed_ref_alias_binding(var);
                             // Detaching a promoted reference is separate from killing its type

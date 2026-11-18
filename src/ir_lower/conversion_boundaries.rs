@@ -125,6 +125,11 @@ fn membership_at_source(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
 /// Validates a later write using its checked declaration rather than a narrowed local read view.
 pub(super) fn local_store(ctx: &mut LoweringContext<'_, '_>, name: &str, value: LoweredValue,
     span: Span) -> Option<(LoweredValue, PhpType)> {
+    if ctx.local_store_contracts.origins.contains_key(
+        &(ctx.loop_storage_scope.clone(), span, name.to_string())) {
+        ctx.prepare_eval_native_binding_store(name, span);
+        return Some((value, PhpType::Mixed));
+    }
     let contract = ctx.local_store_contracts.get(
         &(ctx.loop_storage_scope.clone(), span, name.to_string())).cloned();
     if ctx.source_mode != crate::source::SourceMode::Internal

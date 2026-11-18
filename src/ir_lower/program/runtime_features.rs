@@ -201,7 +201,7 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                         features.eval_bridge = true;
                     }
                 }
-                Op::EvalScopeGet | Op::EvalScopeSet | Op::EvalScopeBindLocalType => {
+                Op::EvalScopeGet | Op::EvalScopeSet | Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding | Op::EvalScopeEndBinding => {
                     features.eval_scope = true;
                 }
                 Op::EvalFunctionCall

@@ -164,3 +164,25 @@ function checkQuantityStream(mixed $replacement): void {
     fclose($owner);
 }
 checkQuantityStream(1);
+
+// Exclusive first bindings keep the contract of the path that actually ran.
+function replaceSelectedValue(bool $numeric, mixed $replacement): void {
+    if ($numeric) { $value = 1; } else { $value = 'pending'; }
+    try {
+        $value = $replacement;
+    } catch (TypeError $error) {
+        echo "The selected binding kept its original kind", PHP_EOL;
+    }
+    echo "Selected value: ", $value, PHP_EOL;
+}
+replaceSelectedValue(true, 2.5);
+replaceSelectedValue(false, 'ready');
+
+// A conditional unset permits a new producer on the path that ends the old binding.
+function resetSelectedValue(bool $reset): void {
+    $value = 1;
+    if ($reset) { unset($value); $value = 'reset'; }
+    echo "Current value: ", $value, PHP_EOL;
+}
+resetSelectedValue(true);
+resetSelectedValue(false);

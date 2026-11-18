@@ -3454,6 +3454,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         null: LoweredValue,
         span: Option<Span>,
     ) -> LoweredValue {
+        let previous = self.binding_state_suppressed;
+        let ends_origin = self.local_store_contracts.has_runtime_origin(&self.loop_storage_scope, name);
+        super::local_binding_origins::end(self, name, span);
+        self.binding_state_suppressed = previous || ends_origin;
+        let result = self.unset_local_storage(name, null, span);
+        self.binding_state_suppressed = previous;
+        result
+    }
+
+    /// Clears physical storage without inventing a successful source-level binding event.
+    fn unset_local_storage(&mut self, name: &str, null: LoweredValue, span: Option<Span>) -> LoweredValue {
         let abandons_binding = span.is_some_and(|span| {
             span.identifies_a_node()
                 && self
@@ -3486,7 +3497,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_fiber_start_sig(name);
         let slot = self.declare_local(name, PhpType::Void);
         // A conditional capture may leave the current path owning the unpromoted raw value.
-        // Keep that destructor boundary explicit before either reference ownership or state ends.
+        // Retire that raw owner while its representation still identifies the stored value.
         self.emit_void(
             Op::ReleaseRawLocalSlot,
             Vec::new(),
@@ -3494,7 +3505,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::ReleaseRawLocalSlot.default_effects(),
             span,
         );
-        self.release_ref_cell_owner(name, span);
         self.emit_void(
             Op::UnsetLocal,
             Vec::new(),
@@ -3502,6 +3512,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::UnsetLocal.default_effects(),
             span,
         );
+        // A throwing destructor must leave neither a stale pointer nor an attached-cell flag.
+        self.release_ref_cell_owner(name, span);
         self.unmark_ref_bound_local(name);
         self.clear_reference_marker_array_local(name);
         if detaches_reference {
@@ -3915,7 +3927,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Selects owned boxed eval bindings without changing borrowed or raw typed-reference ABIs.
     pub(super) fn supports_eval_native_binding_store(&self, name: &str) -> bool {
-        self.builder.function().flags.tracks_local_binding_state && self.eval_barrier_active
+        self.builder.function().flags.tracks_local_binding_state
+            && (self.eval_barrier_active || self.local_store_contracts.has_runtime_origin(&self.loop_storage_scope, name))
             && !crate::names::is_generated_local_name(name) && self.local_can_own_reference_cell(name)
             && eval_barrier_can_widen(&self.local_type(name))
             && (!self.is_ref_bound_local(name) || self.ref_cell_owner_slot(name).is_some_and(|owner|

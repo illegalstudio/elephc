@@ -2674,10 +2674,10 @@ fn test_branch_divergent_assignment_warns() {
     expect_warning("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;", "boxed mixed storage");
 }
 
-/// --strict-locals disables the pre-scan: the divergent assignment errors as today.
+/// Distinct first bindings on exclusive paths retain their own strict source contracts.
 #[test]
-fn test_branch_divergent_assignment_errors_under_strict() {
-    expect_error_strict("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;", "cannot reassign");
+fn test_branch_divergent_first_bindings_are_accepted_under_strict() {
+    expect_no_error_strict("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;");
 }
 
 /// Single-branch retype of an outer binding is also handled by marking.

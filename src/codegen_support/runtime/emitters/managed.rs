@@ -254,6 +254,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     }
     if features.eval_bridge || features.eval_scope {
         eval_scope::emit_scope_origin_bindings(emitter, features.native_reference_validation);
+        eval_scope::emit_scope_end_binding(emitter, features.eval_bridge);
     }
     if features.eval_bridge {
         eval_bridge::emit_eval_bridge_runtime(emitter, features);

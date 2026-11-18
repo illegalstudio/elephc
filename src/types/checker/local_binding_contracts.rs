@@ -13,6 +13,16 @@ use crate::{errors::CompileError, span::Span, types::{LocalStoreContract, PhpTyp
 use elephc_semantics::{conversions::ConversionPlan, StrictFeature};
 
 impl Checker {
+    /// Selects boxed frame bindings whose first producer can differ across source paths.
+    pub(crate) fn runtime_local_binding_origin(&self, name: &str) -> bool {
+        self.semantic_profile.contains(StrictFeature::Locals)
+            && !self.body_contains_eval && !self.typed_local_names.contains_key(name)
+            && !self.local_parameter_names.contains(name)
+            && !self.by_ref_captured_locals.contains(name)
+            && !self.active_globals.contains(name) && !self.static_local_names.contains(name)
+            && (self.mixed_storage_locals.contains(name) || self.local_store_contracts.has_runtime_origin(&self.current_loop_storage_scope, name))
+    }
+
     /// Captures initialized binding origins before an opaque eval can widen their views.
     pub(crate) fn record_eval_binding_contracts(&mut self, env: &TypeEnv, span: Span) {
         for (name, actual) in env {
@@ -38,6 +48,7 @@ impl Checker {
 
     /// Resolves an original producer contract before flow narrowing or destination rebinding.
     pub(crate) fn local_binding_origin(&self, name: &str, actual: &PhpType) -> PhpType {
+        if self.runtime_local_binding_origin(name) { return PhpType::Mixed; }
         self.typed_local_names.get(name)
             .or_else(|| self.inferred_local_contracts.get(name))
             .or_else(|| self.narrowed_local_origins.get(name).map(|origin| &origin.origin))
@@ -71,6 +82,40 @@ impl Checker {
             || !self.semantic_profile.contains(StrictFeature::Locals) { return Ok(incoming.clone()); }
         let key = (self.current_loop_storage_scope.clone(), span, name.to_string());
         self.local_store_contracts.copies.remove(&key);
+        let copy = source.and_then(copy_producer_local);
+        if self.runtime_local_binding_origin(name)
+            || (!env.contains_key(name)
+                && copy.is_some_and(|source| self.runtime_local_binding_origin(source))) {
+            if matches!(incoming.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_)) {
+                return Err(CompileError::new(span,
+                    "--strict-locals: conditional native storage requires an explicit local type"));
+            }
+            let producer = source.and_then(|source| self.copied_binding_origin(source, env))
+                .unwrap_or_else(|| incoming.clone());
+            let contract = crate::semantics::conversions::inferred_binding_contract(&producer)
+                .unwrap_or(PhpType::Mixed);
+            if let Some(source) = copy {
+                self.local_store_contracts.copies.insert(key.clone(), crate::types::LocalCopyContract {
+                    source: source.into(), contract: contract.clone(),
+                });
+            }
+            self.local_store_contracts.remove(&key);
+            self.local_store_contracts.record_origin(key, contract);
+            if self.definitely_bound_locals.contains(name) {
+                if let Some(expected) = self.inferred_local_contracts.get(name) {
+                    if matches!(crate::semantics::conversions::membership(self.semantic_profile,
+                        self.semantic_source_mode, StrictFeature::Locals, expected, incoming),
+                        ConversionPlan::Reject(_)) {
+                        return Err(CompileError::new(span, &format!(
+                            "--strict-locals: cannot reassign ${name} from {expected} to {incoming}")));
+                    }
+                }
+            } else {
+                self.inferred_local_contracts.insert(name.into(),
+                    crate::semantics::conversions::inferred_binding_contract(incoming).unwrap_or(PhpType::Mixed));
+            }
+            return Ok(incoming.clone());
+        }
         if self.eval_barrier_active {
             if let Some(source) = source.and_then(copy_producer_local) {
                 let ty = self.typed_local_names.get(source).or_else(|| self.inferred_local_contracts.get(source))

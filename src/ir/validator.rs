@@ -136,7 +136,7 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
                 }
             }
             let mut required = inst.arithmetic_policy().requirements().bits();
-            if matches!(inst.op, Op::BindLocalRefContract | Op::SetLocalBindingState | Op::GetNativeBindingState | Op::GetEvalBindingState | Op::EvalScopeBindLocalType | Op::EvalScopeCopyBindingType) || matches!(&inst.immediate,
+            if matches!(inst.op, Op::BindLocalRefContract | Op::SetLocalBindingState | Op::GetNativeBindingState | Op::GetEvalBindingState | Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding | Op::EvalScopeEndBinding | Op::EvalScopeCopyBindingType) || matches!(&inst.immediate,
                 Some(Immediate::EvalScopeStore(metadata)) if metadata.contract.is_some()) {
                 required |= elephc_semantics::StrictFeature::Locals.bit();
             }
@@ -823,11 +823,14 @@ fn validate_instruction_immediate(
         PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
-        EvalScopeGet => require_immediate(inst_id, inst, "global name", |imm| {
+        EvalScopeGet | EvalScopeEndBinding => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
         }),
         EvalScopeBindLocalType => require_immediate(inst_id, inst, "checked scope binding type", |imm| {
             matches!(imm, Imm::EvalScopeStore(metadata) if metadata.contract.is_some())
+        }),
+        EvalScopeStartBinding => require_immediate(inst_id, inst, "first native binding producer", |imm| {
+            matches!(imm, Imm::EvalScopeStore(_))
         }),
         EvalScopeCopyBindingType => require_immediate(inst_id, inst, "independent scope binding copy", |imm| {
             matches!(imm, Imm::EvalBindingCopy { .. })
@@ -1019,7 +1022,7 @@ fn validate_opcode_rules(
             }
             Ok(())
         },
-        EvalScopeBindLocalType => {
+        EvalScopeBindLocalType | EvalScopeStartBinding | EvalScopeEndBinding => {
             check_count(inst_id, inst, 0, "0")?;
             if !function.locals.iter().any(|local| local.kind == LocalKind::EvalScope) {
                 return Err(ValidationError::InvalidLocalReferenceContract(inst_id));

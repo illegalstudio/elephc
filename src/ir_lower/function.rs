@@ -77,6 +77,8 @@ pub(crate) fn lower_main(
     let web = module.web;
     let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
     function.flags.is_main = true;
+    function.flags.tracks_local_binding_state = check_result.semantic_profile.contains(
+        elephc_semantics::StrictFeature::Locals);
     let all_global_var_names = collect_global_var_names(program);
     let mut function_global_names =
         crate::ir_lower::program::collect_function_global_names(program);
@@ -1930,7 +1932,8 @@ fn lower_body_into_function(
     });
     function.flags.tracks_local_binding_state = semantic_profile.contains(
         elephc_semantics::StrictFeature::Locals) && !function.flags.is_internal
-        && crate::ir_lower::body_contains_eval_call(body);
+        && (crate::ir_lower::body_contains_eval_call(body)
+            || local_store_contracts.has_runtime_origins_in_scope(&loop_storage_scope));
     let mut builder = Builder::new(function);
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);

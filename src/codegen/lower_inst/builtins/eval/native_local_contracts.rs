@@ -17,8 +17,11 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_bind_local_type
     let Some(Immediate::EvalScopeStore(metadata)) = &inst.immediate else {
         return Err(CodegenIrError::invalid_module("eval binding type requires checked metadata"));
     };
-    let contract = metadata.contract.as_ref().and_then(|ty| eval_native_php_type_spec(ty, false))
-        .ok_or_else(|| CodegenIrError::invalid_module("eval binding type has no native contract spelling"))?;
+    let contract = match &metadata.contract {
+        Some(ty) => eval_native_php_type_spec(ty, false)
+            .ok_or_else(|| CodegenIrError::invalid_module("eval binding type has no native contract spelling"))?,
+        None => "mixed".to_string(),
+    };
     let name = super::scope_access::eval_scope_instruction_name(ctx, inst)?;
     let (name, name_len) = ctx.data.add_string(name.as_bytes());
     let (ty, ty_len) = ctx.data.add_string(contract.as_bytes());
@@ -32,6 +35,21 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_bind_local_type
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_binding_type_v1");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
+    if inst.op == Op::EvalScopeStartBinding {
+        let descriptor = metadata.contract.as_ref().and_then(
+            crate::semantics::conversions::inferred_binding_contract).map(|contract|
+                crate::codegen::runtime_metadata::local_reference_descriptor(ctx.module, &contract))
+            .transpose()?;
+        load_eval_scope_to_arg(ctx, 0);
+        abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &name);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), name_len as i64);
+        let argument = abi::int_arg_reg_name(ctx.emitter.target, 3);
+        if let Some(descriptor) = descriptor {
+            abi::emit_symbol_address(ctx.emitter, argument, &descriptor);
+        } else { abi::emit_load_int_immediate(ctx.emitter, argument, 0); }
+        let symbol = ctx.emitter.target.extern_symbol("__elephc_reference_scope_binding_v1");
+        abi::emit_call_label(ctx.emitter, &symbol);
+    }
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     Ok(())
 }
@@ -109,4 +127,21 @@ mod tests {
             }
         }
     }
+}
+
+/// Ends one private binding while containing destructor exceptions until Rust has returned.
+pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_end_binding(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    let name = super::scope_access::eval_scope_instruction_name(ctx, inst)?;
+    let (name, length) = ctx.data.add_string(name.as_bytes());
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_scope(ctx)?;
+    load_eval_scope_to_arg(ctx, 0);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &name);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), length as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_eval_scope_end_binding");
+    emit_eval_status_check(ctx);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    Ok(())
 }

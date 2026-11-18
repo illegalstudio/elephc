@@ -61,12 +61,14 @@ pub(super) fn prepare_argument_binding(ctx: &mut super::context::LoweringContext
 pub(super) fn lower_requested(module: &mut Module) -> Result<(), super::LoweringError> {
     let mut contracts: Vec<PhpType> = Vec::new();
     let mut has_binding_copy = false;
+    let mut has_binding_origin = false;
     for function in module.functions.iter().chain(&module.class_methods).chain(&module.closures)
         .chain(&module.fiber_wrappers).chain(&module.callback_wrappers)
         .chain(&module.runtime_callable_invokers).chain(&module.extern_callback_trampolines)
     {
         for instruction in &function.instructions {
             has_binding_copy |= instruction.op == Op::EvalScopeCopyBindingType;
+            has_binding_origin |= matches!(instruction.op, Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding);
             let contract = match &instruction.immediate {
                 Some(Immediate::EvalScopeStore(metadata)) => metadata.contract.as_ref(),
                 _ if instruction.op == Op::BindLocalRefContract => Some(&instruction.result_php_type),
@@ -81,7 +83,7 @@ pub(super) fn lower_requested(module: &mut Module) -> Result<(), super::Lowering
         }
     }
     contracts.sort_by_key(ToString::to_string);
-    if contracts.is_empty() && !has_binding_copy { return Ok(()); }
+    if contracts.is_empty() && !has_binding_copy && !has_binding_origin { return Ok(()); }
     super::reference_property_validators::enable_native_reference_validation(module)?;
     for (index, contract) in contracts.into_iter().enumerate() {
         let message = module.data.intern_string(&format!(

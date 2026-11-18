@@ -17,8 +17,8 @@
 //!   every one of the checker's repeated walks over the same body (top level twice, method bodies
 //!   to stability, function bodies once per call-site specialization).
 //! - Guard visibility follows each statement's physical source mode, not the caller's mode.
-//! - Disabled under `--strict-locals`: the scan returns without marking anything and a divergent
-//!   assignment errors exactly as it does today.
+//! - Strict locals use boxed storage for fresh conditional bindings and check their live origin.
+//!   A definitely incompatible write still fails during checking; uncertain origins use guards.
 //! - The same walk also answers a question that has nothing to do with marking: does this body
 //!   call `eval()` at all? It is recorded in `Checker::body_contains_eval` and consulted by
 //!   `Checker::local_binding_is_killable`. The walk is the natural place for it because it is
@@ -132,8 +132,8 @@ impl Checker {
     ///
     /// Fills `mixed_storage_locals` for this body (consumed by `merge_local_assignment_type`),
     /// records every marked name's assignment spans in `mixed_storage_store_sites` (consumed by
-    /// EIR lowering), and files ONE warning per marked name. Under `--strict-locals` nothing is
-    /// marked and nothing is recorded.
+    /// EIR lowering), and files one warning per permissive-mode conflict. Strict source locals
+    /// use the same physical scan with an independently enforced runtime producer contract.
     ///
     /// `pre_bound_own_storage` maps each name the body's OWN frame already holds on entry to the
     /// type it arrives with: a closure's by-VALUE captures, and this body's parameters. It is NOT
@@ -217,9 +217,7 @@ impl Checker {
             }
         }
 
-        if self.strict_locals {
-            return;
-        }
+        if self.strict_locals && facts.contains_eval { return; }
 
         // Collected before pushing so the warnings come out in source order regardless of the
         // name ordering the evidence map imposes. The flag is "say it out loud".
@@ -231,6 +229,7 @@ impl Checker {
                 continue;
             }
             let incoming = pre_bound_own_storage.get(name);
+            if self.strict_locals && incoming.is_some() { continue; }
             // A guard region holding the name's FIRST in-body assignment is transparent for a
             // PRE-BOUND name and not for a fresh one, so the vector depends on which this is.
             let transparent_regions = self.transparent_guard_regions(
@@ -267,15 +266,18 @@ impl Checker {
                     true,
                 ),
             };
-            let Some((existing, site)) = rejection else {
-                continue;
-            };
+            let rejection = rejection.or_else(|| (self.strict_locals
+                && name_facts.assigns.iter().any(|site| site.depth > 0)
+                && name_facts.assigns.iter().any(|site| site.ty == PhpType::Mixed
+                    || site.ty != name_facts.assigns[0].ty))
+                .then(|| (PhpType::Mixed, &name_facts.assigns[0])));
+            let Some((existing, site)) = rejection else { continue; };
             marks.push((
                 site.span,
                 name.clone(),
                 format!(
                     "${} is assigned incompatible types ({} and {}); it is compiled as boxed \
-                     mixed storage (compile with --strict-locals to make this an error)",
+                     mixed storage (compile with --strict-locals to enforce binding contracts)",
                     name, existing, site.ty
                 ),
                 warns,
@@ -296,7 +298,7 @@ impl Checker {
             // SILENTLY: the mark and the store sites are recorded exactly as for any other name,
             // but the warning — whose advice clause would claim a `--strict-locals` rejection that
             // will not happen — is withheld. See this method's own documentation.
-            if warns {
+            if warns && !self.strict_locals {
                 // Keyed by the DECISION, so a later walk that stops marking this name retracts the
                 // warning with the store sites. `span` is one of the name's own store-site spans
                 // (the first rejected assignment), which is what makes the retire loop above find
@@ -634,15 +636,16 @@ fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: 
     // `infer_expr_type_syntactic` answers `Int` for everything it does not recognise — a plain
     // `$a = $b`, a user function call, a property read — so trusting it here would mark locals in
     // programs that type-check perfectly well today, and a marked local's storage is boxed. Any
-    // inexact value therefore disqualifies the name outright, which keeps the marking confined to
-    // programs the checker rejects without it.
-    if !has_exact_syntactic_type(value) {
+    // inexact value therefore disqualifies the name in permissive mode. Strict source origins
+    // retain Mixed as unknown evidence and validate the actual producer before publication.
+    let exact = has_exact_syntactic_type(value);
+    if !exact && !facts.semantic_profile.contains(crate::semantics::StrictFeature::Locals) {
         entry.disqualified = true;
         return;
     }
     let site = entry.assigns.len();
     entry.assigns.push(AssignSite {
-        ty: infer_expr_type_syntactic(value, facts.semantic_profile),
+        ty: if exact { infer_expr_type_syntactic(value, facts.semantic_profile) } else { PhpType::Mixed },
         depth,
         span,
         guard_region,
@@ -1098,9 +1101,13 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
                 facts.contains_eval = true;
             }
             if is_unset_call(name.as_str()) {
-                // A name mentioned in ANY `unset` is left to the kill path (or to today's error).
+                // Native strict origins distinguish an ended local from its next binding.
+                // Other lvalue shapes keep their existing storage and ownership path.
                 for arg in args {
-                    disqualify_root(facts, arg);
+                    if !facts.semantic_profile.contains(crate::semantics::StrictFeature::Locals)
+                        || !matches!(arg.kind, ExprKind::Variable(_)) {
+                        disqualify_root(facts, arg);
+                    }
                 }
             } else if callee_binds_pointer_by_ref(checker, name) {
                 // `?ptr<T> &$p` gives a null local POINTER storage instead (see
