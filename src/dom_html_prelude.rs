@@ -489,18 +489,15 @@ mod tests {
                 "DOMComment",
                 "DOMProcessingInstruction",
                 "Dom\\XMLDocument",
-<<<<<<< HEAD
                 // package P3
                 "DOMNamedNodeMap",
                 "DOMCdataSection",
                 "DOMAttr",
                 "DOMDocumentFragment",
                 "DOMDocumentType",
-=======
                 // Part::Libxml (package P2)
                 "__ElephcDomState",
                 "LibXMLError",
->>>>>>> 0d2e7ac2fc (feat(dom): libxml state, LibXMLError, libxml_* functions and the missing LIBXML/XML/DOM constants with contract rows)
             ]
         );
     }
