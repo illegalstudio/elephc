@@ -445,3 +445,21 @@ run(42);
     );
     assert_eq!(out, "caught nul\ncaught uni\ncaught nobj\ncaught obj\nafter\n");
 }
+
+/// A named argument after a dynamic associative spread into a variadic signature lowers through
+/// the dynamic named-spread branch, which must record the class check of its `mixed` source too.
+#[test]
+fn test_named_mixed_argument_after_dynamic_spread_reaches_class_parameter_check() {
+    let out = compile_and_run(
+        r#"<?php
+class T {}
+function take(?T $t, mixed ...$rest): string { return $t === null ? "null" : get_class($t); }
+function getMixed(mixed $v): mixed { return $v; }
+function msg(TypeError $e): string { return explode(", called in", $e->getMessage())[0]; }
+$args = ['x' => 1];
+try { echo take(...$args, t: getMixed(42)), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+echo take(...$args, t: getMixed(new T())), "\n";
+"#,
+    );
+    assert_eq!(out, "take(): Argument #1 ($t) must be of type ?T, int given\nT\n");
+}
