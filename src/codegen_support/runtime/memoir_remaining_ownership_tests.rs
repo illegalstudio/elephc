@@ -5,6 +5,7 @@
 //! - Compiler assembly regression tests.
 //!
 //! Key details:
+//! - The fixture includes the typed-property reference emitter from main 8fd1043dbe.
 //! - Covers all supported targets and six output configurations.
 
 use super::{arrays, objects, reference_cells, strings};

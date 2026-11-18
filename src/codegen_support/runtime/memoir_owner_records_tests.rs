@@ -5,7 +5,7 @@
 //! - Focused compiler tests for owner-record extraction.
 //!
 //! Key details:
-//! - Fixed-data fingerprints follow main 23314d3e1f after comparison with its original emitter.
+//! - Includes the APM data slots and typed-property reference emitter from main 8fd1043dbe.
 //! - Captured before extraction at 2b9042bfa4ccc51d5c03bef28101641d7e3e5186.
 //! - Fingerprints include output bytes, fixed data and sorted internal-label bookkeeping.
 //! - Every supported target covers executable, PIC, library, extension and dead-strip modes.
