@@ -100,7 +100,7 @@ pub(crate) fn emit_callable_closure_copy(emitter: &mut Emitter) {
 
     // -- the Closure is no string, array or invokable object --
     emitter.instruction("ldr x2, [x0]");                                        // load the copied kind word
-    emitter.instruction(&format!("mov x4, #{origin}"));                        // the string and array origin flags
+    emitter.instruction(&format!("mov x4, #{origin}"));                         // the string and array origin flags
     emitter.instruction("bic x2, x2, x4");                                      // drop the recorded string or array origin
     emitter.instruction(&format!("and x3, x2, #{CALLABLE_DESC_KIND_MASK}"));    // x3 = descriptor kind
     emitter.instruction(&format!("cmp x3, #{CALLABLE_DESC_KIND_OBJECT_INVOKE}")); // does it stand for an invokable object?
