@@ -100,6 +100,32 @@ pub fn php_semantics_declarations(build: impl FnOnce() -> Program) -> Program {
     program
 }
 
+/// Builds prelude CLASSES that model a PHP surface, typed the way user code is.
+///
+/// The class counterpart of [`php_semantics_declarations`]: the checker resolves an `array`
+/// parameter by the span of the METHOD that declares it, so a built method (dummy span) kept the
+/// raw `array<mixed>` internal ABI while every caller handed it the boxed packed-or-hash `array`
+/// a user declaration has. `Dom\Document::getElementsByTagName` passed its boxed `$found` to the
+/// by-reference `array &$found` of `Dom\Element::collectByTagName` and the callee read the box as a
+/// raw array (a SIGSEGV, or `Value must be of type array, AllowDynamicProperties given`). Each
+/// class and each method gets its own synthetic span, which the checker treats as written source.
+pub fn php_semantics_class_declarations(build: impl FnOnce() -> Program) -> Program {
+    let mut program = internal_declarations(build);
+    for stmt in &mut program {
+        if !stmt.span.identifies_a_node() {
+            stmt.span = Span::synthetic();
+        }
+        if let StmtKind::ClassDecl { methods, .. } = &mut stmt.kind {
+            for method in methods {
+                if !method.span.identifies_a_node() {
+                    method.span = Span::synthetic();
+                }
+            }
+        }
+    }
+    program
+}
+
 // ---------------------------------------------------------------------------
 // Type helpers
 // ---------------------------------------------------------------------------

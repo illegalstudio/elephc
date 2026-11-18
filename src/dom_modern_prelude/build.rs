@@ -9519,7 +9519,7 @@ fn decl_class_dom_elephchtmlparser_m158() -> MethodBuilder {
 
 /// Builds the whole surface, one declaration per helper above.
 pub(crate) fn dom_declarations() -> Program {
-    internal_declarations(|| {
+    php_semantics_class_declarations(|| {
         vec![
             decl_class_dom_nodelist(),
             decl_class_dom_htmlcollection(),

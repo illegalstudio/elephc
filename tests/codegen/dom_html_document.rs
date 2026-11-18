@@ -176,3 +176,23 @@ echo $h->body->firstChild->firstChild->length, "\n";
     );
     assert_eq!(out, "P\n2\n");
 }
+
+/// `Document::getElementsByTagName` seeds `$found` with the root, then hands it to the by-reference
+/// `array &$found` of `Element::collectByTagName`. The built prelude methods used to keep the raw
+/// `array<mixed>` ABI for that parameter while the caller held the boxed `array`, so the callee
+/// read a box as an array (SIGSEGV, or "Value must be of type array, AllowDynamicProperties
+/// given"). Expected text is `php -n`'s.
+#[test]
+fn test_dom_document_get_elements_by_tag_name_seeds_by_reference_array() {
+    let out = compile_and_run(
+        r#"<?php
+$doc = Dom\HTMLDocument::createFromString('<!DOCTYPE html><html><body><p class="a">x</p><div><p>y</p></div></body></html>');
+echo $doc->documentElement->getElementsByTagName('p')->length, "\n";
+echo $doc->getElementsByTagName('p')->length, "\n";
+echo $doc->getElementsByTagName('html')->length, "\n";
+echo $doc->getElementsByTagName('*')->length, "\n";
+echo $doc->getElementsByTagName('nope')->length, "\n";
+"#,
+    );
+    assert_eq!(out, "2\n2\n1\n6\n0\n");
+}
