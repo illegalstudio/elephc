@@ -80,3 +80,11 @@ fn eval_binding_ends_eval_values_and_owners() {
         "1:string:after|Tinteger:1|Wstring:1|NULL:new|NULL:new|",
         "1:string:after|Wstring:after|Wstring:1|NULL:new|NULL:new|");
 }
+
+/// Owned incoming parameter bindings can end without changing escaped cells or caller values.
+#[test]
+fn eval_parameter_origins_eval_values_and_owners() {
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/eval_parameter_origins.php"),
+        "Tinteger:1|Tstring:1|1:new|Winteger|Tstring|integer|string|integer|string|new|1|",
+        "Wstring:bad|Winteger:1|1:new|Winteger|Winteger|integer|string|integer|string|new|1|");
+}

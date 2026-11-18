@@ -39,7 +39,8 @@ impl Checker {
         if !self.strict_locals { return; }
         for (name, incoming) in incoming {
             let Some(source) = facts.names.get(name).filter(|source|
-                source.conditional_unset && !source.disqualified) else { continue; };
+                (source.conditional_unset || (facts.contains_eval && source.has_unset))
+                    && !source.disqualified) else { continue; };
             if !self.local_parameter_names.contains(name) || self.active_ref_params.contains(name)
                 || self.name_is_seeded_program_storage(name)
                 || matches!(incoming.storage.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_)) {

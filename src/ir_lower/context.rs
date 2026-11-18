@@ -1493,7 +1493,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn privatize_recreatable_parameter(&mut self, name: &str, incoming: &PhpType) {
         let borrowed = self.load_local(name, None);
         let value = self.box_value_as_mixed(borrowed, PhpType::Mixed, None);
-        let shadow = self.builder.add_local(Some(format!("{name}#binding")), value_ir_type(&PhpType::Mixed),
+        let shadow = self.builder.add_local(Some(format!("{name}#cow")), value_ir_type(&PhpType::Mixed),
             PhpType::Mixed, LocalKind::PhpLocal);
         self.local_slots.insert(name.into(), shadow);
         self.local_kinds.insert(name.into(), LocalKind::PhpLocal);

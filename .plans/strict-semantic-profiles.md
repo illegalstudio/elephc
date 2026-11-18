@@ -2112,3 +2112,29 @@ and diff hygiene passed. Public PHP/LFC optimizer pairs and the complete updated
 heap diagnostics. The public permissive compiler still rejects the pre-existing captured
 int-to-string eval-body shape; permissive interpreter parity and previously accepted
 native fixtures remain controls. See step188-evidence.json for final acceptance.
+
+### Verified189: owned incoming bindings in eval-visible frames
+
+Recreatable by-value parameters now retain their declared/open entry origin even
+when the native body contains eval. Both conditional and unconditional plain unsets
+use the existing owning shadow rather than abandoning a slot that eval can address.
+Incoming ABI slots remain unchanged. Outgoing old captures retain their own cells,
+while new captures and eval-created values belong to the replacement binding.
+
+The native integration fixture exposed an actual shadow-selection bug: the new
+`#binding` suffix from187 was not understood by the authoritative eval inventory,
+which synchronized the incoming ABI slot under the PHP name. After eval recreated
+an array parameter as a string, the body still read the null sentinel in its shadow
+and crashed in `__rt_mixed_unbox_loop`. Symbolized debugger evidence identified
+`evalArrayParameter`; this was not resource exhaustion. Reusing the established
+`#cow` convention makes flush/reload, storage replay and PHP-name consumers select
+the same active slot. Diagnostic copying hooks were removed and saved executables
+and assembly files cleaned. No new assembler strings or runtime layout were added.
+
+All-five-target emission, native optimizer pairs, both interpreter entries/profiles,
+known-invalid store diagnostics, conditional-parameter/fresh-reference controls and
+the existing eval inventory test passed. The default compiler build passed. A real
+opaque-eval test proves native and eval source origins, old aliases, rejected stores
+and complete owner retirement with both optimizer modes. Public PHP/LFC optimizer
+pairs and the complete updated example passed with clean heap diagnostics. See the final
+step189-evidence.json for acceptance and gate timings.
