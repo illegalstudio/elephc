@@ -8,6 +8,7 @@
 //! Key details:
 //! - Declaration metadata must align with name resolution, inheritance flattening, and runtime/codegen expectations.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
@@ -715,7 +716,7 @@ fn push_enum_readonly_property(
     readonly_properties: &mut HashSet<String>,
     property_reference_slots: &mut Vec<bool>,
 ) {
-    let offset = 8 + properties.len() * 16;
+    let offset = object_declared_slot_offset(properties.len());
     let property = property.to_string();
     properties.push((property.clone(), php_type));
     property_offsets.insert(property.clone(), offset);

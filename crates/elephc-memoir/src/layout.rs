@@ -93,3 +93,9 @@ pub const POINTER_ARRAY_VALUE_TYPE: i64 = 13;
 pub const ARRAY_KIND: crate::HeapKind = crate::HeapKind::new(ARRAY_HEAP_KIND);
 /// Typed boxed-cell storage kind used by memory eligibility probes.
 pub const MIXED_KIND: crate::HeapKind = crate::HeapKind::new(MIXED_HEAP_KIND);
+
+/// Returns the byte offset of a declared slot following the class id.
+/// At the declared slot count this is also the end of the fixed object payload.
+pub const fn object_declared_slot_offset(index: usize) -> usize {
+    8 + index * 16
+}

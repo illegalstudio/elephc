@@ -13,6 +13,7 @@
 //! - Target and repetition metadata are passed by the Rust eval bridge and
 //!   stored in the same private layout used by generated reflection objects.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -199,16 +200,14 @@ fn emit_alloc_reflection_attribute_object_aarch64(
     emitter: &mut Emitter,
     layout: &ReflectionAttributeLayout,
 ) {
-    let payload_size = 8 + layout.property_count * 16;
+    let payload_size = object_declared_slot_offset(layout.property_count);
     emitter.instruction(&format!("mov x0, #{}", payload_size));                 // request ReflectionAttribute object payload storage
     elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction(&format!("mov x10, #{}", layout.class_id));             // materialize the ReflectionAttribute class id
     emitter.instruction("str x10, [x0]");                                       // store the class id at object payload offset zero
-    for index in 0..layout.property_count {
-        let offset = 8 + index * 16;
-        abi::emit_store_zero_to_address(emitter, "x0", offset);
-        abi::emit_store_zero_to_address(emitter, "x0", offset + 8);
-    }
+    elephc_memoir::values::object_storage::emit_zero_declared_slots(
+        emitter, "x0", layout.property_count,
+    );
 }
 
 /// Allocates a zero-initialized x86_64 `ReflectionAttribute` object payload.
@@ -216,16 +215,14 @@ fn emit_alloc_reflection_attribute_object_x86_64(
     emitter: &mut Emitter,
     layout: &ReflectionAttributeLayout,
 ) {
-    let payload_size = 8 + layout.property_count * 16;
+    let payload_size = object_declared_slot_offset(layout.property_count);
     emitter.instruction(&format!("mov rax, {}", payload_size));                 // request ReflectionAttribute object payload storage
     elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction(&format!("mov r10, {}", layout.class_id));              // materialize the ReflectionAttribute class id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at object payload offset zero
-    for index in 0..layout.property_count {
-        let offset = 8 + index * 16;
-        abi::emit_store_zero_to_address(emitter, "rax", offset);
-        abi::emit_store_zero_to_address(emitter, "rax", offset + 8);
-    }
+    elephc_memoir::values::object_storage::emit_zero_declared_slots(
+        emitter, "rax", layout.property_count,
+    );
 }
 
 /// Stores the incoming ARM64 attribute name into the private slot and public mirror.

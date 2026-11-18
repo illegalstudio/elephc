@@ -17,6 +17,7 @@
 //! - v1 caps the compressed input at the 64 KiB `_stream_filter_buf` scratch
 //!   and sizes the inflate output at 256x the input (min 64 KiB).
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 
@@ -68,9 +69,7 @@ where
     emitter.instruction("csel x9, x9, x10, gt");                                // pick the larger buffer size
     emitter.instruction("str x9, [sp, #152]");                                  // save the output buffer capacity
     emitter.instruction("mov x0, x9");                                          // buffer size into the allocator argument
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the decompressed-data buffer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #128]");                                  // save the decompressed buffer pointer
 
     // -- zero the 112-byte z_stream so zalloc/zfree start NULL --

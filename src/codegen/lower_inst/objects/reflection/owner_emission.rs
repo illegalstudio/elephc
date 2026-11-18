@@ -8,6 +8,7 @@
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 //! - Class-default Errors are retained until getDefaultProperties requests their values.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use super::*;
 
 /// Releases generic defaults in the builtin Reflection prefix before metadata replaces them.
@@ -32,7 +33,7 @@ pub(super) fn clear_reflection_owner_prefix(
         .enumerate()
         .map(|(index, (_name, ty))| {
             let owned_reference = class_info.property_slot_owns_reference(index);
-            (8 + index * 16, ty.codegen_repr(), owned_reference)
+            (object_declared_slot_offset(index), ty.codegen_repr(), owned_reference)
         })
         .collect::<Vec<_>>();
     for (offset, ty, owned_reference) in slots {

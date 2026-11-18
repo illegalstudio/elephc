@@ -28,6 +28,7 @@
 //!   struct itself is intentionally not freed on close (small documented leak,
 //!   matching the zlib filter).
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 
@@ -179,9 +180,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction("sub sp, sp, #16");                                     // frame: [0]=fd [8]=bz_stream pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the file descriptor across the calls
     emitter.instruction(&format!("mov x0, #{}", BZ_STREAM_SIZE));               // request a bz_stream-sized heap block
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the bz_stream struct, x0 = payload
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned allocation
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the bz_stream block as owned heap state
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #8]");                                    // save the bz_stream pointer
 
     // -- zero all 80 bytes so bzalloc/bzfree/opaque are NULL and counters start clean --

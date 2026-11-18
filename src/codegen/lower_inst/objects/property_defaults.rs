@@ -7,6 +7,7 @@
 //! Key details:
 //! - Literal defaults and constructor argument ownership preserve their established layout.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use super::*;
 
 /// Selects direct literal copies or the class's EIR initializer for object property slots.
@@ -33,7 +34,7 @@ pub(super) fn collect_property_initialization(
         {
             continue;
         }
-        let offset = 8 + index * 16;
+        let offset = object_declared_slot_offset(index);
         let declaring_class = class_info.property_declaring_classes.get(property)
             .map(String::as_str);
         let context = crate::codegen::const_default_values::ConstDefaultContext {

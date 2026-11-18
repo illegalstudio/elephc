@@ -10,6 +10,7 @@
 //! - Every successful allocation marks its exact payload base in `_heap_live_bases`, allowing
 //!   runtime consumers to validate candidate bases without scanning unrelated blocks.
 
+use crate::layout::x86_64_heap_kind_word;
 use super::heap_consolidate::{HEAP_BIN_MAX, HEAP_BIN_TABLE_BYTES, HEAP_CONSOLIDATE_REBIN};
 use crate::Emitter;
 use crate::Arch;
@@ -709,4 +710,22 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut impl Emitter) {
 
     emitter.label("__rt_heap_alloc_size_overflow");
     emitter.instruction("jmp __rt_heap_exhausted");                             // report an impossible header size through the established fatal path
+}
+
+/// Emits a fresh managed allocation and stamps its kind in the uniform heap header.
+/// The requested payload size is in the native integer-result register.
+pub(crate) fn emit_fresh_with_kind(emitter: &mut (impl crate::AssemblyEmitter + crate::TargetAbi), kind: crate::HeapKind) {
+    emitter.emit_call_label("__rt_heap_alloc");
+    let kind = kind.raw();
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x9, #{kind}"));                   // encode the fresh block's managed kind
+            emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocator header
+        }
+        Arch::X86_64 => {
+            let word = x86_64_heap_kind_word(kind);
+            emitter.instruction(&format!("mov r10, 0x{word:x}"));               // encode the kind with the x86_64 heap magic
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the allocator header
+        }
+    }
 }

@@ -7,6 +7,7 @@
 //! Key details:
 //! - Heap layout, refcount retention, and dynamic hash cloning remain ABI-stable.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use super::*;
 use elephc_memoir::values::object_clone_slots::{emit_direct_slot, SlotOwner};
 
@@ -123,7 +124,7 @@ pub(super) fn emit_owned_reference_property_cell(
 
 /// Returns the byte offset of the dynamic-property hash pointer for this layout.
 pub(super) fn dynamic_property_hash_offset(property_count: usize) -> usize {
-    8 + property_count * 16
+    object_declared_slot_offset(property_count)
 }
 
 /// Returns property slot offsets whose copied low word must be retained for the cloned owner.
@@ -136,7 +137,7 @@ pub(super) fn cloned_property_retain_offsets(class_info: &ClassInfo) -> Vec<usiz
             if class_info.property_slot_is_reference(index, property) {
                 return None;
             }
-            property_clone_needs_retain(php_type).then_some(8 + index * 16)
+            property_clone_needs_retain(php_type).then_some(object_declared_slot_offset(index))
         })
         .collect()
 }
@@ -157,7 +158,7 @@ pub(super) fn emit_clone_declared_property_slots(
     owned_references: &[(usize, PhpType, bool)],
 ) {
     for index in 0..property_count {
-        let offset = 8 + index * 16;
+        let offset = object_declared_slot_offset(index);
         let owner = if owned_references
             .iter()
             .any(|(owned_offset, _, _)| *owned_offset == offset)

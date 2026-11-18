@@ -12,15 +12,17 @@ reference counting, cycle collection and candidate proofs, graph traversal,
 container allocation and growth, copy-on-write and cloning, deep release, owned
 strings and scratch allocation, byte concatenation, owned C-string copies,
 growable output/capture buffers, consuming string append,
-callable-descriptor retirement, hash-entry ownership guards, generation-safe
-buffers, Mixed boxing and unboxing, raw-slot array conversion, persistent references,
+callable-descriptor storage initialization and retirement, hash-entry ownership
+guards, generation-safe buffers, Mixed boxing and unboxing, raw-slot array
+conversion, packed array header updates, persistent references,
 reference-cell lifetime, wrapper promotion and writable child-slot selection,
 parameter-owner acquisition, original-identity pins, protected cleanup, temporary
 owner retirement, validated boxed object transfers, the object-handle pool, guarded stack mapping,
 zend_string allocation, recursive zval/string/array storage retirement, and memory
 proofs for direct scalar/empty-array cleanup, static binding storage, guard
 records, depth-stamped temporary owner lists, abandoned activation cleanup,
-stored-property ownership completion, previous-slot release and box reuse during hydration,
+declared-object slot layout and initialization, stored-property ownership completion,
+Throwable previous-owner transfer, previous-slot release and box reuse during hydration,
 non-owning observer caches, hash-entry reference promotion and borrowed payload views,
 temporary/fixed-frame owner record publication, exact chain unlink and consuming
 container boxing, Mixed symbol publication through persistent reference children,

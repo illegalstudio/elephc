@@ -70,6 +70,7 @@
 //!   release a value that reached a top-level local, so a slot reused across
 //!   requests could outlive its object.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use crate::codegen::abi;
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -436,7 +437,7 @@ fn emit_enum_name_property(
 
 /// Allocates an object-shaped enum singleton and zeroes its property storage.
 fn emit_enum_object_allocation(emitter: &mut Emitter, class_id: u64, property_count: usize) {
-    let payload_size = 8 + property_count * 16;
+    let payload_size = object_declared_slot_offset(property_count);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("mov x0, #{}", payload_size));         // request enum singleton object payload storage
@@ -452,11 +453,9 @@ fn emit_enum_object_allocation(emitter: &mut Emitter, class_id: u64, property_co
         }
     }
     let object_reg = abi::int_result_reg(emitter);
-    for index in 0..property_count {
-        let offset = 8 + index * 16;
-        abi::emit_store_zero_to_address(emitter, object_reg, offset);
-        abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);
-    }
+    elephc_memoir::values::object_storage::emit_zero_declared_slots(
+        emitter, object_reg, property_count,
+    );
 }
 
 /// Writes a backed enum case value into the singleton's first property slot.
