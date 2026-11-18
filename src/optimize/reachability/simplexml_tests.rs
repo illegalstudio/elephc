@@ -51,7 +51,7 @@ fn simplexml_factories_keep_only_compatible_class_families() {
 /// Literal XML-only eval keeps the bridge sentinel without importing SAX callback hazards.
 #[test]
 fn simplexml_literal_eval_does_not_root_unused_parser_callbacks() {
-    let reach = xml_reachability("<?php $xml = new SimpleXMLElement('<r/>'); eval('echo (string)$xml->node;');", false);
+    let reach = xml_reachability("<?php $xml = new SimpleXMLElement('<r/>'); eval('echo $xml->node->getName();');", false);
     assert!(reach.functions.contains(&php_symbol_key("xml_parser_create")));
     assert!(!reach.functions.contains(&php_symbol_key("xml_parse")));
     assert!(!reach.classes.contains(&php_symbol_key("XMLWriter")));
