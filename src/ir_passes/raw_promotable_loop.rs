@@ -154,6 +154,13 @@ pub(super) fn frame_cells(function: &Function, data: &mut DataPool) -> FrameCell
     if finalizer.is_applicable(&copy) {
         finalizer.run(&mut copy, data);
     }
+    // Codegen sees the function after the owner-transfer finalizer too: without it the
+    // acquire/release pair around a boxed seed keeps the seed's cell out of the proof, and the
+    // copy was refused as costing that cell.
+    let transfer = super::peephole::OwnerTransfer;
+    if transfer.is_applicable(&copy) {
+        transfer.run(&mut copy, data);
+    }
     FrameCells::of(&copy)
 }
 
@@ -1031,6 +1038,14 @@ fn apply(function: &mut Function, plan: &Plan) {
             else_args: slow_args.clone(),
         });
         cfg.builder.position_at_end(unbox_at);
+        // The frame-cell proof accepts a boxed local's read only beside its user in one block:
+        // a slot unboxed from a load of another block stops being a frame cell, and the copy
+        // would cost the seed its cell. The slot is untouched since the predicate, so it is
+        // simply read again here.
+        let mixed = match item {
+            Guarded::Local(slot) => load_mixed(&mut cfg.builder, *slot),
+            Guarded::Value(_) => mixed,
+        };
         let payload = emit(&mut cfg.builder, Op::MixedUnbox, vec![mixed], None, IrType::I64, PhpType::Int);
         cfg.builder.emit_store_local(raw.ints[item], payload);
         cfg.builder.terminate(Terminator::Br { target: next, args: vec![] });
