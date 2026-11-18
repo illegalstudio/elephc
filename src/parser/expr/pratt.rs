@@ -133,53 +133,26 @@ fn parse_expr_bp_inner(
                     lhs = error;
                     continue;
                 }
-                // An element target keeps the generic update desugaring: its write half is
-                // recognised as the same dimension its read converted, so a float key reports
-                // its deprecation once (`$a[1.9]++`, `$o->m[1.9]++`), as PHP does.
-                let element_target = matches!(&lhs.kind, ExprKind::ArrayAccess { .. });
-                if element_target || !is_non_local_assignment_target(&lhs) {
-                    // Not a shape the stabilizing lowering can name. The generic desugaring
-                    // takes what it can; when it declines (a call, say, which cannot be read
-                    // twice) the operator is left unconsumed so the caller reports the error
-                    // it always did.
-                    let op_span = tokens[*pos].1.span;
-                    match crate::parser::expr::assignment_targets::desugar_lvalue_incdec(
-                        lhs.clone(),
-                        increment,
-                        false,
-                        op_span,
-                    ) {
-                        Some(desugared) => {
-                            *pos += 1;
-                            lhs = desugared;
-                            continue;
-                        }
-                        None => break,
+                // Every place takes the generic update desugaring (the old/new capture the
+                // lowering reads once): an element target so its write half is the dimension its
+                // read converted (`$a[1.9]++` reports its deprecation once), a property so the
+                // checked sum feeds it directly. When it declines (a call, say, which cannot be
+                // read twice) the operator is left unconsumed so the caller reports the error it
+                // always did.
+                let op_span = tokens[*pos].1.span;
+                match crate::parser::expr::assignment_targets::desugar_lvalue_incdec(
+                    lhs.clone(),
+                    increment,
+                    false,
+                    op_span,
+                ) {
+                    Some(desugared) => {
+                        *pos += 1;
+                        lhs = desugared;
+                        continue;
                     }
+                    None => break,
                 }
-                let span = lhs.span.merge(tokens[*pos].1.span);
-                *pos += 1;
-                let op = if increment { BinOp::Add } else { BinOp::Sub };
-                let one = Expr::new(ExprKind::IntLiteral(1), span);
-                let mut lowerer = AssignmentExpressionLowerer::new(span);
-                let target = lowerer.stabilize_non_local_target(lhs, &one);
-                let old_value = lowerer.bind_result_value(target.clone());
-                let value = assignment_value(
-                    old_value.clone(),
-                    AssignmentOperator::Compound(op),
-                    one,
-                    span,
-                );
-                lhs = Expr::new(
-                    ExprKind::Assignment {
-                        target: Box::new(target),
-                        value: Box::new(value),
-                        result_target: Some(Box::new(old_value)),
-                        prelude: lowerer.finish(),
-                        conditional_value_temp: None,
-                    },
-                    span,
-                );
             }
             Token::LBracket => {
                 let span = tokens[*pos].1.span;

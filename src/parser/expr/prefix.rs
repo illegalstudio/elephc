@@ -16,9 +16,6 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 
-use super::assignment_targets::{
-    is_non_local_assignment_target, AssignmentExpressionLowerer,
-};
 use super::calls::{parse_first_class_callable_parens, parse_scoped_static_call, peek_cast};
 use super::prefix_complex::{
     parse_arrow_closure, parse_attributed_closure, parse_closure, parse_function_call_or_callable,
@@ -500,9 +497,6 @@ fn parse_prefix_inc_dec(
     *pos += 1;
     if *pos < tokens.len() {
         if let Token::Variable(name) = &tokens[*pos].0 {
-            if place_suffix_follows(tokens, *pos + 1) && !operand_is_append(tokens, *pos) {
-                return parse_complex_prefix_inc_dec(tokens, pos, span, increment);
-            }
             if !place_suffix_follows(tokens, *pos + 1) {
                 let name = name.clone();
                 *pos += 1;
@@ -515,17 +509,6 @@ fn parse_prefix_inc_dec(
                     span,
                 ));
             }
-        }
-        if matches!(tokens[*pos].0, Token::This) && !operand_is_append(tokens, *pos) {
-            return parse_complex_prefix_inc_dec(tokens, pos, span, increment);
-        }
-        let is_scoped_property = matches!(
-            tokens.get(*pos).map(|(token, _)| token),
-            Some(Token::Identifier(_)) | Some(Token::Self_) | Some(Token::Parent) | Some(Token::Static)
-        ) && tokens.get(*pos + 1).map(|(token, _)| token) == Some(&Token::DoubleColon)
-            && matches!(tokens.get(*pos + 2).map(|(token, _)| token), Some(Token::Variable(_)));
-        if is_scoped_property && !operand_is_append(tokens, *pos) {
-            return parse_complex_prefix_inc_dec(tokens, pos, span, increment);
         }
     }
     // Not a bare variable: it may still be an l-value the increment node cannot name,
@@ -568,61 +551,6 @@ fn parse_prefix_inc_dec(
         } else {
             "Expected variable after '--'"
         },
-    ))
-}
-
-/// True when the prefix operand is better served by the generic update desugaring than by the
-/// stabilizing read-twice path: an append dimension (`++$a[]`, `++$o->p[]`), which the
-/// write-context operand parse lowers and the stabilizer cannot, or an element target
-/// (`++$a[0]`, `++Cls::$a[0][1]`), whose write half is recognised as the dimension its read
-/// converted (a float key reports its deprecation once; a `false`/`null` parent takes the
-/// nested-update promotion paths). This mirrors the postfix operator in `pratt.rs`.
-fn operand_is_append(tokens: &[SpannedToken], pos: usize) -> bool {
-    let mut probe = pos;
-    match super::pratt::parse_prefix_increment_operand(tokens, &mut probe) {
-        Ok((_, super::pratt::PrefixIncrementTarget::Append | super::pratt::PrefixIncrementTarget::AppendProperty)) => true,
-        Ok((target, _)) => matches!(target.kind, ExprKind::ArrayAccess { .. }),
-        Err(_) => false,
-    }
-}
-
-/// Lowers value-producing prefix increment/decrement on a property or array l-value into the
-/// existing stabilized non-local assignment-expression representation.
-fn parse_complex_prefix_inc_dec(
-    tokens: &[SpannedToken],
-    pos: &mut usize,
-    span: Span,
-    increment: bool,
-) -> Result<Expr, CompileError> {
-    let target = parse_expr_bp(tokens, pos, 35)?;
-    if !is_non_local_assignment_target(&target) {
-        return Err(CompileError::new(span, "Invalid increment target"));
-    }
-    let one = Expr::new(ExprKind::IntLiteral(1), span);
-    let mut lowerer = AssignmentExpressionLowerer::new(span);
-    let target = lowerer.stabilize_non_local_target(target, &one);
-    let value = Expr::new(
-        ExprKind::BinaryOp {
-            left: Box::new(target.clone()),
-            op: if increment {
-                crate::parser::ast::BinOp::Add
-            } else {
-                crate::parser::ast::BinOp::Sub
-            },
-            right: Box::new(one),
-        },
-        span,
-    );
-    let result = lowerer.bind_result_value(value);
-    Ok(Expr::new(
-        ExprKind::Assignment {
-            target: Box::new(target),
-            value: Box::new(result.clone()),
-            result_target: Some(Box::new(result)),
-            prelude: lowerer.finish(),
-            conditional_value_temp: None,
-        },
-        span,
     ))
 }
 
