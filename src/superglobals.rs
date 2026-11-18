@@ -221,7 +221,18 @@ pub fn seed_cli_populated_superglobals(
     if compiling_for_web() {
         return program;
     }
-    let spelled = crate::prelude_prune::usage::collect(&program).variables;
+    // Only what the program SPELLS counts. The compiler's own prelude functions (the session API
+    // reads `$_SERVER`/`$_ENV` entries under an `isset`) carry a position-less span and are in
+    // every CLI program until pruning: seeding the superglobals for them put the getenv/argv
+    // statements at the head of every `main`, so the optimizer saw a seeded main frame where the
+    // program mentions no superglobal.
+    let mut spelled = crate::fast_hash::FastSet::default();
+    for stmt in program.iter().filter(|stmt| {
+        !(matches!(stmt.kind, StmtKind::FunctionDecl { .. } | StmtKind::ClassDecl { .. })
+            && stmt.span.line == 0)
+    }) {
+        spelled.extend(crate::prelude_prune::usage::collect(std::slice::from_ref(stmt)).variables);
+    }
     let mut seeds: Vec<Stmt> = Vec::new();
     for name in CLI_POPULATED_SUPERGLOBALS.iter().filter(|name| spelled.contains(**name)) {
         seeds.extend(seed_for(name));

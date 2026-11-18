@@ -84,7 +84,7 @@ enum Id {
      */
     public function id($value) { return $value; }
 }
-echo Id::A->id(ARG);
+Id::A->id("seven");
 "#;
     for flags in [&[][..], &["--strict-php"][..]] {
         let warnings = compile_cli_file_with_flags_capturing_stderr(source, flags);

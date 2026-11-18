@@ -32,15 +32,14 @@ fn test_docblock_same_line_class_declaration() {
 /** @template T */ class Box {
     public function __construct(public T $value) {}
 }
-$box = new Box(7);
+$box = new Box<int>(7);
 echo get_class($box), ":", $box->value;
 "#;
+    assert_eq!(compile_and_run(source), "Box<int>:7");
+    let portable = source.replace("Box<int>(7)", "Box(7)");
     for flags in [&[][..], &["--strict-php"][..]] {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "Box:7", "{flags:?}");
+        assert_eq!(compile_cli_file_and_run_with_flags(&portable, flags), "Box<int>:7");
     }
-    let written = source.replace("new Box(7)", "new Box<int>(7)");
-    let error = compile_cli_file_with_flags_expect_failure(&written, &[]);
-    assert!(error.contains("declares no type parameters"), "{error}");
 }
 
 /// An ordinary class method specializes its returned container at each call's concrete type.
@@ -72,7 +71,7 @@ echo get_class($number), ":", $number->get() + 1, "|",
     for flags in [&[][..], &["--strict-php"][..]] {
         assert_eq!(
             compile_cli_file_and_run_with_flags(source, flags),
-            "Box:8|Box:SEVEN",
+            "Box<int>:8|Box<string>:SEVEN",
             "{flags:?}"
         );
     }
@@ -104,7 +103,7 @@ echo $left->get(), "|", $right->get(), "|", get_class($mapped), ":", $mapped->ge
     "|", get_class($back), ":", $back->get();
 "#,
     );
-    assert_eq!(out, "7|seven|Box:eight|Box:9");
+    assert_eq!(out, "7|seven|Box<string>:eight|Box<int>:9");
 }
 
 /// Static, named, variadic and defaulted calls use the existing method-template argument rules.
@@ -206,22 +205,10 @@ class Identity {
      */
     public function id($value) { return $value; }
 }
-echo (new Identity())->id("seven");
-"#;
-    assert_eq!(compile_and_run(method), "seven");
-    let written = method.replace("->id(", "->id<string>(");
-    let error = compile_cli_file_with_flags_expect_failure(&written, &[]);
-    assert!(error.contains("id<string>"), "{error}");
-    let function = r#"<?php
-/**
- * @template T
- * @param T $value
- * @return T
- */
-function id($value) { return $value; }
-echo id<string>("seven");
-"#;
-    assert_eq!(compile_and_run(function), "seven");
+echo (new Identity())->id<string>("seven");
+"#,
+    );
+    assert_eq!(out, "seven");
 }
 
 /// Native method templates retain both class and method parameter scope inside a namespace.
@@ -409,9 +396,6 @@ echo Id::A->id(ARG);
         assert!(warnings.contains("does not satisfy its bound int"), "{warnings}");
         assert_eq!(compile_cli_file_and_run_with_flags(&violating, flags), "seven", "{flags:?}");
     }
-    let written = template.replace("id(ARG)", "id<int>(7)");
-    let error = compile_cli_file_with_flags_expect_failure(&written, &[]);
-    assert!(error.contains("id<int>"), "{error}");
 }
 
 /// Constructor PHPDoc templates affect class specialization in both PHP modes.
@@ -433,7 +417,7 @@ echo get_class($number), ":", $number->value, "|", get_class($text), ":", $text-
     for flags in [&[][..], &["--strict-php"][..]] {
         assert_eq!(
             compile_cli_file_and_run_with_flags(source, flags),
-            "Box:5|Box:x",
+            "Box<int>:5|Box<string>:x",
             "{flags:?}"
         );
     }

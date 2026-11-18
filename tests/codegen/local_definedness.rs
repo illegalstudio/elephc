@@ -22,9 +22,20 @@ use crate::support::*;
 fn normalized(source: &str) -> String {
     let out = compile_and_run_capture_merged(source);
     assert!(out.success, "program failed: {}", out.stdout);
-    out.stdout
-        .lines()
-        .map(|line| match (line.find(" in /"), line.rfind(" on line ")) {
+    let lines: Vec<&str> = out.stdout.lines().collect();
+    lines
+        .iter()
+        .enumerate()
+        // php prints a blank line before each diagnostic (`\nWarning: ...`); the fixtures spell
+        // the diagnostics without it.
+        .filter(|(at, line)| {
+            !(line.is_empty()
+                && lines.get(at + 1).is_some_and(|next| {
+                    next.starts_with("Warning: ") || next.starts_with("Notice: ")
+                        || next.starts_with("Deprecated: ")
+                }))
+        })
+        .map(|(_, line)| match (line.find(" in /"), line.rfind(" on line ")) {
             (Some(start), Some(end)) if start < end => format!("{}{}", &line[..start], &line[end..]),
             _ => line.to_string(),
         })
