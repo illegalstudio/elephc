@@ -186,12 +186,13 @@ function resetSelectedValue(bool $reset, int $value = 1): void {
 resetSelectedValue(true);
 resetSelectedValue(false);
 
-// A reference capture can create a new binding after unset, independently of the old value.
+// A new reference after unset is independent, including in a frame that exposes locals to eval.
 function recreateQuantityReference(): void {
     $value = 1;
     unset($value);
     $read = function() use (&$value): mixed { return $value; };
     $value = 'ready';
+    eval('');
     echo "Recreated reference: ", $read(), PHP_EOL;
 }
 recreateQuantityReference();

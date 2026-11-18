@@ -95,9 +95,14 @@ impl LocalStoreContracts {
 
     /// Records immutable source metadata and indexes its body/name without scanning other stores.
     pub(crate) fn record_origin(&mut self, key: (String, Span, String), contract: PhpType) {
-        self.origin_bindings.insert((key.0.clone(), key.2.clone()));
-        self.origin_scopes.insert(key.0.clone());
+        self.track_binding_origin(&key.0, &key.2);
         self.origins.insert(key, contract);
+    }
+
+    /// Tracks logical binding ends even when reference formation supplies the only producer.
+    pub(crate) fn track_binding_origin(&mut self, scope: &str, name: &str) {
+        self.origin_bindings.insert((scope.into(), name.into()));
+        self.origin_scopes.insert(scope.into());
     }
 
     /// Tests a binding's runtime-origin transport independently from its current source span.

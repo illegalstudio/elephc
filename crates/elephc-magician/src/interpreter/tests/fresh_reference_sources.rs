@@ -72,3 +72,11 @@ fn conditional_parameter_origins_eval_values_and_owners() {
         "Tstring:after|Tinteger:1|Wstring:ready|Winteger:3|Winteger|TNULL|Tstring|Wdouble|Tstring|Wstring|Tstring|Wobject|Tobject|Tstring|Warray|Tstring|1|Winteger|1|Tstring|closed|Tstring|Tinteger|Tstring|Tinteger|outer|present|absent|Warray|Tstring|",
         "Winteger:2|Wstring:bad|Wstring:ready|Winteger:3|Winteger|Wdouble|Winteger|Wdouble|Wdouble|Wstring|Winteger|Wobject|Wobject|Wobject|Warray|Warray|1|Winteger|1|Winteger|closed|Winteger|Wstring|Winteger|Wstring|outer|present|absent|Warray|Warray|");
 }
+
+/// Eval-visible binding ends keep escaped old cells separate from newly created names.
+#[test]
+fn eval_binding_ends_eval_values_and_owners() {
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/eval_binding_ends.php"),
+        "1:string:after|Tinteger:1|Wstring:1|NULL:new|NULL:new|",
+        "1:string:after|Wstring:after|Wstring:1|NULL:new|NULL:new|");
+}

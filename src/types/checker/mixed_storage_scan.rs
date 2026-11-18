@@ -26,7 +26,7 @@
 //!   "have we crossed an eval yet" flag cannot see an eval BELOW the `unset` it has to veto),
 //!   and because it runs in BOTH modes — the collect above is not gated on `--strict-locals`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use crate::errors::CompileWarning;
 use crate::names::Name;
@@ -102,6 +102,10 @@ struct NameFacts {
     preserve_null_storage: bool,
     /// A conditional binding end can recreate an owned incoming parameter in this frame.
     conditional_unset: bool,
+    /// A plain unset ends this name, including names created solely by reference formation.
+    has_unset: bool,
+    /// An outgoing capture may use the owning eval frame's canonical cell, never a foreign slot.
+    captured_by_ref: bool,
 }
 
 /// Everything one scan of one body collects.
@@ -227,6 +231,7 @@ impl Checker {
             }
         }
 
+        self.mark_owned_eval_binding_origins(&facts, pre_bound_own_storage);
         if self.strict_locals && facts.contains_eval { return; }
 
         self.mark_recreatable_parameter_origins(&facts, pre_bound_own_storage);
@@ -337,6 +342,7 @@ impl Checker {
         for (name, name_facts) in &facts.names {
             if !name_facts.passed_by_ref
                 || name_facts.disqualified
+                || name_facts.captured_by_ref
                 || name_facts.preserve_null_storage
                 || name_facts.assigns.is_empty()
                 || !name_facts.assigns.iter().all(|site| matches!(site.ty, PhpType::Void))
@@ -390,7 +396,8 @@ impl Checker {
     /// Separated from the replay so the caller can answer it BEFORE building the per-name
     /// transparency vector, which walks every guard region in the body.
     fn name_is_markable(&self, name: &str, facts: &NameFacts) -> bool {
-        if facts.disqualified || (facts.passed_by_ref && !self.strict_locals) || facts.assigns.len() < 2 {
+        if facts.disqualified || facts.captured_by_ref
+            || (facts.passed_by_ref && !self.strict_locals) || facts.assigns.len() < 2 {
             return false;
         }
         // A reference-aliased name is NEVER markable: the mark gives the local one boxed `Mixed`
@@ -1120,6 +1127,11 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
                 // Native strict origins distinguish an ended local from its next binding.
                 // Other lvalue shapes keep their existing storage and ownership path.
                 for arg in args {
+                    if !facts.trusted_source {
+                        if let ExprKind::Variable(name) = &arg.kind {
+                            facts.names.entry(name.clone()).or_default().has_unset = true;
+                        }
+                    }
                     if depth > 0 && !facts.trusted_source {
                         if let ExprKind::Variable(name) = &arg.kind {
                             facts.names.entry(name.clone()).or_default().conditional_unset = true;
@@ -1240,7 +1252,11 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
             // statement. The closure's own body is a SEPARATE frame with its own scan, and its
             // parameter defaults are evaluated there, so neither is walked here.
             for capture in capture_refs {
-                disqualify(facts, capture);
+                if facts.semantic_profile.contains(crate::semantics::StrictFeature::Locals) {
+                    facts.names.entry(capture.clone()).or_default().captured_by_ref = true;
+                } else {
+                    disqualify(facts, capture);
+                }
             }
         }
         ExprKind::IncludeValue { path, once: _, required: _ } => collect_expr(checker, path, depth, facts),

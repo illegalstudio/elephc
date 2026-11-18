@@ -12,6 +12,28 @@ use super::Facts;
 use crate::types::{checker::Checker, PhpType};
 
 impl Checker {
+    /// Keeps source origins on owned eval-visible names without changing foreign reference ABIs.
+    pub(super) fn mark_owned_eval_binding_origins(&mut self, facts: &Facts,
+        incoming: &crate::types::checker::PreBoundLocals) {
+        if !self.strict_locals || !facts.contains_eval { return; }
+        for (name, source) in &facts.names {
+            if !source.has_unset || source.disqualified || incoming.contains_key(name)
+                || self.active_ref_params.contains(name) || self.local_binding_depth.contains_key(name)
+                || self.typed_local_names.contains_key(name) || self.active_globals.contains(name)
+                || self.static_local_names.contains(name) || self.name_is_seeded_program_storage(name)
+                || self.top_level_binding_is_program_global(name) || name == "this"
+                || source.assigns.iter().any(|site| !site.span.identifies_a_node()) {
+                continue;
+            }
+            self.local_store_contracts.track_binding_origin(&self.current_loop_storage_scope, name);
+            self.mixed_storage_locals.insert(name.clone());
+            for assignment in &source.assigns {
+                self.mixed_storage_store_sites.entry(assignment.span).or_default().insert(name.clone());
+                self.retired_mixed_storage_store_sites.remove(&(assignment.span, name.clone()));
+            }
+        }
+    }
+
     /// Records entry contracts and physical store sites for eligible by-value parameters.
     pub(super) fn mark_recreatable_parameter_origins(&mut self, facts: &Facts, incoming: &crate::types::checker::PreBoundLocals) {
         if !self.strict_locals { return; }

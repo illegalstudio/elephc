@@ -2092,3 +2092,23 @@ parameter rather than an ordinary local, without changing its output.
 This step admits no additional guarantee. Eval-containing bodies, foreign reference
 parameters, escaping aliases and remaining capture/global/static joins stay active,
 alongside Nullability, Mixed, Initialization, ArrayTypes and Indexing.
+
+### Verified188: owned binding ends in eval-visible frames
+
+Owned fresh locals with a plain unset now retain runtime-origin metadata even when
+the enclosing body contains eval. The scanner distinguishes outgoing captures from
+foreign incoming references and selects only frame-owned, non-typed, non-global,
+non-static sources. Binding tracking does not require an AST assignment: implicit
+reference creation and single-producer names also retire their origins. Existing
+binding-state and source-end EIR operations retire the name before physical cleanup;
+old escaped cells retain their values and contracts. No runtime layout or assembly
+emitter changed. Ordinary reference-capture marking remains unchanged outside this
+admission, including the existing top-level fresh-reference control.
+
+Focused all-five-target emission, optimizer on/off native execution, known-invalid
+pre-eval diagnostics, both interpreter entries/profiles and owner retirement passed.
+Conditional parameter and fresh-reference controls passed. Default compiler build
+and diff hygiene passed. Public PHP/LFC optimizer pairs and the complete updated example passed with clean
+heap diagnostics. The public permissive compiler still rejects the pre-existing captured
+int-to-string eval-body shape; permissive interpreter parity and previously accepted
+native fixtures remain controls. See step188-evidence.json for final acceptance.

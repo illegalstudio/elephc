@@ -852,3 +852,4 @@ mod fresh_member_reference_arguments;
 mod reference_binding_alternatives;
 
 mod conditional_parameter_origins;
+mod eval_binding_ends;
