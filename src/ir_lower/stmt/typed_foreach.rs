@@ -207,8 +207,17 @@ pub(in crate::ir_lower) fn coerce_typed_assign_value(
             // is the same boxed cell, marked borrowed by
             // `LoweringContext::value_is_borrowed_gradual_nominal_guard`, so the source must
             // outlive it.
-            let release_source =
-                matches!(source_ty, PhpType::Object(_)) && ctx.value_is_owning_temporary(value);
+            //
+            // A gradual source whose guard NARROWS to a concrete object is the other case: the
+            // guard hands back an independently retained payload (`$o->p = $a->p ?? $this`
+            // boxes the coalesce result, then narrows it), so the owning box has no consumer
+            // left and is retired here, as `call_arg_coercion` does for a parameter. Skipping it
+            // left the box, and the object inside, one reference high: a document and its
+            // children kept each other alive past `gc_collect_cycles()`.
+            let narrows_gradual = matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+                && !matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
+            let release_source = (matches!(source_ty, PhpType::Object(_)) || narrows_gradual)
+                && ctx.value_is_owning_temporary(value);
             let guarded = ctx.emit_value(
                 Op::RuntimeCall,
                 vec![value.value],
