@@ -1,0 +1,250 @@
+//! Purpose:
+//! Emits the `__rt_array_push_int`, `__rt_array_ensure_unique` runtime helper assembly for array push int.
+//! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
+//!
+//! Called from:
+//! - The compiler's managed runtime emitter inventory.
+//!
+//! Key details:
+//! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
+//! - A unique, non-empty array with spare capacity appends in a leaf path: no frame, no
+//!   `__rt_array_ensure_unique` call, and no growth call. Shared, empty, or full arrays keep the
+//!   original COW/shape/growth path unchanged.
+
+use crate::{Arch, Emitter};
+
+/// Emits the `__rt_array_push_int` runtime helper for ARM64 (macOS/Linux).
+///
+/// Appends a scalar integer to the end of an indexed PHP array. If the array is
+/// shared (copy-on-write), it first calls `__rt_array_ensure_unique` to detach.
+/// For freshly empty arrays, it stamps the header with scalar element metadata
+/// before the first write. Uses a fast in-place append when capacity is available;
+/// otherwise calls `__rt_array_grow` then appends.
+///
+/// Inputs:  x0 = array pointer, x1 = integer value to push
+/// Output: x0 = array pointer (may differ if reallocated), x1 = preserved (scratch after call)
+/// Preserves: x29 (frame pointer), x30 (link register)
+/// Kills: x9–x12 (scratch registers)
+pub fn emit_array_push_int(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
+        emit_array_push_int_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: array_push_int ---");
+    emitter.label_global("__rt_array_push_int");
+
+    // -- append into a unique, pre-shaped array with spare capacity without a call --
+    emitter.comment("-- append into a unique array that already has scalar shape and capacity --");
+    emitter.instruction("cbz x0, __rt_array_push_int_slow");                    // null receivers stay on the conservative path
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // load the current array refcount from the uniform heap header
+    emitter.instruction("cmp w9, #1");                                          // can this owner append without a COW split?
+    emitter.instruction("b.hi __rt_array_push_int_slow");                       // shared arrays still need the cloning path
+    emitter.instruction("ldr x9, [x0]");                                        // load the current logical length
+    emitter.instruction("cbz x9, __rt_array_push_int_slow");                    // the first append still needs shape specialization
+    emitter.instruction("ldr x10, [x0, #8]");                                   // load the current capacity
+    emitter.instruction("cmp x9, x10");                                         // is there room for one more scalar slot?
+    emitter.instruction("b.hs __rt_array_push_int_slow");                       // full arrays still need the growth path
+    emitter.instruction("add x10, x0, #24");                                    // compute the base of the scalar payload region
+    emitter.instruction("str x1, [x10, x9, lsl #3]");                           // store the appended scalar into the next slot
+    emitter.instruction("add x9, x9, #1");                                      // advance the logical length
+    emitter.instruction("str x9, [x0]");                                        // publish the updated length
+    emitter.instruction("ret");                                                 // return the unchanged unique array pointer
+
+    // -- split shared arrays before appending in place --
+    emitter.label("__rt_array_push_int_slow");
+    emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // set up new frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // save the appended value across ensure_unique
+    emitter.instruction("bl __rt_array_ensure_unique");                         // split shared arrays before the append path mutates storage
+    emitter.instruction("ldr x1, [sp, #0]");                                    // restore the appended value after ensure_unique
+
+    // -- specialize freshly empty arrays to pointer-sized scalar slots --
+    emitter.instruction("ldr x9, [x0]");                                        // x9 = current array length before first-write specialization
+    emitter.instruction("cbnz x9, __rt_array_push_int_shape_ready");            // existing arrays already have their element shape fixed
+    emitter.instruction("mov x10, #8");                                         // scalar/refcounted append slots are pointer-sized
+    emitter.instruction("str x10, [x0, #16]");                                  // elem_size = 8 before any future grow copies live slots
+    emitter.instruction("ldr x10, [x0, #-8]");                                  // load packed array metadata to clear stale placeholder tagging
+    emitter.instruction("lsr x11, x10, #8");                                    // move the value_type tag into the low bits
+    emitter.instruction("and x11, x11, #0x7f");                                 // ignore the persistent COW flag while checking the value_type
+    emitter.instruction("cmp x11, #1");                                         // is this the empty-array string fallback tag?
+    emitter.instruction("b.eq __rt_array_push_int_shape_clear");                // clear the stale string fallback tag before the first int append
+    emitter.instruction("cmp x11, #8");                                         // is this the empty-array never placeholder tag (e.g. `$dst = []`)?
+    emitter.instruction("b.ne __rt_array_push_int_shape_ready");                // preserve refcounted tags pre-stamped by array_push_refcounted
+    emitter.label("__rt_array_push_int_shape_clear");
+    emitter.instruction("mov x12, #0x80ff");                                    // keep indexed-array kind and persistent COW metadata only
+    emitter.instruction("and x10, x10, x12");                                   // clear the stale placeholder value_type tag for scalar int arrays
+    emitter.instruction("str x10, [x0, #-8]");                                  // publish scalar int (value_type 0) metadata before the first append
+    emitter.label("__rt_array_push_int_shape_ready");
+
+    // -- check capacity before pushing --
+    emitter.instruction("ldr x9, [x0]");                                        // x9 = current array length
+    emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = array capacity
+    emitter.instruction("cmp x9, x10");                                         // is the array full?
+    emitter.instruction("b.ge __rt_array_push_int_grow");                       // grow array if at capacity
+
+    // -- fast path: push directly --
+    emitter.instruction("add x10, x0, #24");                                    // x10 = base of data region (skip 24-byte header)
+    emitter.instruction("str x1, [x10, x9, lsl #3]");                           // store value at data[length * 8] (8 bytes per int)
+    emitter.instruction("add x9, x9, #1");                                      // length += 1
+    emitter.instruction("str x9, [x0]");                                        // write updated length back to header
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // deallocate the stack frame
+    emitter.instruction("ret");                                                 // return to caller (x0 unchanged)
+
+    // -- slow path: grow array then push --
+    emitter.label("__rt_array_push_int_grow");
+    emitter.instruction("bl __rt_array_grow");                                  // double array capacity → x0 = new array
+
+    emitter.instruction("ldr x1, [sp, #0]");                                    // restore value to push
+    emitter.instruction("ldr x9, [x0]");                                        // reload length from new array
+    emitter.instruction("add x10, x0, #24");                                    // x10 = data region of new array
+    emitter.instruction("str x1, [x10, x9, lsl #3]");                           // store value at data[length * 8]
+    emitter.instruction("add x9, x9, #1");                                      // length += 1
+    emitter.instruction("str x9, [x0]");                                        // update length in new array
+
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // deallocate the stack frame
+    emitter.instruction("ret");                                                 // return with x0 = new array
+}
+
+/// Emits the `__rt_array_push_int` runtime helper for x86_64 (Linux).
+///
+/// Identical contract to the ARM64 variant but uses the System V AMD64 ABI:
+/// rdi = array pointer, rsi = integer value to push, rax = return array pointer.
+///
+/// Spills the scalar payload and array pointer on the stack across helper calls
+/// to preserve them across `__rt_array_ensure_unique` and `__rt_array_grow`.
+/// Uses the same shape-specialization logic for empty arrays and the same
+/// fast-path / grow-path dispatch.
+///
+/// Preserves: rbp (frame pointer)
+/// Kills: rax, r8–r12, rcx, rdx, rsi, rdi (caller-saved registers)
+fn emit_array_push_int_linux_x86_64(emitter: &mut impl Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_push_int ---");
+    emitter.label_global("__rt_array_push_int");
+
+    // -- append into a unique, pre-shaped array with spare capacity without a call --
+    emitter.comment("-- append into a unique array that already has scalar shape and capacity --");
+    emitter.instruction("test rdi, rdi");                                       // null receivers stay on the conservative path
+    emitter.instruction("jz __rt_array_push_int_x86_slow");                     // preserve the slow path's null handling
+    emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                      // load the current indexed-array refcount from the uniform heap header
+    emitter.instruction("cmp r10d, 1");                                         // can this owner append without a COW split?
+    emitter.instruction("ja __rt_array_push_int_x86_slow");                     // shared arrays still need the cloning path
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the current logical length
+    emitter.instruction("test r10, r10");                                       // is this the first append into a freshly empty array?
+    emitter.instruction("jz __rt_array_push_int_x86_slow");                     // the first append still needs shape specialization
+    emitter.instruction("mov r11, QWORD PTR [rdi + 8]");                        // load the current capacity
+    emitter.instruction("cmp r10, r11");                                        // is there room for one more scalar slot?
+    emitter.instruction("jae __rt_array_push_int_x86_slow");                    // full arrays still need the growth path
+    emitter.instruction("mov QWORD PTR [rdi + 24 + r10 * 8], rsi");             // store the appended scalar into the next slot
+    emitter.instruction("add r10, 1");                                          // advance the logical length
+    emitter.instruction("mov QWORD PTR [rdi], r10");                            // publish the updated length
+    emitter.instruction("mov rax, rdi");                                        // return the unchanged unique array pointer
+    emitter.instruction("ret");                                                 // return to the caller
+
+    emitter.label("__rt_array_push_int_x86_slow");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving indexed-array append spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved scalar payload and array pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve aligned spill slots for the appended scalar payload and the possibly-grown array pointer
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // preserve the appended scalar payload across uniqueness and growth helper calls
+    emitter.instruction("call __rt_array_ensure_unique");                       // split shared indexed arrays before appending a new scalar slot
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the unique indexed-array pointer across the optional growth helper call
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the indexed-array logical length before checking the append capacity
+    emitter.instruction("test r10, r10");                                       // is this the first append into a freshly empty indexed array?
+    emitter.instruction("jnz __rt_array_push_int_shape_ready");                 // existing arrays already have their element shape fixed
+    emitter.instruction("mov QWORD PTR [rax + 16], 8");                         // elem_size = 8 before any future growth copies live scalar slots
+    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load packed metadata so only a stale placeholder tag is cleared
+    emitter.instruction("mov r8, r11");                                         // copy metadata before isolating the value_type tag
+    emitter.instruction("shr r8, 8");                                           // move the value_type tag into the low bits
+    emitter.instruction("and r8, 0x7f");                                        // ignore the persistent COW flag while checking the value_type
+    emitter.instruction("cmp r8, 1");                                           // is this the empty-array string fallback tag?
+    emitter.instruction("je __rt_array_push_int_x86_shape_clear");              // clear the stale string fallback tag before the first int append
+    emitter.instruction("cmp r8, 8");                                           // is this the empty-array never placeholder tag (e.g. `$dst = []`)?
+    emitter.instruction("jne __rt_array_push_int_shape_ready");                 // preserve refcounted tags pre-stamped by array_push_refcounted
+    emitter.label("__rt_array_push_int_x86_shape_clear");
+    emitter.instruction("mov r8, 0xffffffff000080ff");                          // preserve heap marker, indexed-array kind, and persistent COW metadata
+    emitter.instruction("and r11, r8");                                         // clear the stale placeholder value_type tag for scalar int arrays
+    emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // publish scalar int (value_type 0) metadata before the first append
+    emitter.label("__rt_array_push_int_shape_ready");
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // reload the indexed-array logical length after shape specialization
+    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // load the indexed-array capacity before deciding between the fast path and growth
+    emitter.instruction("cmp r10, r11");                                        // is the indexed array already full at the current logical length?
+    emitter.instruction("jae __rt_array_push_int_grow");                        // grow the indexed array when the new element would exceed the current capacity
+    emitter.label("__rt_array_push_int_store");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the current indexed-array pointer before writing the appended scalar slot
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // reload the indexed-array logical length after helper calls clobbered caller-saved registers
+    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the appended scalar payload after helper calls clobbered caller-saved registers
+    emitter.instruction("mov QWORD PTR [rax + 24 + r10 * 8], r11");             // store the appended scalar payload into the next indexed-array slot
+    emitter.instruction("add r10, 1");                                          // advance the indexed-array logical length after materializing the appended slot
+    emitter.instruction("mov QWORD PTR [rax], r10");                            // publish the updated indexed-array logical length in the array header
+    emitter.instruction("add rsp, 16");                                         // release the indexed-array append spill slots before returning
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the updated indexed array
+    emitter.instruction("ret");                                                 // return to the caller with rax holding the updated indexed-array pointer
+    emitter.label("__rt_array_push_int_grow");
+    emitter.instruction("mov rdi, rax");                                        // pass the unique indexed-array pointer to the growth helper before appending the new scalar slot
+    emitter.instruction("call __rt_array_grow");                                // allocate a larger indexed-array backing store so the append can proceed
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the grown indexed-array pointer before writing the appended scalar slot
+    emitter.instruction("jmp __rt_array_push_int_store");                       // append the scalar payload into the grown indexed-array storage
+}
+
+/// Emits the inline scalar-slot append, falling back to the full storage helper when needed.
+pub fn emit_inline_append(emitter: &mut impl Emitter, slow: &str, done: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => emit_inline_append_aarch64(emitter, slow, done),
+        Arch::X86_64 => emit_inline_append_x86_64(emitter, slow, done),
+    }
+}
+
+/// Emits the guarded inline append for aarch64.
+fn emit_inline_append_aarch64(emitter: &mut impl Emitter, slow: &str, done: &str) {
+    emitter.instruction(&format!("cbz x0, {slow}"));                            // null receivers need the allocating slow path
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // load the indexed-array refcount
+    emitter.instruction("cmp w9, #1");                                          // can this owner append without a COW split?
+    emitter.instruction(&format!("b.hi {slow}"));                               // shared arrays still need ensure_unique
+    emitter.instruction("ldr x9, [x0]");                                        // load the current logical length
+    emitter.instruction(&format!("cbz x9, {slow}"));                            // the first append still specializes the empty-array shape
+    emitter.instruction("ldr x10, [x0, #8]");                                   // load the current capacity
+    emitter.instruction("cmp x9, x10");                                         // is there room for one more scalar slot?
+    emitter.instruction(&format!("b.hs {slow}"));                               // full arrays still need the growth path
+    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the packed array metadata
+    emitter.instruction("ubfx x10, x10, #8, #7");                               // isolate the value type from the COW flag
+    emitter.instruction(&format!("cbnz x10, {slow}"));                          // only the int shape stores a raw word inline
+    emitter.instruction("add x10, x0, #24");                                    // compute the payload base
+    emitter.instruction("str x1, [x10, x9, lsl #3]");                           // store the appended int in the next slot
+    emitter.instruction("add x9, x9, #1");                                      // advance the logical length
+    emitter.instruction("str x9, [x0]");                                        // publish the updated length
+    emitter.instruction(&format!("b {done}"));                                  // skip the slow helper after the inline append
+    emitter.label(slow);
+    emitter.emit_call_label("__rt_array_push_int");
+    emitter.label(done);
+}
+
+/// Emits the guarded inline append for x86_64.
+fn emit_inline_append_x86_64(emitter: &mut impl Emitter, slow: &str, done: &str) {
+    emitter.instruction("test rdi, rdi");                                       // null receivers need the allocating slow path
+    emitter.instruction(&format!("jz {slow}"));                                 // route null storage to the helper
+    emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                      // load the indexed-array refcount
+    emitter.instruction("cmp r10d, 1");                                         // can this owner append without a COW split?
+    emitter.instruction(&format!("ja {slow}"));                                 // shared arrays still need ensure_unique
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the current logical length
+    emitter.instruction("test r10, r10");                                       // is this the first append into an empty array?
+    emitter.instruction(&format!("jz {slow}"));                                 // the first append still specializes the empty-array shape
+    emitter.instruction("mov r11, QWORD PTR [rdi + 8]");                        // load the current capacity
+    emitter.instruction("cmp r10, r11");                                        // is there room for one more scalar slot?
+    emitter.instruction(&format!("jae {slow}"));                                // full arrays still need the growth path
+    emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                        // load the packed array metadata
+    emitter.instruction("shr r11, 8");                                          // move the value type into the low bits
+    emitter.instruction("and r11d, 0x7f");                                      // ignore the persistent COW flag
+    emitter.instruction(&format!("jnz {slow}"));                                // only the int shape stores a raw word inline
+    emitter.instruction("mov QWORD PTR [rdi + 24 + r10 * 8], rsi");             // store the appended int in the next slot
+    emitter.instruction("add r10, 1");                                          // advance the logical length
+    emitter.instruction("mov QWORD PTR [rdi], r10");                            // publish the updated length
+    emitter.instruction(&format!("jmp {done}"));                                // skip the slow helper after the inline append
+    emitter.label(slow);
+    emitter.emit_call_label("__rt_array_push_int");
+    emitter.label(done);
+}

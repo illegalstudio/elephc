@@ -45,3 +45,16 @@ pub mod hash_unset;
 pub mod object_clone_slots;
 pub mod eval_scope_storage;
 pub mod reference_registry;
+
+pub mod array_set_int;
+pub mod array_set_str;
+pub mod array_set_mixed;
+pub mod array_push_int;
+pub mod array_push_str;
+pub mod array_push_refcounted;
+pub mod array_merge_into;
+pub mod array_merge_into_refcounted;
+pub mod array_shift;
+pub mod array_unshift;
+pub mod hash_iter;
+pub mod hash_insert_owned;

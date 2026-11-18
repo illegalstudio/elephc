@@ -3392,26 +3392,7 @@ fn scalar_slot_element_tag(elem_ty: &PhpType, value_ty: &PhpType) -> Option<PhpT
 fn emit_array_push_int_fast_path_aarch64(ctx: &mut FunctionContext<'_>) {
     let slow = ctx.next_label("array_push_int_slow");
     let done = ctx.next_label("array_push_int_done");
-    ctx.emitter.instruction(&format!("cbz x0, {slow}"));                        // null receivers need the allocating slow path
-    ctx.emitter.instruction("ldr w9, [x0, #-12]");                              // load the indexed-array refcount
-    ctx.emitter.instruction("cmp w9, #1");                                      // can this owner append without a COW split?
-    ctx.emitter.instruction(&format!("b.hi {slow}"));                           // shared arrays still need ensure_unique
-    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the current logical length
-    ctx.emitter.instruction(&format!("cbz x9, {slow}"));                        // the first append still specializes the empty-array shape
-    ctx.emitter.instruction("ldr x10, [x0, #8]");                               // load the current capacity
-    ctx.emitter.instruction("cmp x9, x10");                                     // is there room for one more scalar slot?
-    ctx.emitter.instruction(&format!("b.hs {slow}"));                           // full arrays still need the growth path
-    ctx.emitter.instruction("ldr x10, [x0, #-8]");                              // load the packed array metadata
-    ctx.emitter.instruction("ubfx x10, x10, #8, #7");                           // isolate the value type from the COW flag
-    ctx.emitter.instruction(&format!("cbnz x10, {slow}"));                      // only the int shape stores a raw word inline
-    ctx.emitter.instruction("add x10, x0, #24");                                // compute the payload base
-    ctx.emitter.instruction("str x1, [x10, x9, lsl #3]");                       // store the appended int in the next slot
-    ctx.emitter.instruction("add x9, x9, #1");                                  // advance the logical length
-    ctx.emitter.instruction("str x9, [x0]");                                    // publish the updated length
-    ctx.emitter.instruction(&format!("b {done}"));                              // skip the slow helper after the inline append
-    ctx.emitter.label(&slow);
-    abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
-    ctx.emitter.label(&done);
+    elephc_memoir::values::array_push_int::emit_inline_append(ctx.emitter, &slow, &done);
 }
 
 /// Appends one raw int inline when the receiver is unique, shaped and has spare capacity.
@@ -3421,28 +3402,7 @@ fn emit_array_push_int_fast_path_aarch64(ctx: &mut FunctionContext<'_>) {
 fn emit_array_push_int_fast_path_x86_64(ctx: &mut FunctionContext<'_>) {
     let slow = ctx.next_label("array_push_int_slow");
     let done = ctx.next_label("array_push_int_done");
-    ctx.emitter.instruction("test rdi, rdi");                                   // null receivers need the allocating slow path
-    ctx.emitter.instruction(&format!("jz {slow}"));                             // route null storage to the helper
-    ctx.emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                  // load the indexed-array refcount
-    ctx.emitter.instruction("cmp r10d, 1");                                     // can this owner append without a COW split?
-    ctx.emitter.instruction(&format!("ja {slow}"));                             // shared arrays still need ensure_unique
-    ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                        // load the current logical length
-    ctx.emitter.instruction("test r10, r10");                                   // is this the first append into an empty array?
-    ctx.emitter.instruction(&format!("jz {slow}"));                             // the first append still specializes the empty-array shape
-    ctx.emitter.instruction("mov r11, QWORD PTR [rdi + 8]");                    // load the current capacity
-    ctx.emitter.instruction("cmp r10, r11");                                    // is there room for one more scalar slot?
-    ctx.emitter.instruction(&format!("jae {slow}"));                            // full arrays still need the growth path
-    ctx.emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                    // load the packed array metadata
-    ctx.emitter.instruction("shr r11, 8");                                      // move the value type into the low bits
-    ctx.emitter.instruction("and r11d, 0x7f");                                  // ignore the persistent COW flag
-    ctx.emitter.instruction(&format!("jnz {slow}"));                            // only the int shape stores a raw word inline
-    ctx.emitter.instruction("mov QWORD PTR [rdi + 24 + r10 * 8], rsi");         // store the appended int in the next slot
-    ctx.emitter.instruction("add r10, 1");                                      // advance the logical length
-    ctx.emitter.instruction("mov QWORD PTR [rdi], r10");                        // publish the updated length
-    ctx.emitter.instruction(&format!("jmp {done}"));                            // skip the slow helper after the inline append
-    ctx.emitter.label(&slow);
-    abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
-    ctx.emitter.label(&done);
+    elephc_memoir::values::array_push_int::emit_inline_append(ctx.emitter, &slow, &done);
 }
 
 /// Lowers an indexed-array append for x86_64 targets.
