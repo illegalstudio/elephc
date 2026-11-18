@@ -7,10 +7,12 @@
 //! - `crate::optimize::fold_constants` after CLI superglobal seeding and before folding.
 //!
 //! Key details:
-//! - Only a direct, unconditional `unset($GLOBALS['x'])` at a function body's top level is
-//!   rewritten. A conditional unset needs path-sensitive storage, which is not represented here.
-//! - The pass inserts `$hidden = $x;` before the unset, keeps the unset, and rewrites later `$x`
-//!   uses in that body (including nested blocks and closures) to `$hidden`.
+//! - A direct, unconditional `unset($GLOBALS['x'])` at a function body's top level is rewritten
+//!   by renaming: the pass inserts `$hidden = $x;` before the unset, keeps the unset, and
+//!   rewrites later `$x` uses in that body (including nested blocks and closures) to `$hidden`.
+//! - An unset nested inside control flow cannot be renamed, so `conditional` gives the alias a
+//!   runtime choice between the global storage and a detached copy; it abandons the body when a
+//!   shape it cannot express (references, closure captures, destructuring) is present.
 //! - A later `global $x` reattaches to the global symbol in PHP, so the whole body is left
 //!   untouched when one is present after the unset.
 //! - Hidden names use the reserved `__elephc_detach_global_` prefix; user code should not use
@@ -19,6 +21,8 @@
 use std::collections::HashSet;
 
 use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+
+mod conditional;
 
 /// Rewrites every function-like body in `program` that unset a live global alias.
 pub(crate) fn detach_global_aliases(program: Vec<Stmt>) -> Vec<Stmt> {
@@ -29,12 +33,25 @@ pub(crate) fn detach_global_aliases(program: Vec<Stmt>) -> Vec<Stmt> {
 /// Rewrites one statement list and descends into every nested body.
 fn rewrite_body(mut statements: Vec<Stmt>, counter: &mut usize) -> Vec<Stmt> {
     let globals = direct_globals(&statements);
+    // A body that unsets one of its aliases from inside control flow needs the path-sensitive
+    // rewrite, which owns every use of that name; the straight-line rename below cannot express
+    // the two possible storages after the join.
+    let mut conditionally_detached: HashSet<String> = HashSet::new();
+    for name in &globals {
+        if has_nested_unset(&statements, name) {
+            if let Some(updated) = conditional::detach(statements.clone(), name, counter) {
+                statements = updated;
+                conditionally_detached.insert(name.clone());
+            }
+        }
+    }
     let mut index = 0usize;
     while index < statements.len() {
         if let Some(name) = direct_global_unset(&statements[index]) {
             let already_detached = index > 0 && is_detach_capture(&statements[index - 1], &name);
             if !already_detached
                 && globals.contains(&name)
+                && !conditionally_detached.contains(&name)
                 && !reattaches_later(&statements[index + 1..], &name)
             {
                 let hidden = format!("__elephc_detach_global_{}_{}", *counter, name);
@@ -67,7 +84,7 @@ fn rewrite_body(mut statements: Vec<Stmt>, counter: &mut usize) -> Vec<Stmt> {
 }
 
 /// Returns the names bound by direct top-level `global` statements in one body.
-fn direct_globals(statements: &[Stmt]) -> HashSet<String> {
+pub(super) fn direct_globals(statements: &[Stmt]) -> HashSet<String> {
     statements
         .iter()
         .filter_map(|stmt| match &stmt.kind {
@@ -101,6 +118,73 @@ fn direct_global_unset(stmt: &Stmt) -> Option<String> {
     }
 }
 
+/// Returns whether one of the body's target unsets sits below the top level.
+///
+/// A direct `unset($GLOBALS[$name])` statement is handled by the rename path; anything inside an
+/// `if`, loop, `switch`, `try`, or synthetic block needs the path-sensitive rewrite.
+fn has_nested_unset(statements: &[Stmt], name: &str) -> bool {
+    statements.iter().any(|stmt| {
+        if direct_global_unset(stmt).as_deref() == Some(name) {
+            return false;
+        }
+        nested_unset_in(stmt, name)
+    })
+}
+
+/// Reports whether one statement contains a target unset below it.
+///
+/// Nested function-like bodies are separate scopes: their own `global`/unset pairs are rewritten
+/// when `rewrite_nested_bodies` reaches them, so this scan stops at their boundary.
+fn nested_unset_in(stmt: &Stmt, name: &str) -> bool {
+    let list_has = |list: &[Stmt]| -> bool {
+        list.iter().any(|stmt| {
+            direct_global_unset(stmt).as_deref() == Some(name) || nested_unset_in(stmt, name)
+        })
+    };
+    match &stmt.kind {
+        StmtKind::If {
+            then_body,
+            elseif_clauses,
+            else_body,
+            ..
+        } => {
+            list_has(then_body)
+                || elseif_clauses.iter().any(|(_, body)| list_has(body))
+                || else_body.as_deref().is_some_and(list_has)
+        }
+        StmtKind::IfDef {
+            then_body, else_body, ..
+        } => list_has(then_body) || else_body.as_deref().is_some_and(list_has),
+        StmtKind::While { body, .. } | StmtKind::DoWhile { body, .. } => list_has(body),
+        StmtKind::For {
+            init, update, body, ..
+        } => {
+            init.as_deref().is_some_and(|stmt| list_has(std::slice::from_ref(stmt)))
+                || update
+                    .as_deref()
+                    .is_some_and(|stmt| list_has(std::slice::from_ref(stmt)))
+                || list_has(body)
+        }
+        StmtKind::Foreach { body, .. } => list_has(body),
+        StmtKind::Switch { cases, default, .. } => {
+            cases.iter().any(|(_, body)| list_has(body)) || default.as_deref().is_some_and(list_has)
+        }
+        StmtKind::Try {
+            try_body,
+            catches,
+            finally_body,
+        } => {
+            list_has(try_body)
+                || catches.iter().any(|catch| list_has(&catch.body))
+                || finally_body.as_deref().is_some_and(list_has)
+        }
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body) => list_has(body),
+        _ => false,
+    }
+}
+
 /// Returns whether `stmt` is the hidden capture this pass inserts before an unset.
 fn is_detach_capture(stmt: &Stmt, name: &str) -> bool {
     let StmtKind::Assign { name: hidden, value } = &stmt.kind else {
@@ -111,7 +195,7 @@ fn is_detach_capture(stmt: &Stmt, name: &str) -> bool {
 }
 
 /// Returns whether a later statement re-declares `global $name`, which would reattach it.
-fn reattaches_later(statements: &[Stmt], name: &str) -> bool {
+pub(super) fn reattaches_later(statements: &[Stmt], name: &str) -> bool {
     statements.iter().any(|stmt| match &stmt.kind {
         StmtKind::Global { vars } => vars.iter().any(|var| var == name),
         _ => false,

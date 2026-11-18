@@ -174,11 +174,22 @@ Known `$GLOBALS` limits:
   adds one of those only when the source names it, so `count($GLOBALS)` can be lower
   than PHP's. Under `--web` the snapshot carries every request superglobal, because
   the request prelude populates all of them.
-- A direct, straight-line `unset($GLOBALS['x'])` detaches a `global $x` alias:
-  the removed value stays readable through the local reference, later `$x` writes
-  stay local, and `$GLOBALS['x']` remains unset, matching PHP. A conditional
-  `unset($GLOBALS['x'])` is not path-detached yet and still clears the shared cell;
-  keep that shape out of code that relies on the alias surviving.
+- `unset($GLOBALS['x'])` detaches a `global $x` alias: the removed value stays
+  readable through the local reference, later `$x` writes stay local, and
+  `$GLOBALS['x']` remains unset, matching PHP. A straight-line unset is handled by
+  renaming later uses; a conditional or repeated unset keeps the choice at run time,
+  so on the path that did not detach the alias still reads and writes the global.
+  Reads (`isset($x)`, `empty($x)`, subscripts, iteration) and writes
+  (`$x = …`, `$x[] = …`, `$x['k'] = …`, `$x->p = …`, `$x += …`, `$x++`,
+  `unset($x)`) all follow that choice.
+- Detachment is not expressed when the body uses the alias in a shape the rewrite
+  cannot split, and those bodies keep the older behavior (the unset clears the shared
+  cell): a reference to the alias (`&$x`, `$y =& $x`, a by-reference parameter),
+  a closure capturing it (`use ($x)`), a `list()`/`foreach` target, a write through
+  an expression the alias is not the root of, a later `global $x` in the same body,
+  or an unset inside a nested function or closure. Passing the alias to a
+  by-reference parameter after a conditional unset is rejected at compile time
+  instead of silently detaching.
 - Under `--web`, a `$GLOBALS` lookup — literal or computed — resolves a request
   superglobal's typed Hash slot. Every request superglobal is reachable this way
   even when the source never spells its name, a read boxes the Hash into an owned

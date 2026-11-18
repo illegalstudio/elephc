@@ -25,6 +25,7 @@ pub(super) fn lower_native_isset_offset_probe(
         let read = super::array_access::lower_array_access_with_missing_warning(
             ctx, array, index, expr, false,
         );
+        let borrowed = super::array_access::globals_read_is_borrowed(ctx, index);
         let is_null = ctx.emit_value(
             Op::IsNull,
             vec![read.value],
@@ -33,7 +34,12 @@ pub(super) fn lower_native_isset_offset_probe(
             Op::IsNull.default_effects(),
             Some(expr.span),
         );
-        crate::ir_lower::ownership::release_if_owned(ctx, read, Some(expr.span));
+        // A literal key reads the program-global slot itself: releasing that value would decref
+        // the global's own box, so a second probe frees storage the global still owns. Only the
+        // owned dynamic lookup (computed key, or a literal `--web` superglobal) is released here.
+        if !borrowed {
+            crate::ir_lower::ownership::release_if_owned(ctx, read, Some(expr.span));
+        }
         let zero = ctx.emit_value(
             Op::ConstI64,
             Vec::new(),

@@ -159,3 +159,57 @@ echo isset($GLOBALS["load-key"]) ? "set\n" : "gone\n";
         out.stderr
     );
 }
+
+/// `isset($GLOBALS['x'])` probes the slot without taking a reference, so the probe must not
+/// release the global's own box: a later read would observe freed storage (and heap debug would
+/// report the double release). A computed key keeps the owned dynamic lookup, which must still
+/// release what it retained.
+#[test]
+fn test_global_isset_probe_keeps_the_slot_alive() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$value = "kept-alive";
+for ($i = 0; $i < 6; $i++) {
+    echo isset($GLOBALS["value"]) ? "y" : "n";
+}
+$name = "value";
+echo ":", isset($GLOBALS[$name]) ? "y" : "n", ":", $value, "\n";
+unset($GLOBALS["value"]);
+echo isset($GLOBALS["value"]) ? "set\n" : "gone\n";
+"#,
+    );
+    assert_eq!(out.stdout, "yyyyyy:y:kept-alive\ngone\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// A conditional `unset($GLOBALS['x'])` gives the alias a detached copy: both the global's
+/// payload and the local's copy must be released exactly once on every path.
+#[test]
+fn test_conditional_global_alias_detach_leaves_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function detach(bool $detachIt): void {
+    global $items;
+    $items = [str_repeat("a", 8)];
+    if ($detachIt) {
+        unset($GLOBALS["items"]);
+    }
+    $items[] = str_repeat("b", 8);
+    echo count($items), "|", isset($GLOBALS["items"]) ? "set" : "unset", "\n";
+}
+$items = [];
+detach(false);
+detach(true);
+"#,
+    );
+    assert_eq!(out.stdout, "2|set\n2|unset\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}

@@ -929,3 +929,117 @@ captureDetached();
     );
     assert_eq!(out, "inner|after|unset");
 }
+/// A conditional `unset($GLOBALS['x'])` detaches a `global $x` alias on the path that ran it and
+/// leaves the alias bound to the global on the other path.
+///
+/// The removed value stays reachable through the local, later writes stay local, and the global
+/// keeps receiving assignments on the path where the unset did not run. Coverage also spans a
+/// detachment inside a loop, an indexed/append write, `isset`/`empty`, and a second unset on a
+/// later path; the expected output is php 8.5's for the same fixtures.
+#[test]
+fn test_global_alias_conditional_unset_detaches() {
+    let out = compile_and_run(
+        r#"<?php
+function detach(string $mode): void {
+    global $value;
+    $value = 'g';
+    if ($mode === 'yes') {
+        unset($GLOBALS['value']);
+    }
+    echo $mode, ':', $value, '|', isset($value) ? 'y' : 'n', '|', empty($value) ? 'e' : 'f', '|', $GLOBALS['value'] ?? 'missing', "\n";
+    $value = 'w';
+    echo $mode, ':', $value, '|', $GLOBALS['value'] ?? 'missing', "\n";
+}
+function bump(bool $detachIt): void {
+    global $count;
+    $count = 1;
+    for ($i = 0; $i < 3; $i++) {
+        if ($detachIt && $i === 1) {
+            unset($GLOBALS['count']);
+        }
+        $count++;
+    }
+    echo $detachIt ? 'bump-detached:' : 'bump:', $count, '|', $GLOBALS['count'] ?? 'missing', "\n";
+}
+function grow(bool $detachIt): void {
+    global $items;
+    $items = ['a'];
+    if ($detachIt) {
+        unset($GLOBALS['items']);
+    }
+    $items[] = 'b';
+    $items['k'] = 'c';
+    echo implode(',', $items), '|', isset($GLOBALS['items']) ? 'set' : 'unset', "\n";
+}
+function twice(bool $first, bool $second): void {
+    global $pair;
+    $pair = 'v';
+    if ($first) {
+        unset($GLOBALS['pair']);
+    }
+    if ($second) {
+        unset($GLOBALS['pair']);
+        $pair = 'after';
+    }
+    echo $pair, '|', $GLOBALS['pair'] ?? 'missing', "\n";
+}
+$value = 'init';
+detach('no');
+detach('yes');
+echo 'final:', $GLOBALS['value'] ?? 'missing', "\n";
+$count = 0;
+bump(false);
+bump(true);
+$items = [];
+grow(false);
+grow(true);
+echo 'items:', $GLOBALS['items'] ?? 'missing', "\n";
+$pair = 'P';
+twice(false, false);
+twice(true, false);
+twice(false, true);
+twice(true, true);
+"#,
+    );
+    assert_eq!(
+        out,
+        "no:g|y|f|g\nno:w|w\nyes:g|y|f|missing\nyes:w|missing\nfinal:missing\n\
+         bump:4|4\nbump-detached:4|missing\na,b,c|set\na,b,c|unset\nitems:missing\n\
+         v|v\nv|missing\nafter|missing\nafter|missing\n"
+    );
+}
+
+
+/// Container and property writes on a detached alias target the detached copy, so the unset
+/// global is never recreated and the local keeps its value. Expected output is php 8.5's.
+#[test]
+fn test_global_alias_conditional_unset_splits_container_writes() {
+    let out = compile_and_run(
+        r#"<?php
+class DetachBox { public string $v = 'init'; public array $list = []; }
+function nested(bool $c): void {
+    global $tree;
+    $tree = ['a' => ['b' => 1]];
+    if ($c) { unset($GLOBALS['tree']); }
+    $tree['a']['b'] = 9;
+    echo "tree={$tree['a']['b']}|", isset($GLOBALS['tree']) ? 'set' : 'unset', "\n";
+}
+function props(bool $c): void {
+    global $box;
+    $box = new DetachBox();
+    if ($c) { unset($GLOBALS['box']); }
+    $box->v = 'set';
+    $box->list[] = 'a';
+    $box->list['k'] = 'b';
+    echo $box->v, '|', implode(',', $box->list), '|', isset($GLOBALS['box']) ? 'set' : 'unset', "\n";
+}
+$proto = new DetachBox();
+nested(false); nested(true);
+props(false); props(true);
+"#,
+    );
+    assert_eq!(
+        out,
+        "tree=9|set\ntree=9|unset\nset|a,b|set\nset|a,b|unset\n"
+    );
+}

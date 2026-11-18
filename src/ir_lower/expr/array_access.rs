@@ -226,6 +226,20 @@ pub(super) fn lower_array_access_with_missing_warning(
     lower_array_access_from_receiver(ctx, array_value, index, expr, warn_on_missing)
 }
 
+/// Returns whether a `$GLOBALS[...]` read borrows the program-global slot instead of taking its
+/// own reference.
+///
+/// A literal key lowers to a plain symbol load, so the returned value still belongs to the global
+/// and must not be released. A computed key goes through the runtime name table, which retains the
+/// value for the reader; under `--web` a literal request superglobal does the same so the typed
+/// Hash can be boxed into an owned Mixed value.
+pub(super) fn globals_read_is_borrowed(ctx: &LoweringContext<'_, '_>, index: &Expr) -> bool {
+    match &index.kind {
+        ExprKind::StringLiteral(key) => !(ctx.web && crate::superglobals::is_superglobal(key)),
+        _ => false,
+    }
+}
+
 /// Lowers a `$GLOBALS[$name]` read whose key is only known at run time.
 ///
 /// The key is coerced to a string first; the runtime lookup returns the storage word for a
