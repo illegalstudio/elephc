@@ -315,9 +315,13 @@ fn apply_assignment_evidence(
                         matches!(existing, PhpType::Int | PhpType::Float)
                     }) =>
                 {
+                    // Only a result that keeps the local's own scalar type is a checked update:
+                    // an int accumulator that picks up a float operand changes its storage.
                     match checked_scalar_arithmetic_type(expr, env, infer_value) {
-                        Some(ty) => (ty, true),
-                        None => (PhpType::Mixed, true),
+                        Some(ty) if env.get(*name).is_some_and(|existing| *existing == ty) => {
+                            (ty, true)
+                        }
+                        _ => (PhpType::Mixed, true),
                     }
                 }
                 Some(ty) => (ty, true),
@@ -358,6 +362,13 @@ fn apply_assignment_evidence(
                 AssignedValue::Expr(_) | AssignedValue::Known(_) => {
                     (matches!(existing, PhpType::Void)
                         && !matches!(&incoming, PhpType::Void | PhpType::Never))
+                        // An int local that a loop rebinds to a float (or the reverse) swaps a raw
+                        // integer word for a raw double: the slot cannot stay either of them.
+                        || (typed
+                            && matches!(
+                                (existing.codegen_repr(), incoming.codegen_repr()),
+                                (PhpType::Int, PhpType::Float) | (PhpType::Float, PhpType::Int)
+                            ))
                         || (typed
                             && matches!(
                                 existing.codegen_repr(),

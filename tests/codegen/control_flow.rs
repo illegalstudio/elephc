@@ -33,6 +33,8 @@ mod match_expressions;
 mod closures;
 #[path = "control_flow/goto_jumps.rs"]
 mod goto_jumps;
+#[path = "control_flow/int_seeded_float_accumulator.rs"]
+mod int_seeded_float_accumulator;
 #[path = "control_flow/guarded_reassignment.rs"]
 mod guarded_reassignment;
 #[path = "control_flow/branch_join_locals.rs"]
