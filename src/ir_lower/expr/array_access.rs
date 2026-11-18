@@ -573,7 +573,9 @@ fn lower_array_access_from_values_with_receiver_pins(
         _ => Op::RuntimeCall,
     };
     let mut result_type = array_access_result_type(ctx, array_value.value, op, expr);
-    if preserve_null
+    // Exact-key consumers can receive this value through copies, defaults or calls. Preserve
+    // the missing null at its producer, before a scalar ABI erases its original PHP kind.
+    if (preserve_null || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys))
         && matches!(op, Op::ArrayGet | Op::ArrayGetSilent | Op::HashGet | Op::HashGetSilent)
         && matches!(result_type.codegen_repr(),
             PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Str | PhpType::Callable)

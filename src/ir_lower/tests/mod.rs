@@ -823,3 +823,5 @@ mod boolean_offset_writes;
 mod property_key_writes;
 
 mod array_key_removals;
+
+mod array_key_missing_reads;

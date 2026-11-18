@@ -1388,3 +1388,21 @@ property-write/boolean-parent compatibility controls. Three public CLI variants
 clean heaps. ArrayKeys remains pending
 until typed-miss null provenance, producers/eval and other outstanding boundaries
 are complete; no public feature admission changes in this step.
+
+### Verified164: logical null from typed key producers
+
+The common typed-array read preserves scalar misses as boxed null when ArrayKeys
+is selected. It reuses the existing null-preserving getter path before scalar ABI
+conversion, so direct dimensions, local copies, assignment expressions and prepared
+producer policies share one origin rule. No per-consumer key evaluator or parallel
+origin ledger is needed. Tagged integer reads retain their existing separate tag;
+a legitimate integer 9223372036854775806 remains a valid key.
+
+The regression covers typed int/string misses at read, literal, write, reference,
+property, static and unset boundaries, explicit casts, valid empty-string/integer
+hits, original null arguments to ArrayAccess and independent owner cleanup.
+Twelve native source/profile/optimizer combinations and all five supported target
+emissions pass. All six focused gates pass, including compiler/bridge builds in58.51s,
+property-write and removal compatibility controls and existing nullable-read
+regressions. Three public CLI PHP/LFC variants also pass with clean heaps. ArrayKeys and the full umbrella remain pending while the
+remaining builtin, eval, dependency and binding/family work is completed.
