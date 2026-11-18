@@ -57,7 +57,11 @@ pub(crate) fn lower_by_ref_foreach_element_source(
         }
         return lower_array_access_from_value(ctx, array_value, index, expr, true);
     };
-    let index_value = lower_expr(ctx, index);
+    let operands = super::array_element_references::ArrayReferenceOperands::prepare(
+        ctx, array_value, index, expr.span,
+    );
+    let array_value = operands.receiver;
+    let index_value = operands.key;
     // The hash lookup normalizes its own key, so only the indexed slot arithmetic needs an
     // int-coerced one.
     let index_value = if op == Op::ArrayGetForWrite {
@@ -85,7 +89,7 @@ pub(crate) fn lower_by_ref_foreach_element_source(
     // element on the way out.
     ctx.builder
         .set_value_ownership(result.value, Ownership::Borrowed);
-    release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+    operands.finish(ctx, index.span);
     // An intermediate that fell back to a retaining read owns a reference to the container it
     // handed us, and holding it for the whole loop would be a leak. Dropping it here is safe
     // precisely because `element_fetch_for_write_op` demanded a local-rooted chain: the base

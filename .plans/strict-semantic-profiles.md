@@ -1264,3 +1264,29 @@ without semantic flags and is tracked as task4aa3b0e9. It is not claimed fixed b
 array validation. ArrayKeys writes/producers/eval, dependency policies, remaining
 Locals flow and the six pending guarantees still require completion. Public
 admission is unchanged.
+
+### Verified158: rooted original keys for array references
+
+Array element references now share ArrayReferenceOperands for key evaluation,
+owner publication, original-kind validation and ordered retirement. Ordinary
+references, scoped reference arguments, addressable foreach aliases and the older
+fetch-for-write path use the same preparation. Guards borrow published operands,
+and keys stay alive until their reference binding is published. Cohesive array
+reference lowering moved out of property_access into array_element_references.
+This also retires fresh Mixed and string keys that the managed foreach path
+previously leaked. ArrayAccess and WeakMap keep their separate receiver policies.
+
+Job81d198d6 passes ten target/profile emissions1.84s and twelve native
+PHP/LFC/Internal, profile and optimizer variants5.85s with clean heaps. Cases cover
+bool/float/null rejection, exact numeric/padded string keys, ordinary references,
+nested copy-on-write and throwing key expressions. Final4019627d passes in2m14s,
+including compiler/bridge builds60.40s and seven exact read-domain, Mixed ownership,
+foreach lifetime/COW and named/callable reference controls. All9 unique gates,
+assembly comments and hygiene pass. Public CLI229d5fb5 passes both PHP optimizer
+settings and LFC with Coercions in1.51s, preserving independent key policy.
+
+A preexisting alias-reuse/null-sentinel crash from an outer foreach with unset is
+recorded as facte22ed52c and remains pending in binding-flow work. The key tests use
+separate bindings and do not claim that failure fixed. ArrayKeys writes, unset,
+producers/eval, dependency policies, remaining Locals flow and all six pending
+guarantees still require completion. Public admission is unchanged.

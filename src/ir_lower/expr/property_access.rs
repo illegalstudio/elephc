@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use super::array_element_references::bind_array_element_reference;
 
 pub(super) mod native_xml_reads;
 mod runtime_hooks;
@@ -386,80 +387,6 @@ fn aliased_property_argument(
     None
 }
 
-/// Lowers `$target =& $arr[idx]` using the ownership represented by the container.
-///
-/// The addressable receiver is first represented by a local alias and normalized to hash storage.
-/// Its entry then owns a managed tag-11 cell, so the new local can outlive replacement or
-/// destruction of the parent. This also gives copy-on-write and growth a writable place where
-/// they can publish a replacement reached through a static property or nested element.
-pub(crate) fn lower_ref_assign_array_elem(
-    ctx: &mut LoweringContext<'_, '_>,
-    target: &str,
-    source: &Expr,
-    span: Span,
-) {
-    let ExprKind::ArrayAccess { array, index } = &source.kind else {
-        return;
-    };
-    if instance_object_class_for_ir(ctx, array)
-        .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap"))
-    {
-        let call = Expr::new(ExprKind::MethodCall {
-            object: array.clone(), method: "__elephc_reference".into(), args: vec![(**index).clone()],
-        }, source.span);
-        lower_ref_assign_call(ctx, target, &call, span);
-        return;
-    }
-    let prepared_array = prepare_addressable_ref_array_receiver(ctx, array);
-    let array = prepared_array.as_ref().unwrap_or(array);
-    crate::ir_lower::stmt::promote_by_ref_foreach_source(ctx, array, true);
-    let array_value = lower_expr(ctx, array);
-    bind_array_element_reference(ctx, target, array_value, index, source, span);
-    // A property read that is not addressable storage (a `mixed` property, so no synthetic
-    // alias was reified above) arrives as an OWNING temporary -- `PropGet` acquires -- and
-    // nothing else releases it: the binding above retains the entry's managed cell, not the
-    // container, so the container's owner was simply leaked, one boxed array per
-    // `$r = &$obj->m[k]`. Only the property reads are released here. A concrete container
-    // loaded from a Mixed-widened local also counts as an owning temporary, but that detached
-    // owner is what the backend's consuming store-back transfers, and releasing it too freed
-    // the table under the local.
-    if matches!(
-        ctx.builder.value_defining_op(array_value.value),
-        Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
-    ) && ctx.value_is_owning_temporary(array_value)
-    {
-        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
-    }
-}
-
-/// Binds an element of an already evaluated addressable receiver without replaying its effects.
-fn bind_array_element_reference(ctx: &mut LoweringContext<'_, '_>, target: &str,
-    array_value: LoweredValue, index: &Expr, source: &Expr, span: Span) {
-    let container_type = ctx.builder.value_php_type(array_value.value).codegen_repr();
-    let mut index_value = lower_expr(ctx, index);
-    let value_type = match container_type {
-        PhpType::Array(elem_ty) => {
-            if elem_ty.codegen_repr() == PhpType::Mixed {
-                PhpType::Mixed
-            } else {
-                index_value = coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false);
-                normalize_value_php_type(*elem_ty)
-            }
-        }
-        PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
-        _ => array_access_result_type(ctx, array_value.value, Op::ArrayGet, source),
-    };
-    let cell_ptr = ctx.emit_value(
-        Op::LoadArrayElemRefCell,
-        vec![array_value.value, index_value.value],
-        None,
-        value_type.clone(),
-        Op::LoadArrayElemRefCell.default_effects(),
-        Some(span),
-    );
-    ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
-}
-
 /// Reifies a static property, stable declared property, or nested element as a local receiver.
 ///
 /// Element reference lowering can only republish COW or growth through `ReceiverPlace` when its
@@ -554,39 +481,6 @@ fn prepare_addressable_ref_array_receiver_impl(
         _ => None,
     }
 }
-
-/// Binds a synthetic foreach source alias to an element after its receiver was promoted to hash.
-///
-/// Unlike an ordinary indexed `=&` binding, a promoted hash entry owns a managed reference cell.
-/// Retaining that cell gives the synthetic origin a stable writeback address across table growth,
-/// source replacement, and destruction of the enclosing container.
-pub(crate) fn lower_owned_ref_assign_array_elem(
-    ctx: &mut LoweringContext<'_, '_>,
-    target: &str,
-    source: &Expr,
-    span: Span,
-) {
-    let ExprKind::ArrayAccess { array, index } = &source.kind else {
-        return;
-    };
-    let array_value = lower_expr(ctx, array);
-    let index_value = lower_expr(ctx, index);
-    let value_type = match ctx.builder.value_php_type(array_value.value).codegen_repr() {
-        PhpType::Array(elem_ty) => normalize_value_php_type(*elem_ty),
-        PhpType::AssocArray { value, .. } => normalize_value_php_type(*value),
-        _ => PhpType::Mixed,
-    };
-    let cell_ptr = ctx.emit_value(
-        Op::LoadArrayElemRefCellExisting,
-        vec![array_value.value, index_value.value],
-        None,
-        value_type.clone(),
-        Op::LoadArrayElemRefCellExisting.default_effects(),
-        Some(span),
-    );
-    ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
-}
-
 
 /// Materializes a missing XML property for an indirect write while preserving existing selections.
 pub(crate) fn lower_native_xml_property_write_fetch(
