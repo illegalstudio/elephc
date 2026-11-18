@@ -1063,3 +1063,38 @@ echo f(box(1.5)), "\n";
     );
     assert_eq!(out, "main.php:3 Implicit conversion from float 1.5 to int loses precision\n1\n");
 }
+
+/// The `int` precision deprecation a guarded binding raises runs the user error handler before
+/// the callee, so a global it writes must not be read back from a value the optimizer saved
+/// before the call: an empty `take(int $n)` used to leave `$x` at 1. The method, static-method,
+/// static-property and captured-by-reference cases already invalidated and stay correct.
+#[test]
+fn test_guard_error_handler_writes_are_seen_after_the_call() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function take(int $n): void {}
+class K { public function m(int $n): void {} public static function s(int $n): void {} public static int $p = 0; }
+set_error_handler('handler');
+$v = box(1.5);
+$x = 1;
+take($v);
+echo $x, "\n";
+$y = 1;
+(new K())->m($v);
+echo $y, "\n";
+K::$p = 1;
+K::s($v);
+echo K::$p, "\n";
+function inner(mixed $v): void {
+    $z = 1;
+    set_error_handler(function (int $no, string $msg) use (&$z): bool { $z = 2; return true; });
+    take($v);
+    echo $z, "\n";
+}
+inner(box(2.5));
+function handler(int $no, string $msg): bool { global $x, $y; $x = 2; $y = 2; K::$p = 2; return true; }
+"#,
+    );
+    assert_eq!(out, "2\n2\n2\n2\n");
+}
