@@ -24,6 +24,7 @@
 //!   exhaustive (no wildcard arm). Adding an AST node forces this file to be
 //!   updated. Namespaced and user-owned DOM classes do not opt into this surface.
 
+use super::extend::{Part, PartSet};
 use crate::names::Name;
 use crate::parser::ast::{
     CallableTarget, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl, Expr, ExprKind,
@@ -42,40 +43,144 @@ const DOM_HTML_CLASSES: &[&str] = &[
     "DOMProcessingInstruction",
     "DOMCharacterData",
     "DOMNodeList",
+    // Classes and functions added by packages P2-P9: the detector sees them from the start so a
+    // program naming one gets the walker injected.
+    "DOMAttr",
+    "DOMCdataSection",
+    "DOMDocumentFragment",
+    "DOMDocumentType",
+    "DOMNamedNodeMap",
+    "DOMXPath",
+    "LibXMLError",
     "Dom\\XMLDocument",
 ];
 
-/// Returns whether any top-level statement references the Termwind DOM HTML
-/// surface, so the prelude must be injected ahead of user code.
+/// Method names that put the HTML4 parser/serializer (`Part::Html`) to use.
+const HTML_METHODS: &[&str] = &["loadhtml", "loadhtmlfile", "savehtml", "savehtmlfile"];
+
+thread_local! {
+    /// Fallback class names the running scan resolved to (see [`scan`]).
+    static HITS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// What a program references, decided in one resolve and one walk.
+#[derive(Default, Clone, Copy, Debug)]
+pub(super) struct Detected {
+    /// `DOMException` named.
+    pub exception: bool,
+    /// Any DOM class other than `DOMException`, `LibXMLError` and `DOMXPath`.
+    pub walker: bool,
+    pub xpath: bool,
+    /// `LibXMLError` named, or a `libxml_*` function referenced.
+    pub libxml: bool,
+    /// An HTML4 method is referenced (only meaningful with the walker).
+    pub html: bool,
+}
+
+impl Detected {
+    /// The parts to inject for this program (`Html` and `XPath` imply `Walker`).
+    pub(super) fn parts(self) -> PartSet {
+        let mut parts = PartSet::EMPTY;
+        if self.walker || self.xpath {
+            parts = parts.with(Part::Walker);
+            if self.html { parts = parts.with(Part::Html); }
+            if self.xpath { parts = parts.with(Part::XPath); }
+        }
+        if self.libxml { parts = parts.with(Part::Libxml); }
+        parts
+    }
+}
+
+/// Returns whether any top-level statement references a DOM class (`DOMException` included),
+/// so the prelude must be injected ahead of user code.
 pub(super) fn program_uses_dom_html(program: &[Stmt]) -> bool {
-    program_uses_classes(program, DOM_HTML_CLASSES)
+    let detected = scan(program);
+    detected.exception || detected.walker || detected.xpath
 }
 
-/// Detects walker references independently of the standalone DOMException declaration.
-pub(super) fn program_uses_dom_walker(program: &[Stmt]) -> bool {
-    let classes: Vec<_> = DOM_HTML_CLASSES.iter().copied()
-        .filter(|name| *name != "DOMException").collect();
-    program_uses_classes(program, &classes)
+/// Resolves the fallback classes once and walks the program once. `name_is_dom_class` records
+/// what it matches and answers `false`, so no `any` short-circuits and every kind is seen.
+pub(super) fn scan(program: &[Stmt]) -> Detected {
+    HITS.with(|hits| hits.borrow_mut().clear());
+    if let Ok(resolved) = crate::name_resolver::resolve_with_additional_global_symbols(
+        program.to_vec(), &[], DOM_HTML_CLASSES,
+    ) {
+        for stmt in &resolved {
+            stmt_refs_dom(stmt);
+        }
+    }
+    let hits = HITS.with(|hits| std::mem::take(&mut *hits.borrow_mut()));
+    let mut detected = Detected::default();
+    for name in hits {
+        match name {
+            "DOMException" => detected.exception = true,
+            "DOMXPath" => detected.xpath = true,
+            "LibXMLError" => detected.libxml = true,
+            _ => detected.walker = true,
+        }
+    }
+    let (libxml_call, html_method) = scan_calls(program);
+    detected.libxml |= libxml_call;
+    detected.html = html_method;
+    detected
 }
 
-/// Resolves only the requested fallback classes while retaining shared AST traversal.
-fn program_uses_classes(program: &[Stmt], classes: &[&str]) -> bool {
-    crate::name_resolver::resolve_with_additional_global_symbols(
-        program.to_vec(), &[], classes,
-    )
-    .is_ok_and(|resolved| resolved.iter().any(stmt_refs_dom))
+/// Looks for `libxml_*` function references and HTML4 method names without name resolution.
+///
+/// Sound over precise: a string literal spelling either also counts (callables, dynamic calls),
+/// as does a dynamic method call, which can reach any method name.
+fn scan_calls(program: &[Stmt]) -> (bool, bool) {
+    use crate::parser::ast::visit::{walk_nodes, Node};
+    let (mut libxml, mut html) = (false, false);
+    walk_nodes(program, &mut |node| {
+        let Node::Expr(expr) = node else { return };
+        match &expr.kind {
+            ExprKind::FunctionCall { name, .. }
+            | ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+                libxml |= name.parts.last().is_some_and(|last| is_libxml_function(last));
+            }
+            ExprKind::MethodCall { method, .. }
+            | ExprKind::NullsafeMethodCall { method, .. }
+            | ExprKind::StaticMethodCall { method, .. }
+            | ExprKind::FirstClassCallable(CallableTarget::Method { method, .. })
+            | ExprKind::FirstClassCallable(CallableTarget::StaticMethod { method, .. }) => {
+                html |= is_html_method(method);
+            }
+            ExprKind::NullsafeDynamicMethodCall { .. } => html = true,
+            ExprKind::StringLiteral(text) => {
+                libxml |= is_libxml_function(text);
+                html |= is_html_method(text);
+            }
+            _ => {}
+        }
+    });
+    (libxml, html)
 }
 
-/// Returns whether resolution bound this name to a seeded global DOM class.
+fn is_libxml_function(name: &str) -> bool {
+    name.len() > 7 && name.is_char_boundary(7) && name[..7].eq_ignore_ascii_case("libxml_")
+}
+
+fn is_html_method(name: &str) -> bool {
+    HTML_METHODS.iter().any(|candidate| name.eq_ignore_ascii_case(candidate))
+}
+
+/// Records that resolution bound this name to a seeded global DOM class. Always answers `false`
+/// so the exhaustive walk never short-circuits; [`scan`] reads the recorded hits.
 fn name_is_dom_class(name: &Name) -> bool {
-    if matches!(name.parts.as_slice(), [namespace, class_name]
+    let hit = if matches!(name.parts.as_slice(), [namespace, class_name]
         if namespace.eq_ignore_ascii_case("Dom") && class_name.eq_ignore_ascii_case("XMLDocument"))
     {
-        return true;
+        Some("Dom\\XMLDocument")
+    } else {
+        DOM_HTML_CLASSES.iter().copied().find(|candidate| {
+            crate::name_resolver::is_additional_global_symbol(name, candidate)
+        })
+    };
+    if let Some(hit) = hit {
+        HITS.with(|hits| hits.borrow_mut().push(hit));
     }
-    DOM_HTML_CLASSES.iter().any(|candidate| {
-        crate::name_resolver::is_additional_global_symbol(name, candidate)
-    })
+    false
 }
 
 /// Returns whether a static receiver names a DOM class (`DOMDocument::...`).

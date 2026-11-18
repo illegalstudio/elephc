@@ -21,15 +21,27 @@
 //! - Attribute-name validation and DOMException remain available without libxml2.
 //! - A standalone DOMException reference injects only its declaration; walker
 //!   references add the HTML helpers and weak-cache dependency when needed.
+//! - The prelude is split into parts (`extend::Part`): the walker every DOM program gets, the
+//!   HTML4 parser/serializer (only when `loadHTML`/`saveHTML` and friends are mentioned), the
+//!   libxml error API, and DOMXPath. Packages add code from their own files through the
+//!   `extend::Contributions` API (see the top of `extend.rs`) instead of editing `generated.rs`.
 
 mod attributes;
+mod chardata;
+mod collections;
 mod detect;
+mod element_document;
 mod entities;
+pub(crate) mod extend;
 mod generated;
+mod html_parser;
+mod libxml;
 mod node_cache;
+mod node_tree;
 mod text;
-
-use std::sync::OnceLock;
+mod writer_html;
+mod writer_xml;
+mod xpath;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Program, TypeExpr};
@@ -37,10 +49,7 @@ use crate::synthetic_class::{
     class, e_int, e_method_call, e_new_fq, e_new_static, e_not, e_null, e_prop, e_str, e_var,
     method, s_assign, s_expr, s_if, s_return, s_throw, t_class, t_nullable,
 };
-
-/// Built prelude cache. The declarations are built once and reused for every injecting
-/// compile.
-static PRELUDE: OnceLock<Program> = OnceLock::new();
+use extend::{Part, PartSet};
 
 /// Prelude inventory group holding the declarations.
 pub const GROUP: &str = "dom-html";
@@ -50,29 +59,26 @@ pub(crate) fn program_uses_dom_html(program: &[crate::parser::ast::Stmt]) -> boo
     detect::program_uses_dom_html(program)
 }
 
-/// Builds the cached DOM HTML prelude exactly once.
+/// The generated base of the walker part, before the packages' contributions are merged in.
+///
+/// Declarations are built by `synthetic_class` builders, one fn per declaration; spans are
+/// stamped by `extend::build` (a non-dummy declaration span marks an elephc prelude class as
+/// user-declared for PHP's coercive parameter binding, and distinct synthetic spans keep
+/// span-keyed checker maps from conflating built nodes).
+pub(crate) fn base_declarations() -> Program {
+    let mut program = Vec::new();
+    program.extend(entities::declarations());
+    program.extend(attributes::declarations());
+    program.extend(node_cache::declarations());
+    program.extend(text::declarations());
+    program.extend(generated::declarations());
+    program.push(modern_dom_declaration());
+    program
+}
+
+/// Every declaration of every part (what `inject` and the contract tests see).
 pub(crate) fn declarations() -> Program {
-    PRELUDE
-        .get_or_init(|| {
-            let mut program = Vec::new();
-            program.extend(entities::declarations());
-            program.extend(attributes::declarations());
-            program.extend(node_cache::declarations());
-            program.extend(text::declarations());
-            program.extend(generated::declarations());
-            program.push(modern_dom_declaration());
-            // A non-dummy declaration span marks an elephc prelude class as user-declared for
-            // PHP's coercive parameter binding; `Span::dummy()` would make `new DOMDocument(1, …)`
-            // reject the integer instead of coercing it to a string. Distinct synthetic spans also
-            // keep span-keyed checker maps from conflating built nodes.
-            for declaration in &mut program {
-                if !declaration.span.identifies_a_node() {
-                    declaration.span = crate::span::Span::synthetic();
-                }
-            }
-            program
-        })
-        .clone()
+    extend::build(PartSet::ALL)
 }
 
 /// Builds the PHP 8.4 `Dom\XMLDocument::createFromFile()` interop surface.
@@ -176,7 +182,7 @@ pub(crate) fn inject_exception(
     if inventory.groups.get(GROUP).is_some_and(|group| group.classes.contains("domexception")) {
         return program;
     }
-    let mut prelude = declarations();
+    let mut prelude = extend::build(PartSet::of(Part::Walker));
     prelude.retain(|stmt| {
         matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name.eq_ignore_ascii_case("DOMException"))
     });
@@ -185,10 +191,10 @@ pub(crate) fn inject_exception(
     prelude
 }
 
-/// Prepends the Termwind DOM HTML prelude when the program names a DOM class.
+/// Prepends the DOM prelude when the program names a DOM class or calls a `libxml_*` function.
 ///
-/// `force` exists for the codegen harness and future opt-in; ordinary compiles
-/// pass `false` and rely on `program_uses_dom_html`.
+/// `force` exists for the codegen harness and future opt-in (every part); ordinary compiles
+/// pass `false` and rely on `detect::scan`.
 pub fn inject_if_used(
     program: Program,
     force: bool,
@@ -205,41 +211,95 @@ fn inject_if_used_on_compiler_stack(
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
-    let Some((mut combined, walker)) = pending_prelude(&program, force, inventory) else {
+    let Some(plan) = pending_prelude(&program, force, inventory) else {
         return program;
     };
-    inventory.record_program("dom-html", &combined);
-    combined.extend(program);
+    plan.record(inventory);
+    let walker = plan.walker;
+    let combined = extend::merge_delta(program, plan.prelude, plan.stubs);
     if walker { crate::core_prelude::ensure_weak_reference(combined, inventory) }
     else { combined }
 }
 
-/// Selects missing declarations, allowing autoload to upgrade an exception-only prelude.
+/// What one injection pass adds.
+struct Plan {
+    /// New top-level declarations to prepend.
+    prelude: Program,
+    /// Members to append to classes the program already holds (a part needed after the walker).
+    stubs: Program,
+    /// Parts injected by this pass.
+    parts: PartSet,
+    /// Whether this pass brings the walker (and so needs `WeakReference`).
+    walker: bool,
+}
+
+impl Plan {
+    fn record(&self, inventory: &mut crate::optimize::reachability::PreludeInventory) {
+        inventory.record_program(GROUP, &self.prelude);
+        for part in [Part::Html, Part::Libxml, Part::XPath] {
+            if self.parts.contains(part) {
+                inventory.record_program(extend::part_marker(part), &[]);
+            }
+        }
+    }
+}
+
+/// The parts already injected, from the inventory.
+fn parts_present(inventory: &crate::optimize::reachability::PreludeInventory) -> PartSet {
+    let mut have = PartSet::EMPTY;
+    if inventory.groups.get(GROUP).is_some_and(|group| group.classes.contains("domdocument")) {
+        have = have.with(Part::Walker);
+    }
+    for part in [Part::Html, Part::Libxml, Part::XPath] {
+        if inventory.groups.contains_key(extend::part_marker(part)) {
+            have = have.with(part);
+        }
+    }
+    have
+}
+
+/// Selects what is missing, allowing autoload to upgrade an exception-only prelude, to add the
+/// walker after `libxml_*` alone, and to add `Html`/`XPath` after the walker.
 fn pending_prelude(
     program: &[crate::parser::ast::Stmt],
     force: bool,
     inventory: &crate::optimize::reachability::PreludeInventory,
-) -> Option<(Program, bool)> {
+) -> Option<Plan> {
     use crate::parser::ast::StmtKind;
 
-    let injected = inventory.groups.get("dom-html");
-    if injected.is_some_and(|group| group.classes.contains("domdocument")) {
+    let detected = detect::scan(program);
+    let want = if force { PartSet::ALL } else { detected.parts() };
+    let exception_wanted = force || detected.exception || want.contains(Part::Walker);
+    let have = parts_present(inventory);
+    let exception_have = have.contains(Part::Walker)
+        || inventory.groups.get(GROUP).is_some_and(|group| group.classes.contains("domexception"));
+    let missing = want.without(have);
+    let is_exception = |stmt: &crate::parser::ast::Stmt| matches!(
+        &stmt.kind, StmtKind::ClassDecl { name, .. } if name.eq_ignore_ascii_case("DOMException")
+    );
+
+    let (mut prelude, stubs, walker);
+    if missing.contains(Part::Walker) {
+        prelude = extend::build(missing);
+        prelude.retain(|stmt| !(exception_have && is_exception(stmt)));
+        stubs = Vec::new();
+        walker = true;
+    } else {
+        let (fresh, delta_stubs) = extend::delta(missing);
+        prelude = fresh;
+        stubs = delta_stubs;
+        walker = false;
+        if exception_wanted && !exception_have {
+            let mut exception = extend::build(PartSet::of(Part::Walker));
+            exception.retain(is_exception);
+            exception.extend(prelude);
+            prelude = exception;
+        }
+    }
+    if prelude.is_empty() && stubs.is_empty() {
         return None;
     }
-    if !force && !detect::program_uses_dom_html(program) {
-        return None;
-    }
-    let exception = injected.is_some_and(|group| group.classes.contains("domexception"));
-    let walker = force || detect::program_uses_dom_walker(program);
-    if exception && !walker {
-        return None;
-    }
-    let mut prelude = declarations();
-    prelude.retain(|stmt| match &stmt.kind {
-        StmtKind::ClassDecl { name, .. } if name.eq_ignore_ascii_case("DOMException") => !exception,
-        _ => walker,
-    });
-    Some((prelude, walker))
+    Some(Plan { prelude, stubs, parts: missing, walker })
 }
 
 /// Discovers DOM references loaded by autoload without reinjecting an existing prelude.
@@ -249,12 +309,15 @@ pub fn inject_after_autoload(
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Result<Program, CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
-        let Some((prelude, walker)) = pending_prelude(&program, false, inventory) else {
+        let Some(plan) = pending_prelude(&program, false, inventory) else {
             return Ok(program);
         };
-        let mut combined = crate::name_resolver::resolve(prelude)?;
-        inventory.record_program("dom-html", &combined);
-        combined.extend(program);
+        let prelude = crate::name_resolver::resolve(plan.prelude)?;
+        let stubs = crate::name_resolver::resolve(plan.stubs)?;
+        let plan = Plan { prelude, stubs, parts: plan.parts, walker: plan.walker };
+        plan.record(inventory);
+        let walker = plan.walker;
+        let combined = extend::merge_delta(program, plan.prelude, plan.stubs);
         Ok(if walker { crate::core_prelude::ensure_weak_reference(combined, inventory) }
             else { combined })
     })
@@ -447,5 +510,61 @@ mod tests {
         assert_eq!(method.params.len(), 2);
         assert_eq!(method.params[0].0, "source");
         assert_eq!(method.params[1].0, "options");
+    }
+
+    fn parts_of(source: &str) -> PartSet {
+        detect::scan(&crate::parser::parse_test_source(source).unwrap()).parts()
+    }
+
+    /// A program that loads XML does not pay for the HTML4 part; naming an HTML method does.
+    #[test]
+    fn html_part_is_gated_on_html_method_names() {
+        let xml = parts_of("<?php $d = new DOMDocument(); $d->loadXML('<a/>'); echo $d->saveXML();");
+        assert!(xml.contains(Part::Walker) && !xml.contains(Part::Html));
+        for source in [
+            "<?php $d = new DOMDocument(); $d->loadHTML('<p>x</p>');",
+            "<?php $d = new DOMDocument(); echo $d->saveHTML();",
+            "<?php $d = new DOMDocument(); $f = $d->loadHTMLFile(...);",
+            "<?php $d = new DOMDocument(); $m = 'loadHTML'; $d->$m('x');",
+            "<?php $d = new DOMDocument(); call_user_func([$d, 'saveHTMLFile'], 'f');",
+        ] {
+            assert!(parts_of(source).contains(Part::Html), "{source}");
+        }
+        // HTML methods without any DOM class never inject anything.
+        assert!(parts_of("<?php $o->loadHTML('x');").is_empty());
+    }
+
+    /// `libxml_*` calls and `LibXMLError` select the Libxml part alone, without the walker.
+    #[test]
+    fn libxml_part_is_independent_of_the_walker() {
+        let calls = parts_of("<?php libxml_use_internal_errors(true);");
+        assert!(calls.contains(Part::Libxml) && !calls.contains(Part::Walker));
+        let class = parts_of("<?php function f(LibXMLError $e) {}");
+        assert!(class.contains(Part::Libxml) && !class.contains(Part::Walker));
+        let both = parts_of("<?php new DOMDocument(); \\libxml_get_errors();");
+        assert!(both.contains(Part::Libxml) && both.contains(Part::Walker));
+        assert!(parts_of("<?php $x = 'unrelated_libxml_';").is_empty());
+    }
+
+    /// `DOMXPath` implies the walker; a user-owned `DOMXPath` opts out.
+    #[test]
+    fn xpath_part_implies_walker() {
+        let parts = parts_of("<?php $x = new DOMXPath($d);");
+        assert!(parts.contains(Part::Walker) && parts.contains(Part::XPath));
+        assert!(parts_of("<?php namespace App; class DOMXPath {} new DOMXPath();").is_empty());
+    }
+
+    /// Whatever the part set, no declaration appears twice.
+    #[test]
+    fn building_parts_never_duplicates_a_declaration() {
+        for bits in [PartSet::ALL, PartSet::of(Part::Walker), PartSet::of(Part::Libxml)] {
+            let program = extend::build(bits);
+            let mut names = std::collections::HashSet::new();
+            for stmt in &program {
+                if let StmtKind::ClassDecl { name, .. } = &stmt.kind {
+                    assert!(names.insert(name.to_ascii_lowercase()), "{name} declared twice");
+                }
+            }
+        }
     }
 }
