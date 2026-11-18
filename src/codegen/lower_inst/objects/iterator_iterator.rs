@@ -264,10 +264,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #56");                             // request Throwable payload storage (message/code/previous)
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks object instances
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp allocation as a runtime object
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
             abi::emit_symbol_address(ctx.emitter, "x9", "_spl_logic_exception_class_id");
             ctx.emitter.instruction("ldr x9, [x9]");                            // load LogicException's runtime class id
             ctx.emitter.instruction("str x9, [x0]");                            // store the class id at object header
@@ -290,12 +287,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction("mov rbp, rsp");                            // establish an aligned helper frame
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call aligned
             ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(                                            // materialize the target heap-kind marker
-                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
-            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
             ctx.emitter
                 .instruction("mov r10, QWORD PTR [rip + _spl_logic_exception_class_id]"); // load LogicException's runtime class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object header

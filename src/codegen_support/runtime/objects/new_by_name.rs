@@ -126,10 +126,7 @@ pub fn emit_new_by_name(emitter: &mut Emitter, native_validation: bool) {
     // -- allocate the object payload --
     emitter.label("__rt_nbn_generic_alloc");
     emitter.instruction("mov x0, x13");                                         // allocation size
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = object pointer
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the uniform heap header
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction("ldr x12, [sp, #32]");                                  // reload class_id
     emitter.instruction("str x12, [x0]");                                       // class_id at offset 0
 
@@ -234,13 +231,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter, native_validation: bool)
     // -- allocate the object payload --
     emitter.label("__rt_nbn_generic_alloc_x86");
     emitter.instruction("mov rax, rdx");                                        // allocation size
-    emitter.instruction("call __rt_heap_alloc");                                // rax = object pointer
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-    ));                                                                         // object heap-kind word with the x86_64 marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
-    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload class_id
     emitter.instruction("mov QWORD PTR [rax], rcx");                            // class_id at offset 0
 

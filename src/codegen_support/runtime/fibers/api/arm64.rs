@@ -42,11 +42,7 @@ pub(super) fn emit_throw_state_error(emitter: &mut Emitter) {
     emitter.instruction("mov x20, x1");                                         // x20 = message length (callee-saved across __rt_heap_alloc)
 
     emitter.instruction("mov x0, #24");                                         // FiberError object size (8 class_id + 16 message property)
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = freshly allocated payload pointer (heap header at -8)
-
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the kind in the uniform heap header
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     abi::emit_load_symbol_to_reg(emitter, "x9", "_fiber_error_class_id", 0);    // x9 = runtime class id of FiberError
     emitter.instruction("str x9, [x0]");                                        // store FiberError class id at the object header
 

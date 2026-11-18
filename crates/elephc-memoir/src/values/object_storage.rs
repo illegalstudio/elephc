@@ -2,25 +2,36 @@
 //! Allocates an object payload and exposes the physical declared-slot initializer.
 //!
 //! Called from:
-//! - Direct object lowering, boxed clone, stdClass and eval Reflection emitters.
+//! - Compiler object, compact Throwable and boxed-clone emitters.
 //!
 //! Key details:
 //! - The caller determines size, class id, reference bindings and property defaults.
 //! - The allocated payload has one owner and an assigned native object handle.
 
-use crate::{Arch, Emitter, layout::{OBJECT_HEAP_KIND, x86_64_heap_kind_word}};
+use crate::layout::{OBJECT_HEAP_KIND, THROWABLE_HEAP_KIND, x86_64_heap_kind_word};
+use crate::{Arch, Emitter};
 
-/// Allocates the requested byte count in the native integer-result register.
+/// Allocates an ordinary object with the requested size in the native integer-result register.
 pub fn emit_allocate_object(emitter: &mut impl Emitter) {
+    emit_allocate_with_handle(emitter, OBJECT_HEAP_KIND);
+}
+
+/// Allocates a compact Throwable with the requested size in the native integer-result register.
+pub fn emit_allocate_throwable(emitter: &mut impl Emitter) {
+    emit_allocate_with_handle(emitter, THROWABLE_HEAP_KIND);
+}
+
+/// Stamps the supplied heap kind before binding the allocation to a native object handle.
+fn emit_allocate_with_handle(emitter: &mut impl Emitter, heap_kind: u32) {
     emitter.emit_call_label("__rt_heap_alloc");
     match emitter.arch() {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov x9, #{OBJECT_HEAP_KIND}"));       // encode the heap kind of the new object
+            emitter.instruction(&format!("mov x9, #{heap_kind}"));              // encode the heap kind of the new object
             emitter.instruction("str x9, [x0, #-8]");                           // stamp the managed allocator header
         }
         Arch::X86_64 => {
-            let kind = x86_64_heap_kind_word(OBJECT_HEAP_KIND);
-            emitter.instruction(&format!("mov r10, 0x{kind:x}"));               // encode the managed x86_64 object kind
+            let kind = x86_64_heap_kind_word(heap_kind);
+            emitter.instruction(&format!("mov r10, 0x{kind:x}"));               // encode the x86_64 managed heap kind
             emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the managed allocator header
         }
     }

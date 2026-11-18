@@ -156,10 +156,7 @@ pub(super) fn emit_throwable_allocation(
             ctx.emitter.instruction(                                            // allocate enough storage for every compact Throwable field
                 &format!("mov x0, #{}", THROWABLE_COMPACT_PAYLOAD_SIZE)
             );                                                                  // request compact Throwable payload storage
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks runtime object payloads
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the Throwable payload
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
             ctx.emitter.instruction(&format!("mov x9, #{}", class_id));         // materialize the Throwable runtime class id
             ctx.emitter.instruction("str x9, [x0]");                            // store class id at payload offset zero
             if runtime_line {
@@ -174,13 +171,7 @@ pub(super) fn emit_throwable_allocation(
             ctx.emitter.instruction(                                            // allocate enough storage for every compact Throwable field
                 &format!("mov rax, {}", THROWABLE_COMPACT_PAYLOAD_SIZE)
             );                                                                  // request compact Throwable payload storage
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(                                   // preserve the x86_64 heap marker when selecting the Throwable kind
-                "mov r10, 0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(6)
-            ));                                                                 // materialize the x86_64 Throwable heap kind word
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the Throwable payload
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the Throwable runtime class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at payload offset zero
             if runtime_line {

@@ -420,10 +420,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("b __rt_unser_obj_incomplete");                         // match PHP's __PHP_Incomplete_Class fallback
     emitter.label("__rt_unser_obj_incomplete");
     emitter.instruction("mov x0, #32");                                         // class id, original class name, and opaque property hash
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the incomplete-object payload
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the object heap header
-    emitter.instruction("bl __rt_object_handle_acquire");                       // give the incomplete object a normal PHP handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction("mov x9, #-2");                                         // reserved class id for __PHP_Incomplete_Class
     emitter.instruction("str x9, [x0]");                                        // publish synthetic class id
     emitter.instruction("str x0, [sp, #24]");                                   // preserve incomplete object across string persistence

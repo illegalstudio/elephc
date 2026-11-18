@@ -440,22 +440,13 @@ fn emit_enum_object_allocation(emitter: &mut Emitter, class_id: u64, property_co
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("mov x0, #{}", payload_size));         // request enum singleton object payload storage
-            abi::emit_call_label(emitter, "__rt_heap_alloc");
-            emitter.instruction("mov x9, #4");                                  // heap kind 4 marks enum singletons as object instances
-            emitter.instruction("str x9, [x0, #-8]");                           // stamp the heap header before the enum singleton payload
-            emitter.instruction("bl __rt_object_handle_acquire");               // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_object(emitter);
             emitter.instruction(&format!("mov x10, #{}", class_id));            // materialize the enum class id
             emitter.instruction("str x10, [x0]");                               // store the enum class id at payload offset zero
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov rax, {}", payload_size));         // request enum singleton object payload storage
-            abi::emit_call_label(emitter, "__rt_heap_alloc");
-            emitter.instruction(&format!(
-                "mov r10, 0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            ));                                                                 // materialize the x86_64 object heap kind word
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the heap header before the enum singleton payload
-            emitter.instruction("call __rt_object_handle_acquire");             // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_object(emitter);
             emitter.instruction(&format!("mov r10, {}", class_id));             // materialize the enum class id
             emitter.instruction("mov QWORD PTR [rax], r10");                    // store the enum class id at payload offset zero
         }
