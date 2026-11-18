@@ -528,6 +528,10 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
                     // or not this frame has read it before (`isset($GLOBALS['x'])` is the first).
                     || crate::globals_array::is_alias(name)
                     || checker_read.is_some_and(|ty| *ty != PhpType::Void)
+                    // A loop that stores the variable further down its body hands the next
+                    // iteration that value: the read is a definedness question, not a
+                    // constant NULL.
+                    || crate::ir_lower::local_definedness::read_may_see_a_later_loop_store(ctx, name)
                 {
                     // The definedness flags warn for a variable that is only conditionally
                     // assigned on the path to this read.

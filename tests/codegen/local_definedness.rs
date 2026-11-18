@@ -135,6 +135,51 @@ int(10)"
     );
 }
 
+/// The same read-before-store shape through a `while`, a `??` probe and a bare `isset`: every
+/// later iteration must see what the earlier one stored (output of `php -n`).
+#[test]
+fn test_loop_carried_local_probes_see_the_previous_iterations_store() {
+    let out = normalized(
+        r#"<?php
+function w($n) {
+    $i = 0;
+    while ($i < $n) {
+        var_dump(isset($d), $d);
+        $d = $i + 10;
+        $i++;
+    }
+}
+w(2);
+function g($n) {
+    for ($i = 0; $i < $n; $i++) {
+        var_dump($d ?? "u");
+        $d = "s$i";
+    }
+}
+g(2);
+function k($n) {
+    for ($i = 0; $i < $n; $i++) {
+        var_dump(isset($d));
+        $d = "s$i";
+    }
+}
+k(2);
+"#,
+    );
+    assert_eq!(
+        out,
+        "Warning: Undefined variable $d on line 5
+bool(false)
+NULL
+bool(true)
+int(10)
+string(1) \"u\"
+string(2) \"s0\"
+bool(false)
+bool(true)"
+    );
+}
+
 /// `$out[] = …` in a loop that does not run leaves `$out` undefined: the array exists only
 /// once the first element write has run (it was created at function entry, `array(0)`).
 #[test]

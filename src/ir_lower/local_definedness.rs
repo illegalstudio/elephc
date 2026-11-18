@@ -77,6 +77,10 @@ pub(crate) struct DefinednessState {
     markers: HashMap<String, LocalSlotId>,
     /// Open `try` statements: the markers known at entry and those at each exit to the join.
     try_frames: Vec<(HashSet<LocalSlotId>, Vec<HashSet<LocalSlotId>>)>,
+    /// Names a loop both reads and assigns: the read may run before the store lowering sees
+    /// (the second iteration finds what the first stored), so such a read cannot be answered
+    /// from the slot-less "undefined, therefore null" fact of the first lowered iteration.
+    loop_carried: HashSet<String>,
     /// Set while a `compact()` literal is lowered through its ordinary path.
     in_compact: bool,
     /// Counter for the generated `compact()` result locals.
@@ -163,6 +167,7 @@ pub(crate) fn begin_body(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
             ctx.definedness.quiet_reads = quiet;
             ctx.definedness.whole_probe_reads = whole;
             ctx.definedness.by_ref_arguments = by_ref_argument_names(ctx, body);
+            ctx.definedness.loop_carried = loop_carried_names(body);
             let params: Vec<String> = ctx
                 .builder
                 .function()
@@ -413,7 +418,18 @@ fn lower_guarded_read(
 
     ctx.builder.position_at_end(defined_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    // The slot a later store of an enclosing loop creates does not exist yet where this read is
+    // lowered: reserve it as a boxed `mixed` for the read, so the flag-guarded load reads it
+    // instead of the constant NULL an absent slot answers.
+    let reserved = !ctx.has_local_slot(name);
+    if reserved {
+        ctx.declare_local(name, PhpType::Mixed);
+        ctx.local_types.insert(name.to_string(), PhpType::Mixed);
+    }
     let value = crate::ir_lower::expr::lower_local_value(ctx, name, span);
+    if reserved {
+        ctx.local_types.remove(name);
+    }
     crate::ir_lower::expr::store_value_into_temp(ctx, &temp, PhpType::Mixed, value, span);
     branch_to(ctx, merge);
 
@@ -832,4 +848,46 @@ fn read_variable_names(body: &[Stmt]) -> HashSet<String> {
         }
     });
     names
+}
+
+/// Names a loop both assigns (`$x = …`) and reads: the read may run, on a later iteration,
+/// after a store that lowering reaches only further down the body.
+fn loop_carried_names(body: &[Stmt]) -> HashSet<String> {
+    let mut carried = HashSet::default();
+    walk_nodes(body, &mut |node| {
+        let Node::Stmt(stmt) = node else {
+            return;
+        };
+        if !matches!(
+            stmt.kind,
+            StmtKind::While { .. } | StmtKind::DoWhile { .. } | StmtKind::For { .. } | StmtKind::Foreach { .. }
+        ) {
+            return;
+        }
+        let mut assigned: HashSet<String> = HashSet::default();
+        let mut read: HashSet<String> = HashSet::default();
+        walk_nodes(std::slice::from_ref(stmt), &mut |inner| match inner {
+            Node::Stmt(inner) => {
+                if let StmtKind::Assign { name, .. } | StmtKind::TypedAssign { name, .. } = &inner.kind {
+                    assigned.insert(name.clone());
+                }
+            }
+            Node::Expr(expr) => {
+                if let ExprKind::Variable(name) = &expr.kind {
+                    read.insert(name.clone());
+                }
+            }
+        });
+        carried.extend(assigned.intersection(&read).cloned());
+    });
+    carried
+}
+
+/// Whether a read of `name` that finds no storage yet may still see a value a later store of an
+/// enclosing loop leaves for the next iteration.
+pub(crate) fn read_may_see_a_later_loop_store(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    ctx.definedness.is_eligible()
+        && ctx.definedness.loop_carried.contains(name)
+        && is_trackable_name(ctx, name)
+        && !ctx.has_local_slot(name)
 }
