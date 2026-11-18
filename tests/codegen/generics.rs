@@ -2649,6 +2649,29 @@ fn test_class_template_marker_is_hidden_from_reflection() {
     );
 }
 
+/// A runtime target or subject sees the class template marker the way the literal target does:
+/// `is_a()` holds for an instantiation (`new Box(5)`, class name `Box<int>`), `is_subclass_of()`
+/// only for a class extending one (`IntBox`), never for the instantiation itself.
+#[test]
+fn test_class_template_marker_with_runtime_target() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/** @template T */\n",
+        "class Box { /** @param T $v */ public function __construct(public $v) {} }\n",
+        "/** @extends Box<int> */\n",
+        "class IntBox extends Box {}\n",
+        "class Plain {}\n",
+        "function yn(bool $v): string { return $v ? 'y' : 'n'; }\n",
+        "$t = $argc > 9 ? 'Plain' : 'Box';\n",
+        "$n = $argc > 9 ? 'Plain' : 'IntBox';\n",
+        "$b = new Box(5); $i = new IntBox(3); $s = get_class($b);\n",
+        "echo yn(is_a($b, $t)), yn(is_subclass_of($b, $t)), yn(is_a($i, $t)), yn(is_subclass_of($i, $t)), \"\\n\";\n",
+        "echo yn(is_subclass_of('IntBox', $t)), yn(is_subclass_of($n, $t)), yn(is_a($n, $t, true)), \"\\n\";\n",
+        "echo yn(is_subclass_of($s, $t)), yn(is_subclass_of($s, 'Box')), yn(is_a($s, $t, true)), yn(is_a($s, 'Box', true)), \"\\n\";\n",
+    ));
+    assert_eq!(out, "ynyy\nyyy\nnnyy\n");
+}
+
 /// An `instanceof` guard on a template is not a narrowing for the mixed-storage scan either, so
 /// reassigning the guarded local inside it is an ordinary store.
 #[test]
