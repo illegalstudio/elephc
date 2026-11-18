@@ -188,14 +188,22 @@ fn guard_object_reference_parameter(
         )
     } else {
         let data = ctx.intern_class_name(&class);
-        ctx.emit_value(
+        // The slot's declared class is exactly what this entry guard has to PROVE, so the probe
+        // must not see it: an `instanceof` on a value statically typed as the target is
+        // answered from the declaration alone (`receiver != null`) and would accept any object,
+        // an eval-declared one that misses the interface included. A boxed `mixed` view makes
+        // the runtime matcher (and, in a program with an eval bridge, the owner probe) decide.
+        let probe = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span));
+        let answer = ctx.emit_value(
             Op::InstanceOf,
-            vec![value.value],
+            vec![probe.value],
             Some(Immediate::Data(data)),
             PhpType::Bool,
             Op::InstanceOf.default_effects(),
             Some(span),
-        )
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
+        answer
     };
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));

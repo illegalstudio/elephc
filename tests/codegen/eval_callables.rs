@@ -3284,3 +3284,26 @@ return $object->tally(first: 1);');
 
     assert_eq!(out, "1:1:1|2:2:2|1:1:1|1:1:1");
 }
+
+/// A by-reference interface parameter rejects an eval-declared object that misses the interface:
+/// the entry guard must prove the class, not read it back from the slot's own declaration
+/// (`php -n` prints `a|TE`).
+#[test]
+fn test_by_reference_interface_guard_rejects_an_eval_object_missing_the_interface() {
+    let out = compile_and_run(
+        r#"<?php
+interface C { public function label(): string; }
+class A implements C { public function label(): string { return "a"; } }
+function g(C &$v): string { return $v->label(); }
+$a = new A();
+echo g($a), "|";
+$s = $argc > 0
+    ? 'class F { public function label(): string { return "f"; } }
+       $x = new F();
+       try { echo g($x); } catch (TypeError $e) { echo "TE"; }'
+    : '';
+eval($s);
+"#,
+    );
+    assert_eq!(out, "a|TE");
+}

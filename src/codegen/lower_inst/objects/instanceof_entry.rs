@@ -99,8 +99,8 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
     // `Container::build()` owns one (`new ReflectionClass($concrete)`), read its own resolver
     // closure as a class name, and every binding failed with "Target class [] does not exist".
     // The path below asks the bridge first and then the native closure test.
-    if ctx.module.required_runtime_features.eval_bridge && !closure_probe {
-        // An escaped eval-declared object carries its owner independently of this AOT frame.
+    if builtins::has_eval_context(ctx) && !closure_probe {
+        // A frame owning an eval context asks the bridge directly. An escaped eval-declared object carries its owner independently of this AOT frame.
         return builtins::lower_eval_object_is_a(ctx, inst, value, &class_name, false);
     }
     // An AOT method can receive an object that was created by a request-global eval context.
