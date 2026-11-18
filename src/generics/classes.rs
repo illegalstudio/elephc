@@ -1193,10 +1193,24 @@ mod tests {
         crate::name_resolver::resolve(program).expect("name resolution failed")
     }
 
-    /// Returns the names of every class and interface the program declares.
+    /// Returns the class and trait declarations, skipping the marker interfaces generic class
+    /// templates leave behind. Those markers are not instantiations; the assertions below list
+    /// concrete declarations.
     fn declared(program: &Program) -> Vec<String> {
+        /// Visits namespace blocks, collecting class and trait names only.
+        fn visit(stmts: &[Stmt], names: &mut Vec<String>) {
+            for stmt in stmts {
+                match &stmt.kind {
+                    StmtKind::ClassDecl { name, .. } | StmtKind::TraitDecl { name, .. } => {
+                        names.push(name.clone());
+                    }
+                    StmtKind::NamespaceBlock { body, .. } => visit(body, names),
+                    _ => {}
+                }
+            }
+        }
         let mut names = Vec::new();
-        collect_declared_names(program, &mut names);
+        visit(program, &mut names);
         names
     }
 
