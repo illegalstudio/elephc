@@ -7,6 +7,8 @@
 //! Key details:
 //! - The entry owns throw-safe cleanup; the decoder assumes the allocation-free preflight succeeded.
 
+use elephc_memoir::{FrameOffset, ValueTag, values::owned_payload};
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
@@ -335,14 +337,9 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // source base
     emitter.instruction("cmp BYTE PTR [r9 + r8], 125");                         // exact `}`
     emitter.instruction("jne __rt_unser_at_array_fail");                        // anything but '}' fails the array
-    emitter.instruction("mov rax, 24");                                         // box the hash: Mixed cell = tag + two payload words
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the boxed Mixed cell
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the hash pointer
-    emitter.instruction(&format!("mov r11, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the x86_64 boxed-Mixed heap kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // stamp the Mixed box without discarding the x86_64 heap marker
-    emitter.instruction("mov QWORD PTR [rax], 5");                              // value tag 5 = associative array (hash)
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the hash pointer (ownership transferred)
-    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // clear the high payload word
+    owned_payload::emit_owned_pointer_from_x86_frame_before_kind(
+        emitter, ValueTag::new(5), FrameOffset::new(32),
+    );
     emitter.instruction("mov rdi, rax");                                        // pass the completed array box to registry publication
     emitter.instruction("mov rsi, QWORD PTR [rbp - 88]");                       // pass this array's reserved zero-based index
     emitter.instruction("call __rt_unserialize_register_array");                // retain a context lease for references after hydration
@@ -422,14 +419,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r10");                                        // restore object pointer for the shared allocated path
     emitter.label("__rt_unser_obj_allocated_x");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the new object pointer
-    emitter.instruction("mov rax, 24");                                         // allocate the object's stable boxed Mixed cell
-    emitter.instruction("call __rt_heap_alloc");                                // create the box before decoding any property values
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the boxed-Mixed heap kind
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the Mixed box with the target heap marker
-    emitter.instruction("mov QWORD PTR [rax], 6");                              // value tag 6 = object
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the object pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // transfer object ownership into the box
-    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // clear the high payload word
+    owned_payload::emit_owned_pointer_from_slot(emitter, ValueTag::new(6), "QWORD PTR [rbp - 32]");
     emitter.instruction("mov QWORD PTR [rbp - 96], rax");                       // retain the stable result box through hooks and parsing
     emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // reserved value index for this object
     emitter.instruction("cmp r10, 65536");                                      // is the reserved slot inside the registry?

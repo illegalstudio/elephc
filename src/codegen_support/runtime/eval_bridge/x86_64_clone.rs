@@ -12,6 +12,8 @@
 //!   would mutate an object refcount by hand. Neither is needed: the cell simply adopts
 //!   the reference the allocation already produced.
 
+use elephc_memoir::{ValueTag, values::owned_payload};
+
 use super::*;
 
 /// Emits the x86_64 native wrapper for cloning boxed object cells.
@@ -104,14 +106,7 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter, na
         emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                   // register the completed clone before exposing its owning box
         abi::emit_call_label(emitter, "__rt_reference_sources_bind_object");
     }
-    emitter.instruction("mov rax, 24");                                         // a Mixed cell stores a runtime tag and two payload words
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the Mixed cell that will own the fresh clone
-    emitter.instruction(&x86_64_mixed_heap_kind_instruction());                 // materialize the Mixed-cell heap kind marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform Mixed-cell heap header
-    emitter.instruction("mov QWORD PTR [rax], 6");                              // runtime tag 6 = object
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the clone, which still holds the allocator's only reference
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // move that reference into the Mixed cell rather than retaining a second one
-    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // object payloads do not use a high word
+    owned_payload::emit_owned_pointer_from_slot(emitter, ValueTag::new(6), "QWORD PTR [rbp - 16]");
     emitter.instruction("jmp __rt_object_clone_shallow_boxed_done_x86");        // skip the null sentinel after a successful clone
 
     emitter.label("__rt_object_clone_shallow_boxed_null_x86");

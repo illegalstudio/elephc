@@ -9,7 +9,7 @@
 //! - Result validation and tag selection happen at the call site.
 
 use crate::layout::{MIXED_CELL_SIZE, MIXED_HEAP_KIND};
-use crate::{Arch, AssemblyEmitter, Emitter, HeapKind, TargetAbi, ValueTag};
+use crate::{Arch, AssemblyEmitter, Emitter, FrameOffset, HeapKind, TargetAbi, ValueTag, abi};
 
 const STRING_TAG: ValueTag = ValueTag::new(1);
 
@@ -36,13 +36,21 @@ pub fn emit_owned_string(emitter: &mut (impl AssemblyEmitter + TargetAbi)) {
 
 /// Adopts the owned string result of a native helper using the paired spill sequence.
 pub fn emit_owned_string_pair(emitter: &mut (impl AssemblyEmitter + TargetAbi)) {
+    emit_owned_string_pair_with_reload(emitter, ["x10", "x11"]);
+}
+
+/// Uses the emitter-supplied AArch64 registers to preserve the caller's native spill sequence.
+pub fn emit_owned_string_pair_with_reload(
+    emitter: &mut (impl AssemblyEmitter + TargetAbi), aarch64_reload: [&str; 2],
+) {
     spill_string(emitter);
     emit_cell_allocation(emitter);
     match emitter.arch() {
         Arch::AArch64 => {
             emit_aarch64_tag(emitter, "x9", STRING_TAG);
-            emitter.instruction("ldp x10, x11, [sp], #16");                     // recover the transferred pointer and length
-            emitter.instruction("stp x10, x11, [x0, #8]");                      // transfer the complete string pair
+            let [pointer, length] = aarch64_reload;
+            emitter.instruction(&format!("ldp {pointer}, {length}, [sp], #16")); // recover the transferred pointer and length
+            emitter.instruction(&format!("stp {pointer}, {length}, [x0, #8]")); // transfer the complete string pair
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov r10, {STRING_TAG}"));             // prepare the string tag before restoring the pair
@@ -56,15 +64,34 @@ pub fn emit_owned_string_pair(emitter: &mut (impl AssemblyEmitter + TargetAbi)) 
     }
 }
 
+/// Adopts an already-owned string pair staged in a SysV frame.
+pub fn emit_owned_string_from_x86_frame(
+    emitter: &mut (impl AssemblyEmitter + TargetAbi), pointer: FrameOffset, length: FrameOffset,
+) {
+    emit_cell_allocation(emitter);
+    emitter.instruction(&format!("mov QWORD PTR [rax], {STRING_TAG}"));         // publish the owned string tag
+    abi::load_at_offset(emitter, "r10", pointer.bytes());
+    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // transfer the pointer into the cell
+    abi::load_at_offset(emitter, "r10", length.bytes());
+    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // transfer the length into the cell
+}
+
 /// Adopts one already-owned pointer in the native result register into a tagged cell.
 pub fn emit_owned_pointer(emitter: &mut (impl AssemblyEmitter + TargetAbi), tag: ValueTag) {
+    emit_owned_pointer_with_reload(emitter, tag, "x10");
+}
+
+/// Uses the emitter-supplied AArch64 registers to preserve the caller's native spill sequence.
+pub fn emit_owned_pointer_with_reload(
+    emitter: &mut (impl AssemblyEmitter + TargetAbi), tag: ValueTag, aarch64_reload: &str,
+) {
     emitter.emit_push_reg(emitter.int_result_reg());
     emit_cell_allocation(emitter);
     match emitter.arch() {
         Arch::AArch64 => {
             emit_aarch64_tag(emitter, "x9", tag);
-            emitter.emit_pop_reg("x10");
-            emitter.instruction("str x10, [x0, #8]");                           // transfer the one-word pointer payload
+            emitter.emit_pop_reg(aarch64_reload);
+            emitter.instruction(&format!("str {aarch64_reload}, [x0, #8]"));    // transfer the one-word pointer payload
             emitter.instruction("str xzr, [x0, #16]");                          // clear the unused high word
         }
         Arch::X86_64 => {
@@ -77,14 +104,22 @@ pub fn emit_owned_pointer(emitter: &mut (impl AssemblyEmitter + TargetAbi), tag:
 }
 
 /// Adopts an already-owned pointer saved in a native frame slot into a fresh Mixed cell.
-/// The caller supplies the architecture's memory operand, which stays valid across allocation.
+/// The caller supplies the memory operand and the two AArch64 tag and payload registers.
 pub fn emit_owned_pointer_from_slot(emitter: &mut impl Emitter, tag: ValueTag, source_slot: &str) {
+    emit_owned_pointer_from_slot_with_scratch(emitter, tag, source_slot, ["x10", "x11"]);
+}
+
+/// Uses the emitter-supplied AArch64 registers to preserve the caller's native spill sequence.
+pub fn emit_owned_pointer_from_slot_with_scratch(
+    emitter: &mut impl Emitter, tag: ValueTag, source_slot: &str, aarch64_scratch: [&str; 2],
+) {
     emit_cell_allocation(emitter);
     match emitter.arch() {
         Arch::AArch64 => {
-            emit_aarch64_tag(emitter, "x10", tag);
-            emitter.instruction(&format!("ldr x11, {source_slot}"));            // recover the staged owner
-            emitter.instruction("str x11, [x0, #8]");                           // transfer the pointer into the low payload word
+            let [tag_reg, payload] = aarch64_scratch;
+            emit_aarch64_tag(emitter, tag_reg, tag);
+            emitter.instruction(&format!("ldr {payload}, {source_slot}"));      // recover the staged owner
+            emitter.instruction(&format!("str {payload}, [x0, #8]"));           // transfer the pointer into the low payload word
             emitter.instruction("str xzr, [x0, #16]");                          // clear the unused high payload word
         }
         Arch::X86_64 => {
@@ -94,6 +129,21 @@ pub fn emit_owned_pointer_from_slot(emitter: &mut impl Emitter, tag: ValueTag, s
             emitter.instruction("mov QWORD PTR [rax + 16], 0");                 // clear the unused high payload word
         }
     }
+}
+
+/// Adopts an x86_64 frame owner loaded before the box's heap-kind word is installed.
+pub fn emit_owned_pointer_from_x86_frame_before_kind(
+    emitter: &mut impl Emitter, tag: ValueTag, source: FrameOffset,
+) {
+    abi::emit_load_int_immediate(emitter, "rax", MIXED_CELL_SIZE as i64);
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    abi::load_at_offset(emitter, "r10", source.bytes());
+    let word = crate::layout::x86_64_heap_kind_word(MIXED_HEAP_KIND);
+    emitter.instruction(&format!("mov r11, 0x{word:x}"));                       // prepare the heap kind while retaining the owner in r10
+    emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // stamp the complete x86_64 kind word
+    emitter.instruction(&format!("mov QWORD PTR [rax], {tag}"));                // publish the caller's payload tag
+    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // transfer the staged owner
+    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // clear the unused high word
 }
 
 /// Adopts a pointer with a runtime tag already saved alongside it in the native frame.
