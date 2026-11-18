@@ -12,6 +12,8 @@
 //!   would mutate an object refcount by hand. Neither is needed: the cell simply adopts
 //!   the reference the allocation already produced.
 
+use elephc_memoir::{ValueTag, values::owned_payload};
+
 use super::*;
 
 /// Emits the ARM64 native wrapper for cloning boxed object cells.
@@ -103,15 +105,7 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter, n
         emitter.instruction("ldr x0, [sp, #8]");                                // register the completed clone before a PHP-visible box owns it
         abi::emit_call_label(emitter, "__rt_reference_sources_bind_object");
     }
-    emitter.instruction("mov x0, #24");                                         // a Mixed cell stores a runtime tag and two payload words
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the Mixed cell that will own the fresh clone
-    emitter.instruction("mov x9, #5");                                          // heap kind 5 marks Mixed cells for the ownership helpers
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the uniform Mixed-cell heap header
-    emitter.instruction("mov x9, #6");                                          // runtime tag 6 = object
-    emitter.instruction("str x9, [x0]");                                        // store the runtime tag at mixed[0]
-    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the clone, which still holds the allocator's only reference
-    emitter.instruction("str x9, [x0, #8]");                                    // move that reference into the Mixed cell rather than retaining a second one
-    emitter.instruction("str xzr, [x0, #16]");                                  // object payloads do not use a high word
+    owned_payload::emit_owned_pointer_from_slot_with_scratch(emitter, ValueTag::new(6), "[sp, #8]", ["x9", "x9"]);
     emitter.instruction("b __rt_object_clone_shallow_boxed_done");              // skip the null sentinel after a successful clone
 
     emitter.label("__rt_object_clone_shallow_boxed_null");

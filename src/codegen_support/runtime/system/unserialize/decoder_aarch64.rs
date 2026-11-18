@@ -7,6 +7,8 @@
 //! Key details:
 //! - The entry owns throw-safe cleanup; the decoder assumes the allocation-free preflight succeeded.
 
+use elephc_memoir::{ValueTag, values::owned_payload};
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
@@ -354,15 +356,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldrb w11, [x10, x9]");                                 // bounded closing delimiter
     emitter.instruction("cmp w11, #125");                                       // exact `}`
     emitter.instruction("b.ne __rt_unser_at_array_fail");                       // anything but '}' fails the array
-    emitter.instruction("mov x0, #24");                                         // box the hash: Mixed cell = tag + two payload words
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the boxed Mixed cell
-    emitter.instruction("mov x9, #5");                                          // heap kind 5 = boxed Mixed cell
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the heap header
-    emitter.instruction("mov x9, #5");                                          // value tag 5 = associative array (hash)
-    emitter.instruction("str x9, [x0]");                                        // store the value tag
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the hash pointer
-    emitter.instruction("str x9, [x0, #8]");                                    // store the hash pointer (ownership transferred, no incref)
-    emitter.instruction("str xzr, [x0, #16]");                                  // clear the high payload word
+    owned_payload::emit_owned_pointer_from_slot_with_scratch(emitter, ValueTag::new(5), "[sp, #24]", ["x9", "x9"]);
     emitter.instruction("ldr x1, [sp, #88]");                                   // pass this array's reserved zero-based index beside its box
     emitter.instruction("bl __rt_unserialize_register_array");                  // retain a context lease for references after hydration
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload position (at the closing '}')
@@ -433,15 +427,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x0, #24]");                                  // property hash is created after its count is parsed
     emitter.label("__rt_unser_obj_allocated");
     emitter.instruction("str x0, [sp, #24]");                                   // save the new object pointer
-    emitter.instruction("mov x0, #24");                                         // allocate the object's stable boxed Mixed cell
-    emitter.instruction("bl __rt_heap_alloc");                                  // create the box before decoding any property values
-    emitter.instruction("mov x9, #5");                                          // heap kind 5 = boxed Mixed cell
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the box header
-    emitter.instruction("mov x9, #6");                                          // value tag 6 = object
-    emitter.instruction("str x9, [x0]");                                        // publish the object tag
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the object pointer
-    emitter.instruction("str x9, [x0, #8]");                                    // transfer the object ownership into the box
-    emitter.instruction("str xzr, [x0, #16]");                                  // clear the high payload word
+    owned_payload::emit_owned_pointer_from_slot_with_scratch(emitter, ValueTag::new(6), "[sp, #24]", ["x9", "x9"]);
     emitter.instruction("str x0, [sp, #96]");                                   // retain the stable result box through hooks and parsing
     emitter.instruction("ldr x9, [sp, #88]");                                   // reserved value index for this object
     emitter.instruction("mov x10, #65536");                                     // value-registry capacity

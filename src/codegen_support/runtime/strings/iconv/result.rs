@@ -17,18 +17,12 @@
 //!   `[count]` then `[key_len][key][value_count]` and `[len][bytes]` per value. A value
 //!   count of one is a string entry; anything else becomes a PHP list.
 
+use elephc_memoir::{FrameOffset, ValueTag, values::owned_payload};
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
 use super::call::{RESULT_BYTES, RESULT_INT, RESULT_KIND, RESULT_LEN};
-
-/// Uniform heap-header kind reserved for boxed Mixed cells.
-const MIXED_HEAP_KIND: u32 = 5;
-
-/// Returns the x86_64 heap-kind word that marks an allocation as a boxed Mixed cell.
-fn mixed_heap_kind_word() -> u64 {
-    crate::codegen_support::sentinels::x86_64_heap_kind_word(MIXED_HEAP_KIND)
-}
 
 /// Emits the result materializer and its packed-array decoder for the active target.
 pub(super) fn emit_iconv_result(emitter: &mut Emitter) {
@@ -82,29 +76,12 @@ fn emit_materialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x2, [x0, #{}]", RESULT_LEN));             // load the produced byte length
     emitter.instruction(&format!("ldr x1, [x0, #{}]", RESULT_BYTES));           // load the bridge-owned byte pointer
     emitter.instruction("bl __rt_str_persist");                                 // copy the bytes into runtime-owned storage
-    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // hold the owned string while the Mixed cell is allocated
-    emitter.instruction("mov x0, #24");                                         // a Mixed cell is a tag word plus two payload words
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the boxed cell
-    emitter.instruction("mov x9, #5");                                          // heap kind 5 = boxed Mixed cell
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the allocation as a Mixed cell
-    emitter.instruction("mov x9, #1");                                          // runtime tag 1 = string
-    emitter.instruction("str x9, [x0]");                                        // store the runtime value tag
-    emitter.instruction("ldp x9, x10, [sp], #16");                              // reload the owned string pointer and length
-    emitter.instruction("stp x9, x10, [x0, #8]");                               // install the owned string as the cell payload
+    owned_payload::emit_owned_string_pair_with_reload(emitter, ["x9", "x10"]);
     emitter.instruction("b __rt_iconv_materialize_done");                       // return the boxed string
 
     emitter.label("__rt_iconv_materialize_array");
     emitter.instruction("bl __rt_iconv_build_array");                           // decode the packed entries into a runtime hash
-    emitter.instruction("str x0, [sp, #-16]!");                                 // hold the owned hash while the Mixed cell is allocated
-    emitter.instruction("mov x0, #24");                                         // a Mixed cell is a tag word plus two payload words
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the boxed cell
-    emitter.instruction("mov x9, #5");                                          // heap kind 5 = boxed Mixed cell
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the allocation as a Mixed cell
-    emitter.instruction("mov x9, #5");                                          // runtime tag 5 = associative array
-    emitter.instruction("str x9, [x0]");                                        // store the runtime value tag
-    emitter.instruction("ldr x9, [sp], #16");                                   // reload the owned hash pointer
-    emitter.instruction("str x9, [x0, #8]");                                    // install the owned hash as the cell payload
-    emitter.instruction("str xzr, [x0, #16]");                                  // array Mixed payloads do not use a high word
+    owned_payload::emit_owned_pointer_with_reload(emitter, ValueTag::new(5), "x9");
 
     emitter.label("__rt_iconv_materialize_done");
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the caller frame pointer and return address
@@ -257,28 +234,13 @@ fn emit_materialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // copy the bytes into runtime-owned storage
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // hold the owned string pointer across the allocation
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // hold the owned string length across the allocation
-    emitter.instruction("mov rax, 24");                                         // a Mixed cell is a tag word plus two payload words
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the boxed cell
-    emitter.instruction(&format!("mov r10, 0x{:x}", mixed_heap_kind_word()));   // stamp the canonical x86_64 heap-kind word for a Mixed cell
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the Mixed-cell heap kind
-    emitter.instruction("mov QWORD PTR [rax], 1");                              // runtime tag 1 = string
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owned string pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // install the owned string pointer as the payload
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the owned string length
-    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // install the string length as the payload high word
+    owned_payload::emit_owned_string_from_x86_frame(emitter, FrameOffset::new(8), FrameOffset::new(16));
     emitter.instruction("jmp __rt_iconv_materialize_done_linux_x86_64");        // return the boxed string
 
     emitter.label("__rt_iconv_materialize_array_linux_x86_64");
     emitter.instruction("call __rt_iconv_build_array");                         // decode the packed entries into a runtime hash
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // hold the owned hash across the allocation
-    emitter.instruction("mov rax, 24");                                         // a Mixed cell is a tag word plus two payload words
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the boxed cell
-    emitter.instruction(&format!("mov r10, 0x{:x}", mixed_heap_kind_word()));   // stamp the canonical x86_64 heap-kind word for a Mixed cell
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the Mixed-cell heap kind
-    emitter.instruction("mov QWORD PTR [rax], 5");                              // runtime tag 5 = associative array
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owned hash pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // install the owned hash as the cell payload
-    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // array Mixed payloads do not use a high word
+    owned_payload::emit_owned_pointer_from_slot(emitter, ValueTag::new(5), "QWORD PTR [rbp - 8]");
 
     emitter.label("__rt_iconv_materialize_done_linux_x86_64");
     emitter.instruction("mov rsp, rbp");                                        // release the materializer frame
