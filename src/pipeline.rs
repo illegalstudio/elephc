@@ -463,15 +463,6 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // consumed only when `opcache.preload` is set (see `opcache_prelude::preload_statistics`).
     let opcache_preload_symbols = opcache_prelude::collect_preload_symbols(&ast);
 
-    // Inject the DOM HTML subset (`DOMDocument` family, built as AST so it participates in name
-    // resolution, type checking, EIR lowering and closed-world pruning like user classes) only
-    // when the program names a DOM class, so other binaries never carry the HTML walker. The late
-    // gate below covers a program that only an autoloaded class reaches them from.
-    crate::progress::phase("dom-html-prelude");
-    let phase_started = Instant::now();
-    let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    timings.record_since("dom-html-prelude", phase_started);
-
     // Inject the PDO standard-library prelude (extern bridge + PDO classes,
     // written in elephc-PHP) only when the program references PDO, so non-PDO
     // binaries never declare the elephc_pdo externs or link the bridge.
@@ -703,6 +694,14 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_gradual_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // Inject the DOM HTML subset (`DOMDocument` family, built as AST so it participates in name
+    // resolution, type checking, EIR lowering and closed-world pruning like user classes) only
+    // when the program names a DOM class. Runs after Core so the weak-cache dependency
+    // (`WeakReference`) is declared exactly once, as on main.
+    crate::progress::phase("dom-html-prelude");
+    let dom_phase_started = Instant::now();
+    let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    timings.record_since("dom-html-prelude", dom_phase_started);
     // php 8.4's `Dom\HTMLDocument` and its node classes; the late gate below covers a program
     // that only an autoloaded class (symfony/html-sanitizer's `NativeParser`) names it from.
     let ast = crate::dom_modern_prelude::inject_if_used(ast, php_version, false, &mut prelude_inventory);

@@ -43,7 +43,13 @@ fn label_token_positions(text: &str, label: &str) -> Vec<usize> {
         let after = at + label.len();
         let keep = match bytes.get(after) {
             Some(b) if b.is_ascii_digit() => true,
-            Some(b'_') => bytes.get(after + 1).is_some_and(u8::is_ascii_digit),
+            Some(b'_') => {
+                bytes.get(after + 1).is_some_and(u8::is_ascii_digit)
+                    // The shared owner callbacks are filed once, out of line, under the label
+                    // of the first invoker that needed them (`<label>__gc_argument_owners`
+                    // and `..._cleanup`); a body that names one must keep naming it.
+                    || bytes[after..].starts_with(b"__gc_argument_owners")
+            }
             _ => false,
         };
         if keep {
