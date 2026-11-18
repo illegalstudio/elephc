@@ -2362,3 +2362,13 @@ Acceptance covers the refreshed compiler/Magician archive, all five emitters and
 This step repairs reached source views. Original program producer contracts across narrowed/replaced views and conditional global binding ends remain active work. Nullability, Mixed, Initialization, ArrayTypes, Indexing and complete umbrella acceptance remain unadmitted.
 
 All 11 acceptance gates passed in job 6dc015b7. Every public executable and the complete example reports a clean heap.
+
+### Verified201: conditional global activation origins
+
+The existing persistent declaration-origin selector now covers ordinary reached function globals as well as statics. It preserves displaced parameter/capture entry evidence and excludes trusted declarations, request superglobals, extern globals and this from the new global selection. Runtime local-origin checking admits an active global only with that explicit proof. Reached declarations record their producer independently of displaced entry facts, and native global leases reuse end, bind_persistent_ref_cell_ptr and start_reference_declaration. No global sidecar, cell layout or new origin protocol was introduced.
+
+An executed conditional unset ends the activation's binding. Its replacement gets the successful producer's contract; a still-attached predecessor retains the program contract. Re-declaring global reconnects to the persistent value. The shared fixture covers old reference captures, mixed replacement producers, integer/float rejection, allowed integer updates, a fresh string producer rejecting an integer, and repeated declarations after detachment. The expanded strict-locals example shows a detached string label and rejection through the still-attached integer global.
+
+All 13 gates passed in job ee186713: refreshed compiler/archive, all five emitters, both optimizer native and opaque-eval runs, both interpreter entries/profiles with zero retained owners, the preserved native no-flag cross-kind diagnostic, existing static/parameter/raw-reference/reached-global controls, diff hygiene and public PHP/LFC cases. Four strict public runs and the complete example have clean heaps; four no-flag controls preserve the legacy diagnostic. Earlier initial probes also passed all-target/native/interpreter checks. Separate frontend probes202 accept explicit mixed and union program producers after a root write, so no missing original-producer behavior is inferred solely from that scenario. Their executable positive and negative boundary checks remain next.
+
+No additional strict family is admitted. Nullability, Mixed, Initialization, ArrayTypes, Indexing and complete umbrella/host/cache/optimizer acceptance remain active.

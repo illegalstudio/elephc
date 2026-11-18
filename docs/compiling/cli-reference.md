@@ -1020,7 +1020,10 @@ incoming reference this way leaves the caller's variable intact.
 Unsetting or rebinding that local name leaves the program entry intact. References
 captured before detachment keep observing the program value; value captures keep
 an independent snapshot. A conditional detach affects only its executed path,
-including across runtime eval. Replacing an existing local during `global` can
+including across runtime eval. With `--strict-locals`, the detached path starts a
+fresh producer contract, while the attached path keeps the program contract.
+Re-declaring `global` reconnects the name to the program value.
+Replacing an existing local during `global` can
 run its destructor before the alias is published. If that destructor throws, the
 local remains null and the program value stays intact.
 For ordinary assignments to a global, the replacement is visible before the old

@@ -182,3 +182,11 @@ fn reached_global_producers_eval_values_and_owners() {
     let expected = "string:after|after|string:after|1:after|string:after|after|string:after|string:after|after|double:2.5|string:ready|";
     assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/reached_global_producers.php"), expected, expected);
 }
+
+/// Conditional global binding ends retain the executed source contract in both engines.
+#[test]
+fn conditional_global_origins_eval_values_and_owners() {
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/conditional_global_origins.php"),
+        "Wstring:new:1|1|Tinteger:1:1|1|Tinteger:1:1|1|Winteger:2:2|2|integer:2|integer:2|Tstring:local|2|Winteger:3|3|",
+        "Wstring:new:1|1|Wstring:bad:bad|bad|Wdouble:1.5:1.5|1.5|Winteger:2:2|2|integer:2|integer:2|Winteger:3|2|Winteger:3|3|");
+}

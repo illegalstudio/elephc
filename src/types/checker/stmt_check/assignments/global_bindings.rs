@@ -8,10 +8,10 @@
 //! - Program source views replace old parameter, capture, static and ordinary local views.
 //! - Physical canonical storage does not by itself authorize broader reference contracts.
 
-use crate::{errors::CompileError, types::{checker::Checker, PhpType, TypeEnv}};
+use crate::{errors::CompileError, span::Span, types::{checker::Checker, PhpType, TypeEnv}};
 
 /// Checks reached program sources independently of the local values they displace.
-pub(super) fn check(checker: &mut Checker, vars: &[String], env: &mut TypeEnv) -> Result<(), CompileError> {
+pub(super) fn check(checker: &mut Checker, vars: &[String], span: Span, env: &mut TypeEnv) -> Result<(), CompileError> {
     for name in vars {
         let retired = checker.binding_retirement_type(name, env);
         let source = checker.top_level_env.get(name).cloned().unwrap_or(PhpType::Mixed);
@@ -27,6 +27,10 @@ pub(super) fn check(checker: &mut Checker, vars: &[String], env: &mut TypeEnv) -
             checker.active_statics.remove(name);
         }
         checker.active_globals.insert(name.clone());
+        if checker.local_store_contracts.has_runtime_origin(&checker.current_loop_storage_scope, name) {
+            checker.inferred_local_contracts.insert(name.clone(), source.clone());
+            checker.record_declared_binding_contract(name, &source, span);
+        }
         env.insert(name.clone(), source);
         checker.definitely_bound_locals.insert(name.clone());
         checker.record_binding_retirement_exception_flow(&retired, env);

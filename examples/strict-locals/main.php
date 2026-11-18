@@ -259,11 +259,16 @@ selectStoredQuantity(true);
 selectStoredQuantity(false);
 
 // A detached global name becomes local while the program keeps its original quantity.
-function detachGlobalQuantity(): void {
+function detachGlobalQuantity(bool $detach): void {
     global $globalQuantity;
-    unset($globalQuantity);
-    $globalQuantity = 3;
-    echo "Detached quantity: ", $globalQuantity, PHP_EOL;
+    if ($detach) { unset($globalQuantity); }
+    try {
+        $globalQuantity = 'not tracked';
+        echo "Detached quantity: ", $globalQuantity, PHP_EOL;
+    } catch (TypeError $error) {
+        echo "The global quantity kept its integer type", PHP_EOL;
+    }
 }
-detachGlobalQuantity();
+detachGlobalQuantity(true);
+detachGlobalQuantity(false);
 echo "Retained global quantity: ", $globalQuantity, PHP_EOL;

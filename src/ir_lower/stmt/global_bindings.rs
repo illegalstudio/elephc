@@ -21,6 +21,10 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span) {
     ctx.adopt_returned_ref_cell_into(&staged, pointer, PhpType::Mixed, Some(span));
     crate::ir_lower::local_binding_origins::end(ctx, name, Some(span));
     ctx.bind_persistent_ref_cell_ptr(name, pointer, span);
+    let contract = ctx.local_store_contracts.get(&(ctx.loop_storage_scope.clone(), span, name.into()))
+        .filter(|contract| contract.feature == elephc_semantics::StrictFeature::Locals)
+        .map_or(PhpType::Mixed, |contract| contract.ty.clone());
+    crate::ir_lower::local_binding_origins::start_reference_declaration(ctx, name, contract, span);
     crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
     ctx.clear_static_callable_locals();
 }

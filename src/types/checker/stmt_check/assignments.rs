@@ -181,7 +181,7 @@ impl Checker {
             StmtKind::ListUnpack { vars, value } => {
                 locals::check_list_unpack(self, vars, value, stmt.span, env)
             }
-            StmtKind::Global { vars } => global_bindings::check(self, vars, env),
+            StmtKind::Global { vars } => global_bindings::check(self, vars, stmt.span, env),
             StmtKind::StaticVar { name, init } => {
                 locals::check_static_var(self, name, init, stmt.span, env)
             }

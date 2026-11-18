@@ -108,6 +108,8 @@ struct NameFacts {
     captured_by_ref: bool,
     /// A reached function static lends canonical persistent storage to this activation name.
     static_binding: bool,
+    /// A reached function global lends canonical program storage to this activation name.
+    global_binding: bool,
 }
 
 /// Everything one scan of one body collects.
@@ -235,7 +237,7 @@ impl Checker {
 
         self.mark_owned_eval_binding_origins(&facts, pre_bound_own_storage);
         self.mark_entry_binding_origins(&facts, pre_bound_own_storage);
-        self.mark_static_binding_origins(&facts, pre_bound_own_storage);
+        self.mark_persistent_binding_origins(&facts, pre_bound_own_storage);
         if self.strict_locals && facts.contains_eval { return; }
 
         // Collected before pushing so the warnings come out in source order regardless of the
@@ -937,6 +939,7 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
         StmtKind::Global { vars } => {
             for var in vars {
                 disqualify(facts, var);
+                if !facts.trusted_source { facts.names.entry(var.clone()).or_default().global_binding = true; }
             }
         }
         StmtKind::StaticVar { name, init } => {
