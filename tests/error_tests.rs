@@ -61,7 +61,7 @@ fn host_platform() -> elephc::codegen_support::platform::Platform {
     }
 }
 
-/// Checks source with defines and options for this module.
+/// Runs the frontend on `src` with the supplied defines and check options.
 fn check_source_with_defines_and_options(
     src: &str,
     defines: &[&str],
