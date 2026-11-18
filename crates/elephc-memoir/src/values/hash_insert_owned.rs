@@ -9,6 +9,7 @@
 //! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
 
 use crate::hash_layout;
+use super::hash_bucket;
 use crate::{Arch, Emitter};
 
 /// hash_insert_owned: insert a normalized key-value pair whose key/value ownership already
@@ -99,43 +100,13 @@ pub fn emit_hash_insert_owned(emitter: &mut impl Emitter) {
     emitter.instruction("str x13, [x12, #8]");                                  // store key pointer in slot
     emitter.instruction("ldr x13, [sp, #16]");                                  // reload moved key length
     emitter.instruction("str x13, [x12, #16]");                                 // store key length in slot
-    emitter.instruction("ldr x13, [sp, #24]");                                  // reload moved value_lo
-    emitter.instruction("str x13, [x12, #24]");                                 // store value_lo in slot
-    emitter.instruction("ldr x13, [sp, #32]");                                  // reload moved value_hi
-    emitter.instruction("str x13, [x12, #32]");                                 // store value_hi in slot
-    emitter.instruction("ldr x13, [sp, #40]");                                  // reload moved value_tag
-    emitter.instruction("str x13, [x12, #40]");                                 // store value_tag in slot
-    emitter.instruction("ldr x14, [x5, #32]");                                  // load the previous tail slot for insertion-order linking
-    emitter.instruction("str x14, [x12, #48]");                                 // store prev = old tail on the new entry
-    emitter.instruction("mov x15, #-1");                                        // sentinel index for end of the insertion-order chain
-    emitter.instruction("str x15, [x12, #56]");                                 // store next = none on the new tail entry
-    emitter.instruction("ldr x15, [x5, #24]");                                  // load the current head slot
-    emitter.instruction("cmp x15, #-1");                                        // is this the first inserted slot in the destination hash?
-    emitter.instruction("b.ne __rt_hash_insert_owned_link_tail");               // existing hashes append after the previous tail
-    emitter.instruction("str x9, [x5, #24]");                                   // initialize head = inserted slot
-    emitter.instruction("str x9, [x5, #32]");                                   // initialize tail = inserted slot
-    emitter.instruction("b __rt_hash_insert_owned_count");                      // skip the tail-link update for the first entry
-    emitter.label("__rt_hash_insert_owned_link_tail");
-    emitter.instruction("mov x16, #64");                                        // x16 = hash entry size for tail-slot addressing
-    hash_layout::emit_entry_address(emitter, "x17", "x5", "x14");
-    emitter.instruction("str x9, [x17, #56]");                                  // link old tail.next = inserted slot
-    emitter.instruction("str x9, [x5, #32]");                                   // update tail = inserted slot
-    emitter.label("__rt_hash_insert_owned_count");
-    emitter.instruction("ldr x5, [sp, #0]");                                    // reload destination table pointer
-    emitter.instruction("ldr x13, [x5]");                                       // load current entry count
-    emitter.instruction("add x13, x13, #1");                                    // count the newly inserted slot
-    emitter.instruction("str x13, [x5]");                                       // store updated entry count
-    super::hash_next_index::record_insert(emitter, "x5", "x12", "__rt_hash_insert_owned");
+    hash_bucket::emit_publish_payload(emitter);
+    hash_bucket::emit_link_new_bucket(emitter, "__rt_hash_insert_owned", "__rt_hash_insert_owned_count");
     emitter.instruction("b __rt_hash_insert_owned_done");                       // insertion is complete
 
     // -- duplicate key during grow: overwrite value in place --
     emitter.label("__rt_hash_insert_owned_overwrite");
-    emitter.instruction("ldr x13, [sp, #24]");                                  // reload moved value_lo
-    emitter.instruction("str x13, [x12, #24]");                                 // overwrite value_lo in existing slot
-    emitter.instruction("ldr x13, [sp, #32]");                                  // reload moved value_hi
-    emitter.instruction("str x13, [x12, #32]");                                 // overwrite value_hi in existing slot
-    emitter.instruction("ldr x13, [sp, #40]");                                  // reload moved value_tag
-    emitter.instruction("str x13, [x12, #40]");                                 // overwrite value_tag in existing slot
+    hash_bucket::emit_publish_payload(emitter);
 
     emitter.label("__rt_hash_insert_owned_done");
     emitter.instruction("ldr x0, [sp, #0]");                                    // return destination table pointer
@@ -205,34 +176,8 @@ fn emit_hash_insert_owned_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("mov QWORD PTR [r12 + 8], r13");                        // store the owned key pointer into the selected hash entry without repersisting it
     emitter.instruction("mov r13, QWORD PTR [rbp - 24]");                       // reload the owned key length that already belongs to the destination hash table
     emitter.instruction("mov QWORD PTR [r12 + 16], r13");                       // store the owned key length into the selected hash entry without repersisting it
-    emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // reload the low payload word that belongs to the inserted hash value
-    emitter.instruction("mov QWORD PTR [r12 + 24], r13");                       // store the low payload word into the hash entry payload area
-    emitter.instruction("mov r13, QWORD PTR [rbp - 40]");                       // reload the high payload word that belongs to the inserted hash value
-    emitter.instruction("mov QWORD PTR [r12 + 32], r13");                       // store the high payload word into the hash entry payload area
-    emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // reload the runtime value tag that describes the inserted payload
-    emitter.instruction("mov QWORD PTR [r12 + 40], r13");                       // store the runtime value tag into the selected hash entry
-    emitter.instruction("mov r13, QWORD PTR [r10 + 32]");                       // load the previous insertion-order tail slot from the hash header
-    emitter.instruction("mov QWORD PTR [r12 + 48], r13");                       // link the new entry back to the previous tail slot
-    emitter.instruction("mov r14, -1");                                         // materialize the end-of-chain sentinel for the inserted tail entry
-    emitter.instruction("mov QWORD PTR [r12 + 56], r14");                       // initialize the new entry next-pointer as the tail sentinel
-    emitter.instruction("cmp r13, -1");                                         // detect the first insertion so the hash header head/tail can be initialized together
-    emitter.instruction("jne __rt_hash_insert_owned_link_tail");                // existing tables need an extra step to wire the previous tail forward to the inserted slot
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the inserted slot index to seed the insertion-order head pointer
-    emitter.instruction("mov QWORD PTR [r10 + 24], r11");                       // header[24]: initialize the insertion-order head for the first occupied entry
-    emitter.instruction("mov QWORD PTR [r10 + 32], r11");                       // header[32]: initialize the insertion-order tail for the first occupied entry
-    emitter.instruction("jmp __rt_hash_insert_owned_bump_count");               // skip the previous-tail forward-link update on the very first insertion
-
-    emitter.label("__rt_hash_insert_owned_link_tail");
-    hash_layout::emit_entry_address(emitter, "r14", "r10", "r13");
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the inserted slot index for the previous-tail forward-link store
-    emitter.instruction("mov QWORD PTR [r14 + 56], r11");                       // update the previous tail entry to point at the inserted slot as its logical successor
-    emitter.instruction("mov QWORD PTR [r10 + 32], r11");                       // publish the inserted slot as the new insertion-order tail in the hash header
-
-    emitter.label("__rt_hash_insert_owned_bump_count");
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the current live-entry count from the hash header before incrementing it
-    emitter.instruction("add r11, 1");                                          // increment the live-entry count after claiming a previously empty hash slot
-    emitter.instruction("mov QWORD PTR [r10], r11");                            // store the updated live-entry count back into the hash header
-    super::hash_next_index::record_insert(emitter, "r10", "r12", "__rt_hash_insert_owned");
+    hash_bucket::emit_publish_payload(emitter);
+    hash_bucket::emit_link_new_bucket(emitter, "__rt_hash_insert_owned", "__rt_hash_insert_owned_bump_count");
     emitter.instruction("mov rax, r10");                                        // return the destination hash-table pointer after a successful owned insertion
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the owned-insert helper
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the owned-insert helper
@@ -242,12 +187,7 @@ fn emit_hash_insert_owned_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("ret");                                                 // return to the caller with the destination hash-table pointer in rax
 
     emitter.label("__rt_hash_insert_owned_overwrite");
-    emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // reload the replacement low payload word for the existing key slot
-    emitter.instruction("mov QWORD PTR [r12 + 24], r13");                       // overwrite the stored low payload word in the existing hash entry
-    emitter.instruction("mov r13, QWORD PTR [rbp - 40]");                       // reload the replacement high payload word for the existing key slot
-    emitter.instruction("mov QWORD PTR [r12 + 32], r13");                       // overwrite the stored high payload word in the existing hash entry
-    emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // reload the replacement runtime value tag for the existing key slot
-    emitter.instruction("mov QWORD PTR [r12 + 40], r13");                       // overwrite the stored runtime value tag in the existing hash entry
+    hash_bucket::emit_publish_payload(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged destination hash-table pointer after an in-place value overwrite
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the owned-overwrite path
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the owned-overwrite path

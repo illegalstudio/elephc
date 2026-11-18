@@ -60,6 +60,7 @@ pub mod array_merge_into_refcounted;
 pub mod array_shift;
 pub mod array_unshift;
 pub mod hash_iter;
+pub mod hash_bucket;
 pub mod hash_fnv1a;
 pub mod hash_get;
 pub mod hash_key_eq;
