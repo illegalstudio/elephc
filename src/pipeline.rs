@@ -2764,6 +2764,12 @@ fn classlike_activation_source_paths(
     // validation with `UnresolvedSource`.
     let mut paths = std::collections::BTreeSet::new();
     crate::parser::ast::visit::walk_stmts(program, &mut |statement| match &statement.kind {
+        // A class-binding mark carries its label (not a file) in the path slot.
+        StmtKind::IncludeOnceMark { source_path }
+            if source_path
+                .to_str()
+                .and_then(crate::parser::ast::class_binding_mark_class)
+                .is_some() => {}
         StmtKind::ClassLikeActivate { source_path, .. }
         | StmtKind::IncludeOnceMark { source_path }
         | StmtKind::IncludeOnceGuard { source_path, .. } => {
