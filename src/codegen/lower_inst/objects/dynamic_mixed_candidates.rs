@@ -633,7 +633,7 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
     ref_params.push(false);
     ref_params.extend_from_slice(&constructor.ref_params);
     let lifetime = super::super::constructor_ref_cell_lifetime(ctx, &candidate.class_name);
-    let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
+    let call_args = materialize_constructor_call_args_with_receiver_reg_and_refs(
         ctx,
         object_reg,
         &object_ty,

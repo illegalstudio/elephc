@@ -811,3 +811,5 @@ mod duplicate_unpack_values;
 mod reflection_array_evaluation;
 
 mod reflection_guarded_properties;
+
+mod constructor_string_owners;

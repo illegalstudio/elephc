@@ -124,6 +124,16 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     )
 }
 
+/// Roots string conversions when the register receiver belongs to a fresh construction.
+pub(super) fn materialize_constructor_call_args_with_receiver_reg_and_refs(
+    ctx: &mut FunctionContext<'_>, receiver_reg: &str, receiver_ty: &PhpType,
+    operands: &[ValueId], param_types: &[PhpType], ref_params: &[bool],
+    lifetime: RefArgCellLifetime,
+) -> Result<CallArgMaterialization> {
+    materialize_method_call_args_with_receiver_reg_and_refs_options(ctx, receiver_reg,
+        receiver_ty, operands, param_types, ref_params, lifetime, true)
+}
+
 
 /// Loads receiver-register method arguments with optional guarded conversion cleanup.
 fn materialize_method_call_args_with_receiver_reg_and_refs_options(
@@ -134,7 +144,7 @@ fn materialize_method_call_args_with_receiver_reg_and_refs_options(
     param_types: &[PhpType],
     ref_params: &[bool],
     lifetime: RefArgCellLifetime,
-    _guard_conversion_temporaries: bool,
+    constructor: bool,
 ) -> Result<CallArgMaterialization> {
     if operands.len() != param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
@@ -181,7 +191,11 @@ fn materialize_method_call_args_with_receiver_reg_and_refs_options(
         &mut ref_writebacks,
         &mut ref_temp_cells,
     )?;
-    let cleanup_slots = plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?;
+    let cleanup_slots = if constructor {
+        plan_constructor_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?
+    } else {
+        plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?
+    };
     let cleanup_bytes = cleanup_slots.len() * CALL_ARG_TEMP_CLEANUP_BYTES;
     abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);

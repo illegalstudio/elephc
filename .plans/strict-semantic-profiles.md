@@ -1217,3 +1217,25 @@ Raw permissive dynamic constructor Mixed-to-string ABI conversion still leaves a
 string owner; this is isolated independently and is the next cleanup step. The
 optional Reflection subclass limitation reproduces without semantic flags and is
 tracked separately as taskbc259636. ArrayKeys and six pending families stay gated.
+
+### Verified156: constructor ABI string conversion owners
+
+Constructor argument materialization adds string conversions to the shared cleanup
+plan in source order. Borrowed formatting becomes persistent before later PHP
+callbacks; already-owned results keep their owner. Slots use the target string
+pointer register, normal retirement reuses canonical string release, and existing
+owner records cover exceptions. Constructor entry points select this policy while
+ordinary call-result alias rules retain their existing behavior.
+
+Finald1b2adef passes in3m46s: compiler/bridge builds60.29s, ten target/profile
+generations13.96s, six PHP/LFC/Internal native variants12.78s, five exact promoted
+reference target controls and six string alias/throw/Reflection/eval controls.
+All13 unique gates, assembly comments and hygiene pass. Ten clang assemblies cover
+all five targets with both optimizer settings. Public CLIfe0da192 passes both
+optimizer variants in6s with clean heaps. The fixture includes owned and borrowed
+conversions, later formatting callbacks, conversion/callee throws, typed/untyped
+reference writeback and four-string arguments overflowing native registers.
+
+The signed154 raw constructor string-owner diagnostic is closed. Constructor-array
+validation, dependency policies and the remaining ArrayKeys/Locals/six-family
+integrations remain open; public admission has not changed.

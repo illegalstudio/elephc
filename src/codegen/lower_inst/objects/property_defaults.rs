@@ -394,12 +394,11 @@ pub(super) fn emit_constructor_call(
     ref_params.push(false);
     ref_params.extend_from_slice(constructor_ref_params);
     let lifetime = super::super::constructor_ref_cell_lifetime(ctx, class_name);
-    let call_args = super::super::materialize_direct_call_args_with_refs_and_options(
+    let call_args = super::super::materialize_constructor_call_args_with_refs(
         ctx,
         &args,
         &param_types,
         &ref_params,
-        true,
         lifetime,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
