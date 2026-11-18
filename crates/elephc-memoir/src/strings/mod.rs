@@ -21,3 +21,5 @@ pub mod strcopy;
 pub mod guarded_snapshot;
 pub mod owner_pair;
 pub mod byte_view;
+
+pub mod concat_window;

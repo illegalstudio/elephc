@@ -146,6 +146,28 @@ Detachment clears the slot and frees its bytes and name before the host dispatch
 callback retirement. PHP output flags, callback handling and flush policy stay
 in the compiler.
 
+Indexed-array emitters also own physical writes, appends, bulk copies and scalar
+slot shifts, including the inline append fast path. Hash growth and clone share
+the raw insertion-order cursor and owned bucket insertion with the compiler. The
+host supplies automatic-key bookkeeping and controls reference-aware assignment.
+
+`arena_reset` clears the collector and allocator for a full request reset. The
+live-base index is cleared while the old arena extent is still available.
+The web lifecycle chooses the full reset boundary. Persistent applications
+keep their arenas and roots.
+
+`handler_owners` saves, restores and retires active handler records using
+compiler-selected field layouts and exception completion. `deferred_owners`
+detaches each queued owner before invoking its destructor and drains additions
+made during reentry. Scoped parser owners can move to an enclosing scope or
+retire after detachment, while the parser chooses when to share its registry.
+
+Object construction and clone share the allocator header and handle sequence.
+Eval reference adapters share the transfer of a replacement payload into an
+existing box and keep the two displaced-owner policies distinct.
+Stream byte windows grow from staged offsets, and print_r renderers can park
+and restore their capture owner around nested PHP calls.
+
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, formatting, output routing, zval pack/unpack,
 resource identity/inventory policy, class/coroutine/SPL layout definitions, platform
@@ -204,6 +226,10 @@ strings. These contracts configure emission; they add no target runtime checks.
 The native lifecycle fingerprints cover 30 combinations of target and emission
 mode, including container conversions and mutation, protected cleanup, tagged
 clones, native eval and registry storage, and output buffer storage and emitters.
+
+The residual-storage fingerprints add 30 cases for indexed storage, raw hash
+transfer, handler records, mbstring's FIFO, parser cleanup and stream windows.
+The existing web reset and object clone fingerprints cover the reused emitters.
 
 ## Boundary gates
 

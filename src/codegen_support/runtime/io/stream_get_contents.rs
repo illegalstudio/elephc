@@ -16,7 +16,7 @@
 //! - The read-all loop uses `__rt_fread` so TLS sessions, filters, and wrapper
 //!   reads share one I/O dispatch path.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Initial accumulation capacity, in bytes. Two read chunks wide so the first `__rt_fread`
 /// never has to grow, and small enough that short streams still stay in concat scratch.
@@ -490,48 +490,15 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
 /// Expanding filters can return more bytes than fread requested; grow before copying that chunk.
 /// The bounded path already clamps its actual chunk length to the caller's remaining limit.
 fn ensure_returned_chunk_capacity(emitter: &mut Emitter, bounded: bool) {
-    let arm = emitter.target.arch == Arch::AArch64;
+    let (buffer, used, capacity, chunk, length) = match (emitter.target.arch, bounded) {
+        (Arch::AArch64, false) => (16, 24, 48, 32, 40),
+        (Arch::AArch64, true) => (24, 32, 56, 40, 48),
+        (Arch::X86_64, false) => (24, 32, 56, 40, 48),
+        (Arch::X86_64, true) => (32, 40, 64, 48, 56),
+    };
+    let frame = elephc_memoir::strings::concat_window::ConcatWindow {
+        buffer, used, capacity, chunk, length,
+    };
     let ready = format!("__rt_stream_actual_chunk_ready_{}", u8::from(bounded));
-    // -- compare the actual returned byte count with the accumulation window --
-    if arm {
-        let (buffer, used, capacity, chunk, length) = if bounded { (24, 32, 56, 40, 48) } else { (16, 24, 48, 32, 40) };
-        emitter.instruction(&format!("ldr x9, [sp, #{used}]"));                 // read the already accumulated byte count
-        emitter.instruction(&format!("ldr x10, [sp, #{length}]"));              // inspect the clamped actual chunk length
-        emitter.instruction("add x9, x9, x10");                                 // compute the space required before any byte is copied
-        emitter.instruction(&format!("ldr x10, [sp, #{capacity}]"));            // compare with the reserved accumulation capacity
-        emitter.instruction("cmp x9, x10");                                     // an expanding filter can exceed the requested read size
-        emitter.instruction(&format!("b.ls {ready}"));                          // retain the current window when it already fits
-        emitter.instruction(&format!("str x9, [sp, #{capacity}]"));             // grow to cover the actual bytes returned
-        emitter.instruction(&format!("ldr x1, [sp, #{buffer}]"));               // return the old concat scratch reservation
-        emitter.instruction("mov x2, #0");                                      // release the full scratch window before moving to heap storage
-        abi::emit_call_label(emitter, "__rt_concat_publish");
-        emitter.instruction(&format!("ldr x0, [sp, #{buffer}]"));               // preserve the existing accumulation bytes during growth
-        emitter.instruction(&format!("ldr x1, [sp, #{used}]"));                 // copy only the initialized prefix
-        emitter.instruction(&format!("ldr x2, [sp, #{capacity}]"));             // allocate room for the full actual chunk
-        abi::emit_call_label(emitter, "__rt_concat_grow");
-        emitter.instruction(&format!("str x0, [sp, #{buffer}]"));               // publish the grown accumulation buffer
-        emitter.label(&ready);
-        emitter.instruction(&format!("ldr x1, [sp, #{chunk}]"));                // restore the source pointer after growth clobbered result registers
-        emitter.instruction(&format!("ldr x2, [sp, #{length}]"));               // restore the actual chunk length for the copy loop
-        emitter.instruction(&format!("ldr x9, [sp, #{used}]"));                 // restore the destination prefix offset
-    } else {
-        let (buffer, used, capacity, chunk, length) = if bounded { (32, 40, 64, 48, 56) } else { (24, 32, 56, 40, 48) };
-        emitter.instruction(&format!("mov r8, QWORD PTR [rbp - {used}]"));      // read the already accumulated byte count
-        emitter.instruction(&format!("add r8, QWORD PTR [rbp - {length}]"));    // include the clamped actual chunk length
-        emitter.instruction(&format!("cmp r8, QWORD PTR [rbp - {capacity}]"));  // compare actual output with the reserved window
-        emitter.instruction(&format!("jbe {ready}"));                           // no allocation is needed when the chunk fits
-        emitter.instruction(&format!("mov QWORD PTR [rbp - {capacity}], r8"));  // grow to cover every returned byte
-        emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {buffer}]"));   // return the old concat scratch reservation
-        emitter.instruction("xor edx, edx");                                    // release the full scratch window before moving to heap storage
-        abi::emit_call_label(emitter, "__rt_concat_publish");
-        emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {buffer}]"));   // preserve the existing accumulation bytes during growth
-        emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {used}]"));     // copy only the initialized prefix
-        emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {capacity}]")); // allocate room for the full actual chunk
-        abi::emit_call_label(emitter, "__rt_concat_grow");
-        emitter.instruction(&format!("mov QWORD PTR [rbp - {buffer}], rax"));   // publish the grown accumulation buffer
-        emitter.label(&ready);
-        emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {chunk}]"));    // restore the source pointer after growth clobbered result registers
-        emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {length}]"));   // restore the actual chunk length for the copy loop
-        emitter.instruction(&format!("mov r8, QWORD PTR [rbp - {used}]"));      // restore the destination prefix offset
-    }
+    elephc_memoir::strings::concat_window::emit_ensure(emitter, frame, &ready);
 }
