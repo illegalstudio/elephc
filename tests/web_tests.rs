@@ -1382,6 +1382,10 @@ try {
     echo '|dyn-type';
 }
 echo '|', is_array($_SERVER) ? 'array' : 'no';
+// A computed unset detaches the typed slot; probe it through the dynamic table, since a static
+// `$_SERVER` read is folded from the superglobal's declared array type.
+unset($GLOBALS[$name]);
+echo '|', isset($GLOBALS[$name]) ? 'still' : 'gone';
 "#;
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
@@ -1392,7 +1396,7 @@ echo '|', is_array($_SERVER) ? 'array' : 'no';
     let _ = child.wait();
     assert!(
         resp.ends_with(
-            "seeded|/computed|/computed|read|/computed|yes|20|hash|hash|8|ok|ok|snap-get|type|lit-type|dyn-type|array"
+            "seeded|/computed|/computed|read|/computed|yes|20|hash|hash|8|ok|ok|snap-get|type|lit-type|dyn-type|array|gone"
         ),
         "body: {:?}",
         resp
