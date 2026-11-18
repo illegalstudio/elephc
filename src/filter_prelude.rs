@@ -129,6 +129,21 @@ pub(crate) fn filter_declarations(
     })
 }
 
+/// Returns whether the program names the filter surface explicitly, ignoring opaque eval.
+///
+/// Test fixtures use this to keep unrelated opaque-eval programs from pulling the complete
+/// filter surface into their compile. Production still uses [`program_uses_surface`], because
+/// an opaque eval may call filter at run time.
+pub fn program_uses_explicit_surface(program: &[crate::parser::ast::Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    functions()
+        .iter()
+        .any(|name| usage.references(name) || usage.literals.contains(*name))
+        || CONSTANTS.iter().any(|name| usage.constants.contains(*name))
+        || usage.classes.contains("filter\\filterexception")
+        || usage.classes.contains("filter\\filterfailedexception")
+}
+
 /// Returns whether the program names the filter surface, directly or through introspection.
 pub(crate) fn program_uses_surface(program: &[crate::parser::ast::Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);

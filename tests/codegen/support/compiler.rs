@@ -423,12 +423,24 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // filter usage would retain the filter bridge and every dynamically dispatched class on a
     // PDO-only program. Filter usage is decided from the user AST and its includes.
     let overrides = TEST_INI_OVERRIDES.with(|slot| slot.borrow().clone());
-    let resolved = elephc::filter_prelude::inject_if_used_with_ini_and_initializer(
-        resolved,
-        &overrides,
-        false,
-        &mut prelude_inventory,
-    );
+    // Opaque eval can reach every builtin, so the production pipeline injects the whole
+    // filter surface for it. That makes unrelated eval fixtures millions of assembly lines
+    // and dominates their compile time. The fixture suite only needs the surface when the
+    // source or resolved program actually names it; the filter/eval visibility tests do.
+    let source_lower = source.to_ascii_lowercase();
+    let filter_mentioned = source_lower.contains("filter_")
+        || source_lower.contains("filter\\")
+        || elephc::filter_prelude::program_uses_explicit_surface(&resolved);
+    let resolved = if filter_mentioned {
+        elephc::filter_prelude::inject_if_used_with_ini_and_initializer(
+            resolved,
+            &overrides,
+            false,
+            &mut prelude_inventory,
+        )
+    } else {
+        resolved
+    };
     // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
     // the harness seeds `set_linked_extensions` from the same bits so
     // `extension_loaded('PDO'/'mysqli')` agrees between `compile_and_run` and
