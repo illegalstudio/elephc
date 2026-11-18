@@ -1958,6 +1958,7 @@ fn lower_body_into_function(
         .collect::<Vec<_>>();
     // By-reference parameters of a union of null, arrays and objects are checked on entry,
     // after the caller evaluated every argument (php's RECV order).
+    let mut callable_variadic_guard: Option<(String, usize, String, PhpType)> = None;
     let reference_entry_guards = {
         let display = function
             .display_name
@@ -1967,17 +1968,49 @@ fn lower_body_into_function(
         let mut position = 0;
         let mut guards = Vec::new();
         for (index, (name, php_type)) in params.iter().enumerate() {
+            // Hidden ABI parameters (the receiver, a static method's late-static-binding class
+            // id, func_get_args() state) are not PHP arguments and take no position.
             if name == "this"
+                || name == crate::names::CALLED_CLASS_ID_LOCAL
                 || name == crate::func_args::HIDDEN_ARGC_PARAM
                 || name == crate::func_args::HIDDEN_ARGS_PARAM
             {
                 continue;
             }
             position += 1;
-            if by_ref_params.get(index).copied().unwrap_or(false)
-                && crate::ir_lower::expr::reference_parameter_needs_entry_guard(php_type)
-            {
+            let by_ref = by_ref_params.get(index).copied().unwrap_or(false);
+            let variadic = function
+                .signature
+                .as_ref()
+                .is_some_and(|signature| signature.variadic.as_deref() == Some(name.as_str()));
+            if variadic {
+                // A variadic's storage need not carry its declared element type: a by-reference
+                // collector is `array<mixed>` and one a descriptor or named arguments can fill is
+                // promoted to an iterable container. The source hint keeps the contract, so a
+                // `callable ...$xs` / `callable &...$xs` checks each value on entry from it.
+                let callable_element = function
+                    .signature
+                    .as_ref()
+                    .and_then(crate::types::signatures::variadic_source_element_type_expr)
+                    .filter(|hint| crate::types::checker::type_expr_declares_callable(hint))
+                    .map(crate::ir_lower::context::type_expr_to_php_type);
+                if let Some(element) = callable_element {
+                    callable_variadic_guard = Some((display.clone(), position, name.clone(), element));
+                    continue;
+                }
+            }
+            if by_ref && crate::ir_lower::expr::reference_parameter_needs_entry_guard(php_type) {
                 guards.push((display.clone(), position, name.clone(), php_type.clone()));
+            } else if !variadic && php_type.declares_callable() {
+                // A declared `callable` keeps the PHP value it received, so PHP's binding
+                // check (`must be of type callable, T given`) runs here, on entry. A by-reference
+                // parameter checks the referenced value.
+                guards.push((display.clone(), position, name.clone(), php_type.clone()));
+            } else if let (true, false, PhpType::Array(element)) = (variadic, by_ref, php_type) {
+                if element.declares_callable() {
+                    callable_variadic_guard =
+                        Some((display.clone(), position, name.clone(), (**element).clone()));
+                }
             }
         }
         guards
@@ -2100,14 +2133,24 @@ fn lower_body_into_function(
     ctx.lower_with_final_string_storage(|ctx| {
         if !eager_parameters {
             super::object_boundaries::guard_parameters(ctx, &reference_entry_guards);
+            if let Some((display, position, name, element)) = &callable_variadic_guard {
+                crate::ir_lower::expr::guard_declared_callable_variadic_entry(
+                    ctx, display, *position, name, element,
+                );
+            }
         }
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
         } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
             if eager_parameters {
                 // Generators check their parameters eagerly elsewhere; these keep their
-                // place at the start of the body.
+                // place at the start of the body. A declared `callable` is checked once, at
+                // the call, by the generator's eager validator: checking it again here would
+                // read a by-reference binding the caller may have changed since.
                 for (display, position, name, php_type) in &reference_entry_guards {
+                    if php_type.declares_callable() {
+                        continue;
+                    }
                     crate::ir_lower::expr::guard_reference_parameter_entry(ctx, display, *position, name, php_type);
                 }
             }

@@ -38,6 +38,26 @@ use types::{
 pub(super) use types::{CatchReachability, ThrownTypes};
 pub(crate) use checker::{CheckerExceptionAnalysis, CheckerThrownTypes};
 
+/// Which calls can fail a callee's entry binding check with a `TypeError`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EntryCheck {
+    /// Only a call passing some argument that is not a fresh `new` object: the
+    /// `Class|false` / `Class|null` and by-reference guards accept a fresh object.
+    NonFreshArguments,
+    /// Every call: a declared `callable` parameter checks `is_callable`, which a fresh object
+    /// does not prove (a class without `__invoke`).
+    Always,
+}
+
+/// Returns whether a call with `args` can fail the callee's entry check.
+fn entry_check_throws(check: Option<EntryCheck>, args: &[Expr]) -> bool {
+    match check {
+        Some(EntryCheck::Always) => true,
+        Some(EntryCheck::NonFreshArguments) => !all_arguments_are_fresh_objects(args),
+        None => false,
+    }
+}
+
 /// Returns whether every argument is a freshly constructed object.
 ///
 /// A call whose object-typed arguments are all `new Class()` values cannot fail the
@@ -78,9 +98,9 @@ pub(super) struct ExceptionFlowAnalysis {
     static_method_throws: HashMap<String, ThrownTypes>,
     instance_method_throws: HashMap<String, ThrownTypes>,
     /// Declared object references can reject a cell retyped by an earlier call at entry.
-    function_object_ref_checks: HashSet<String>,
-    static_method_object_ref_checks: HashMap<String, bool>,
-    instance_method_object_ref_checks: HashMap<String, bool>,
+    function_object_ref_checks: HashMap<String, EntryCheck>,
+    static_method_object_ref_checks: HashMap<String, EntryCheck>,
+    instance_method_object_ref_checks: HashMap<String, EntryCheck>,
     /// Class property initialization can raise Error independently of constructor argument omission.
     constructor_default_errors: HashSet<String>,
     /// Classes whose first `new` may raise a deprecation from their initialization, which a
@@ -112,11 +132,25 @@ pub(super) struct ExceptionFlowAnalysis {
     checker_retirement_types: Option<Rc<crate::types::TypeEnv>>,
 }
 
-/// Returns whether argument binding can throw before entering an otherwise clean body.
-fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
+/// Classifies the entry checks argument binding runs before entering an otherwise clean body.
+///
+/// A declared `callable` return is not an entry check: `ReturnBoundaryFacts` reports its
+/// `TypeError` from the body's return statements.
+fn declared_entry_check(signature: &FunctionSig) -> Option<EntryCheck> {
+    // A by-value `callable` parameter keeps the PHP value it received and checks it on entry
+    // (`must be of type callable, T given`); a fresh object can fail that check too.
+    // A by-reference `callable &...$xs` is stored as `array<mixed>` and keeps its element
+    // contract only in the source hint, which its entry check reads.
+    if signature.params.iter().any(|(_, ty)| {
+        ty.declares_callable() || matches!(ty, PhpType::Array(element) if element.declares_callable())
+    }) || crate::types::signatures::variadic_source_element_type_expr(signature)
+        .is_some_and(crate::types::checker::type_expr_declares_callable)
+    {
+        return Some(EntryCheck::Always);
+    }
     // Literal false arguments are checked before ABI truthiness coercion, even for pure bodies.
     if signature.params.iter().any(|(_, ty)| ty == &PhpType::False) {
-        return true;
+        return Some(EntryCheck::NonFreshArguments);
     }
     // A by-value object parameter also runs the runtime union guard for a
     // `Class|false` / `Class|null` argument before entering the body. Treat every
@@ -130,7 +164,7 @@ fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
         matches!(ty.codegen_repr(), PhpType::Object(_))
             || (signature.ref_params.get(index).copied().unwrap_or(false)
                 && by_ref_param_checks_boxed_argument(signature, index, ty))
-    })
+    }).then_some(EntryCheck::NonFreshArguments)
 }
 
 /// Whether the EIR call lowering guards a boxed argument bound to by-reference parameter
@@ -348,8 +382,7 @@ impl ExceptionFlowAnalysis {
         let mut function_object_ref_checks = type_metadata
             .map(|(functions, _, _)| {
                 functions.iter()
-                    .filter(|(_, signature)| declared_object_reference_can_throw(signature))
-                    .map(|(name, _)| name.clone())
+                    .filter_map(|(name, signature)| Some((name.clone(), declared_entry_check(signature)?)))
                     .collect()
             })
             .unwrap_or_default();
@@ -358,8 +391,9 @@ impl ExceptionFlowAnalysis {
                 classes.iter()
                     .flat_map(|(class_name, class)| {
                         class.static_methods.iter()
-                            .filter(|(_, signature)| declared_object_reference_can_throw(signature))
-                            .map(move |(method, _)| (method_effect_key(class_name, method), true))
+                            .filter_map(move |(method, signature)| {
+                                Some((method_effect_key(class_name, method), declared_entry_check(signature)?))
+                            })
                     })
                     .collect()
             })
@@ -369,13 +403,15 @@ impl ExceptionFlowAnalysis {
                 classes.iter()
                     .flat_map(|(class_name, class)| {
                         class.methods.iter()
-                            .filter(|(_, signature)| declared_object_reference_can_throw(signature))
-                            .map(move |(method, _)| (method_effect_key(class_name, method), true))
+                            .filter_map(move |(method, signature)| {
+                                Some((method_effect_key(class_name, method), declared_entry_check(signature)?))
+                            })
                     })
                     .chain(interfaces.iter().flat_map(|(interface_name, interface)| {
                         interface.methods.iter()
-                            .filter(|(_, signature)| declared_object_reference_can_throw(signature))
-                            .map(move |(method, _)| (method_effect_key(interface_name, method), true))
+                            .filter_map(move |(method, signature)| {
+                                Some((method_effect_key(interface_name, method), declared_entry_check(signature)?))
+                            })
                     }))
                     .collect()
             })
@@ -956,9 +992,7 @@ impl ExceptionFlowAnalysis {
                         thrown.combined(self.local_retirement_throws(target)));
                 }
                 thrown = thrown.combined(self.operand_cleanup_throws(args, class_context));
-                if self.function_object_ref_checks.contains(name)
-                    && !all_arguments_are_fresh_objects(args)
-                {
+                if entry_check_throws(self.function_object_ref_checks.get(name).copied(), args) {
                     thrown = thrown.combined(ThrownTypes::exact("TypeError"));
                 }
                 if self.function_unresolved_defaults.contains(name)
@@ -1004,13 +1038,10 @@ impl ExceptionFlowAnalysis {
                     ) {
                         thrown = thrown.combined(method_defaults::selected_default_throws(&signature, args, expr.span));
                     }
-                    if self.resolve_method_value(
-                        &class_name,
-                        method,
-                        &self.static_method_object_ref_checks,
-                    ) == Some(true)
-                        && !all_arguments_are_fresh_objects(args)
-                    {
+                    if entry_check_throws(
+                        self.resolve_method_value(&class_name, method, &self.static_method_object_ref_checks),
+                        args,
+                    ) {
                         thrown = thrown.combined(ThrownTypes::exact("TypeError"));
                     }
                     if let Some(summary) = self.resolve_method_value(
@@ -1050,13 +1081,10 @@ impl ExceptionFlowAnalysis {
                     ) {
                         thrown = thrown.combined(method_defaults::selected_default_throws(&signature, args, expr.span));
                     }
-                    if self.resolve_method_value(
-                        &class_name,
-                        method,
-                        &self.instance_method_object_ref_checks,
-                    ) == Some(true)
-                        && !all_arguments_are_fresh_objects(args)
-                    {
+                    if entry_check_throws(
+                        self.resolve_method_value(&class_name, method, &self.instance_method_object_ref_checks),
+                        args,
+                    ) {
                         thrown = thrown.combined(ThrownTypes::exact("TypeError"));
                     }
                     if let Some(summary) = self.resolve_method_value(
@@ -1256,7 +1284,7 @@ impl ExceptionFlowAnalysis {
             class_name,
             "__construct",
             &self.instance_method_object_ref_checks,
-        ) == Some(true) {
+        ).is_some() {
             ThrownTypes::exact("TypeError")
         } else {
             ThrownTypes::default()

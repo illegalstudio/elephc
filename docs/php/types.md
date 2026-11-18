@@ -458,19 +458,25 @@ echo coerceHere(true);      // compile error — this call lives in a strict fil
 
 ### Callable strings
 
-PHP accepts a function-name string wherever a `callable` is declared and resolves it when the call runs. elephc resolves callables statically, so a callable string binds when it is a compile-time constant:
+A declared `callable` is a constraint, as in PHP: the parameter (or a `callable` return) keeps the value the caller passed, whether it is a function name, a `"Class::method"` string, a callable array, an invokable object or a Closure. `gettype()`, `var_dump()`, `is_string()` and `ctype_*()` see that value, and invoking it resolves the target when the call runs:
 
 ```php
 function apply(callable $f, string $s) { return $f($s); }
 
-echo apply("strtoupper", "abc");        // ABC   — builtin name
-echo apply("my_helper", "abc");         //       — user function name
-echo apply("Formatter::wrap", "abc");   //       — "Class::method"
+echo apply("strtoupper", "abc");            // ABC
+echo apply("Formatter::wrap", "abc");       // "Class::method"
+echo apply([new Formatter(), "pad"], "abc"); // callable array
+$name = $argc > 1 ? "my_helper" : "Formatter::wrap";
+echo apply($name, "abc");                   // runtime-selected name
 ```
 
-Names are matched case-insensitively and a leading `\` is allowed, matching PHP. A callable string that is only known at run time is rejected with `a callable string must be a compile-time constant here`; pass a first-class callable (`strtoupper(...)`), a closure, or a literal name instead. A constant string that names nothing is rejected too, where PHP throws `TypeError` when the call runs.
+Names are matched case-insensitively and a leading `\` is allowed, matching PHP. A literal name that names nothing is a compile error when it is the argument itself (positional or named); inside a spread it binds to a parameter only at run time, so it raises PHP's `TypeError` there. A builtin named only inside a spread that needs a library or a prelude helper (`md5`, `iconv_strlen`, GMP) is not linked by that spread, because the same string may be ordinary text for another parameter; it then stops with the error described below, so name it directly or pass `md5(...)`. The same holds for an XML or GMP builtin handed to a `callable` parameter through a closure variable (`$apply("gmp_abs")`): its prelude is injected only for a target named in the source (a function, a method, `new`, or `apply(...)`), so pass `gmp_abs(...)` there. A literal assigned at the argument binds as the value the assignment yields: `apply($name = "strlen")`, `apply($box->cb = "strlen")` and an element of an array or object local, of an `array` parameter or of a property declared `array` (`apply($list[0] = "strlen")`) bind the name, while a string-offset write binds the one byte it stored. The prelude decision runs before types, so it does not look through an element write: an XML or GMP builtin written that way also needs `gmp_abs(...)`. A value that is not callable at run time raises PHP's `TypeError` (`apply(): Argument #1 ($f) must be of type callable, array given`) when it reaches the parameter, without PHP's trailing `called in FILE on line N`.
 
-Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are still rejected at a `callable` parameter, and because elephc maps the `Closure` type hint onto the same internal callable type, a `Closure` parameter also accepts a callable string where PHP requires an actual `Closure`.
+Invoking a declared `callable` resolves a runtime-selected name among the program's functions, static methods (`"Class::method"`) and the builtin names written as literals at `callable` arguments, so a binary does not carry a wrapper for every builtin. A builtin named only at run time, never as such a literal, passes `is_callable()` and the parameter check, but invoking it throws a catchable `Error` (`Cannot call strtolower() through a declared callable: a builtin named only at run time is not linked; ...`) where PHP would call it; pass it as a literal or as a first-class callable (`strtolower(...)`). This restriction applies to calling a value typed exactly `callable`. Other routes go through elephc's generic dynamic call, which links a wrapper for every builtin that can run from a runtime name: an element read from a `callable ...$fs` variadic, a value typed as a union such as `?callable` or `callable|false`, and a declared `callable` handed to a builtin that takes a callback (`array_map()`, `array_filter()`, `call_user_func()`, `usort()`, `preg_replace_callback()`). There a runtime-selected `strtolower` is called as in PHP; a builtin that elephc lowers only at compile time (such as `ucfirst`) still has to be written as a literal or as `ucfirst(...)`, because the generic dynamic call cannot resolve it from a runtime name (a variadic element reports it as a catchable `TypeError`, `Argument must be a valid callback`). A function or method entered from `eval()` is the exception: the eval frame resolves any builtin, so the call goes through as in PHP.
+
+The same check covers `callable &$c` (the referenced value), each element of `callable ...$fs` (`Argument #2 must be of type callable, string given`; `?callable ...$fs` admits null) and the value returned by a `callable` return type, by value or by reference (`bad(): Return value must be of type callable, string returned`). A union of `callable` with `null`, `false`, arrays or objects behaves like `callable`; a union with a scalar such as `int|callable` keeps elephc's stricter rules for callable strings (a literal string that is not an int is refused at compile time), because PHP would convert a non-callable argument to that scalar. A runtime value reaching such a union is checked against every member and kept as it is: a numeric string accepted by `int` stays a string, where PHP converts it to an int.
+
+Because elephc maps the `Closure` type hint onto its callable descriptor type, a `Closure` parameter still accepts a callable string or array where PHP requires an actual `Closure`.
 
 ### Known incompatibilities with PHP
 

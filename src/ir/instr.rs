@@ -232,6 +232,10 @@ pub enum Immediate {
     /// Marks `DynamicObjectNewMixed` as `ReflectionClass::newInstance()` rather than
     /// `new $class`, so constructor refusals raise `ReflectionException` instead of `Error`.
     ReflectionConstruction,
+    /// Marks `NormalizeCallable` on a value declared `callable`: a runtime name it resolves is
+    /// limited to user functions, static methods and the builtin names written as literals at
+    /// declared callables (`Module::declared_callable_names`).
+    DeclaredCallableNames,
     Data(DataId),
     /// Data-pool reference carrying the strict-PHP profile of its physical call site.
     ProfiledData {

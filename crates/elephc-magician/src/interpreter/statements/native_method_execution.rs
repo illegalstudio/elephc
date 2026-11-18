@@ -252,6 +252,8 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
                 values,
             )
         } else {
+            // Like the scoped path, the method runs as a native frame of this eval context.
+            let _native_context = push_native_frame_context(context);
             values.method_call(object, method_name, native_bound_arg_values(&bound_args))
         };
         let writeback = write_back_native_callable_ref_args(&bound_args, context, values);

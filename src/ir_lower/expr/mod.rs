@@ -39,6 +39,7 @@ use array_merge_values::lower_array_value_for_merge;
 mod nullsafe_chain;
 mod ref_place_args;
 mod boxed_user_sort;
+pub(crate) mod declared_callables;
 mod scalar_literals;
 mod local_values;
 use local_values::lower_local_value;
@@ -258,7 +259,10 @@ pub(crate) use call_operand_owners::{
     PinnedInFlightOwner,
 };
 pub(crate) use property_access::singular_object_class;
-pub(crate) use enum_argument_guards::{guard_reference_parameter_entry, reference_parameter_needs_entry_guard};
+pub(crate) use enum_argument_guards::{
+    guard_declared_callable_return, guard_declared_callable_variadic_entry,
+    guard_reference_parameter_entry, reference_parameter_needs_entry_guard,
+};
 pub(crate) use property_access::class_extends_class;
 pub(crate) use property_access::packed_receiver_class;
 pub(crate) use property_access::extern_receiver_class;

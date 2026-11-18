@@ -108,6 +108,21 @@ comparison checks the descriptor's object handle before selecting Closure conver
 invocation target kinds alone do not distinguish these PHP value forms. Each global runtime
 entry explicitly branches to its shared body so linker section collection retains it.
 
+A declared `callable` reaches codegen as a boxed `Mixed` cell (see `DeclaredCallable` in the
+type checker guide). `Op::NormalizeCallable` with the `Immediate::DeclaredCallableNames` marker lowers it
+through `lower_elephc_normalize_callable` with `declared_callable_candidates` set, so the string
+dispatch only emits cases for the program's functions, its static methods and the recorded
+literal builtin names (`declared_callable_name_cases`, which skips a name whose prelude helpers
+are absent). The set is never widened, even when it yields no case. A runtime-selected
+builtin outside it misses; when `is_callable()` accepts the
+name, the miss throws a catchable `Error` naming it. A function entered from `eval()` tries the
+eval callback fallback first; a function that owns an eval context checks before it, since that
+context resolves every builtin. Only a
+value typed exactly `callable` carries the marker: a union such as `?callable` (stored as plain
+`Mixed`), a variadic element read through `foreach`, and a declared `callable` handed to a
+builtin callback (`__elephc_normalize_callable` for `array_map()` and `call_user_func()`, the boxed
+`usort()` path) normalize without it, through the open dynamic-call table.
+
 ## Pipeline Position
 
 Internal value classes can declare operator adapters in their shared

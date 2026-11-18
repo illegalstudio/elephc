@@ -212,6 +212,7 @@ fn lower_reference_return(
                 return;
             }
             crate::ir_lower::object_boundaries::guard_return(ctx, value, Some(span));
+            super::return_coercions::guard_declared_callable_return_value(ctx, value, span);
             acquire_and_return_reference_cell(ctx, value, span);
         }
         Some(ExprKind::PropertyAccess { object, property }) => {
@@ -236,6 +237,23 @@ fn lower_reference_return(
             // never released here.
             let (object, receiver_owner) =
                 crate::ir_lower::expr::root_owned_call_operand(ctx, object, span);
+            if ctx.return_type_is_declared && ctx.return_php_type.declares_callable() {
+                // A `callable` result is checked on the value the cell holds, read through a
+                // temporary copy of the receiver so the object expression runs only once.
+                let receiver_ty = ctx.builder.value_php_type(object.value);
+                let receiver = ctx.declare_hidden_temp(receiver_ty.clone());
+                let copy = crate::ir_lower::ownership::acquire_if_refcounted(ctx, object, Some(span));
+                ctx.store_local(&receiver, copy, receiver_ty, Some(span));
+                let read = lower_expr(ctx, &Expr::new(
+                    ExprKind::PropertyAccess {
+                        object: Box::new(Expr::new(ExprKind::Variable(receiver), span)),
+                        property: property.clone(),
+                    },
+                    span,
+                ));
+                super::return_coercions::guard_declared_callable_return_value(ctx, read, span);
+                crate::ir_lower::ownership::release_if_owned(ctx, read, Some(span));
+            }
             let cell_ptr = ctx.emit_value(
                 Op::LoadPropRefCellChecked,
                 vec![object.value],

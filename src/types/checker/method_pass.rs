@@ -240,6 +240,10 @@ impl Checker {
                     self.current_method = Some(method_key.clone());
                     self.current_method_is_static = method.is_static;
                     self.current_by_ref_return = method.by_ref_return;
+                    self.current_return_declares_callable = method
+                        .return_type
+                        .as_ref()
+                        .is_some_and(crate::types::checker::type_expr_declares_callable);
                     let loop_storage_scope = format!("{}::{}", class.name, method.name);
                     self.clear_loop_storage_scope(&loop_storage_scope);
                     self.begin_promotable_walk(&loop_storage_scope);
@@ -306,6 +310,7 @@ impl Checker {
                     self.current_method = None;
                     self.current_method_is_static = false;
                     self.current_by_ref_return = false;
+                    self.current_return_declares_callable = false;
                     self.current_loop_storage_scope = previous_loop_storage_scope;
                 }
             }
@@ -647,7 +652,7 @@ impl Checker {
         callable_return_sigs: &[FunctionSig],
         callable_array_return_sigs: &[FunctionSig],
     ) {
-        let callable_sig = (return_type == &PhpType::Callable)
+        let callable_sig = return_type.is_callable_like()
             .then(|| matching_callable_sig(callable_return_sigs))
             .flatten();
         let callable_array_sig = is_callable_array_return_type(return_type)

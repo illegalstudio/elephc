@@ -596,7 +596,7 @@ fn check_ref_assign_variable(
     }
     env.insert(target.to_string(), source_ty.clone());
     checker.active_ref_params.insert(target.to_string());
-    if source_ty == PhpType::Callable || is_callable_array_type(&source_ty) {
+    if source_ty.is_callable_like() || is_callable_array_type(&source_ty) {
         copy_callable_metadata(checker, target, source);
     } else {
         clear_callable_metadata(checker, target);
@@ -670,7 +670,7 @@ pub(super) fn update_callable_assignment_metadata(
     }
     update_callable_array_assignment_metadata(checker, name, callable_source, env)?;
 
-    if *ty == PhpType::Callable {
+    if ty.is_callable_like() {
         if let Some(sig) = checker.resolve_expr_callable_sig(callable_source, env)? {
             checker
                 .closure_return_types

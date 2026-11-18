@@ -381,9 +381,20 @@ impl Checker {
             }
         }
 
+        // Spreads and named arguments decide which parameter a spread element binds, so a
+        // possible callable literal anywhere in the planned arguments is recorded.
+        let call_declares_callable = decl
+            .param_types
+            .iter()
+            .flatten()
+            .chain(decl.variadic_type.iter())
+            .any(crate::parser::ast::TypeExpr::declares_callable);
         let mut param_types = Vec::new();
         let mut arg_idx = 0;
         for arg in args {
+            if call_declares_callable {
+                self.record_static_callable_literals(arg);
+            }
             let ty = self.infer_type(arg, caller_env)?;
             if let ExprKind::Spread(_) = &arg.kind {
                 for i in arg_idx..decl.params.len() {
@@ -626,6 +637,14 @@ impl Checker {
                         declared,
                         decl.span,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
+                    )?;
+                    self.require_declared_callable_variadic_arg(
+                        &elem_ty,
+                        &ty,
+                        arg,
+                        caller_env,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                        decl.variadic_by_ref,
                     )?;
                     self.require_compatible_arg_type(
                         &elem_ty,

@@ -271,7 +271,7 @@ fn collect_builtin_reflection_class_from_type(
         | PhpType::Void
         | PhpType::Never
         | PhpType::Iterable
-        | PhpType::Mixed
+        | PhpType::Mixed | PhpType::DeclaredCallable
         | PhpType::Callable
         | PhpType::Packed(_)
         | PhpType::Pointer(None)

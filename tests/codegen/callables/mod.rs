@@ -11,6 +11,7 @@ mod boxed_calls;
 mod shared_boxed_dispatch;
 mod branch_reach;
 mod callable_strings;
+mod declared_callable_values;
 mod closure_array_returns;
 mod closure_call_returns;
 mod closure_binding_scopes;

@@ -171,10 +171,19 @@ pub(super) fn lower_method_call(
             return stabilize_borrowed_result_and_release_receiver(ctx, object, value, expr.span);
         }
     }
-    if matches!(
-        ctx.builder.value_php_type(object.value).codegen_repr(),
-        PhpType::Callable
-    ) {
+    // A declared `callable` keeps its PHP value in a boxed cell. `__invoke` needs its
+    // descriptor; the Closure methods apply only when the value is a Closure.
+    if ctx.builder.value_php_type(object.value) == PhpType::DeclaredCallable {
+        let method_key = php_symbol_key(method);
+        if method_key == "__invoke" {
+            object = super::declared_callables::normalize_declared_callable(ctx, object, expr.span);
+        } else if matches!(method_key.as_str(), "bindto" | "call") {
+            return super::declared_callables::lower_declared_callable_closure_method(
+                ctx, object, method, args, expr,
+            );
+        }
+    }
+    if matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Callable) {
         if php_symbol_key(method) == "__invoke" {
             return lower_expr_call_from_value(ctx, object, args, expr);
         }

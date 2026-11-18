@@ -407,13 +407,13 @@ fn guard_boxed_object_reference_argument(
 }
 
 /// Whether a by-reference parameter of type `ty` takes a boxed cell a promoted local can share:
-/// `mixed`, an object, a union of objects only (`A|B`), or a NULLABLE union of objects, arrays
+/// `mixed` (or a declared `callable`, stored the same way), an object, a union of objects only (`A|B`), or a NULLABLE union of objects, arrays
 /// and floats (`?Base`, `?array`, `?float`). The checker authorizes promotion only for a whole
 /// local it gave boxed storage: one that may receive `null` (or a sibling class) through such a
 /// parameter, which its typed slot could not hold.
 fn boxed_reference_param_type(ty: &PhpType) -> bool {
     match ty {
-        PhpType::Mixed | PhpType::Object(_) => true,
+        PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Object(_) => true,
         PhpType::Union(members) => {
             let objects_only = members.iter().any(|member| matches!(member, PhpType::Object(_)))
                 && members
@@ -663,6 +663,12 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     let param_ty = param_ty.codegen_repr();
     if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
+    }
+    if param_ty == PhpType::Callable
+        && !sig.ref_params.get(index).copied().unwrap_or(false)
+        && ctx.builder.value_php_type(value.value) == PhpType::DeclaredCallable
+    {
+        return super::declared_callables::normalize_declared_callable(ctx, value, arg.span);
     }
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
     if param_ty == PhpType::Callable
@@ -1038,7 +1044,11 @@ pub(super) fn coerce_operands_to_params(
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
         {
             let lowered = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
-            let coerced = unbox_callable_param_storage(ctx, lowered, None);
+            let coerced = if ctx.builder.value_php_type(value) == PhpType::DeclaredCallable {
+                super::declared_callables::normalize_declared_callable(ctx, lowered, Span::dummy())
+            } else {
+                unbox_callable_param_storage(ctx, lowered, None)
+            };
             operands[index] =
                 root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
         } else if param_ty == PhpType::Iterable

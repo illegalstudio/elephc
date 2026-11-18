@@ -650,7 +650,7 @@ fn pop_result_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
         | PhpType::Int
         | PhpType::Resource(_)
         | PhpType::Iterable
-        | PhpType::Mixed
+        | PhpType::Mixed | PhpType::DeclaredCallable
         | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }

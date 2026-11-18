@@ -599,6 +599,20 @@ impl Checker {
         if expected == actual {
             return true;
         }
+        // `int|callable` and other unions with a coercible scalar keep the descriptor-typed
+        // callable member: only a value-preserving `callable` accepts any string or array.
+        if let PhpType::Union(members) = expected {
+            if PhpType::callable_union_needs_descriptor(members) {
+                let members = members
+                    .iter()
+                    .map(|member| match member {
+                        PhpType::DeclaredCallable => PhpType::Callable,
+                        other => other.clone(),
+                    })
+                    .collect();
+                return Self::types_compatible(&PhpType::Union(members), actual);
+            }
+        }
         match (expected, actual) {
             (PhpType::Mixed, _) => true,
             (_, PhpType::Never) => true, // never is the bottom type — compatible with any expected type
@@ -638,6 +652,21 @@ impl Checker {
                 PhpType::resource_types_compatible(expected, actual)
             }
             (PhpType::Callable, PhpType::Callable) => true,
+            // A declared `callable` keeps the value PHP passed: a Closure, a function or
+            // `Class::method` string, a callable array, or an invokable object. Whether it is
+            // actually callable is PHP's runtime check; literal names are still resolved where
+            // the binding happens (`require_declared_callable_arg`).
+            (
+                PhpType::DeclaredCallable,
+                PhpType::Callable
+                | PhpType::Mixed
+                | PhpType::Str
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_),
+            ) => true,
+            // A Closure slot materializes a descriptor from the declared value when it is used.
+            (PhpType::Callable, PhpType::DeclaredCallable) => true,
             _ => false,
         }
     }
@@ -901,9 +930,18 @@ impl Checker {
         }
 
         let variadic_elem_ty = self.variadic_argument_element_type(sig, span, callee_desc)?;
+        // Spreads and named arguments decide which parameter a spread element binds, so a
+        // possible callable literal anywhere in the planned arguments is recorded.
+        let call_declares_callable = Self::call_declares_callable(
+            &Self::declared_spread_targets(sig, 0, regular_param_count),
+            variadic_elem_ty.as_ref(),
+        );
 
         let mut param_idx = 0usize;
         for arg in args {
+            if call_declares_callable {
+                self.record_static_callable_literals(arg);
+            }
             let descriptor_projected = descriptor_invocation
                 && descriptor_projections
                     .get(param_idx)
@@ -1072,7 +1110,25 @@ impl Checker {
                                 None,
                                 supplied_reference,
                             )?;
+                        } else if !supplied_reference
+                            && *expected_ty == PhpType::DeclaredCallable
+                            && sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                        {
+                            // A closure, arrow function or first-class callable binds without
+                            // coercion, but a literal name still has to be resolved and recorded
+                            // for the runtime dispatch, as a named function's `callable` does.
+                            self.require_declared_callable_arg(
+                                expected_ty,
+                                &actual_ty,
+                                arg,
+                                caller_env,
+                                &format!("{} parameter ${}", callee_desc, param_name),
+                                None,
+                            )?;
                         } else {
+                            if !supplied_reference && expected_ty.declares_callable() {
+                                self.record_declared_callable_literal_name(arg, caller_env);
+                            }
                             self.require_compatible_arg_type(
                                 expected_ty,
                                 &actual_ty,
@@ -1133,6 +1189,18 @@ impl Checker {
                             &format!("{} variadic parameter ${}", callee_desc, vname),
                         )?;
                     }
+                    let variadic_by_ref = variadic_index
+                        .and_then(|index| sig.ref_params.get(index))
+                        .copied()
+                        .unwrap_or(false);
+                    self.require_declared_callable_variadic_arg(
+                        expected_ty,
+                        &actual_ty,
+                        arg,
+                        caller_env,
+                        &format!("{} variadic parameter ${}", callee_desc, vname),
+                        variadic_by_ref,
+                    )?;
                     self.require_compatible_arg_type(
                         expected_ty,
                         &actual_ty,

@@ -136,6 +136,10 @@ pub(crate) struct Checker {
     /// Tracks callable signatures inferred for user-function callable parameters,
     /// keyed by (function_name, param_name).
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Function names written as string literals where a declared `callable` keeps the
+    /// string. Runtime string dispatch must reach each of them, including builtins it would
+    /// not resolve from an arbitrary runtime name.
+    pub declared_callable_names: std::collections::BTreeSet<String>,
     /// Whether the statement currently being checked was written in a file that opened with
     /// `declare(strict_types=1)`.
     ///
@@ -317,6 +321,10 @@ pub(crate) struct Checker {
     /// reference (`function &f()`). A `return $obj->prop` in such a body promotes the
     /// property to a reference property (see `reference_property_promotions`).
     pub current_by_ref_return: bool,
+    /// Whether the body currently being checked declares a `callable` return type. A string
+    /// literal it returns names a function the runtime callable dispatch must know, like a
+    /// literal bound to a declared `callable` parameter (see `declared_callable_names`).
+    pub current_return_declares_callable: bool,
     /// Nesting depth of closure bodies currently being type-checked. A non-zero
     /// depth means `$this` is allowed even outside a class method: such a
     /// closure can be bound to an object later via `Closure::bind` / `bindTo`.
@@ -1451,6 +1459,17 @@ pub struct CheckOptions {
     pub strict_locals: bool,
 }
 
+/// Returns whether a declared type annotation names `callable`, alone, nullable or as a union
+/// member.
+pub(crate) fn type_expr_declares_callable(type_expr: &TypeExpr) -> bool {
+    match type_expr {
+        TypeExpr::Named(name) => name.as_str().eq_ignore_ascii_case("callable"),
+        TypeExpr::Nullable(inner) => type_expr_declares_callable(inner),
+        TypeExpr::Union(members) => members.iter().any(type_expr_declares_callable),
+        _ => false,
+    }
+}
+
 /// Returns whether a called name is PHP's `unset`, the only builtin that ends a local binding.
 ///
 /// ONE recogniser for all three sides of the feature — the pre-scan's disqualification
@@ -1650,6 +1669,7 @@ fn check_types_on_compiler_stack(
         function_attribute_names,
         function_attribute_args,
         callable_param_sigs: checker.callable_param_sigs,
+        declared_callable_names: checker.declared_callable_names,
         return_alias_summaries,
         callable_return_sigs: checker.callable_return_sigs,
         callable_array_return_sigs: checker.callable_array_return_sigs,

@@ -12,6 +12,8 @@
 //!   matches `gmp_add`, `\gmp_add` and `\App\gmp_add`.
 //! - The function set is exact, never a prefix: `gmdate` and user functions such as
 //!   `gmp_helper` must not inject the surface or link the bridge.
+//! - A GMP function name written as a literal where a user `callable` parameter or return keeps
+//!   it counts as a call, through `Usage::callable_slot_literals`.
 //! - Soundness beats precision here: a missed reference would remove declarations a
 //!   valid program needs, while a false positive only adds harmless declarations.
 
@@ -30,5 +32,11 @@ pub(crate) fn program_uses_gmp(program: &[Stmt]) -> bool {
         name.rsplit('\\')
             .next()
             .is_some_and(|segment| segment.eq_ignore_ascii_case("GMP"))
+    }) || usage.callable_slot_literals.iter().any(|name| {
+        // `apply("gmp_abs")` on a declared `callable` invokes the wrapper, which forwards to
+        // the prelude helper exactly as the call `gmp_abs(...)` does.
+        elephc_builtin_contract::GMP_FUNCTIONS
+            .iter()
+            .any(|candidate| name.eq_ignore_ascii_case(candidate))
     })
 }

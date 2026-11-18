@@ -136,8 +136,17 @@ impl Checker {
                 ),
             ));
         }
+        // Spreads and named arguments decide which parameter a spread element binds, so a
+        // possible callable literal anywhere in the planned arguments is recorded.
+        let call_declares_callable = Self::call_declares_callable(
+            &Self::declared_spread_targets(effective_sig, 0, regular_param_count),
+            variadic_elem_ty.as_ref(),
+        );
         let mut param_idx = 0usize;
         for arg in args {
+            if call_declares_callable {
+                self.record_static_callable_literals(arg);
+            }
             let actual_ty = self.infer_type(arg, caller_env)?;
             let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
                 || self.boxed_reference_promotion_pending(arg, span);
@@ -302,6 +311,17 @@ impl Checker {
                             &format!("Function '{}' variadic parameter ${}", name, vname),
                         )?;
                     }
+                    self.require_declared_callable_variadic_arg(
+                        expected_ty,
+                        &actual_ty,
+                        arg,
+                        caller_env,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                        variadic_index
+                            .and_then(|index| effective_sig.ref_params.get(index))
+                            .copied()
+                            .unwrap_or(false),
+                    )?;
                     self.require_compatible_arg_type(
                         expected_ty,
                         &actual_ty,

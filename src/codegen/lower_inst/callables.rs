@@ -81,7 +81,7 @@ fn php_argument_type_name(ty: &PhpType) -> String {
         PhpType::Array(_) => "array".to_string(),
         PhpType::AssocArray { .. } => "array".to_string(),
         PhpType::Iterable => "iterable".to_string(),
-        PhpType::Callable => "callable".to_string(),
+        PhpType::Callable | PhpType::DeclaredCallable => "callable".to_string(),
         PhpType::Object(name) => name.clone(),
         PhpType::Void | PhpType::Never => "null".to_string(),
         PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar => "mixed".to_string(),
@@ -260,13 +260,7 @@ fn lower_mixed_callable_descriptor_invoke(
     let callable_label = ctx.next_label("mixed_callable_closure");
     let fatal_label = ctx.next_label("mixed_callable_not_callable");
     let done_label = ctx.next_label("mixed_callable_done");
-    let eval_fallback_slot = if crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(
-        ctx.module,
-    ) {
-        super::builtins::eval::eval_context_local_slot(ctx)
-    } else {
-        None
-    };
+    let eval_fallback_slot = eval_callback_context(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(callable, "x0")?;
@@ -527,14 +521,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     let fatal_label = ctx.next_label("mixed_callable_value_not_callable");
     let done_label = ctx.next_label("mixed_callable_value_done");
     // Only an owned result can carry a freshly built adapter descriptor back to the caller.
-    let eval_fallback_slot = if retain_existing_descriptor
-        && crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(
-            ctx.module,
-        ) {
-        super::builtins::eval::eval_context_local_slot(ctx)
-    } else {
-        None
-    };
+    let eval_fallback_slot = if retain_existing_descriptor { eval_callback_context(ctx) } else { None };
 
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -591,6 +578,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         candidate_names.as_deref(),
         arity,
         eval_fallback_slot.map(|_| fatal_label.as_str()),
+        matches!(eval_fallback_slot, Some(EvalCallbackContext::Slot(_))),
         scoped,
     )?;
     abi::emit_jump(ctx.emitter, &done_label);
@@ -675,6 +663,9 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     ctx.emitter.label(&fatal_label);
     if let Some(slot) = eval_fallback_slot {
         emit_eval_closure_descriptor_fallback(ctx, callable, slot, &done_label)?;
+        if ctx.declared_callable_candidates.is_some() && invalid_type_error.is_none() {
+            emit_unlinked_declared_callable_builtin_error_from_mixed(ctx, callable)?;
+        }
     }
     if let Some(message) = invalid_type_error {
         emit_callable_conversion_error(ctx, message);
@@ -685,21 +676,45 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     Ok(())
 }
 
+/// Where an eval callback fallback finds the eval context that can resolve a boxed value.
+#[derive(Clone, Copy)]
+pub(super) enum EvalCallbackContext {
+    /// This function owns an eval context in a local slot (it calls `eval()` itself).
+    Slot(crate::ir::LocalSlotId),
+    /// This function does not own one, but eval may be running it: a native function called
+    /// from `eval()` receives eval-only callbacks (a function declared inside `eval()`), and
+    /// `__elephc_eval_object_context` finds the eval context of the active native frame.
+    FrameActive,
+}
+
+/// Selects the eval fallback for boxed callables that match no native shape, when the module
+/// links eval callable support.
+pub(super) fn eval_callback_context(ctx: &FunctionContext<'_>) -> Option<EvalCallbackContext> {
+    if !crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module) {
+        return None;
+    }
+    Some(
+        super::builtins::eval::eval_context_local_slot(ctx)
+            .map_or(EvalCallbackContext::FrameActive, EvalCallbackContext::Slot),
+    )
+}
+
 /// Hands a boxed value no native shape matched to Magician before calling it not callable.
 ///
 /// A closure created by `eval()` is an eval `Closure` object: runtime tag 6 with no generated
-/// class behind it, so every native arm misses. When this function owns an eval context,
-/// `__elephc_eval_is_callable` recognises the object and the adapter wrapper turns it into the
-/// descriptor `__elephc_eval_dynamic_callable_invoker` dispatches. A context that was never
-/// created (the slot is still zero) cannot own such an object, so that case keeps the fatal.
+/// class behind it, so every native arm misses, and the name of a function declared inside
+/// `eval()` matches no native function. `__elephc_eval_is_callable` recognises either and the
+/// adapter wrapper turns it into the descriptor `__elephc_eval_dynamic_callable_invoker`
+/// dispatches. Without an eval context (a slot still zero, or no eval frame active) the value
+/// cannot be an eval callback, so that case keeps the fatal.
 fn emit_eval_closure_descriptor_fallback(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
-    context_slot: crate::ir::LocalSlotId,
+    context: EvalCallbackContext,
     done_label: &str,
 ) -> Result<()> {
     let miss = ctx.next_label("mixed_callable_eval_miss");
-    emit_eval_closure_descriptor_or_branch(ctx, callable, context_slot, &miss)?;
+    emit_eval_closure_descriptor_or_branch(ctx, callable, context, &miss)?;
     abi::emit_jump(ctx.emitter, done_label);
     ctx.emitter.label(&miss);
     Ok(())
@@ -707,27 +722,56 @@ fn emit_eval_closure_descriptor_fallback(
 
 /// Leaves an owned adapter descriptor for an eval callback in the result register, or branches.
 ///
-/// Branches to `miss` when this function never created an eval context or when Magician does
-/// not recognise the boxed value as callable; both leave the registers as the caller's fatal
-/// path expects. Shared by the descriptor-value and the direct-invoke ladders.
+/// Branches to `miss` when no eval context can own the value or when Magician does not
+/// recognise the boxed value as callable; both leave the registers as the caller's fatal path
+/// expects. Shared by the descriptor-value and the direct-invoke ladders.
 fn emit_eval_closure_descriptor_or_branch(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
-    context_slot: crate::ir::LocalSlotId,
+    context: EvalCallbackContext,
     miss: &str,
 ) -> Result<()> {
     let target = ctx.emitter.target;
     let result_reg = abi::int_result_reg(ctx.emitter);
     let (arg0, arg1) = (abi::int_arg_reg_name(target, 0), abi::int_arg_reg_name(target, 1));
-    let offset = ctx.local_offset(context_slot)?;
-    abi::load_at_offset(ctx.emitter, result_reg, offset);
-    abi::emit_branch_if_int_result_zero(ctx.emitter, miss);
-    abi::emit_reg_move(ctx.emitter, arg0, result_reg);
-    ctx.load_value_to_reg(callable, arg1)?;
     let is_callable = target.extern_symbol("__elephc_eval_is_callable");
-    abi::emit_call_label(ctx.emitter, &is_callable);
-    abi::emit_branch_if_int_result_zero(ctx.emitter, miss);
-    abi::load_at_offset(ctx.emitter, arg0, offset);
+    match context {
+        EvalCallbackContext::Slot(context_slot) => {
+            let offset = ctx.local_offset(context_slot)?;
+            abi::load_at_offset(ctx.emitter, result_reg, offset);
+            abi::emit_branch_if_int_result_zero(ctx.emitter, miss);
+            abi::emit_reg_move(ctx.emitter, arg0, result_reg);
+            ctx.load_value_to_reg(callable, arg1)?;
+            abi::emit_call_label(ctx.emitter, &is_callable);
+            abi::emit_branch_if_int_result_zero(ctx.emitter, miss);
+            abi::load_at_offset(ctx.emitter, arg0, offset);
+        }
+        EvalCallbackContext::FrameActive => {
+            // -- find the eval context of the active native frame, then probe the value --
+            abi::emit_load_int_immediate(ctx.emitter, arg0, 0);
+            ctx.load_value_to_reg(callable, arg1)?;
+            let object_context = target.extern_symbol("__elephc_eval_object_context");
+            abi::emit_call_label(ctx.emitter, &object_context);
+            abi::emit_branch_if_int_result_zero(ctx.emitter, miss);
+            abi::emit_push_reg(ctx.emitter, result_reg);
+            abi::emit_reg_move(ctx.emitter, arg0, result_reg);
+            ctx.load_value_to_reg(callable, arg1)?;
+            abi::emit_call_label(ctx.emitter, &is_callable);
+            match target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov w9, w0");                      // keep the 32-bit eval callable verdict across the context reload
+                    abi::emit_pop_reg(ctx.emitter, arg0);
+                    ctx.emitter.instruction(&format!("cbz w9, {miss}"));        // an unrecognised value keeps the caller's not-callable path
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov r11d, eax");                   // keep the 32-bit eval callable verdict across the context reload
+                    abi::emit_pop_reg(ctx.emitter, arg0);
+                    ctx.emitter.instruction("test r11d, r11d");                 // did eval recognise the boxed value as callable?
+                    ctx.emitter.instruction(&format!("je {miss}"));             // an unrecognised value keeps the caller's not-callable path
+                }
+            }
+        }
+    }
     ctx.load_value_to_reg(callable, arg1)?;
     abi::emit_call_label(
         ctx.emitter,
@@ -881,6 +925,13 @@ fn runtime_string_descriptor_cases_at_arity(
         candidate_names,
         strict_php,
     ));
+    let covered: std::collections::HashSet<String> =
+        cases.iter().filter_map(|case| case.php_name.as_deref().map(php_symbol_key)).collect();
+    cases.extend(
+        super::callable_descriptors::declared_callable_name_cases(ctx, candidate_names, strict_php)?
+            .into_iter()
+            .filter(|case| case.php_name.as_deref().is_some_and(|name| !covered.contains(name))),
+    );
     cases.extend(
         runtime_static_method_descriptor_cases_with_scope(ctx, candidate_names, scoped)
             .into_iter()
@@ -888,7 +939,9 @@ fn runtime_string_descriptor_cases_at_arity(
     );
     cases.sort_by(|left, right| left.label.cmp(&right.label));
     cases.dedup_by(|left, right| left.label == right.label);
-    if cases.is_empty() && candidate_names.is_some() {
+    // A declared `callable` never widens: its set is the program's functions, static methods and
+    // literal builtin names, and a name outside it takes the runtime miss (the named Error).
+    if cases.is_empty() && candidate_names.is_some() && ctx.declared_callable_candidates.is_none() {
         let fallback = runtime_string_descriptor_cases_at_arity(ctx, source_arg_ty, None, strict_php, arity, scoped)?;
         if arity.is_none() && !scoped {
             ctx.shared.cache_runtime_string_descriptor_cases(
@@ -1161,6 +1214,7 @@ fn emit_runtime_string_descriptor_value_impl(
 
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(callable, ptr_reg, len_reg)?;
+    emit_strip_callable_name_separator(ctx, ptr_reg, len_reg);
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
     let done_label = ctx.next_label(&format!("{}_runtime_string_descriptor_done", op_name));
@@ -1207,6 +1261,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     candidate_names: Option<&[String]>,
     arity: Option<usize>,
     eval_fallback: Option<&str>,
+    own_eval_context: bool,
     scoped: bool,
 ) -> Result<()> {
     let cases = runtime_string_descriptor_cases_at_arity(
@@ -1217,7 +1272,8 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
         arity,
         scoped,
     )?;
-    if cases.is_empty() {
+    // A declared `callable` with no candidate still needs its runtime miss (the named Error).
+    if cases.is_empty() && ctx.declared_callable_candidates.is_none() {
         if let Some(fallback) = eval_fallback {
             abi::emit_jump(ctx.emitter, fallback);
             return Ok(());
@@ -1232,6 +1288,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction(&format!("mov {}, rdi", ptr_reg));              // move the unboxed string pointer into the canonical string result register
     }
+    emit_strip_callable_name_separator(ctx, ptr_reg, len_reg);
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
     let done_label = ctx.next_label(&format!("{}_mixed_string_descriptor_done", op_name));
@@ -1258,6 +1315,16 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
+    // A function entered from `eval()` (no eval context of its own) lets the eval frame resolve
+    // any builtin, so its miss path checks after the fallback. A function that owns an eval
+    // context only because it calls `eval()` checks first: that context resolves every builtin,
+    // and only an eval-only function (which `is_callable` of the native table refuses) reaches it.
+    if ctx.declared_callable_candidates.is_some()
+        && type_error.is_none()
+        && (eval_fallback.is_none() || own_eval_context)
+    {
+        emit_unlinked_declared_callable_builtin_error(ctx);
+    }
     if let Some(fallback) = eval_fallback {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         abi::emit_jump(ctx.emitter, fallback);
@@ -1270,6 +1337,106 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
+}
+
+/// Throws a catchable `Error` naming a builtin that a declared `callable` cannot call.
+///
+/// A declared `callable` resolves runtime names among the program's own functions, its static
+/// methods and the builtins written as literals at `callable` arguments, so a binary does not
+/// carry a wrapper for every builtin. A name that misses that set but that `is_callable()`
+/// accepts (the native table covers every builtin, user function and static method) is
+/// therefore a builtin selected only at run time. Any other miss falls through to the
+/// caller's eval fallback or fatal. Expects the stripped name on the temporary stack
+/// (pointer at offset 0, length at 8) and leaves it there on the fall-through path.
+fn emit_unlinked_declared_callable_builtin_error(ctx: &mut FunctionContext<'_>) {
+    let other_miss = ctx.next_label("declared_callable_other_miss");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_is_callable_string");
+            ctx.emitter.instruction(&format!("cbz x0, {}", other_miss));        // a name is_callable() refuses keeps the existing miss path
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_is_callable_string");
+            ctx.emitter.instruction("test rax, rax");                           // did is_callable() accept the name?
+            ctx.emitter.instruction(&format!("je {}", other_miss));             // a name is_callable() refuses keeps the existing miss path
+        }
+    }
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    super::call_argument_unpack::emit_dynamic_message(
+        ctx,
+        b"Cannot call ",
+        b"() through a declared callable: a builtin named only at run time is not linked; \
+pass its name as a string literal or as a first-class callable",
+    );
+    super::exceptions::emit_error_from_string_result(ctx);
+    ctx.emitter.label(&other_miss);
+}
+
+/// Runs [`emit_unlinked_declared_callable_builtin_error`] after the eval fallback missed.
+///
+/// The string-name miss defers to eval first, because a callback reached inside an eval frame
+/// can still name any builtin. When eval resolves nothing either, a boxed string that
+/// `is_callable()` accepts is reported as an unlinked builtin; any other value falls through.
+fn emit_unlinked_declared_callable_builtin_error_from_mixed(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+) -> Result<()> {
+    let not_string = ctx.next_label("declared_callable_eval_miss_not_string");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(callable, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_STRING)); // only a callable name can be an unlinked builtin
+            ctx.emitter.instruction(&format!("b.ne {}", not_string));           // other boxed values keep the existing fatal
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(callable, "rax")?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_STRING)); // only a callable name can be an unlinked builtin
+            ctx.emitter.instruction(&format!("jne {}", not_string));            // other boxed values keep the existing fatal
+        }
+    }
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction(&format!("mov {}, rdi", ptr_reg));              // move the unboxed string pointer into the string result register
+    }
+    emit_strip_callable_name_separator(ctx, ptr_reg, len_reg);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    emit_unlinked_declared_callable_builtin_error(ctx);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    ctx.emitter.label(&not_string);
+    Ok(())
+}
+
+/// Drops one leading `\` from the callable name in `ptr_reg`/`len_reg`: a callable string is
+/// always fully qualified, so PHP resolves `"\\strtolower"` exactly like `"strtolower"`.
+fn emit_strip_callable_name_separator(ctx: &mut FunctionContext<'_>, ptr_reg: &str, len_reg: &str) {
+    let done = ctx.next_label("callable_name_unqualified");
+    // -- skip the global namespace separator of a fully qualified callable name --
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {len_reg}, {done}"));         // an empty name has no separator to drop
+            ctx.emitter.instruction(&format!("ldrb w9, [{ptr_reg}]"));          // read the first byte of the callable name
+            ctx.emitter.instruction("cmp w9, #92");                             // is it the global namespace separator?
+            ctx.emitter.instruction(&format!("b.ne {done}"));                   // keep names without a leading separator unchanged
+            ctx.emitter.instruction(&format!("add {ptr_reg}, {ptr_reg}, #1"));  // skip the leading separator
+            ctx.emitter.instruction(&format!("sub {len_reg}, {len_reg}, #1"));  // shorten the name by the skipped separator
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {len_reg}, {len_reg}"));     // an empty name has no separator to drop
+            ctx.emitter.instruction(&format!("je {done}"));                     // keep the empty name unchanged
+            ctx.emitter.instruction(&format!("cmp BYTE PTR [{ptr_reg}], 92"));  // is the first byte the global namespace separator?
+            ctx.emitter.instruction(&format!("jne {done}"));                    // keep names without a leading separator unchanged
+            ctx.emitter.instruction(&format!("add {ptr_reg}, 1"));              // skip the leading separator
+            ctx.emitter.instruction(&format!("sub {len_reg}, 1"));              // shorten the name by the skipped separator
+        }
+    }
+    ctx.emitter.label(&done);
 }
 
 /// Lowers `call_user_func_array($object, $args)` through an `__invoke` descriptor.

@@ -161,6 +161,30 @@ pub fn dynamic_wrapper_prelude_callees(name: &str) -> &'static [&'static str] {
     }
 }
 
+/// Returns every compiler prelude function a builtin's callable wrapper may call directly: the
+/// runtime-selected wrapper callees, and the XML and GMP helpers their lowerings forward to.
+///
+/// A wrapper can only be built when all of them are declared, which happens when the program
+/// calls the builtin or names it as a literal where a declared `callable` keeps the string.
+pub fn callable_wrapper_prelude_helpers(name: &str) -> Vec<&'static str> {
+    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    let mut helpers = dynamic_wrapper_prelude_callees(&key).to_vec();
+    helpers.extend_from_slice(crate::builtins::xml::prelude_helpers_for(&key));
+    helpers.extend(crate::builtins::gmp::prelude_helpers_for(&key));
+    helpers
+}
+
+/// Returns whether a builtin links nothing beyond its own wrapper: no bridge, system or macOS
+/// library and no runtime feature, as resolved for a call with no static arguments.
+pub fn builtin_requirements_are_empty(def: &BuiltinDef) -> bool {
+    match def.spec.semantics.requirements {
+        crate::builtins::semantics::BuiltinRequirements::Static(requirements) => requirements.is_empty(),
+        crate::builtins::semantics::BuiltinRequirements::Shared(resolve) => {
+            resolve(&crate::builtins::semantics::BuiltinRequirementInput { args: &[] }).is_empty()
+        }
+    }
+}
+
 /// Looks up a PHP builtin by name, using case-insensitive matching.
 ///
 /// Returns `None` if the name is not registered in the inventory.
