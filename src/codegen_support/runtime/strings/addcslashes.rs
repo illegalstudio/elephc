@@ -99,7 +99,7 @@ fn emit_addcslashes_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x6, #-1");                                         // the next range needs a fresh start character
     emitter.instruction("b __rt_addcslashes_mask_loop");                        // continue scanning the character list
     emitter.label("__rt_addcslashes_mask_single");
-    emitter.instruction("strb w15, [sp, x7]");                                   // mark this literal character as escaped
+    emitter.instruction("strb w15, [sp, x7]");                                  // mark this literal character as escaped
     emitter.instruction("mov x6, x7");                                          // remember it as a possible range start
     emitter.instruction("add x5, x5, #1");                                      // advance to the next character-list byte
     emitter.instruction("b __rt_addcslashes_mask_loop");                        // scan the remaining character-list bytes

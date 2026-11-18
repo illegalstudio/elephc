@@ -937,6 +937,25 @@ fn test_filter_default_ini_get_uses_fixture_overrides() {
     );
     assert_eq!(output.stdout, "special_chars|4");
 }
+/// `FULL_SPECIAL_CHARS` validates against `default_charset`: Latin-1 keeps its bytes while the
+/// same input is malformed under UTF-8.
+#[test]
+fn test_filter_sanitize_honors_default_charset() {
+    let source = r#"<?php echo bin2hex(filter_var("caf\xE9", FILTER_SANITIZE_FULL_SPECIAL_CHARS));"#;
+    let latin = compile_and_run_capture_with_ini(
+        source,
+        &[("default_charset".to_string(), "ISO-8859-1".to_string())],
+    );
+    assert!(latin.success, "stderr: {}", latin.stderr);
+    assert_eq!(latin.stdout, "636166e9");
+    let utf8 = compile_and_run_capture_with_ini(
+        source,
+        &[("default_charset".to_string(), "UTF-8".to_string())],
+    );
+    assert!(utf8.success, "stderr: {}", utf8.stderr);
+    assert_eq!(utf8.stdout, "");
+}
+
 /// `FULL_SPECIAL_CHARS` rejects invalid UTF-8 and null string names raise PHP's deprecation.
 #[test]
 fn test_filter_sanitize_rejects_invalid_utf8_and_deprecates_null_names() {

@@ -26,6 +26,8 @@ pub(crate) struct FilterDefault {
     pub(crate) name: String,
     /// `filter.default_flags` parsed with PHP's leading-integer rule.
     pub(crate) flags: i64,
+    /// Baked `default_charset`, which selects the sanitizer's accepted input encoding.
+    pub(crate) charset: String,
 }
 
 impl Default for FilterDefault {
@@ -35,6 +37,7 @@ impl Default for FilterDefault {
         Self {
             name: "unsafe_raw".to_string(),
             flags: 0x80,
+            charset: "UTF-8".to_string(),
         }
     }
 }
@@ -57,6 +60,7 @@ pub(crate) fn config_from_overrides(overrides: &[(String, String)]) -> FilterDef
         match name.as_str() {
             "filter.default" => config.name = canonical_filter_name(value).to_string(),
             "filter.default_flags" => config.flags = leading_integer(value),
+            "default_charset" => config.charset = value.trim().to_string(),
             _ => {}
         }
     }

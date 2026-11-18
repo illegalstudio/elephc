@@ -111,7 +111,7 @@ pub(crate) fn filter_declarations(
     internal_declarations(|| {
         let mut declarations = externs::declarations();
         declarations.extend(options::declarations());
-        declarations.extend(apply::declarations());
+        declarations.extend(apply::declarations(&config.charset));
         declarations.extend(public::declarations());
         declarations.extend(surface::declarations());
         declarations.extend(input::declarations());

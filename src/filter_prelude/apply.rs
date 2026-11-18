@@ -40,13 +40,13 @@ const HTML4_NAMED_ENTITIES: &str = concat!(
 );
 
 /// Returns the scalar dispatcher and its validation helpers.
-pub(super) fn declarations() -> Program {
+pub(super) fn declarations(charset: &str) -> Program {
     vec![
         bridge_decl(),
         validation_failed_decl(),
         apply_decl(),
         walk_decl(),
-        full_special_chars_decl(),
+        full_special_chars_decl(charset),
         numeric_entity_decl(),
         named_entity_decl(),
         userinfo_decl(),
@@ -830,7 +830,31 @@ fn mac_decl() -> Stmt {
 }
 
 /// Builds the full-special-chars helper, preserving existing entities like php-src.
-fn full_special_chars_decl() -> Stmt {
+fn full_special_chars_decl(charset: &str) -> Stmt {
+    // php-src applies the configured `default_charset`: malformed UTF-8 becomes an empty
+    // string, while the single-byte Latin charsets accept every byte. Probing with
+    // `htmlentities()` cannot decide this: the byte-oriented runtime leaves invalid bytes
+    // unchanged, so the bridge validates the encoding directly.
+    let single_byte_charset = matches!(
+        charset.trim().to_ascii_lowercase().as_str(),
+        "iso-8859-1" | "iso-8859-15" | "windows-1252" | "cp1252",
+    );
+    let utf8_validation = if single_byte_charset {
+        e_bool(false)
+    } else {
+        e_binop(
+            e_binop(e_var("value"), BinOp::StrictNotEq, e_str("")),
+            BinOp::And,
+            e_binop(
+                e_call(
+                    "elephc_filter_valid_utf8",
+                    vec![e_call("bin2hex", vec![e_var("value")])],
+                ),
+                BinOp::StrictEq,
+                e_int(0),
+            ),
+        )
+    };
     function("__elephc_filter_full_special_chars")
         .param("value", TypeExpr::Str)
         .param("flags", t_int())
@@ -847,22 +871,8 @@ fn full_special_chars_decl() -> Stmt {
                 vec![],
                 None,
             ),
-            // php-src returns an empty string when the input is not valid UTF-8. Probing with
-            // `htmlentities()` cannot decide this: the byte-oriented runtime leaves invalid
-            // bytes unchanged, so the bridge validates the encoding directly.
             s_if(
-                e_binop(
-                    e_binop(e_var("value"), BinOp::StrictNotEq, e_str("")),
-                    BinOp::And,
-                    e_binop(
-                        e_call("elephc_filter_valid_utf8", vec![e_call(
-                            "bin2hex",
-                            vec![e_var("value")],
-                        )]),
-                        BinOp::StrictEq,
-                        e_int(0),
-                    ),
-                ),
+                utf8_validation,
                 vec![s_return(e_str(""))],
                 vec![],
                 None,
