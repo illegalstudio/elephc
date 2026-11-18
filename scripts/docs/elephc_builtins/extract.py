@@ -687,6 +687,12 @@ PRELUDE_SOURCES: dict[str, tuple[tuple[tuple[str, ...], ...], str]] = {
         ),
         "crates/elephc-builtin-contract/src/catalog_xml.rs",
     ),
+    # The libxml error state lives in the DOM prelude's `Libxml` part; the contracts sit in the
+    # xml catalog file but carry `PhpModule::Libxml`, which selects this entry.
+    "libxml": (
+        (("dom_html_prelude/libxml.rs", "libxml"),),
+        "crates/elephc-builtin-contract/src/catalog_xml.rs",
+    ),
     # The tidy surface is built AST; the extractor's builder pattern finds
     # `function("tidy_*")` in the generated functions module.
     "tidy": (

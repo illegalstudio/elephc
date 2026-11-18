@@ -26,6 +26,11 @@
 use super::super::*;
 
 mod dispatch;
+mod libxml_clear_errors;
+mod libxml_disable_entity_loader;
+mod libxml_get_errors;
+mod libxml_get_last_error;
+mod libxml_use_internal_errors;
 mod simplexml_import_dom;
 mod simplexml_load_file;
 mod simplexml_load_string;
