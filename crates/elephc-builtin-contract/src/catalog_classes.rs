@@ -67,6 +67,8 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("__ElephcCallableSessionHandler", "__elephccallablesessionhandler", Class, Elephc, Prelude, internal: true),
     class!("__ElephcDOMNodeListIterator", "__elephcdomnodelistiterator", Class, Elephc, Prelude, internal: true),
     class!("__ElephcDomState", "__elephcdomstate", Class, Elephc, Prelude, internal: true),
+    class!("__ElephcHtmlTables", "__elephchtmltables", Class, Elephc, Prelude, internal: true),
+    class!("__ElephcHtmlParser", "__elephchtmlparser", Class, Elephc, Prelude, internal: true),
     class!("__ElephcMysqliResultIterator", "__elephcmysqliresultiterator", Class, Elephc, Prelude, internal: true),
     class!("__ElephcPDOPgsqlLobStream", "__elephcpdopgsqllobstream", Class, Elephc, Prelude, internal: true),
     class!("__ElephcPDOSqliteBlobStream", "__elephcpdosqliteblobstream", Class, Elephc, Prelude, internal: true),

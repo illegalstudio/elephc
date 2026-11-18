@@ -501,6 +501,9 @@ mod tests {
                 // package P5
                 "DOMEntityReference",
                 "DOMImplementation",
+                // Part::Html (package P6)
+                "__ElephcHtmlTables",
+                "__ElephcHtmlParser",
             ]
         );
     }
@@ -539,6 +542,8 @@ mod tests {
             "<?php $d = new DOMDocument(); $f = $d->loadHTMLFile(...);",
             "<?php $d = new DOMDocument(); $m = 'loadHTML'; $d->$m('x');",
             "<?php $d = new DOMDocument(); call_user_func([$d, 'saveHTMLFile'], 'f');",
+            // Source text handed to eval() names the method inside a longer string literal.
+            "<?php $d = new DOMDocument(); eval('$d->loadHTML(\"<p>x</p>\");');",
         ] {
             assert!(parts_of(source).contains(Part::Html), "{source}");
         }
@@ -578,6 +583,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The HTML4 parser, its tables and the eager-tree helpers belong to `Part::Html` only, and
+    /// `loadHTML` / `loadHTMLFile` come with them (package P6).
+    #[test]
+    fn html_parser_is_carried_by_the_html_part_only() {
+        let names = |program: &Program| {
+            let mut found = Vec::new();
+            for stmt in program {
+                match &stmt.kind {
+                    StmtKind::ClassDecl { name, methods, .. } => {
+                        found.push(name.to_string());
+                        for method in methods {
+                            found.push(format!("{name}::{}", method.name.to_ascii_lowercase()));
+                        }
+                    }
+                    StmtKind::FunctionDecl { name, .. } => found.push(name.to_string()),
+                    _ => {}
+                }
+            }
+            found
+        };
+        let walker = names(&extend::build(PartSet::of(Part::Walker)));
+        let html = names(&extend::build(PartSet::of(Part::Walker).with(Part::Html)));
+        for wanted in [
+            "__ElephcHtmlParser",
+            "__ElephcHtmlTables",
+            "__elephc_dom_parse_html",
+            "__elephc_dom_make_children",
+            "__elephc_dom_make_node",
+            "DOMDocument::loadhtml",
+            "DOMDocument::loadhtmlfile",
+        ] {
+            assert!(!walker.iter().any(|name| name == wanted), "{wanted} must not cost a non-HTML program");
+            assert!(html.iter().any(|name| name == wanted), "{wanted} missing from the HTML part");
+        }
+        // The Termwind scanner is gone; the attribute lookup `getAttribute` uses stays in the walker.
+        assert!(!html.iter().any(|name| name == "__elephc_dom_token_stream"));
+        assert!(walker.iter().any(|name| name == "__elephc_dom_attr_get"));
     }
 
     /// Baseline of the injected prelude, printed for the migration packages to compare against

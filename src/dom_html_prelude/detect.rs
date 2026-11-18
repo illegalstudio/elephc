@@ -151,7 +151,7 @@ fn scan_calls(program: &[Stmt]) -> (bool, bool) {
             ExprKind::NullsafeDynamicMethodCall { .. } => html = true,
             ExprKind::StringLiteral(text) => {
                 libxml |= is_libxml_function(text);
-                html |= is_html_method(text);
+                html |= is_html_method(text) || mentions_html_method(text);
             }
             _ => {}
         }
@@ -161,6 +161,15 @@ fn scan_calls(program: &[Stmt]) -> (bool, bool) {
 
 fn is_libxml_function(name: &str) -> bool {
     name.len() > 7 && name.is_char_boundary(7) && name[..7].eq_ignore_ascii_case("libxml_")
+}
+
+/// Whether a string literal holds source text that calls an HTML4 method (`eval('$d->loadHTML(..)')`).
+fn mentions_html_method(text: &str) -> bool {
+    if text.len() < 8 {
+        return false;
+    }
+    let lowered = text.to_ascii_lowercase();
+    HTML_METHODS.iter().any(|candidate| lowered.contains(candidate))
 }
 
 fn is_html_method(name: &str) -> bool {

@@ -185,6 +185,7 @@ mod preg_replace_callback_throw;
 mod iterators;
 mod dom_html;
 mod dom_html_document;
+mod dom_html_parser;
 mod run_time_class_semantics;
 mod spl;
 mod generators;

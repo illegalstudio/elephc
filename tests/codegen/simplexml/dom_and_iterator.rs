@@ -266,7 +266,7 @@ if ($argc === 1) {
     $document = new DOMDocument(); echo $document->childNodes->length;
 } elseif ($argc === 2) {
     for ($i = 0; $i < 3; $i++) {
-        $tree = __elephc_dom_parse_html('<html><body><p>x</p></body></html>', 0);
+        $tree = __elephc_dom_parse_html('<html><body><p>x</p></body></html>', 4);
         echo count($tree['children']); unset($tree);
     }
 } elseif ($argc === 3) {
