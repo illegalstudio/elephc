@@ -798,6 +798,10 @@ fn lower_dynamic_property_assign_with_values(
     value: LoweredValue,
     span: Span,
 ) {
+    // A name captured in a hidden temp can come back boxed (a prepared compound update reloads
+    // it through a Mixed slot); the store ladders only take a string operand, so cast it once
+    // here. An already-string name is returned untouched.
+    let property = property_access::coerce_runtime_property_name(ctx, property, span);
     // A later eval can widen the name's local after this read was lowered, making the
     // read detach an owned string. Publish its lifetime before any write guard can throw.
     let (property, property_owner) = ctx.with_independent_write_receiver(|ctx|
