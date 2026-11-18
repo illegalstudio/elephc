@@ -294,11 +294,14 @@ pub(super) fn expr_is_observable(expr: &Expr) -> bool {
     expr_effect(expr).is_observable() || !active_expr_thrown_types(expr).is_empty()
 }
 
-/// Marks a call `may_throw` when the checker recorded a runtime scalar-parameter check for
-/// one of its arguments.
-fn scalar_guard_effect(args: &[Expr]) -> Effect {
+/// The effect of the runtime scalar-parameter checks the checker recorded for a call's
+/// arguments: besides throwing `TypeError`, an `int` binding can raise the precision
+/// deprecation, which runs the user error handler, and a `string` binding converts a
+/// `Stringable` through `__toString()`, so the binding itself can write globals before the
+/// callee runs, even when the callee is pure.
+pub(super) fn scalar_guard_effect(args: &[Expr]) -> Effect {
     if super::binding_decisions::call_has_scalar_guard_arg(args) {
-        Effect::PURE.with_may_throw()
+        Effect::PURE.with_side_effects().with_may_throw().with_writes_globals()
     } else {
         Effect::PURE
     }
