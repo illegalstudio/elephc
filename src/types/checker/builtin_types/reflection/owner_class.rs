@@ -549,7 +549,11 @@ fn builtin_reflection_lazy_declaring_class_method() -> ClassMethod {
         body: vec![
             materialized,
             Stmt::new(
-                StmtKind::Return(Some(reflection_this_property("__declaring_class", span))),
+                // An eval-built reflector stores the class's NAME here (main's lazy class read):
+                // turn it into a fresh, complete reflector on every call.
+                StmtKind::Return(Some(super::class_collections::reflection_lazy_class_read(
+                    "__declaring_class",
+                ))),
                 span,
             ),
         ],

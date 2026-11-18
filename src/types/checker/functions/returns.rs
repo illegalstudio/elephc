@@ -628,7 +628,9 @@ impl Checker {
         // `new $class()` or an untyped array element returned from `: object` compiles and the
         // boundary raises the TypeError at run time. Named classes go through the nominal guard
         // above; the bare `object` has no class to name, so the object-ness check is the guard.
-        if matches!(expected, PhpType::Object(name) if name.is_empty())
+        // Symfony's `(new ReflectionClass($c))->newInstanceWithoutConstructor()` relies on it.
+        if matches!(expected, PhpType::Object(name)
+                if name.is_empty() || name.eq_ignore_ascii_case("object"))
             && actual.codegen_repr() == PhpType::Mixed
         {
             return Ok(());
