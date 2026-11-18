@@ -799,7 +799,7 @@ thread_local! {
     /// the declaration that owns the list; see [`param_lines`].
     static PARAM_LINES: std::cell::RefCell<std::collections::HashMap<(u32, u32, u32), Vec<u32>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
-    /// Set while a parse only discovers declarations (see [`without_recording_param_lines`]).
+    /// Set while a helper, prelude or discovery-only parse runs (see [`without_recording_param_lines`]).
     static PARAM_LINES_SUSPENDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -811,11 +811,14 @@ pub(crate) fn record_param_lines(span: Span, lines: Vec<u32>) {
     PARAM_LINES.with(|table| table.borrow_mut().insert((span.source_id(), span.line, span.col), lines));
 }
 
-/// Runs a parse that only discovers declarations without recording parameter lines.
+/// Runs a parse that must not record parameter lines: an internal helper or prelude source
+/// (curl, tokenizer, xml, PDO, the datetime classes, the web application contracts, ...) or a
+/// discovery-only parse (the Composer classmap scan).
 ///
-/// The Composer classmap scan parses files under the entry file's source identity 0 and never
-/// compiles them, so its records would replace the entry's own at the same line and column (a
-/// one-line classmap function at line 2 gave an entry function there its parameter line).
+/// Those sources are lexed under the entry file's source identity 0, so their records would
+/// replace the entry's own at the same line and column (a one-line helper function at line 12
+/// gave an entry function declared there its parameter line). User files (the entry, includes,
+/// autoloaded files) record as usual.
 pub(crate) fn without_recording_param_lines<T>(parse: impl FnOnce() -> T) -> T {
     let previous = PARAM_LINES_SUSPENDED.with(|flag| flag.replace(true));
     let result = parse();
