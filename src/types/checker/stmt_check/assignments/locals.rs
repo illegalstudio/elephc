@@ -420,6 +420,7 @@ pub(super) fn check_ref_assign(
     checker.invalidate_local_flow_narrowing(target, env);
     if let ExprKind::Variable(source_name) = &source.kind {
         checker.invalidate_local_flow_narrowing(source_name, env);
+        checker.initialize_missing_reference_local(source_name, env);
     }
     if crate::names::append_update_alias_kind(target).is_some() {
         if let ExprKind::ArrayAccess { array, .. } = &source.kind {

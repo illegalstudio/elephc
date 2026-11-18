@@ -1090,6 +1090,13 @@ Cannot re-bind $a here: 2 statements in this program sit at line 2 column 1 and 
 The message names both causes because it cannot distinguish them. Keep the two
 assignments type-compatible, or move one statement to a different line or column.
 
+Forming a reference to an undeclared local creates a null value. This also applies
+to `use (&$value)` after `unset($value)`, to a contextual callback capture and to
+`$alias = &$value`. The new reference source has an open producer contract, so
+later stores can choose another value kind. Existing bindings keep their contracts:
+an explicit `$value = null` still has a null contract under `--strict-locals`.
+Escaped aliases retain the old binding after its original name is unset.
+
 **Migrating.** The `unset()` kill is the one shape that can reject code that
 compiled before. Reading a variable after a straight-line `unset()` of it is now
 `Undefined variable: $a` — in BOTH modes, since the kill is not gated by

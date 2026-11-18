@@ -18,7 +18,10 @@ impl Checker {
     /// Keeps callback literals available for contextual typing while visiting other argument effects.
     pub(super) fn infer_contextual_callback_effects(&mut self, arg: &Expr, env: &mut TypeEnv) -> Result<(), CompileError> {
         match &arg.kind {
-            ExprKind::Closure { .. } => Ok(()),
+            ExprKind::Closure { capture_refs, .. } => {
+                self.prepare_reference_captures(capture_refs, env);
+                Ok(())
+            },
             ExprKind::FirstClassCallable(target) => self.infer_callable_receiver_effects(target, env),
             ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) =>
                 self.infer_contextual_callback_effects(value, env),

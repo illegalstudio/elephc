@@ -1888,3 +1888,44 @@ The root is fixed without a second checker pass or disabling ordinary optimizati
 This step does not admit another registered family; Nullability, Mixed,
 Initialization, ArrayTypes and Indexing remain pending, along with stronger
 Locals joins and legitimate reference-binding creation after unset.
+
+### Verified182: legitimate fresh reference sources
+
+A shared checker helper now initializes an undeclared reference source at creation,
+with a null value and an open producer contract. Ordinary and contextual closure
+captures use the same preparation; reference assignment shares it. Existing source
+contracts and by-value capture diagnostics are retained. Named locals with explicit
+declarations retain their prior handling. The helper records binding presence and
+creation depth without running a deferred closure body.
+
+Allowing those sources exposed stale Void lowering metadata: a fresh alias after
+unset accepted a write of9, but reading the source still emitted null. Shared local
+promotion now normalizes only frame-owned unbound Void storage to Mixed before cell formation.
+Alias payload metadata is read after promotion, and self-aliasing forms a real
+source cell before returning. Already bound incoming reference payload ABIs are
+preserved. Fact55188904 records the observed failure. Old escaped aliases keep
+independent closed contracts, and explicit null remains closed under Locals.
+
+All ten focused gates pass. Both profiles lower on all five supported targets;
+native optimizer on/off runs and walker/dispatcher execution produce matching
+values with every owner released. The callback fixture uses contextual usort,
+getter-only captures observe later stores, self-aliases are initialized, and
+ordinary value captures still reject missing sources. Real opaque eval passes
+both optimizer settings with clean native heaps. Existing foreach/promotion and
+conditional reference-detachment controls pass. The default compiler build and
+diff hygiene pass. Public PHP/LFC repeats all eight profile/optimizer combinations
+with clean heaps and no undefined-variable warnings; the complete updated strict
+example matches its tracked output and releases all owners.
+
+The initial eval array_map callback segment exposed a separate permissive baseline
+ownership defect. Taskb6efb927 records retained iteration keys and string leases;
+removing that segment retires every owner. Its ordinary AOT path was clean, and
+native opaque-eval impact is not claimed as measured. The final source-creation
+fixture retains contextual callback coverage through usort. No builtin ownership
+implementation is changed by this step.
+
+A separate baseline probe still rejects an undeclared variable passed to a known
+mixed reference parameter under Locals while permissive compilation accepts it.
+Integrate reference argument creation with the shared call planner next, preserving
+source order and ordinary-read diagnostics. Stronger Locals audits and the five
+pending guarantees remain active before full umbrella acceptance.

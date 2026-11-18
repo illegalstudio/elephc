@@ -98,9 +98,7 @@ impl Checker {
                 Ok(PhpType::Void)
             }
             ExprKind::Closure { capture_refs, .. } => {
-                for name in capture_refs {
-                    self.invalidate_local_flow_narrowing(name, env);
-                }
+                self.prepare_reference_captures(capture_refs, env);
                 let result = self.infer_type(expr, env);
                 if result.is_ok() { self.definitely_bound_locals.extend(capture_refs.iter().cloned()); }
                 result

@@ -3904,6 +3904,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Emits an idempotent promotion of an initialized local into an owned fallback ref-cell.
     pub(crate) fn promote_local_ref_cell(&mut self, name: &str, span: Option<Span>) {
+        if !self.is_ref_bound_local(name) && self.local_can_own_reference_cell(name)
+            && self.local_type(name).codegen_repr() == PhpType::Void {
+            // A frame-owned null reference must carry future values, including getter-only captures.
+            let slot = self.declare_local(name, PhpType::Mixed);
+            self.builder.widen_local_storage_type(slot, PhpType::Mixed);
+            self.set_local_type(name, PhpType::Mixed);
+        }
         let slot = self.declare_local(name, self.local_type(name));
         let fallback_ty = self.builder.local_php_type(slot);
         let owner_slot = self.declare_ref_cell_owner(name, fallback_ty.clone());
@@ -4016,9 +4023,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Binds one local name to the same ref-cell pointer as another local.
     pub(crate) fn alias_local_ref_cell(&mut self, target: &str, source: &str, span: Option<Span>) {
-        if target == source {
-            return;
-        }
+        if target == source && !self.local_can_own_reference_cell(source) { return; }
         // An existing reference can point into an object property whose payload remains raw.
         // Reboxing that shared cell here would make property reads treat a box as an object.
         let source_repr = self.local_type(source).codegen_repr();
@@ -4029,12 +4034,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         {
             self.promote_local_mixed_ref_cell(source, span);
         }
-        let source_ty = self.local_type(source);
         // `is_ref_bound_local` is intentionally conservative across lowered
         // branches, so a source marked by a conditional predecessor may still
         // be raw on another runtime path. An idempotent promotion here gives
         // every alias operation a cell on all incoming paths.
         self.promote_local_ref_cell(source, span);
+        if target == source { return; }
+        let source_ty = self.local_type(source);
         self.clear_static_callable_local(target);
         self.clear_reflection_class_local(target);
         self.clear_reflection_function_local(target);
