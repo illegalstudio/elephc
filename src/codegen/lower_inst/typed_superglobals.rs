@@ -131,7 +131,8 @@ pub(super) fn lower_typed_superglobal_store(
                     ctx.emitter.instruction("mov rcx, rax");
                     ctx.emitter.instruction(&format!("jmp {publish}"));
                     ctx.emitter.label(&convert);
-                    ctx.emitter.instruction("mov rax, rdi");                    // build an independent hash from the indexed array
+                    ctx.emitter.instruction("mov rax, rdi");                    // keep the indexed payload address for the converter call
+                    ctx.emitter.instruction("mov rdi, rax");                    // SysV passes the indexed array in the first argument register
                     abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
                     ctx.emitter.instruction("mov rcx, rax");
                     ctx.emitter.instruction(&format!("jmp {publish}"));
@@ -145,6 +146,7 @@ pub(super) fn lower_typed_superglobal_store(
                 }
                 PhpType::Array(_) => {
                     abi::emit_store_to_sp(ctx.emitter, "rax", 8);               // preserve the indexed source for owner cleanup
+                    ctx.emitter.instruction("mov rdi, rax");                    // SysV passes the indexed array in the first argument register
                     abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");    // rax = fresh owned hash
                     ctx.emitter.instruction("mov rcx, rax");
                     if owns_value {
@@ -299,7 +301,8 @@ pub(super) fn lower_hash_superglobal_store(
                     ctx.emitter.instruction("mov rcx, rax");
                     ctx.emitter.instruction(&format!("jmp {publish}"));
                     ctx.emitter.label(&convert);
-                    ctx.emitter.instruction("mov rax, rdi");                    // build an independent hash from the indexed array
+                    ctx.emitter.instruction("mov rax, rdi");                    // keep the indexed payload address for the converter call
+                    ctx.emitter.instruction("mov rdi, rax");                    // SysV passes the indexed array in the first argument register
                     abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");
                     ctx.emitter.instruction("mov rcx, rax");
                     ctx.emitter.instruction(&format!("jmp {publish}"));
@@ -313,6 +316,7 @@ pub(super) fn lower_hash_superglobal_store(
                 }
                 PhpType::Array(_) => {
                     abi::emit_store_to_sp(ctx.emitter, "rax", 8);               // preserve the indexed source for owner cleanup
+                    ctx.emitter.instruction("mov rdi, rax");                    // SysV passes the indexed array in the first argument register
                     abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");    // rax = fresh owned hash
                     ctx.emitter.instruction("mov rcx, rax");
                     if owns_value {
