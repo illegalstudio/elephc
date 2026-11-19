@@ -57,9 +57,9 @@ pub(crate) fn eval_validate_property_reference(
 ) -> Result<(), EvalStatus> {
     array_reference_contracts::validate(reference, value, context, values)?;
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
-        for declared in context.local_reference_types(reference) {
-            validate_generic_local(&declared, "reference", value, context, values)?;
-        }
+        let contracts = context.local_reference_types(reference);
+        for declared in &contracts { validate_generic_local(declared, "reference", value, context, values)?; }
+        array_reference_contracts::validate_new_owner(reference, value, &contracts, context, values)?;
     }
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals) {
         for declared in context.local_reference_types(reference) {

@@ -14,7 +14,6 @@ use crate::eval_ir::EvalParameterType;
 /// An array-owned element association inspected before a shared referent can change.
 pub(crate) struct EvalArrayReferenceSource {
     pub(crate) array: RuntimeCellHandle,
-    pub(crate) key: EvalArrayReferenceKey,
     pub(crate) contracts: Vec<EvalParameterType>,
 }
 
@@ -31,18 +30,11 @@ impl ElephcEvalContext {
         aliases.contracts = contracts;
     }
 
-    /// Snapshots only exact live array associations targeting this persistent reference cell.
-    pub(crate) fn array_reference_sources(&self, reference: RuntimeCellHandle) -> Vec<EvalArrayReferenceSource> {
-        let mut sources = Vec::new();
-        for (address, aliases) in &self.array_element_aliases {
-            if !aliases.lifetime.is_live() || aliases.contracts.is_empty() { continue; }
-            for (key, target) in &aliases.targets {
-                if matches!(target, EvalReferenceTarget::Cell { cell } if cell.as_ptr() == reference.as_ptr()) {
-                    sources.push(EvalArrayReferenceSource { array: RuntimeCellHandle::from_raw(*address as *mut _),
-                        key: key.clone(), contracts: aliases.contracts.clone() });
-                }
-            }
-        }
-        sources
+    /// Snapshots live root contracts so nested references retain their original owner lifetime.
+    pub(crate) fn array_reference_sources(&self) -> Vec<EvalArrayReferenceSource> {
+        self.array_element_aliases.iter().filter(|(_, aliases)| aliases.lifetime.is_live() && !aliases.contracts.is_empty())
+            .map(|(address, aliases)| EvalArrayReferenceSource {
+                array: RuntimeCellHandle::from_raw(*address as *mut _).borrowed(), contracts: aliases.contracts.clone(),
+            }).collect()
     }
 }

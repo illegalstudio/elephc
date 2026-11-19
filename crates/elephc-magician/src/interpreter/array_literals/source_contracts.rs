@@ -77,7 +77,7 @@ fn evaluate_literal_source(elements: &[EvalArrayElement], context: &mut ElephcEv
 }
 
 /// Captures a producer after earlier operands, recursively retaining nested literal alternatives.
-pub(super) fn evaluate_value(expr: &EvalExpr, context: &mut ElephcEvalContext,
+pub(in crate::interpreter) fn evaluate_value(expr: &EvalExpr, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalParameterType>), EvalStatus> {
     if let EvalExpr::Array(elements) = expr {

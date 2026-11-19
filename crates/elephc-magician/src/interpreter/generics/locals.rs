@@ -46,7 +46,15 @@ pub(in crate::interpreter) fn generic_reference_contracts(target: &EvalReference
 
 /// Enforces every contract on the destination before a whole-value replacement.
 pub(in crate::interpreter) fn validate_generic_local_contracts(scope: &ElephcEvalScope, name: &str, value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
-    for declared in generic_local_contracts(scope, name, context) { validate_generic_local(&declared, name, value, context, values)?; }
+    let contracts = generic_local_contracts(scope, name, context);
+    for declared in &contracts { validate_generic_local(declared, name, value, context, values)?; }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+        if let Some(reference) = visible_scope_cell(context, scope, name) {
+            if values.is_reference(reference)? {
+                array_reference_contracts::validate_new_owner(reference, value, &contracts, context, values)?;
+            }
+        }
+    }
     Ok(())
 }
 

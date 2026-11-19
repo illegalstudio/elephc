@@ -35,8 +35,12 @@ fn eval_local_offset_write(
     let mut result = (|| {
         let index = index.map(|index| eval_owned_expr(index, context, scope, values)).transpose()?;
         if let Some(index) = index { operands.push(index); }
-        let producer = local_binding_origins::source_view(value, context, scope);
-        let value = eval_owned_expr(value, context, scope, values)?;
+        let (value, producer) = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+            array_literals::evaluate_value(value, context, scope, values)?
+        } else {
+            let producer = local_binding_origins::source_view(value, context, scope);
+            (eval_owned_expr(value, context, scope, values)?, producer)
+        };
         operands.push(value);
         let current = visible_scope_cell(context, scope, name).map(|cell| values.retain(cell)).transpose()?;
         if let Some(current) = current { operands.push(current); }
@@ -116,11 +120,15 @@ fn eval_local_offset_write(
                 origin = local_binding_origins::prepare_array_local_write(scope, name, array, Some(index),
                     value, producer.as_ref(), context, values)?;
                 for ty in &declared { validate_generic_local_element(Some(ty), array, index, value, context, values)?; }
+                let receiver = if origin.is_some() && !captured_parent {
+                    let detached = copy_scope_value(array, context, values)?;
+                    operands.push(detached); detached
+                } else { array };
                 let replacement = if captured_parent { array }
-                    else { eval_array_set_target_for_index(array, index, values)? };
-                if replacement != array {
+                    else { eval_array_set_target_for_index(receiver, index, values)? };
+                if replacement != receiver {
                     operands.push(replacement);
-                    context.clone_array_element_aliases(array, replacement, None);
+                    context.clone_array_element_aliases(receiver, replacement, None);
                 }
                 eval_array_element_reference_write(replacement, index, value, context, values)?;
                 values.array_set(replacement, index, value)?;
@@ -128,8 +136,20 @@ fn eval_local_offset_write(
             } else {
                 origin = local_binding_origins::prepare_array_local_write(scope, name, array, None,
                     value, producer.as_ref(), context, values)?;
-                eval_array_append_owned_value_with_type(array, value, &declared, context, values)?
+                let receiver = if origin.is_some() && !captured_parent {
+                    let detached = copy_scope_value(array, context, values)?;
+                    operands.push(detached); detached
+                } else { array };
+                eval_array_append_owned_value_with_type(receiver, value, &declared, context, values)?
             };
+            if let Some(origin) = &origin {
+                if let Some(reference) = visible_scope_cell(context, scope, name) {
+                    if values.is_reference(reference)? {
+                        array_reference_contracts::validate_new_owner(reference, replacement,
+                            std::slice::from_ref(origin), context, values)?;
+                    }
+                }
+            }
             if captured_parent { return Ok(()); }
             if published_generation.is_some_and(|generation|
                 scope_entry(context, scope, name).map(|entry| entry.generation()) != Some(generation)) {

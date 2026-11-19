@@ -181,3 +181,55 @@ fn strict_array_reference_sources_intersect_live_element_contracts() {
         assert_eq!(output, "BA"); assert_eq!(returned, FakeValue::String("allowed".to_string()));
     }
 }
+
+/// Nested array roots constrain a shared leaf before mutation through the original variable.
+#[test]
+fn strict_array_reference_nested_roots_guard_shared_leaves() {
+    let source = "$value=1;$items=[[&$value]]; \
+        try{$value='bad';}catch(TypeError $error){echo 'N';}return $items[0][0];";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "N"); assert_eq!(returned, FakeValue::Int(1));
+    }
+}
+
+/// A nested value surviving in an open copy does not keep a retired closed root contract.
+#[test]
+fn strict_array_reference_nested_roots_retire_with_their_owners() {
+    let source = "$value=1;$closed=[[&$value]];array<array<mixed>> $open=$closed; \
+        unset($closed);$value='released';return $open[0][0];";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert!(output.is_empty()); assert_eq!(returned, FakeValue::String("released".to_string()));
+    }
+}
+
+/// A prospective inferred self reference rejects before changing the original empty array.
+#[test]
+fn strict_array_reference_prospective_self_candidates_are_atomic() {
+    let source = "$items=[];try{$items=[&$items];}catch(TypeError $error){echo 'S';}return count($items);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "S"); assert_eq!(returned, FakeValue::Int(0));
+    }
+}
+
+/// First appends with inferred recursive shapes reject before publishing the array receiver.
+#[test]
+fn strict_array_reference_first_self_appends_are_atomic() {
+    let source = "$items=[];try{$items[]=[&$items];}catch(TypeError $error){echo 'A';}return count($items);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "A"); assert_eq!(returned, FakeValue::Int(0));
+    }
+}
+
+/// Explicit mixed recursive containers remain legal without acquiring an inferred finite schema.
+#[test]
+fn strict_array_reference_explicit_mixed_cycles_remain_open() {
+    let source = "array<mixed> $items=[];$items=[&$items];return count($items);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert!(output.is_empty()); assert_eq!(returned, FakeValue::Int(1));
+    }
+}

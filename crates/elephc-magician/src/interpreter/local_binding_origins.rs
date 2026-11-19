@@ -191,6 +191,17 @@ pub(in crate::interpreter) fn store_local_with_origin(context: &mut ElephcEvalCo
         Ok(origin) => origin,
         Err(status) => { let _ = eval_release_value(context, values, value); return Err(status); }
     };
+    if let Some(origin) = &array_origin {
+        let checked = (|| {
+            if let Some(reference) = visible_scope_cell(context, scope, &name) {
+                if values.is_reference(reference)? {
+                    array_reference_contracts::validate_new_owner(reference, value, std::slice::from_ref(origin), context, values)?;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(status) = checked { let _ = eval_release_value(context, values, value); return Err(status); }
+    }
     let origin = if fresh {
         match producer.map(|ty| Ok(parameter_type(&binding_kind_type(generic_type(&ty))))).unwrap_or_else(|| value_contract(value, context, values)) {
             Ok(origin) => Some(origin),
