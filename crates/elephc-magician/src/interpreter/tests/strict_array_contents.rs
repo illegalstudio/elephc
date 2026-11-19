@@ -14,18 +14,28 @@ use elephc_semantics::{SemanticProfile, StrictFeature};
 
 /// Installs a generated conditional schema before executing the fixture's source writes.
 fn run_contents(source: &str, schema: &str, features: &[StrictFeature]) -> (String, FakeValue) {
-    let schema = crate::parser::generics::parse_type_string(schema).unwrap();
-    let contract = crate::eval_ir::array_contents_type(schema).unwrap();
+    run_source(source, Some(schema), features, false)
+}
+
+/// Runs either explicit metadata or automatic producer inference with complete owner cleanup.
+fn run_source(source: &str, schema: Option<&str>, features: &[StrictFeature], dispatch: bool) -> (String, FakeValue) {
     let mut context = ElephcEvalContext::new();
     let profile = features.iter().fold(SemanticProfile::PERMISSIVE,
         |profile, feature| profile.with(*feature, true));
     context.install_semantic_profile(profile).unwrap();
     let mut scope = ElephcEvalScope::new();
-    scope.infer_local_type("items".to_string(), crate::eval_ir::parameter_type(&contract));
+    if let Some(schema) = schema {
+        let schema = crate::parser::generics::parse_type_string(schema).unwrap();
+        let contract = crate::eval_ir::array_contents_type(schema).unwrap();
+        scope.infer_local_type("items".to_string(), crate::eval_ir::parameter_type(&contract));
+    }
     let mut values = FakeOps::default();
     let program = crate::parser::parse_fragment_with_semantics(source.as_bytes(), profile).unwrap();
-    let result = execute_statements(program.statements(), &mut context, &mut scope, &mut values)
-        .unwrap_or_else(|error| panic!("{source}: {error:?}; {}", values.output));
+    let executed = if dispatch {
+        bytecode::try_execute(&mut context, &program, &mut scope, &mut values).and_then(|result|
+            result.map(Ok).unwrap_or_else(|| execute_statements(program.statements(), &mut context, &mut scope, &mut values)))
+    } else { execute_statements(program.statements(), &mut context, &mut scope, &mut values) };
+    let result = executed.unwrap_or_else(|error| panic!("{source}: {error:?}; {}", values.output));
     let EvalControl::Return(result) = result else { panic!("fixture returns its observed value"); };
     let returned = values.get(result); values.release(result).unwrap();
     for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
@@ -71,4 +81,79 @@ fn strict_array_contents_aliases_and_explicit_element_alternatives() {
         $alias=7;$alias=[2];return $items[0];";
     let (output, returned) = run_contents(source, "array<int>", &[StrictFeature::ArrayTypes]);
     assert_eq!(output, "A"); assert_eq!(returned, FakeValue::Int(2));
+}
+
+/// Fresh literal arrays retain contents through copies, alias writes and unrelated kind changes.
+#[test]
+fn strict_array_origins_automatic_locals_copies_and_aliases() {
+    for dispatch in [false, true] {
+        let source = "$items=[1];$copy=$items;$alias=&$items; \
+            try{$copy[]='bad';}catch(TypeError $error){echo 'C';} \
+            try{$alias[]='bad';}catch(TypeError $error){echo 'A';} \
+            $items=7;$items=null;$items=[2]; \
+            try{$items=['bad'];}catch(TypeError $error){echo 'R';}return $items[0];";
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "CAR"); assert_eq!(returned, FakeValue::Int(2));
+        let source = "$items=[1];$alias=&$items;$copy=$alias; \
+            try{$copy[]='bad';}catch(TypeError $error){echo 'A';}return $items[0];";
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "A"); assert_eq!(returned, FakeValue::Int(1));
+        let source = "$items=[1];$copy=$items; \
+            try{$items=7;}catch(TypeError $error){echo 'L';} \
+            try{$copy[]='bad';}catch(TypeError $error){echo 'C';}return $copy[0];";
+        let (output, returned) = run_source(source, None,
+            &[StrictFeature::ArrayTypes, StrictFeature::Locals], dispatch);
+        assert_eq!(output, "LC"); assert_eq!(returned, FakeValue::Int(1));
+    }
+}
+
+/// Inferred heterogeneous initializers reject before replacement and retire every candidate owner.
+#[test]
+fn strict_array_origins_heterogeneous_initializers_are_atomic() {
+    let source = "$items=7;try{$items=[1,'bad'];}catch(TypeError $error){echo 'H';} \
+        $other=8;try{$other=[[1],['bad']];}catch(TypeError $error){echo 'N';} \
+        return $items+$other;";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "HN"); assert_eq!(returned, FakeValue::Int(15));
+    }
+}
+
+/// Declared mixed and bare-array returns keep intentional openness after assignment and copying.
+#[test]
+fn strict_array_origins_declared_open_producers_stay_open() {
+    let source = "function open_array():array{return [1];} \
+        function open_mixed():mixed{return [1];} \
+        $items=open_array();$items[]='allowed';$copy=$items;$copy[]=false; \
+        $other=open_mixed();$other[]='allowed';return count($copy)+count($other);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert!(output.is_empty()); assert_eq!(returned, FakeValue::Int(5));
+    }
+}
+
+/// The actual bytecode store preserves a copied array contract and rejects before publication.
+#[test]
+fn strict_array_origins_vm_copy_replacement_and_owners() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayTypes, true);
+    let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+    let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+    let setup = crate::parser::parse_fragment_with_semantics(
+        b"$items=[1];$candidate=['bad'];", profile).unwrap();
+    execute_statements(setup.statements(), &mut context, &mut scope, &mut values).unwrap();
+    let program = crate::parser::parse_fragment_with_semantics(
+        b"$copy=$items;$copy=$candidate;", profile).unwrap();
+    assert!(bytecode::compile_program(&program).is_ok());
+    assert!(matches!(bytecode::try_execute(&mut context, &program, &mut scope, &mut values),
+        Err(EvalStatus::UncaughtThrowable)));
+    assert!(bytecode::last_execution_used_vm());
+    let thrown = context.take_pending_throw().unwrap();
+    assert!(values.object_is_a(thrown, "TypeError", false).unwrap()); values.release(thrown).unwrap();
+    let copy = scope.visible_cell("copy").unwrap();
+    let index = values.int(0).unwrap(); let element = values.array_get(copy, index).unwrap();
+    assert_eq!(values.get(element), FakeValue::Int(1));
+    values.release(index).unwrap(); values.release(element).unwrap();
+    for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+    for value in context.take_persistent_cell_owners() { values.release(value).unwrap(); }
+    for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "owner{id}"); }
 }

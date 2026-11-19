@@ -145,6 +145,7 @@ pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
     local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     inferred_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
+    array_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_storage_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_binding_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_detached_names: HashSet<String>,
@@ -162,6 +163,7 @@ impl ElephcEvalScope {
             entries: HashMap::new(),
             local_types: HashMap::new(),
             inferred_local_types: HashMap::new(),
+            array_local_types: HashMap::new(),
             native_storage_types: HashMap::new(),
             native_binding_types: HashMap::new(),
             native_detached_names: HashSet::new(),
@@ -198,6 +200,16 @@ impl ElephcEvalScope {
         self.inferred_local_types.get(name)
     }
 
+    /// Records array contents independently from the whole binding's producer kind.
+    pub(crate) fn infer_array_local_type(&mut self, name: String, ty: crate::eval_ir::EvalParameterType) {
+        self.array_local_types.entry(name).or_insert(ty);
+    }
+
+    /// Borrows the retained array-content contract of a successful producer.
+    pub(crate) fn array_local_type(&self, name: &str) -> Option<&crate::eval_ir::EvalParameterType> {
+        self.array_local_types.get(name)
+    }
+
     /// Refreshes a native semantic source independently of its current snapshot representation.
     pub(crate) fn set_native_binding_type(&mut self, name: String, ty: crate::eval_ir::EvalParameterType) {
         self.native_binding_types.insert(name, ty);
@@ -227,6 +239,7 @@ impl ElephcEvalScope {
     /// Collects explicit contracts from every visible name sharing this PHP reference group.
     pub(crate) fn local_type_contracts(&self, name: &str) -> Vec<crate::eval_ir::EvalParameterType> {
         let mut types = self.local_type(name).cloned().into_iter().collect::<Vec<_>>();
+        if let Some(ty) = self.array_local_type(name).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
         if let Some(ty) = self.inferred_local_type(name).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
         if let Some(ty) = self.native_storage_types.get(name).filter(|ty| !types.contains(ty)) {
             types.push(ty.clone());
@@ -234,6 +247,7 @@ impl ElephcEvalScope {
         if let Some(entry) = self.entry(name).filter(|entry| entry.flags().is_visible() && entry.flags().by_ref) {
             for (alias, alias_entry) in &self.entries {
                 if alias_entry.flags().is_visible() && alias_entry.flags().by_ref && alias_entry.cell() == entry.cell() {
+                    if let Some(ty) = self.array_local_type(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
                     if let Some(ty) = self.inferred_local_type(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
                     if let Some(ty) = self.local_type(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
                     if let Some(ty) = self.native_storage_types.get(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
@@ -402,6 +416,7 @@ impl ElephcEvalScope {
         self.static_bindings.remove(&name);
         self.native_storage_types.remove(&name);
         self.inferred_local_types.remove(&name);
+        self.array_local_types.remove(&name);
         self.native_binding_types.remove(&name);
         if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         self.reference_targets.remove(&name);
@@ -420,6 +435,7 @@ impl ElephcEvalScope {
         self.static_bindings.remove(&name);
         self.native_storage_types.remove(&name);
         self.inferred_local_types.remove(&name);
+        self.array_local_types.remove(&name);
         self.native_binding_types.remove(&name);
         if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         let Some(entry) = self.entries.get(&name).copied() else {
@@ -594,6 +610,7 @@ impl ElephcEvalScope {
     pub fn drain_owned_cells(&mut self) -> Vec<RuntimeCellHandle> {
         self.static_bindings.clear();
         self.inferred_local_types.clear();
+        self.array_local_types.clear();
         self.native_binding_types.clear();
         self.aot_visible_names.clear();
         self.reference_targets.clear();

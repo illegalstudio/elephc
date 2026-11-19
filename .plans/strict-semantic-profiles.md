@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step232 (this commit). Remaining feature integration is active. Issue:
+Verified through step234 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2882,3 +2882,9 @@ Three focused regressions pass: invalid mixed/partial-union selectors, guarded a
 A reusable generated metadata schema carries array key/element contracts independently of whole-value kind stability. Native binding metadata accepts the internal schema only for local bindings; parameters and returns reject the reserved marker. Conditional schemas validate arrays recursively but permit unrelated scalar and null stores. One-argument element schemas normalize to integer-key shapes without requiring packed physical layout.
 
 The shared generic and alias validators consume the same schema. Focused tests cover incorrect appends and whole-array replacements, scalar/null changes, explicit mixed and union elements, integer-key gaps, independent ArrayKeys normalization and alias rejection with balanced owners. Existing nullability property aliases and native metadata ABI layout remain green. Default build, seven exact test registrations/executions, diff hygiene, assembly comments and unchanged-source verification passed in job70b725d9. Automatic producer recording is still pending; ArrayTypes and Mixed remain gated.
+
+### Verified234: automatic runtime array producer origins
+
+Successful nonempty literal assignments establish independent content metadata in the existing scope and generic reference validators. Recursive inference rejects heterogeneous candidates before replacing storage and releases all candidate owners. Producer declarations remain authoritative: bare array and mixed returns stay open. Copies, including reads through aliases, carry source contracts without deriving a proof from a shared cell handle. The Locals kind contract remains separate from array contents; ordinary generic union/intersection validation preserves compound content metadata.
+
+Eleven exact focused tests pass, including automatic literals/copies/aliases, atomic heterogeneous initializers, declared open producers, the prior explicit conditional schemas, nullability aliases and generic unions. An actual bytecode-only copy/replacement test rejects before publication and keeps the previous value with balanced owners. Append/array-literal fixtures use the existing walker fallback, not newly added VM array opcodes. Default build, diff/assembly hygiene and source stability pass in jobe4f148cd. Empty-array first writes, other producers, properties/statics and native source publication remain pending; ArrayTypes and Mixed remain gated.

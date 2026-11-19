@@ -12,16 +12,28 @@ use super::*;
 use crate::eval_ir::{generic_type, parameter_type};
 use elephc_generics::Type;
 
+mod arrays;
+
 /// Captures a producer's declared alternatives without executing PHP or borrowing live maps.
 pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
     context: &ElephcEvalContext, scope: &ElephcEvalScope,
 ) -> Option<EvalParameterType> {
-    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals) { return None; }
+    let arrays = context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes);
+    if !arrays && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals) { return None; }
     let mixed = || EvalParameterType::new(vec![EvalParameterTypeVariant::Mixed], false);
     match expr {
-        EvalExpr::LoadVar(name) => Some(scope.local_type(name).or_else(|| scope.inferred_local_type(name))
-            .or_else(|| scope.native_binding_type(name))
-            .cloned().unwrap_or_else(mixed)),
+        EvalExpr::LoadVar(name) => {
+            let kind = scope.local_type(name).or_else(|| scope.inferred_local_type(name))
+                .or_else(|| scope.native_binding_type(name)).cloned().unwrap_or_else(mixed);
+            let contents = if arrays { generic_local_contracts(scope, name, context).into_iter()
+                .filter(|ty| arrays::contains_contents(&generic_type(ty))).collect::<Vec<_>>() }
+                else { Vec::new() };
+            if contents.is_empty() { Some(kind) } else {
+                let mut members = vec![generic_type(&kind)];
+                members.extend(contents.iter().map(generic_type));
+                Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Generic(Type::Intersection(members))], false))
+            }
+        },
         EvalExpr::Assign { value, .. } => local_producer_contract(value, context, scope),
         EvalExpr::Const(value) => Some(match value {
             EvalConst::Null => EvalParameterType::new(Vec::new(), true),
@@ -30,6 +42,7 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
             EvalConst::Bool(_) => EvalParameterType::new(vec![EvalParameterTypeVariant::Bool], false),
             EvalConst::String(_) | EvalConst::Bytes(_) => EvalParameterType::new(vec![EvalParameterTypeVariant::String], false),
         }),
+        EvalExpr::Array(_) if arrays => None,
         EvalExpr::Array(_) => Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Array], false)),
         EvalExpr::Closure { .. } | EvalExpr::FunctionCallable { .. }
             | EvalExpr::InvokableCallable { .. } | EvalExpr::MethodCallable { .. }
@@ -61,7 +74,7 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
                 .map(|contract| parameter_type(&builtin_producer_type(contract.returns)));
             builtin.or_else(|| context.function(&name).and_then(|function| function.return_type()).cloned())
                 .or_else(|| context.native_function(&name).and_then(|function| function.return_type().cloned()))
-                .map(|ty| parameter_type(&binding_kind_type(generic_type(&ty))))
+                .map(|ty| if arrays { ty } else { parameter_type(&binding_kind_type(generic_type(&ty))) })
                 .or_else(|| Some(mixed()))
         }
         EvalExpr::DynamicCall { .. } | EvalExpr::DynamicMethodCall { .. }
@@ -86,13 +99,18 @@ fn builtin_producer_type(ty: elephc_builtin_contract::TypeSpec) -> Type {
 
 /// Keeps declared producer alternatives while leaving array element inference to ArrayTypes.
 fn binding_kind_type(ty: Type) -> Type {
+    if crate::eval_ir::array_contents_schema(&ty).is_some() { return Type::atom("array"); }
     match ty {
         Type::Atom(name) if name == "void" => Type::atom("null"),
         Type::Apply(name, _) if name == "array" => Type::atom("array"),
         Type::Callable(_, _) => Type::atom("callable"),
         Type::Nullable(inner) => Type::Nullable(Box::new(binding_kind_type(*inner))),
         Type::Union(members) => Type::Union(members.into_iter().map(binding_kind_type).collect()),
-        Type::Intersection(members) => Type::Intersection(members.into_iter().map(binding_kind_type).collect()),
+        Type::Intersection(members) => {
+            let mut kinds = members.into_iter().filter(|member| !arrays::contains_contents(member))
+                .map(binding_kind_type).collect::<Vec<_>>();
+            match kinds.len() { 0 => Type::atom("array"), 1 => kinds.remove(0), _ => Type::Intersection(kinds) }
+        },
         ty => ty,
     }
 }
@@ -146,13 +164,23 @@ pub(in crate::interpreter) fn store_local_with_origin(context: &mut ElephcEvalCo
     let fresh = context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals)
         && visible_scope_cell(context, scope, &name).is_none()
         && scope.local_type(&name).is_none();
+    let array_origin = match arrays::prepare(scope, &name, producer.as_ref(), value, context, values) {
+        Ok(origin) => origin,
+        Err(status) => { let _ = eval_release_value(context, values, value); return Err(status); }
+    };
     let origin = if fresh {
-        match producer.map(Ok).unwrap_or_else(|| value_contract(value, context, values)) {
+        match producer.map(|ty| Ok(parameter_type(&binding_kind_type(generic_type(&ty))))).unwrap_or_else(|| value_contract(value, context, values)) {
             Ok(origin) => Some(origin),
             Err(status) => { let _ = eval_release_value(context, values, value); return Err(status); }
         }
     } else { None };
     let replaced = set_owned_scope_cell(context, scope, name.clone(), value, values)?;
+    if let Some(origin) = array_origin {
+        scope.infer_array_local_type(name.clone(), origin);
+        if values.supports_persistent_references() {
+            eval_persistent_variable_reference(&name, context, scope, values)?;
+        }
+    }
     if let Some(origin) = origin {
         let open = origin.variants().contains(&EvalParameterTypeVariant::Mixed);
         scope.infer_local_type(name.clone(), origin);

@@ -74,6 +74,16 @@ pub(in crate::interpreter) fn generic_value_accepts(ty: &Type, value: RuntimeCel
         } else { Ok(true) };
     }
     match ty {
+        Type::Intersection(members) => {
+            for member in members { if !generic_value_accepts(member, value, context, values)? { return Ok(false); } }
+            Ok(true)
+        }
+        Type::Union(members) => {
+            for member in members { if generic_value_accepts(member, value, context, values)? { return Ok(true); } }
+            Ok(false)
+        }
+        Type::Nullable(inner) => if values.type_tag(value)? == EVAL_TAG_NULL { Ok(true) }
+            else { generic_value_accepts(inner, value, context, values) },
         Type::Atom(name) if name == "false" => Ok(values.type_tag(value)? == EVAL_TAG_BOOL && !values.truthy(value)?),
         Type::Apply(name, args) if name == "array" => {
             let tag = values.type_tag(value)?;
