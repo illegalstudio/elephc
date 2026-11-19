@@ -77,6 +77,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("tidy_prelude", crate::tidy_prelude::tidy_declarations()),
         ("fileinfo_prelude", crate::fileinfo_prelude::fileinfo_declarations()),
         ("tokenizer_prelude", crate::tokenizer_prelude::tokenizer_declarations()),
+        ("zip_prelude", crate::zip_prelude::zip_declarations()),
         ("testing_prelude", crate::testing_prelude::testing_declarations()),
         (
             "version_prelude",
@@ -245,6 +246,49 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[
          exposes it as an output-handler alias, not as a function in ext/tidy's stub, so \
          the shared builtin catalog has no row for it. The tidy prelude declares it so the \
          handler string resolves at compile time and eval() sees the same name.",
+    ),
+    (
+        "zip_open",
+        "a deprecated procedural alias implemented by the zip prelude over ZipArchive. It has \
+         no `builtin!` binding and no `eval_builtin!` home; the prelude is the whole \
+         implementation. The comparison table therefore counts the zip module from the \
+         registry (0/10), while ZipArchive and the procedural API remain prelude-provided.",
+    ),
+    (
+        "zip_close",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_read",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_open",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_close",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_read",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_name",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_compressedsize",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_filesize",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
+    ),
+    (
+        "zip_entry_compressionmethod",
+        "see `zip_open`; the deprecated procedural API is prelude-provided over ZipArchive.",
     ),
 ];
 

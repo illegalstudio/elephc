@@ -70,6 +70,15 @@ runs:
         CURL_STATUS: ${{ steps.curl.outputs.status || 'skipped' }}
         FAMILY: ${{ inputs.family }}
       run: python3 -B scripts/ci/shard_recovery.py prepare
+    - name: Ensure cmake for the managed libzip build
+      # Cached libzip artifacts are restored from the host build, but a cold or
+      # evicted cache rebuilds libzip in this shard and its recipe is CMake-only.
+      if: inputs.family == 'codegen' && runner.os == 'Linux'
+      shell: elephc-ci-shell {0}
+      run: |
+        if ! command -v cmake >/dev/null 2>&1; then
+          elephc-ci-apt-install --no-install-recommends cmake
+        fi
     - name: Install macOS test-only native providers
       if: steps.prepare.outputs.status == 'ready' && inputs.target == 'macos-aarch64'
       shell: bash

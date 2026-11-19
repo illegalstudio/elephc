@@ -105,7 +105,9 @@ fn emit_user_wrapper_path_op_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x15, x9");                                         // compared every protocol byte?
     emitter.instruction("b.ge __rt_uwpo_match");                                // full match — dispatch into the wrapper class
     emitter.instruction("ldrb w16, [x13, x15]");                                // stored protocol byte
+    emitter.instruction("orr w16, w16, #0x20");                                 // lowercase the stored scheme byte
     emitter.instruction("ldrb w17, [x0, x15]");                                 // path scheme byte
+    emitter.instruction("orr w17, w17, #0x20");                                 // lowercase the path scheme byte
     emitter.instruction("cmp w16, w17");                                        // do the bytes match?
     emitter.instruction("b.ne __rt_uwpo_slot_next");                            // protocol byte differs — try the next slot
     emitter.instruction("add x15, x15, #1");                                    // advance the compare index
@@ -226,7 +228,9 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r15, r9");                                         // compared every protocol byte?
     emitter.instruction("jge __rt_uwpo_match_x86");                             // full match — dispatch into the wrapper class
     emitter.instruction("movzx ecx, BYTE PTR [r13 + r15]");                     // stored protocol byte
+    emitter.instruction("or cl, 0x20");                                         // lowercase the stored scheme byte
     emitter.instruction("movzx r8d, BYTE PTR [rax + r15]");                     // path scheme byte
+    emitter.instruction("or r8b, 0x20");                                        // lowercase the path scheme byte
     emitter.instruction("cmp cl, r8b");                                         // do the bytes match?
     emitter.instruction("jne __rt_uwpo_slot_next_x86");                         // protocol byte differs — try the next slot
     emitter.instruction("inc r15");                                             // advance the compare index
@@ -372,7 +376,9 @@ fn emit_user_wrapper_rename_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x15, x9");                                         // compared every protocol byte?
     emitter.instruction("b.ge __rt_uwrn_match");                                // full match — dispatch into the wrapper class
     emitter.instruction("ldrb w16, [x13, x15]");                                // stored protocol byte
+    emitter.instruction("orr w16, w16, #0x20");                                 // lowercase the stored scheme byte
     emitter.instruction("ldrb w17, [x0, x15]");                                 // from-path scheme byte
+    emitter.instruction("orr w17, w17, #0x20");                                 // lowercase the path scheme byte
     emitter.instruction("cmp w16, w17");                                        // do the bytes match?
     emitter.instruction("b.ne __rt_uwrn_slot_next");                            // protocol byte differs — try the next slot
     emitter.instruction("add x15, x15, #1");                                    // advance the compare index
@@ -489,7 +495,9 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r15, r9");                                         // compared every protocol byte?
     emitter.instruction("jge __rt_uwrn_match_x86");                             // full match — dispatch into the wrapper class
     emitter.instruction("movzx ecx, BYTE PTR [r13 + r15]");                     // stored protocol byte
+    emitter.instruction("or cl, 0x20");                                         // lowercase the stored scheme byte
     emitter.instruction("movzx r8d, BYTE PTR [rax + r15]");                     // from-path scheme byte
+    emitter.instruction("or r8b, 0x20");                                        // lowercase the path scheme byte
     emitter.instruction("cmp cl, r8b");                                         // do the bytes match?
     emitter.instruction("jne __rt_uwrn_slot_next_x86");                         // protocol byte differs — try the next slot
     emitter.instruction("inc r15");                                             // advance the compare index

@@ -4,8 +4,9 @@
 //! package that holds every archive a fixture needs to link.
 //!
 //! Called from:
-//! - `crate::support::curl_native` (curl and its four dependencies) and
-//!   `crate::support::xml_native` (libxml2 + the Elephc shim).
+//! - `crate::support::curl_native` (curl and its four dependencies),
+//!   `crate::support::xml_native` (libxml2 + the Elephc shim), and
+//!   `crate::support::zip_native` (libzip + bzip2/xz/zlib/openssl).
 //!
 //! Key details:
 //! - Deliberately NOT the production resolver: the harness has no project manifest, so it

@@ -19,6 +19,24 @@ use super::super::super::Checker;
 use super::super::syntactic::wider_type_syntactic;
 
 impl Checker {
+    /// Returns the resource-or-false shape of `ZipArchive` stream getters.
+    ///
+    /// The prelude implements `getStream*` in PHP over `fopen()`, but a method with no
+    /// declared return type infers the codegen representation (`int|false`) and loses
+    /// the stream resource kind that `feof()`/`fread()` require. PHP has no `resource`
+    /// return type syntax to spell this, so the built-in class contract lives here.
+    fn zip_stream_method_return(class_name: &str, method: &str) -> Option<PhpType> {
+        let class_name = class_name.trim_start_matches('\\');
+        if class_name != "ZipArchive" {
+            return None;
+        }
+        if matches!(method.to_ascii_lowercase().as_str(), "getstream" | "getstreamname" | "getstreamindex") {
+            Some(PhpType::Union(vec![PhpType::stream_resource(), PhpType::False]))
+        } else {
+            None
+        }
+    }
+
     /// Infers the type of a method call expression (`$obj->method(...)`).
     ///
     /// Dispatches to `infer_method_call_on_class_type` for concrete `Object`
@@ -47,6 +65,10 @@ impl Checker {
         self.require_valid_unresolved_call_argument_order(args, &description)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
+            if let Some(stream_type) = Self::zip_stream_method_return(class_name, method) {
+                self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
+                return Ok(stream_type);
+            }
             if !class_name.is_empty() {
                 if self.interfaces.contains_key(class_name) {
                     return self
@@ -58,6 +80,10 @@ impl Checker {
                     .tracked_reflection_class_method_return_type(object, method)
                     .unwrap_or(return_ty));
             }
+            let return_ty = self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
+            return Ok(self
+                .tracked_reflection_class_method_return_type(object, method)
+                .unwrap_or(return_ty));
         }
         // Method calls on a union object type are allowed when the union has a
         // single object class. `?Foo` / `Foo|null` faults on a null receiver as in
@@ -80,6 +106,10 @@ impl Checker {
                         expr,
                         env,
                     );
+                }
+                if let Some(stream_type) = Self::zip_stream_method_return(&class_name, method) {
+                    self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;
+                    return Ok(stream_type);
                 }
                 let return_ty =
                     self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;

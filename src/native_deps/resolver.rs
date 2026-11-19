@@ -7,7 +7,7 @@
 //! Key details:
 //! - Resolution never downloads/builds/writes and never falls back to named system libraries.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::codegen_support::platform::Target;
@@ -81,14 +81,15 @@ pub fn resolve_for_compilation_in_cache(
 }
 
 /// Names the PHP-visible surface a managed package serves, for the "<feature> support requires
-/// managed native package <name>" diagnostics: `pcre2` backs the regex builtins and `libxml2`
-/// the xml/xmlwriter extensions. A package without a surface of its own (the curl chain, zlib)
-/// is reported by its package name.
+/// managed native package <name>" diagnostics: `pcre2` backs the regex builtins, `libxml2` the
+/// xml/xmlwriter extensions, and `libzip` the ext/zip surface. A package without a surface of
+/// its own (the curl chain, zlib) is reported by its package name.
 fn feature_label(package: &str) -> &str {
     match package {
         "pcre2" => "regex",
         "libxml2" => "xml",
         "libtidy" => "tidy",
+        "libzip" => "zip",
         _ => package,
     }
 }
@@ -141,6 +142,8 @@ pub(crate) fn resolve_for_compilation_with(
     })?;
     let mut seen = BTreeSet::new();
     let mut resolved = Vec::new();
+    let mut discovery = Vec::new();
+    let mut dependencies: HashMap<String, Vec<String>> = HashMap::new();
     // A flat worklist, not a `for` loop over `requirements`: a package's own
     // catalog/lock-declared dependencies (e.g. `curl` -> `["openssl", "zlib"]`,
     // the first non-empty `PackageVersion::dependencies`) are spliced in right
@@ -160,6 +163,7 @@ pub(crate) fn resolve_for_compilation_with(
         let name = queue[cursor].clone();
         cursor += 1;
         if !seen.insert(name.clone()) { continue; }
+        discovery.push(name.clone());
         let selected = manifest.dependencies().get(name.as_str()).ok_or_else(|| NativeError::new(
             NativeErrorKind::Manifest,
             format!("project does not declare required native package {name}"),
@@ -227,11 +231,65 @@ pub(crate) fn resolve_for_compilation_with(
             package: name.clone(), artifact_root: root, archives,
             system_libraries: target_plan.system_libraries.clone(), library_paths: Vec::new(), frameworks: target_plan.frameworks.clone(),
         });
-        for (offset, dependency) in locked.dependencies.iter().enumerate() {
+        let package_dependencies = locked.dependencies.clone();
+        for (offset, dependency) in package_dependencies.iter().enumerate() {
             queue.insert(cursor + offset, dependency.clone());
         }
+        dependencies.insert(name.clone(), package_dependencies);
     }
-    Ok(resolved)
+    let order = static_link_order(&discovery, &dependencies);
+    let mut by_name: HashMap<String, ResolvedNativePackage> = resolved
+        .into_iter()
+        .map(|package| (package.package.clone(), package))
+        .collect();
+    Ok(order
+        .into_iter()
+        .filter_map(|name| by_name.remove(&name))
+        .collect())
+}
+
+/// Orders resolved packages so every dependent archive precedes the archives it references.
+///
+/// `discovery` is the resolver's pre-order visit order and `dependencies` maps each package to
+/// its lock-declared dependencies. Kahn's algorithm runs over dependent-before-dependency
+/// edges, so a single root keeps its recorded order while multiple roots sharing a dependency
+/// emit that dependency only after every package that references it — GNU ld cannot satisfy
+/// undefined symbols introduced after an archive has already been scanned. A cycle (which the
+/// catalog forbids) falls back to discovery order for the remaining packages.
+fn static_link_order(
+    discovery: &[String],
+    dependencies: &HashMap<String, Vec<String>>,
+) -> Vec<String> {
+    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (package, package_dependencies) in dependencies {
+        for dependency in package_dependencies {
+            dependents
+                .entry(dependency.as_str())
+                .or_default()
+                .push(package.as_str());
+        }
+    }
+    let mut emitted: HashSet<&str> = HashSet::new();
+    let mut order = Vec::with_capacity(discovery.len());
+    while order.len() < discovery.len() {
+        let next = discovery.iter().find(|candidate| {
+            !emitted.contains(candidate.as_str())
+                && dependents
+                    .get(candidate.as_str())
+                    .map_or(true, |users| users.iter().all(|user| emitted.contains(user)))
+        });
+        let Some(next) = next else {
+            for package in discovery {
+                if emitted.insert(package.as_str()) {
+                    order.push(package.clone());
+                }
+            }
+            break;
+        };
+        emitted.insert(next.as_str());
+        order.push(next.clone());
+    }
+    order
 }
 
 /// Adds the exact selected target/ABI recovery command to an artifact failure.
@@ -356,13 +414,15 @@ mod tests {
     }
 
     /// Verifies the diagnostic names the PHP surface a package serves — regex for pcre2, xml
-    /// for libxml2 — and falls back to the package name for every other catalog package.
+    /// for libxml2, zip for libzip — and falls back to the package name for every other
+    /// catalog package.
     #[test]
     fn feature_label_names_the_php_surface_or_the_package() {
         assert_eq!(feature_label("libxml2"), "xml");
         assert_eq!(feature_label("libtidy"), "tidy");
         assert_eq!(feature_label("pcre2"), "regex");
-        for package in ["curl", "libssh2", "nghttp2", "openssl", "zlib", "unknown"] {
+        assert_eq!(feature_label("libzip"), "zip");
+        for package in ["curl", "libssh2", "nghttp2", "openssl", "zlib", "bzip2", "xz", "unknown"] {
             assert_eq!(feature_label(package), package, "{package} has no surface of its own");
         }
     }
@@ -589,5 +649,79 @@ mod tests {
         );
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Verifies a single root keeps the lock's dependent-before-dependency order.
+    #[test]
+    fn static_link_order_preserves_one_root() {
+        let discovery = ["curl", "libssh2", "openssl", "zlib", "nghttp2"]
+            .map(String::from)
+            .to_vec();
+        let mut dependencies = HashMap::new();
+        dependencies.insert(
+            "curl".to_string(),
+            ["libssh2", "nghttp2", "openssl", "zlib"]
+                .map(String::from)
+                .to_vec(),
+        );
+        dependencies.insert(
+            "libssh2".to_string(),
+            ["openssl", "zlib"].map(String::from).to_vec(),
+        );
+        for leaf in ["openssl", "zlib", "nghttp2"] {
+            dependencies.insert(leaf.to_string(), Vec::new());
+        }
+
+        assert_eq!(static_link_order(&discovery, &dependencies), discovery);
+    }
+
+    /// Verifies two roots sharing zlib/openssl emit each shared archive after every dependent,
+    /// which is the order GNU ld requires when a program uses both curl and libzip.
+    #[test]
+    fn static_link_order_places_shared_dependencies_after_every_dependent() {
+        let discovery = [
+            "curl", "libssh2", "openssl", "zlib", "nghttp2", "libzip", "bzip2", "xz",
+        ]
+        .map(String::from)
+        .to_vec();
+        let mut dependencies = HashMap::new();
+        dependencies.insert(
+            "curl".to_string(),
+            ["libssh2", "nghttp2", "openssl", "zlib"]
+                .map(String::from)
+                .to_vec(),
+        );
+        dependencies.insert(
+            "libssh2".to_string(),
+            ["openssl", "zlib"].map(String::from).to_vec(),
+        );
+        dependencies.insert(
+            "libzip".to_string(),
+            ["bzip2", "xz", "zlib", "openssl"]
+                .map(String::from)
+                .to_vec(),
+        );
+        for leaf in ["openssl", "zlib", "nghttp2", "bzip2", "xz"] {
+            dependencies.insert(leaf.to_string(), Vec::new());
+        }
+
+        let order = static_link_order(&discovery, &dependencies);
+        let position = |name: &str| order.iter().position(|package| package == name).unwrap();
+        assert_eq!(order.len(), discovery.len());
+        for dependent in ["libssh2", "nghttp2", "openssl", "zlib"] {
+            assert!(position("curl") < position(dependent), "curl must precede {dependent}");
+        }
+        for dependency in ["openssl", "zlib"] {
+            assert!(
+                position("libssh2") < position(dependency),
+                "libssh2 must precede {dependency}"
+            );
+        }
+        for dependency in ["bzip2", "xz", "zlib", "openssl"] {
+            assert!(
+                position("libzip") < position(dependency),
+                "libzip must precede {dependency}"
+            );
+        }
     }
 }
