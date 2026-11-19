@@ -44,6 +44,19 @@ pub(crate) const PHPEXT_REPLACEMENT_OWNER_BASE: &str =
 pub(crate) const PHPEXT_REPLACEMENT_OWNERS: &str = "_elephc_phpext_replacement_owners";
 pub(crate) const PHPEXT_REPLACEMENT_OWNER_LIMIT: usize = 64;
 
+/// Native replacement-owner table shared by hosted chaining and export cleanup.
+pub(crate) const REPLACEMENT_OWNER_STORAGE: elephc_memoir::interop::replacement_owners::ReplacementOwners<'static> =
+    elephc_memoir::interop::replacement_owners::ReplacementOwners {
+        count: PHPEXT_REPLACEMENT_OWNER_COUNT,
+        base: PHPEXT_REPLACEMENT_OWNER_BASE,
+        limit: PHPEXT_REPLACEMENT_OWNER_LIMIT,
+    };
+
+/// Materializes the hosted replacement table through the compiler's external ABI.
+pub(crate) fn emit_replacement_owners_address(emitter: &mut Emitter, dest: &str) {
+    abi::emit_extern_symbol_address(emitter, dest, PHPEXT_REPLACEMENT_OWNERS);
+}
+
 /// Converts a guarded host callback failure into a contained native cleanup unwind.
 pub(crate) fn emit_host_callback_check(emitter: &mut Emitter, done: &str) {
     let status_ready = format!("{done}_host_status_ready");

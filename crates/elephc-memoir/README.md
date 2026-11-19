@@ -44,6 +44,8 @@ It also emits checked offset-vector allocation, boxed callback argument storage
 and intercepted exception retirement, concat cursor saves and restores, owned
 string buffer growth, protected transfer of previous Throwable owners, and
 acquisition of staged hash payloads.
+Memoir also builds packed offset rows and callback argument vectors, copies retained
+Mixed slots, and emits weak resource cell and hosted replacement owner storage.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
