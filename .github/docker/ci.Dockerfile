@@ -8,7 +8,7 @@ ARG NEXTEST_VERSION=0.9.140
 ENV DEBIAN_FRONTEND=noninteractive
 COPY --chmod=0755 scripts/ci/apt_install.sh /usr/local/bin/elephc-ci-apt-install
 RUN elephc-ci-apt-install --no-install-recommends \
-        binutils build-essential ca-certificates curl file gdb git libbz2-dev \
+        binutils build-essential ca-certificates cmake curl file gdb git libbz2-dev \
         m4 netbase pkg-config python3 tzdata zlib1g-dev zstd \
     && rm -rf /var/lib/apt/lists/*
 # Outside HOME: GitHub overrides HOME for actions and job containers.

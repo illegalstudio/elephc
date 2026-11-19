@@ -544,7 +544,22 @@ pub fn emit_file_get_contents_url(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #96");                                     // release helper frame
     emitter.instruction("ret");                                                 // return failure
     emitter.label("__rt_fgc_url_plain");
+    emitter.instruction("sub sp, sp, #32");                                     // preserve the path and caller return address across the wrapper probe
+    emitter.instruction("stp x1, x2, [sp, #0]");                                // save path pointer and length
+    emitter.instruction("str x30, [sp, #16]");                                  // save the caller return address across the probe call
+    emitter.instruction("mov x0, x1");                                          // path pointer for the registered-wrapper probe
+    emitter.instruction("mov x1, x2");                                          // path length for the registered-wrapper probe
+    emitter.instruction("bl __rt_path_is_wrapper");                             // does the scheme match a userspace wrapper?
+    emitter.instruction("cbnz x0, __rt_fgc_url_user_wrapper");                  // wrapper URLs read through stream_open
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // restore the path pointer and length
+    emitter.instruction("ldr x30, [sp, #16]");                                  // restore the caller return address
+    emitter.instruction("add sp, sp, #32");                                     // release the probe scratch
     emitter.instruction("b __rt_file_get_contents_maybe_phar");                 // fallback to phar:// runtime reader or filesystem path
+    emitter.label("__rt_fgc_url_user_wrapper");
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // restore the path pointer and length
+    emitter.instruction("ldr x30, [sp, #16]");                                  // restore the caller return address
+    emitter.instruction("add sp, sp, #32");                                     // release the probe scratch
+    emitter.instruction("b __rt_file_get_contents_wrapper");                    // read through stream_open/stream_read
 }
 
 /// Emits the x86_64 variant of `__rt_file_get_contents_maybe_url`.
@@ -1022,5 +1037,21 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return failure
     emitter.label("__rt_fgc_url_plain_x86");
+    emitter.instruction("sub rsp, 24");                                         // preserve the path across the wrapper probe and keep calls aligned
+    emitter.instruction("mov QWORD PTR [rsp + 0], rax");                        // save path pointer
+    emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                        // save path length
+    emitter.instruction("mov rdi, rax");                                        // path pointer for the registered-wrapper probe
+    emitter.instruction("mov rsi, rdx");                                        // path length for the registered-wrapper probe
+    emitter.instruction("call __rt_path_is_wrapper");                           // does the scheme match a userspace wrapper?
+    emitter.instruction("test rax, rax");                                       // wrapper scheme matched?
+    emitter.instruction("jnz __rt_fgc_url_user_wrapper_x86");                   // wrapper URLs read through stream_open
+    emitter.instruction("mov rax, QWORD PTR [rsp + 0]");                        // restore the path pointer for the filesystem reader
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // restore the path length for the filesystem reader
+    emitter.instruction("add rsp, 24");                                         // release the probe scratch
     emitter.instruction("jmp __rt_file_get_contents_maybe_phar");               // fallback to phar:// runtime reader or filesystem path
+    emitter.label("__rt_fgc_url_user_wrapper_x86");
+    emitter.instruction("mov rax, QWORD PTR [rsp + 0]");                        // restore the path pointer for the wrapper reader
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // restore the path length for the wrapper reader
+    emitter.instruction("add rsp, 24");                                         // release the probe scratch
+    emitter.instruction("jmp __rt_file_get_contents_wrapper");                  // read through stream_open/stream_read
 }

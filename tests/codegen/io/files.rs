@@ -478,15 +478,28 @@ string(3) "EFG"
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies a non-null `$context` is refused with a diagnostic that names the parameter, rather
-/// than being silently ignored: elephc has no stream-context plumbing on the read path, so a
-/// caller's context options could not be honored.
+/// Verifies a non-null `$context` is accepted on the read path. The shared stream-context
+/// state carries the options into user-space wrappers; a plain local read still succeeds.
 #[test]
-fn test_file_get_contents_rejects_a_non_null_stream_context() {
+fn test_file_get_contents_accepts_a_non_null_stream_context() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("x.txt", "ABC");
+$context = stream_context_create([]);
+echo file_get_contents("x.txt", false, $context);
+"#,
+    );
+    assert_eq!(out, "ABC");
+}
+
+/// Verifies built-in remote readers still refuse a non-null context rather than silently
+/// dropping its options; user-space wrapper reads take the dedicated context path instead.
+#[test]
+fn test_file_get_contents_rejects_builtin_remote_stream_context() {
     let error = compile_source_expect_backend_error(
         r#"<?php
 $context = stream_context_create([]);
-echo file_get_contents("x.txt", false, $context);
+echo file_get_contents("http://example.com", false, $context);
 "#,
     );
     assert!(

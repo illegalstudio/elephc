@@ -75,6 +75,8 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_fopen_uw_match");                            // full match — dispatch into the user wrapper class
     emitter.instruction("ldrb w16, [x13, x15]");                                // stored protocol byte
     emitter.instruction("ldrb w17, [x1, x15]");                                 // path scheme byte
+    emitter.instruction("orr w16, w16, #0x20");                                 // lowercase the stored scheme byte
+    emitter.instruction("orr w17, w17, #0x20");                                 // lowercase the path scheme byte
     emitter.instruction("cmp w16, w17");                                        // do the bytes match?
     emitter.instruction("b.ne __rt_fopen_uw_slot_next");                        // protocol byte differs — try the next slot
     emitter.instruction("add x15, x15, #1");                                    // advance the compare index
@@ -229,9 +231,9 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload the wrapper object pointer
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
     emitter.instruction("str x13, [x10, x12, lsl #3]");                         // _user_wrapper_handles[slot] = obj
-    emitter.instruction("mov x0, #0x4000");                                     // low 16 bits of USER_WRAPPER_FD_BASE = 0x40000000
-    emitter.instruction("lsl x0, x0, #16");                                     // shift into bits 30..16 to form 0x40000000
-    emitter.instruction("orr x0, x0, x12");                                     // synthetic fd = USER_WRAPPER_FD_BASE | slot index
+    emitter.instruction("ldr x0, [sp, #40]");                                   // handle slot → metadata helper arg0
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // path ptr/len → metadata helper args
+    abi::emit_call_label(emitter, "__rt_zip_register_stream_meta");
     emitter.instruction("add sp, sp, #64");                                     // release the wrapper-dispatch scratch
     emitter.instruction("b __rt_fopen_return");                                 // share the common return path
 
@@ -261,14 +263,14 @@ pub fn emit_fopen(emitter: &mut Emitter) {
 }
 
 /// Emits the x86_64 Linux variant of `__rt_fopen`.
-/// Accepts filename (rdi=ptr, rsi=len) and mode (rax=ptr, rdx=len) as ElephC string registers,
+/// Accepts filename (rax=ptr, rdx=len) and mode (rdi=ptr, rsi=len) as ElephC string registers,
 /// converts both to null-terminated C strings via `__rt_cstr`/`__rt_cstr2`, parses the mode character
 /// to derive Linux `open()` flags, calls libc `open()`, and returns the file descriptor in rax
 /// (or -1 on failure). Clears the EOF flag entry for the newly opened descriptor before returning.
 ///
 /// # Call-ABI
-/// - Filename: rdi=pointer, rsi=length
-/// - Mode: rax=pointer, rdx=length (ElephC string registers, caller-preserved across `__rt_cstr`)
+/// - Filename: rax=pointer, rdx=length
+/// - Mode: rdi=pointer, rsi=length (ElephC string registers, caller-preserved across `__rt_cstr`)
 /// - Returns: rax=fd or -1
 fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -322,6 +324,8 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_fopen_uw_match_x86");                         // full match — dispatch into the user wrapper class
     emitter.instruction("movzx ecx, BYTE PTR [r13 + r15]");                     // stored protocol byte
     emitter.instruction("movzx r8d, BYTE PTR [rax + r15]");                     // path scheme byte
+    emitter.instruction("or cl, 0x20");                                         // lowercase the stored scheme byte
+    emitter.instruction("or r8b, 0x20");                                        // lowercase the path scheme byte
     emitter.instruction("cmp cl, r8b");                                         // do the bytes match?
     emitter.instruction("jne __rt_fopen_uw_slot_next_x86");                     // protocol byte differs — try the next slot
     emitter.instruction("inc r15");                                             // advance the compare index
@@ -472,8 +476,10 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r13, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer
     abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
     emitter.instruction("mov QWORD PTR [r10 + r12 * 8], r13");                  // _user_wrapper_handles[slot] = obj
-    emitter.instruction("mov rax, 0x40000000");                                 // USER_WRAPPER_FD_BASE
-    emitter.instruction("or rax, r12");                                         // synthetic fd = USER_WRAPPER_FD_BASE | slot index
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 40]");                       // handle slot → metadata helper arg0
+    emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");                        // path ptr → metadata helper
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // path len → metadata helper
+    abi::emit_call_label(emitter, "__rt_zip_register_stream_meta");
     emitter.instruction("add rsp, 64");                                         // release the wrapper-dispatch scratch
     emitter.instruction("jmp __rt_fopen_return_x86");                           // share the common return path
 

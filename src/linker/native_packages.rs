@@ -13,9 +13,11 @@
 //!   The release probe (`scripts/verify-release-artifact.sh`) reads it back
 //!   through `--print-capabilities`, so a bridge that gains a package here is
 //!   prepared by the packaged-artifact probe without a second list to update.
-//! - Table order is link order. The resolver links packages in the order it
-//!   receives them, and `curl` (whose catalog chain carries OpenSSL 3.5.8 for
-//!   TLS) stays ahead of `openssl-crypto` (a separate libcrypto 3.6.4 build).
+//! - Table order is requirement order. The resolver then topologically sorts the
+//!   resolved packages so every dependent archive precedes the dependencies it
+//!   references, which matters when two bridges share zlib/OpenSSL. `curl` (whose
+//!   catalog chain carries OpenSSL 3.5.8 for TLS) still stays ahead of
+//!   `openssl-crypto` (a separate libcrypto 3.6.4 build) in this table.
 //! - None of these packages has a system-library fallback.
 
 /// Bridge library names paired with the managed native packages they link against.
@@ -33,6 +35,9 @@ const BRIDGE_NATIVE_PACKAGES: &[(&str, &[&str])] = &[
     // The cipher bridge declares libcrypto's provider/EVP symbols without
     // linking them; the package's zlib dependency supplies `libz.a` after it.
     ("elephc_openssl", &["openssl-crypto"]),
+    // The archive bridge is a thin FFI layer over libzip; the catalog splices in
+    // its bzip2/xz/zlib/OpenSSL dependency chain.
+    ("elephc_zip", &["libzip"]),
 ];
 
 /// Returns the managed native packages a planned library set needs, in link order.
