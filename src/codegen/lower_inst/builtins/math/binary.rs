@@ -8,6 +8,7 @@
 //! - Preserves PHP source evaluation order before arranging libc/ABI argument
 //!   registers for integer division and floating-point helpers.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
@@ -261,9 +262,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("str x9, [x0, #8]");                        // store the static ArithmeticError message pointer
             ctx.emitter.instruction(&format!("mov x9, #{}", msg_len));          // materialize the static ArithmeticError message length
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store the exception message length
-            ctx.emitter.instruction("str xzr, [x0, #24]");                      // store the default zero exception code
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            throwable_storage::emit_default_fields(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
             ctx.emitter.instruction("str x0, [x9]");                            // publish the active ArithmeticError object
             ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
@@ -283,9 +282,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(
                 &format!("mov QWORD PTR [rax + 16], {}", msg_len)
             );                                                                  // store the exception message length
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // store the default zero exception code
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            throwable_storage::emit_default_fields(ctx.emitter, "rax");
             ctx.emitter.instruction("mov QWORD PTR [rip + _exc_value], rax");   // publish the active ArithmeticError object
             ctx.emitter.instruction("mov rsp, rbp");                            // release the helper frame before throwing
             ctx.emitter.instruction("pop rbp");                                 // restore caller frame pointer before throwing

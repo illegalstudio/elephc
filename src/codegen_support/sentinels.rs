@@ -395,7 +395,7 @@ pub(crate) use elephc_memoir::layout::x86_64_heap_kind_word;
 /// know the line write `0`, which the readers treat as "origin unknown" and omit.
 ///
 /// Read by `Throwable::getLine()` in `lower_inst.rs` and by `__rt_report_uncaught_exception`.
-pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = 32;
+pub(crate) use elephc_memoir::values::throwable_storage::CREATION_LINE_OFFSET as THROWABLE_CREATION_LINE_OFFSET;
 
 /// Marks a creation line as belonging to tokenizer input with an explicitly empty filename.
 /// Normal source spans are u32, so their creation-line values never set this bit.
@@ -409,18 +409,7 @@ pub(crate) const THROWABLE_SCANNED_LOCATION_FLAG: u64 = 1 << 63;
 /// check — there is no source line to record, and PHP would report the internal call site rather
 /// than anything these emitters know. Writing zero says "unknown" explicitly; leaving the slot
 /// untouched would let recycled heap bytes read back as a plausible-looking line number.
-pub(crate) fn emit_throwable_creation_line_unknown(emitter: &mut Emitter, payload_reg: &str) {
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction(&format!(
-            "str xzr, [{}, #{}]",
-            payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )),                                                                     // no user `new` behind this Throwable: the creation line is unknown
-        Arch::X86_64 => emitter.instruction(&format!(
-            "mov QWORD PTR [{} + {}], 0",
-            payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )),                                                                     // no user `new` behind this Throwable: the creation line is unknown
-    }
-}
+pub(crate) use elephc_memoir::values::throwable_storage::emit_throwable_creation_line_unknown;
 
 #[cfg(test)]
 mod tests {

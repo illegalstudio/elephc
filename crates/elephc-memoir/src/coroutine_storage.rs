@@ -203,3 +203,35 @@ fn emit_x86_64(
     abi::emit_symbol_address(emitter, "r11", "__rt_fiber_entry");              // r11 = absolute address of the entry trampoline
     emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", initial_entry_offset)); // saved return address = entry trampoline
 }
+
+/// Allocates a one-word unwind sentinel without assigning it a PHP object handle.
+pub fn emit_unwind_marker(emitter: &mut impl crate::Emitter) {
+    crate::heap_alloc::emit_fresh_with_kind(emitter, crate::HeapKind::new(crate::layout::OBJECT_HEAP_KIND));
+    match emitter.arch() {
+        crate::Arch::AArch64 => {
+            emitter.instruction("mov x9, #-3");                                 // keep the sentinel outside catchable PHP class ids
+            emitter.instruction("str x9, [x0]");                                // publish the one-word marker payload
+        }
+        crate::Arch::X86_64 => {
+            emitter.instruction("mov QWORD PTR [rax], -3");                     // publish the one-word marker payload
+        }
+    }
+}
+
+/// Allocates an ordinary Error owner and transfers three staged words from the current stack.
+pub fn emit_compact_error(emitter: &mut impl crate::Emitter) {
+    crate::values::object_storage::emit_allocate_object(emitter);
+    // -- store the class and immutable message metadata in their existing order --
+    for offset in [0, 8, 16] {
+        match emitter.arch() {
+            crate::Arch::AArch64 => {
+                emitter.instruction(&format!("ldr x9, [sp, #{offset}]"));       // recover one staged error word
+                emitter.instruction(&format!("str x9, [x0, #{offset}]"));       // publish the word in the compact payload
+            }
+            crate::Arch::X86_64 => {
+                emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {offset}]")); // recover one staged error word
+                emitter.instruction(&format!("mov QWORD PTR [rax + {offset}], r10")); // publish the word in the compact payload
+            }
+        }
+    }
+}

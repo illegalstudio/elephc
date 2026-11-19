@@ -48,6 +48,7 @@ pub(in crate::codegen) use scalar_param_args::InvokerScalarGuards;
 pub(crate) use string_return::function_returns_owned_string;
 pub(super) use string_return::method_returns_owned_string;
 
+use elephc_memoir::values::throwable_storage;
 use elephc_memoir::{FrameOffset, strings::concat_cursor::SavedConcatCursor};
 use public_args::InvokerParamShape;
 
@@ -3816,11 +3817,7 @@ fn emit_invoker_throwable(
             emitter.instruction("str x9, [x0, #8]");                            // store the immutable diagnostic bytes
             abi::emit_load_int_immediate(emitter, "x9", message_len as i64);
             emitter.instruction("str x9, [x0, #16]");                           // store the diagnostic byte length
-            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
-                emitter, "x0",
-            );
-            emitter.instruction("str xzr, [x0, #40]");                          // previous exception defaults to null
+            throwable_storage::emit_default_fields(emitter, "x0");
             abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
             emitter.instruction("b __rt_throw_current");                        // release argument guards and enter PHP exception handling
         }
@@ -3838,11 +3835,7 @@ fn emit_invoker_throwable(
             emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store the immutable diagnostic bytes
             abi::emit_load_int_immediate(emitter, "r10", message_len as i64);
             emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store the diagnostic byte length
-            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
-                emitter, "rax",
-            );
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous exception defaults to null
+            throwable_storage::emit_default_fields(emitter, "rax");
             abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
             emitter.instruction("jmp __rt_throw_current");                      // release argument guards and enter PHP exception handling
         }

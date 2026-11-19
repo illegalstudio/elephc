@@ -11,6 +11,7 @@
 //! - A successful check returns the canonical zero word for false or null.
 //! - Descriptor names remain dynamic because invoker bodies can share a signature.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen_support::data_section::DataSection;
 use crate::codegen_support::emit::Emitter;
 
@@ -251,9 +252,7 @@ fn throw_type_error(emitter: &mut Emitter) {
             abi::emit_pop_reg_pair(emitter, ptr, len);
             emitter.instruction("str x1, [x0, #8]");                            // transfer the persisted diagnostic pointer
             emitter.instruction("str x2, [x0, #16]");                           // store the diagnostic byte length
-            emitter.instruction("str xzr, [x0, #24]");                          // initialize the exception code
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
-            emitter.instruction("str xzr, [x0, #40]");                          // initialize the previous exception
+            throwable_storage::emit_default_fields(emitter, "x0");
             abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
             emitter.instruction("b __rt_throw_current");                        // unwind argument owners before the PHP catch
         }
@@ -271,9 +270,7 @@ fn throw_type_error(emitter: &mut Emitter) {
             emitter.instruction(&format!(
                 "mov QWORD PTR [rax + 16], {diagnostic_len}"
             ));                                                                 // store the diagnostic byte length
-            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // initialize the exception code
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // initialize the previous exception
+            throwable_storage::emit_default_fields(emitter, "rax");
             abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
             emitter.instruction("jmp __rt_throw_current");                      // unwind argument owners before the PHP catch
         }

@@ -9,6 +9,7 @@
 //! - Raw target bodies contain decimal-free marshalling only; arithmetic remains in elephc-bcmath.
 //! - Dynamic crate messages are persisted before `ValueError` or `DivisionByZeroError` is thrown.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -157,9 +158,7 @@ fn emit_throw_dynamic_bcmath_error_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x0]");                                        // install the selected throwable class id
     emitter.instruction("ldp x10, x11, [sp, #24]");                             // reload the owned dynamic message pair
     emitter.instruction("stp x10, x11, [x0, #8]");                              // install the throwable message pointer and length
-    emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
-    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous exception defaults to null
+    throwable_storage::emit_default_fields(emitter, "x0");
     abi::emit_symbol_address(emitter, "x9", "_exc_value");
     emitter.instruction("str x0, [x9]");                                        // publish the active BCMath throwable
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the caller frame before unwinding
@@ -200,9 +199,7 @@ fn emit_throw_dynamic_bcmath_error_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // install the throwable message pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the owned dynamic message length
     emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // install the throwable message length
-    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
-    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous exception defaults to null
+    throwable_storage::emit_default_fields(emitter, "rax");
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);          // publish the active BCMath throwable
     emitter.instruction("mov rsp, rbp");                                        // release the dynamic-error frame before unwinding
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

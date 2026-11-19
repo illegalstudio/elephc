@@ -26,10 +26,10 @@
 //!   warning can run a user error handler that throws, which would strand the box. A lossy
 //!   float-string buffers the string into the diagnostic before the box goes.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::{emit_throwable_creation_line_unknown, x86_64_heap_kind_word};
 
 /// `SplFixedArray` offset rules: canonical integer strings only, null is a type error.
 pub(crate) const SPL_OFFSET_MODE_FIXED: i64 = 0;
@@ -300,14 +300,10 @@ fn emit_throw_aarch64(emitter: &mut Emitter) {
     // -- create the canonical Throwable object with owned message storage --
     emitter.instruction("mov x0, #56");                                         // canonical Throwable payload size
     elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_type_error_class_id", 0);
-    emitter.instruction("str x9, [x0]");                                        // stamp the TypeError class id
+    throwable_storage::emit_class_id(emitter, "_spl_type_error_class_id");
     emitter.instruction("ldp x10, x11, [sp]");                                  // recover the persisted message pair
-    emitter.instruction("str x10, [x0, #8]");                                   // message pointer
-    emitter.instruction("str x11, [x0, #16]");                                  // message byte length
-    emitter.instruction("str xzr, [x0, #24]");                                  // code = 0
-    emit_throwable_creation_line_unknown(emitter, "x0");
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous = null
+    throwable_storage::emit_message_pair(emitter, "x10", "x11");
+    throwable_storage::emit_default_fields(emitter, "x0");
     // -- publish the error and unwind after retiring the construction frame --
     abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);              // publish the Throwable for the unwinder
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame and return address
@@ -532,19 +528,12 @@ fn emit_throw_x86_64(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_heap_free");                            // release heap-backed storage; concat scratch is ignored
     // -- create the canonical Throwable object with owned message storage --
     emitter.instruction("mov rax, 56");                                         // canonical Throwable payload size
-    abi::emit_call_label(emitter, "__rt_heap_alloc");                           // allocate the Throwable object payload (rax = payload)
-    emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(6))); // magic + kind 6 identifies a throwable object
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
-    abi::emit_call_label(emitter, "__rt_object_handle_acquire");                // bind the Throwable to its PHP object handle
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_type_error_class_id", 0);
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // stamp the TypeError class id
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_class_id(emitter, "_spl_type_error_class_id");
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // recover the message pointer
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // recover the message byte length
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // message pointer
-    emitter.instruction("mov QWORD PTR [rax + 16], r11");                       // message byte length
-    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // code = 0
-    emit_throwable_creation_line_unknown(emitter, "rax");
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous = null
+    throwable_storage::emit_message_pair(emitter, "r10", "r11");
+    throwable_storage::emit_default_fields(emitter, "rax");
     // -- publish the error and unwind after retiring the construction frame --
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the Throwable for the unwinder
     emitter.instruction("mov rsp, rbp");                                        // release the local frame

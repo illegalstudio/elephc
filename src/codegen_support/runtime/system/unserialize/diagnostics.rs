@@ -7,6 +7,7 @@
 //! Key details:
 //! - Helpers preserve PHP error types and unwind the active unserialize context exactly once.
 
+use elephc_memoir::values::throwable_storage;
 use elephc_memoir::values::incomplete_object::CLASS_ID;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -147,11 +148,7 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.instruction("str x9, [x0, #8]");                            // store the dynamic TypeError message pointer
             emitter.instruction("ldr x9, [sp, #64]");                           // recover the dynamic message byte length
             emitter.instruction("str x9, [x0, #16]");                           // store the TypeError message byte length
-            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
-                emitter, "x0",
-            );
-            emitter.instruction("str xzr, [x0, #40]");                          // previous Throwable defaults to null
+            throwable_storage::emit_default_fields(emitter, "x0");
             crate::codegen_support::abi::emit_store_reg_to_symbol(
                 emitter,
                 "x0",
@@ -296,11 +293,7 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store the dynamic TypeError message pointer
             emitter.instruction("mov r10, QWORD PTR [rbp - 48]");               // dynamic TypeError message byte length
             emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store the TypeError message byte length
-            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
-                emitter, "rax",
-            );
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous Throwable defaults to null
+            throwable_storage::emit_default_fields(emitter, "rax");
             crate::codegen_support::abi::emit_store_reg_to_symbol(
                 emitter,
                 "rax",
@@ -358,9 +351,7 @@ pub(super) fn emit_unserialize_object_string_error_helper(emitter: &mut Emitter)
             emitter.instruction("str x9, [x0]");                                // store the built-in Error class id
             emitter.instruction("ldp x10, x11, [sp, #16]");                     // recover the persisted message pair
             emitter.instruction("stp x10, x11, [x0, #8]");                      // store Error message pointer and length
-            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
-            emitter.instruction("str xzr, [x0, #40]");                          // previous Throwable defaults to null
+            throwable_storage::emit_default_fields(emitter, "x0");
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
             emitter.instruction("ldp x29, x30, [sp, #48]");                     // restore the caller frame before unwinding
             emitter.instruction("add sp, sp, #64");                             // release Error-construction state
@@ -412,9 +403,7 @@ pub(super) fn emit_unserialize_object_string_error_helper(emitter: &mut Emitter)
             emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store message pointer
             emitter.instruction("mov r10, QWORD PTR [rbp - 32]");               // recover persisted Error message length
             emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store message byte length
-            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous Throwable defaults to null
+            throwable_storage::emit_default_fields(emitter, "rax");
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
             emitter.instruction("leave");                                       // restore the caller frame before unwinding
             emitter.instruction("jmp __rt_throw_current");                      // propagate through the catchable Throwable path

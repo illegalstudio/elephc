@@ -25,6 +25,7 @@
 //!   `ValueError`s that interpolate the offending values into their wording, where the caller
 //!   has already built the exact message at runtime.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen_support::runtime::UNCAUGHT_EXIT_STATUS;
@@ -639,9 +640,7 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             ctx.emitter.instruction("str x9, [x0, #8]");                        // store the runtime exception message pointer
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 8);
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store the runtime exception message length
-            ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            throwable_storage::emit_default_fields(ctx.emitter, "x0");
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_call_label(ctx.emitter, "__rt_throw_current");
@@ -655,9 +654,7 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the runtime exception message pointer
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the runtime exception message length
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            throwable_storage::emit_default_fields(ctx.emitter, "rax");
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
             abi::emit_call_label(ctx.emitter, "__rt_throw_current");

@@ -14,6 +14,7 @@
 //! - Typed static properties use the same high-word uninitialized sentinel as
 //!   the emitted code before reads.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
@@ -1196,9 +1197,7 @@ fn emit_uninitialized_static_property_fatal(
             ctx.emitter.instruction("str x9, [x0, #8]");                        // store static Error message pointer
             ctx.emitter.instruction(&format!("mov x9, #{}", message_len));      // load Error message length
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store exception message length
-            ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            throwable_storage::emit_default_fields(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");             // materialize the active exception cell
             ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
             ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
@@ -1216,9 +1215,7 @@ fn emit_uninitialized_static_property_fatal(
             ctx.emitter.instruction(                                            // store Error message length
                 &format!("mov QWORD PTR [rax + 16], {}", message_len)
             );
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            throwable_storage::emit_default_fields(ctx.emitter, "rax");
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);   // publish the active exception object
             ctx.emitter.instruction("mov rsp, rbp");                            // release helper frame before throwing
             ctx.emitter.instruction("pop rbp");                                 // restore caller frame pointer before throwing

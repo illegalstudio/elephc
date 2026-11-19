@@ -7,6 +7,7 @@
 //! Key details:
 //! - Optional downcast checks remain target-aware and PHP-compatible.
 
+use elephc_memoir::values::throwable_storage;
 use super::*;
 
 /// Lowers `new IteratorIterator($iterator)` by normalizing a Traversable source to an Iterator.
@@ -275,9 +276,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
             ));                                                                 // load static exception message length
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store static exception message length
-            ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            throwable_storage::emit_default_fields(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
             ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
             ctx.emitter.instruction("b __rt_throw_current");                    // enter the standard exception unwinder
@@ -298,9 +297,7 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
                 "mov QWORD PTR [rax + 16], {}",
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
             ));                                                                 // store static exception message length
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            throwable_storage::emit_default_fields(ctx.emitter, "rax");
             ctx.emitter
                 .instruction("mov QWORD PTR [rip + _exc_value], rax"); // publish the active exception object
             ctx.emitter.instruction("mov rsp, rbp");                            // release helper frame before throwing

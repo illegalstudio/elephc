@@ -13,9 +13,7 @@
 //! - Both Throwables use the compact runtime layout; the fresh Error reference is
 //!   transferred into the TypeError previous slot so destruction releases it exactly once.
 
-use crate::codegen_support::sentinels::{
-    emit_throwable_creation_line_unknown, x86_64_heap_kind_word,
-};
+use elephc_memoir::values::throwable_storage;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Message of the Error SimpleXML raises when the wrapper context write reaches an
@@ -25,9 +23,6 @@ pub(crate) const SIMPLEXML_WRAPPER_INIT_MESSAGE: &str = "SimpleXMLElement is not
 /// Message php-src raises when the wrapper context resource cannot be stored.
 pub(crate) const SIMPLEXML_WRAPPER_CONTEXT_MESSAGE: &str =
     "It's not possible to assign a complex type to properties, resource given";
-
-/// Compact Throwable payload size shared by every runtime-created exception.
-const THROWABLE_PAYLOAD_SIZE: u64 = 56;
 
 /// Emits `__rt_simplexml_wrapper_failure` for the active target.
 pub(crate) fn emit_simplexml_wrapper_failure(emitter: &mut Emitter) {
@@ -69,20 +64,11 @@ fn emit_aarch64(emitter: &mut Emitter) {
 
 /// Allocates and initializes one compact AArch64 Throwable in `x0`.
 fn emit_error_aarch64(emitter: &mut Emitter, class_id: &str, message: &str, length: usize) {
-    abi::emit_load_int_immediate(emitter, "x0", THROWABLE_PAYLOAD_SIZE as i64); // request one compact Throwable payload
-    abi::emit_call_label(emitter, "__rt_heap_alloc");                          // x0 = fresh payload storage
-    emitter.instruction("mov x9, #6");                                          // heap kind 6 marks runtime object payloads
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the heap header before the payload
-    abi::emit_call_label(emitter, "__rt_object_handle_acquire");               // bind the new object to its PHP handle
-    abi::emit_load_symbol_to_reg(emitter, "x9", class_id, 0);                  // load the runtime Throwable class id
-    emitter.instruction("str x9, [x0]");                                        // store the class id at payload offset zero
-    abi::emit_symbol_address(emitter, "x9", message);                          // load the static message pointer
-    emitter.instruction("str x9, [x0, #8]");                                    // store the message pointer
-    abi::emit_load_int_immediate(emitter, "x9", length as i64);                // load the message byte length
-    emitter.instruction("str x9, [x0, #16]");                                   // store the message length
-    emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
-    emit_throwable_creation_line_unknown(emitter, "x0");                       // no user `new` location for this internal throwable
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
+    abi::emit_load_int_immediate(emitter, "x0", throwable_storage::PAYLOAD_BYTES as i64); // request one compact Throwable payload
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_class_id(emitter, class_id);
+    throwable_storage::emit_static_message(emitter, message, length as i64, throwable_storage::LengthStore::Register);
+    throwable_storage::emit_default_fields(emitter, "x0");
 }
 
 /// Emits the x86_64 chained-exception helper.
@@ -115,21 +101,9 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
 /// Allocates and initializes one compact x86_64 Throwable in `rax`.
 fn emit_error_x86_64(emitter: &mut Emitter, class_id: &str, message: &str, length: usize) {
-    emitter.instruction(&format!("mov rax, {THROWABLE_PAYLOAD_SIZE}"));         // request one compact Throwable payload
-    abi::emit_call_label(emitter, "__rt_heap_alloc");                          // rax = fresh payload storage
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        x86_64_heap_kind_word(6)
-    ));                                                                         // materialize the x86_64 Throwable heap kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap header before the payload
-    abi::emit_call_label(emitter, "__rt_object_handle_acquire");               // bind the new object to its PHP handle
-    abi::emit_load_symbol_to_reg(emitter, "r10", class_id, 0);                 // load the runtime Throwable class id
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at payload offset zero
-    abi::emit_symbol_address(emitter, "r10", message);                         // load the static message pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the message pointer
-    abi::emit_load_int_immediate(emitter, "r10", length as i64);               // load the message byte length
-    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // store the message length
-    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
-    emit_throwable_creation_line_unknown(emitter, "rax");                      // no user `new` location for this internal throwable
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
+    emitter.instruction(&format!("mov rax, {}", throwable_storage::PAYLOAD_BYTES));         // request one compact Throwable payload
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_class_id(emitter, class_id);
+    throwable_storage::emit_static_message(emitter, message, length as i64, throwable_storage::LengthStore::Register);
+    throwable_storage::emit_default_fields(emitter, "rax");
 }

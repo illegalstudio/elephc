@@ -75,6 +75,7 @@ pub mod hash_next_index;
 pub mod hash_insert_owned;
 pub mod hash_reindex_dense;
 pub mod object_storage;
+pub mod throwable_storage;
 pub mod incomplete_object;
 
 pub mod throwable_previous;
