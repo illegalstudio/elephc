@@ -835,7 +835,7 @@ fn validate_instruction_immediate(
         PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
-        GlobalBindingPresent | UnsetGlobal | LoadGlobalRefCell | EvalScopeGet | EvalScopeBindingType | EvalScopeEndBinding => require_immediate(inst_id, inst, "global name", |imm| {
+        GlobalBindingPresent | UnsetGlobal | LoadGlobalRefCell | EvalScopeGet | EvalScopeContains | EvalScopeBindingType | EvalScopeEndBinding => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
         }),
         EvalScopeBindLocalType => require_immediate(inst_id, inst, "checked scope binding type", |imm| {
@@ -1173,8 +1173,13 @@ fn validate_opcode_rules(
             }
             Ok(())
         }
-        GlobalBindingPresent => {
-            check_count(inst_id, inst, 0, "0")?;
+        GlobalBindingPresent | EvalScopeContains => {
+            let count = usize::from(inst.op == EvalScopeContains);
+            check_count(inst_id, inst, count, "presence operands")?;
+            if inst.op == EvalScopeContains && !function.value(inst.operands[0])
+                .is_some_and(|value| value.php_type == PhpType::Int) {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
+            }
             let result = inst.result.ok_or(ValidationError::InstructionResultMissing(inst_id))?;
             if inst.result_type != IrType::I64 || inst.result_php_type != PhpType::Bool {
                 return Err(ValidationError::ResultTypeMismatch(result));

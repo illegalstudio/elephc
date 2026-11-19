@@ -60,6 +60,13 @@ pub(in crate::codegen::lower_inst) fn lower_eval_scope_get(
     eval::lower_eval_scope_get(ctx, inst)
 }
 
+/// Lowers a scope presence observation independently of its boxed value.
+pub(in crate::codegen::lower_inst) fn lower_eval_scope_contains(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_scope_contains(ctx, inst)
+}
+
 /// Lowers a direct EIR eval-scope write by static variable name.
 pub(in crate::codegen::lower_inst) fn lower_eval_scope_set(
     ctx: &mut FunctionContext<'_>,

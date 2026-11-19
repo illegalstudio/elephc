@@ -142,6 +142,7 @@ where
 /// Returns a conservative plan for fragments that cannot be parsed statically.
 pub(super) fn parse_error_plan() -> EvalAotPlan {
     EvalAotPlan {
+        profile: EvalSourceProfile::default(),
         function_name: None,
         eir_program: None,
         scope_function_name: None,
@@ -226,6 +227,7 @@ where
     let needs_global_scope =
         !is_fully_static_no_bridge && !has_scope_eir && scope_access.has_scope_access();
     EvalAotPlan {
+        profile,
         function_name: eir_program
             .as_ref()
             .map(|_| eir_function_name(fragment, profile)),

@@ -26,6 +26,29 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_get(
     store_if_result(ctx, inst)
 }
 
+/// Reads scope visibility without confusing initialized null with an absent name.
+pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_contains(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "eval scope contains", 1)?;
+    let scope = expect_operand(inst, 0)?;
+    let name = eval_scope_instruction_name(ctx, inst)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    load_eval_scope_operand_to_arg(ctx, scope, 0)?;
+    emit_eval_scope_get_for_loaded_scope(ctx, &name, 0, 8);
+    let missing = ctx.next_label("eval_scope_absent");
+    let done = ctx.next_label("eval_scope_presence_done");
+    super::scope_io::emit_branch_if_scope_entry_missing_at(ctx, 8, &missing);
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result, 1);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&missing);
+    abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    ctx.emitter.label(&done);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers an EIR eval-scope write for a static variable name.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_set(
     ctx: &mut FunctionContext<'_>,

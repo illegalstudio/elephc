@@ -84,6 +84,7 @@ where
 
 /// Compile-time plan for one literal eval fragment.
 pub(crate) struct EvalAotPlan {
+    profile: EvalSourceProfile,
     function_name: Option<String>,
     eir_program: Option<Program>,
     scope_function_name: Option<String>,
@@ -114,6 +115,7 @@ impl EvalAotPlan {
     /// Returns true when the scope-read EIR body can receive reads as direct parameters.
     pub(crate) fn uses_scope_read_params(&self) -> bool {
         self.scope_eir_program.is_some()
+            && !self.profile.semantics().contains(elephc_semantics::StrictFeature::Initialization)
             && !self.reads.is_empty()
             && self.writes.is_empty()
             && self.scope_direct_writes.is_empty()

@@ -60,6 +60,7 @@ pub(super) fn lower_literal_eval_aot_functions(
             EvalAotFunctionCandidate::Scope {
                 body,
                 reads,
+                use_read_params,
                 direct_writes,
                 flush_writes,
             } => {
@@ -70,6 +71,7 @@ pub(super) fn lower_literal_eval_aot_functions(
                     &name,
                     &body,
                     &reads,
+                    use_read_params,
                     &direct_writes,
                     &flush_writes,
                     module,
@@ -90,6 +92,7 @@ pub(super) enum EvalAotFunctionCandidate {
     Scope {
         body: Program,
         reads: BTreeSet<String>,
+        use_read_params: bool,
         direct_writes: BTreeSet<String>,
         flush_writes: BTreeSet<String>,
     },
@@ -136,6 +139,7 @@ pub(super) fn collect_literal_eval_aot_function_candidates(
             if !seen.insert(name.clone()) {
                 continue;
             };
+            let use_read_params = plan.uses_scope_read_params();
             let reads = plan.reads().clone();
             let direct_writes = plan.direct_writes().clone();
             let flush_writes = plan.flush_writes().clone();
@@ -147,6 +151,7 @@ pub(super) fn collect_literal_eval_aot_function_candidates(
                 EvalAotFunctionCandidate::Scope {
                     body: program,
                     reads,
+                    use_read_params,
                     direct_writes,
                     flush_writes,
                 },

@@ -52,7 +52,7 @@ pub(super) fn coalesce_value(ctx: &mut LoweringContext<'_, '_>, arg: &Expr) -> O
     }
     let present = crate::ir_lower::initialization::binding_presence(ctx, name, arg.span)?;
     let snapshot_type = normalize_union_members(vec![
-        ctx.local_type(name), PhpType::Void,
+        if ctx.reads_from_eval_scope(name) { PhpType::Mixed } else { ctx.local_type(name) }, PhpType::Void,
     ]).expect("a coalesce snapshot has at least its null alternative");
     let temp = ctx.declare_owned_hidden_temp(snapshot_type.clone());
     let ready = ctx.builder.create_named_block("coalesce.present", Vec::new());

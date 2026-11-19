@@ -1356,6 +1356,8 @@ pub enum Op {
     LanguageConstructCall,
     EvalLiteralCall,
     EvalScopeGet,
+    /// Observes visible binding flags independently of the boxed payload.
+    EvalScopeContains,
     /// Borrows the immutable descriptor of the current producer, or zero for an open origin.
     EvalScopeBindingType,
     EvalScopeSet,
@@ -1776,7 +1778,7 @@ impl Op {
             EvalScopeBindLocalType | EvalScopeStartBinding => E::READS_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
             EvalScopeCopyBindingType => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
             EvalScopeEndBinding => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
-            EvalScopeGet => E::READS_HEAP | E::MAY_FATAL,
+            EvalScopeGet | EvalScopeContains => E::READS_HEAP | E::MAY_FATAL,
             EvalScopeBindingType => E::READS_LOCAL | E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
             EvalScopeSet => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
             EvalConstantFetch => {
@@ -2142,6 +2144,7 @@ impl Op {
             EvalScopeEndBinding => "eval_scope_end_binding",
             EvalScopeCopyBindingType => "eval_scope_copy_binding_type",
             EvalScopeGet => "eval_scope_get",
+            EvalScopeContains => "eval_scope_contains",
             EvalScopeBindingType => "eval_scope_binding_type",
             EvalScopeSet => "eval_scope_set",
             EvalFunctionCall => "eval_function_call",

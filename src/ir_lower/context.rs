@@ -2559,6 +2559,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 || self.eval_scope_write_names.contains(name))
     }
 
+    /// Observes a scope-only name through the same materialized handle used by its value read.
+    pub(crate) fn eval_scope_binding_present(&mut self, name: &str, span: Span) -> LoweredValue {
+        let scope_param = self.eval_scope_read_param.clone().expect("eval scope presence has a handle");
+        let scope = self.load_local(&scope_param, Some(span));
+        let data = self.intern_global_name(name);
+        self.emit_value(Op::EvalScopeContains, vec![scope.value], Some(Immediate::GlobalName(data)),
+            PhpType::Bool, Op::EvalScopeContains.default_effects(), Some(span))
+    }
+
     /// Emits an `EvalScopeGet` for a selected eval-scope variable read.
     fn load_eval_scope_name(&mut self, name: &str, span: Option<Span>) -> LoweredValue {
         let scope_param = self

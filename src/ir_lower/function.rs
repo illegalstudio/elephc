@@ -578,6 +578,7 @@ pub(crate) fn lower_eval_aot_scope_function(
     name: &str,
     body: &[Stmt],
     scope_reads: &std::collections::BTreeSet<String>,
+    use_read_params: bool,
     scope_direct_writes: &std::collections::BTreeSet<String>,
     scope_flush_writes: &std::collections::BTreeSet<String>,
     module: &mut Module,
@@ -586,8 +587,6 @@ pub(crate) fn lower_eval_aot_scope_function(
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let return_type = PhpType::Mixed;
-    let use_read_params =
-        !scope_reads.is_empty() && scope_direct_writes.is_empty() && scope_flush_writes.is_empty();
     let params = if use_read_params {
         scope_reads
             .iter()

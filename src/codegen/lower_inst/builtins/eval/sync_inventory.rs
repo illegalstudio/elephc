@@ -16,7 +16,9 @@ use super::*;
 
 /// Collects PHP-visible locals that the current conservative scope sync can round-trip.
 pub(super) fn eval_sync_locals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncLocal> {
-    eval_sync_function_locals(ctx.function, ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Locals))
+    eval_sync_function_locals(ctx.function,
+        ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)
+            || ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization))
         .into_iter()
         .filter(|local| !local_uses_eval_global_sync(ctx, Some(&local.name)))
         .collect()

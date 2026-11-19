@@ -882,3 +882,5 @@ mod global_producer_boundaries;
 mod initialized_frame_reads;
 mod initialized_scope_reads;
 mod initialized_extended_reads;
+
+mod initialized_eval_reads;

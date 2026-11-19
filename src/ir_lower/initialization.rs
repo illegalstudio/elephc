@@ -24,8 +24,10 @@ pub(super) fn binding_presence(ctx: &mut LoweringContext<'_, '_>, name: &str, sp
     -> Option<super::context::LoweredValue> {
     if !enabled(ctx) || name == "GLOBALS"
         || crate::names::is_generated_local_name(name)
-        || ctx.reads_from_eval_scope(name)
         || ctx.extern_globals.contains_key(name) { return None; }
+    if ctx.reads_from_eval_scope(name) {
+        return Some(ctx.eval_scope_binding_present(name, span));
+    }
     if ctx.local_uses_global_storage(name) {
         let data = ctx.intern_global_name(name);
         return Some(ctx.emit_value(Op::GlobalBindingPresent, Vec::new(),
