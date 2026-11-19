@@ -3,7 +3,7 @@
 //! Covers iterator_count(), iterator_to_array(), and iterator_apply() over user iterators.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through Rust's test harness.
+//! - `cargo test --test codegen_tests_oop` through Rust's test harness.
 //!
 //! Key details:
 //! - Fixtures assert PHP-visible traversal order, key preservation, callback stopping, and final iterator position.

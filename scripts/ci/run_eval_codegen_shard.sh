@@ -191,12 +191,12 @@ write_pass1_junit() {
             body = ""
             if (status == "FAILED") { failures++; body = "<failure message=\"failed in the single-process pass\"/>" }
             if (status == "ignored") { skipped++; body = "<skipped/>" }
-            cases = cases sprintf("    <testcase classname=\"elephc::codegen_tests\" name=\"%s\" time=\"%d\">%s</testcase>\n", name, elapsed, body)
+            cases = cases sprintf("    <testcase classname=\"elephc::codegen_tests_eval\" name=\"%s\" time=\"%d\">%s</testcase>\n", name, elapsed, body)
         }
         END {
             printf "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
             printf "<testsuites name=\"eval shard %s pass 1\" tests=\"%d\" failures=\"%d\" skipped=\"%d\">\n", shard, tests, failures, skipped
-            printf "  <testsuite name=\"elephc::codegen_tests\" tests=\"%d\" failures=\"%d\" skipped=\"%d\">\n", tests, failures, skipped
+            printf "  <testsuite name=\"elephc::codegen_tests_eval\" tests=\"%d\" failures=\"%d\" skipped=\"%d\">\n", tests, failures, skipped
             printf "    <properties>\n"
             printf "      <property name=\"elephc.eval_shard.time\" value=\"seconds since the previous completion in one two-thread libtest process, not the test duration itself\"/>\n"
             printf "    </properties>\n"
@@ -245,7 +245,7 @@ fi
 echo "Rerunning ${#remaining[@]} test(s) under nextest after the single-process pass (status $pass1_status):"
 printf '  %s\n' "${remaining[@]}"
 
-filter="binary(codegen_tests) and ("
+filter="binary(codegen_tests_eval) and ("
 separator=""
 for test_name in "${remaining[@]}"; do
     filter+="${separator}test(=${test_name})"

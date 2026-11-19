@@ -2,7 +2,7 @@
 //! End-to-end regressions for builtin lookup parity across AOT code and eval.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval_builtin_parity` through Rust's test harness.
+//! - `cargo test --test codegen_tests_eval eval_builtin_parity` through Rust's test harness.
 //!
 //! Key details:
 //! - Fixtures verify `function_exists()` and namespaced builtin fallback before

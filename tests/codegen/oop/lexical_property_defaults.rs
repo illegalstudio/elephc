@@ -3,7 +3,7 @@
 //! Checks trait consumer binding and deferred errors for missing parent scopes.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests property_default_review_`.
+//! - `cargo test --test codegen_tests_oop property_default_review_`.
 //!
 //! Key details:
 //! - Stored defaults must preserve declaration scope rather than caller or subclass scope.

@@ -294,9 +294,9 @@ mod tests {
             ("Engine", "count"), ("My_Class", "hot_count"), ("prop", "local"), ("u", "u"),
         ] {
             for symbol in [
-                elephc::names::static_property_symbol(owner, member),
-                elephc::names::static_local_symbol(owner, member),
-                elephc::names::static_local_init_symbol(owner, member),
+                crate::names::static_property_symbol(owner, member),
+                crate::names::static_local_symbol(owner, member),
+                crate::names::static_local_init_symbol(owner, member),
             ] {
                 assert!(!super::super::is_php_symbol(&symbol), "{symbol}");
                 assert_eq!(kind_of(&symbol), Kind::Native, "{symbol}");
@@ -313,7 +313,7 @@ mod tests {
             ("prop", "hot_count"), ("local", "hot_count"), ("My_Class", "_run_"),
             ("App\\Éngine", "run"), ("local", "init"), ("local", "init_u_a"), ("_", "_"),
         ] {
-            let symbol = elephc::names::static_method_symbol(class, method);
+            let symbol = crate::names::static_method_symbol(class, method);
             assert!(super::super::is_php_symbol(&symbol), "{symbol}");
             assert_eq!(kind_of(&symbol), Kind::Php, "{symbol}");
             assert_eq!(
@@ -332,19 +332,19 @@ mod tests {
         // `_method___My_u_Class___run` join. Reading an attached profile of a real
         // program is what these names have to survive.
         vec![
-            FuncSymbol { value: 0x1000, size: 0x100, name: elephc::names::function_symbol("spin") },
-            FuncSymbol { value: 0x2000, size: 0x100, name: elephc::names::function_symbol("hot_leaf") },
+            FuncSymbol { value: 0x1000, size: 0x100, name: crate::names::function_symbol("spin") },
+            FuncSymbol { value: 0x2000, size: 0x100, name: crate::names::function_symbol("hot_leaf") },
             FuncSymbol { value: 0x3000, size: 0x100, name: "__rt_mixed_add".into() },
             FuncSymbol { value: 0x4000, size: 0x100, name: "main".into() },
             FuncSymbol {
                 value: 0x5000,
                 size: 0x100,
-                name: elephc::names::method_symbol("Engine", "step"),
+                name: crate::names::method_symbol("Engine", "step"),
             },
             FuncSymbol {
                 value: 0x6000,
                 size: 0x100,
-                name: elephc::names::method_symbol("My_Class", "run"),
+                name: crate::names::method_symbol("My_Class", "run"),
             },
         ]
     }
@@ -482,7 +482,7 @@ mod tests {
         let symbols = vec![FuncSymbol {
             value: 0x1000,
             size: 0x100,
-            name: elephc::names::static_method_symbol("My_Class", "run_hot"),
+            name: crate::names::static_method_symbol("My_Class", "run_hot"),
         }];
         assert!(super::super::is_php_symbol(&symbols[0].name));
         let named = display_stack(&[0x1010], &symbols, 0);

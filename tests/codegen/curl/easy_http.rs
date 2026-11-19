@@ -4,7 +4,7 @@
 //! connection-refused error shape over a genuine `http://` transfer.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl` through Rust's test harness.
 //!
 //! Key details:
 //! - No fixture here reaches the public internet: every URL is `127.0.0.1` — either the

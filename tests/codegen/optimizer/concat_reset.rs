@@ -7,7 +7,7 @@
 //! closures, exceptions, `eval`, and string-producing loops.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::concat_reset`
+//! - `cargo test --test codegen_tests_core optimizer::concat_reset`
 //!
 //! Key details:
 //! - Compares `--ir-opt=on` and `--ir-opt=off` on both textual EIR (`--emit-ir`)

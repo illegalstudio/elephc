@@ -2,7 +2,7 @@
 //! End-to-end version-surface and live-server tests for the optional PDO_IBM backend.
 //!
 //! Called from:
-//! - `cargo test --features pdo-ibm --test codegen_tests`.
+//! - `cargo test --features pdo-ibm --test codegen_tests_ext`.
 //!
 //! Key details:
 //! - Surface tests need unixODBC at link time but no IBM driver installation.

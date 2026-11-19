@@ -2,7 +2,7 @@
 //! End-to-end surface and live-server tests for the optional PDO_FIREBIRD backend.
 //!
 //! Called from:
-//! - `cargo test --features pdo-firebird --test codegen_tests`.
+//! - `cargo test --features pdo-firebird --test codegen_tests_ext`.
 //!
 //! Key details:
 //! - Surface tests need no server and verify the PHP-version-dependent aliases/classes.

@@ -3,7 +3,7 @@
 //! the `PREG_*` / `PCRE_VERSION*` constants.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through `tests/codegen/mod.rs`.
+//! - `cargo test --test codegen_tests_ext` through the PCRE test module.
 //!
 //! Key details:
 //! - Expected output is PHP 8.5's, except `PCRE_VERSION*`, which report the managed

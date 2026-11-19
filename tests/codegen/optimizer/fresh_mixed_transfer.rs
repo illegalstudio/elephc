@@ -2,7 +2,7 @@
 //! Regression coverage for transferring fresh numeric assignment boxes.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::fresh_mixed_transfer`.
+//! - `cargo test --test codegen_tests_core optimizer::fresh_mixed_transfer`.
 //!
 //! Key details:
 //! - Checks allocation scaling, aliases, PHP overflow, and both optimizer modes.

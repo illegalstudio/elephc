@@ -3,11 +3,12 @@
 //! launch it with `--listen`, drive it over raw TCP, and assert the response.
 //!
 //! Called from:
-//! - `cargo test --test web_tests` through Rust's test harness.
+//! - `cargo test --test integration web_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an
-//!   isolated temp dir with an isolated runtime cache, mirroring cdylib_tests.
+//!   isolated temp dir with a private XDG cache root and the shared
+//!   runtime-object cache, mirroring cdylib_tests.
 //! - The HTTP client is a hand-written minimal HTTP/1.1 request over a
 //!   std::net::TcpStream so the test pulls in no HTTP client dependency.
 //! - Host-target only: each platform/arch covers itself (macOS aarch64 local,
@@ -89,6 +90,7 @@ fn compile_web_with_native(
     if regex {
         managed_pcre2_support::configure_host_managed_pcre2(&mut cmd, dir);
     }
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg("--web").args(flags).arg(&php);
     let output = cmd.output().expect("failed to spawn elephc");

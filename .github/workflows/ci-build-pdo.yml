@@ -78,7 +78,7 @@ jobs:
           printf '%s\n' "$VARIANT" > target/debug/elephc-pdo-features.txt
           mkdir -p "target/ci-pdo/$VARIANT"
           cargo nextest archive --config-file "$RUNNER_TEMP/variant-nextest.toml" --locked --profile ci \
-            -p elephc -p elephc-pdo --lib --test codegen_tests \
+            -p elephc -p elephc-pdo --lib --test codegen_tests_ext \
             --features "elephc/pdo-$VARIANT" \
             --archive-file "target/ci-pdo/$VARIANT/nextest-archive.tar.zst"
           cp "$(command -v cargo-nextest)" "target/ci-pdo/$VARIANT/cargo-nextest"
