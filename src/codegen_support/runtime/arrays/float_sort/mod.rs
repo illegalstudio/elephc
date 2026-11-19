@@ -46,12 +46,9 @@ fn emit_entry(a: &mut Asm<'_>, label: &str, ascending: &str, descending: &str) {
     a.read(1, 0, 0);
     a.save(16, 1);
     a.cmp_imm(1, 2, Cond::Lt, &format!("{label}_done"));
-    a.load(0, 16);
-    a.shift(0, 3, true);
-    a.emitter.bl_c("malloc");                                                   // allocate one ordinal sidecar, without allocating boxed values
-    a.save_result(32);
-    a.cmp_result(Cond::Ne, &format!("{label}_allocated"));
-    a.jump("__rt_heap_allocation_failed");
+    elephc_memoir::buffers::native_words::emit_allocate_frame_vector(
+        a.emitter, 16, 32, &format!("{label}_allocated"),
+    );
     a.label(&format!("{label}_allocated"));
     // -- build the shared context and initialize each element's original ordinal --
     a.load(0, 8);
@@ -73,8 +70,7 @@ fn emit_entry(a: &mut Asm<'_>, label: &str, ascending: &str, descending: &str) {
     a.load(2, 16);
     abi::emit_call_label(a.emitter, "__rt_float_sort_range");
     // -- dispose the sidecar after every element has reached its final position --
-    a.load(0, 32);
-    a.emitter.bl_c("free");                                                     // release the independently allocated original-position sidecar
+    elephc_memoir::buffers::native_words::emit_release_frame_vector(a.emitter, 32);                                                     // release the independently allocated original-position sidecar
     a.label(&format!("{label}_done"));
     abi::emit_load_int_immediate(a.emitter, abi::int_result_reg(a.emitter), 1);
     a.ret();

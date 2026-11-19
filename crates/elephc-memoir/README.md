@@ -249,6 +249,12 @@ staged hash insertion payloads and Zend array backing blocks. Scratch completion
 retains the distinction between publishing an owned string and discarding a
 read chunk.
 
+The compiler also delegates compact Throwable initialization, native callable
+descriptor construction, heap-backed string and C output buffers, and libc
+scratch-vector ownership to Memoir. Adapters preserve the allocator pairing at
+each native boundary. The compiler still supplies PHP lifetime decisions,
+descriptor metadata and the control flow for error publication.
+
 ## Typed configuration
 
 `HeapKind` contains only a storage-kind byte, while `ValueTag` represents a boxed
