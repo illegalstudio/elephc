@@ -14,6 +14,7 @@
 //! - String values are persisted (independent copies) and heap values retained, so the result
 //!   owns its payloads.
 
+use elephc_memoir::values::hash_payload;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -77,15 +78,10 @@ pub fn emit_array_to_hash_reverse(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_array_to_hash_rev_set");                     // scalar elements need no retain
     emitter.instruction("cmp x9, #7");                                          // is the element above the heap-backed tag range?
     emitter.instruction("b.gt __rt_array_to_hash_rev_set");                     // non-heap tags need no retain
-    emitter.instruction("ldr x0, [sp, #48]");                                   // load the heap-backed element pointer
-    emitter.instruction("bl __rt_incref");                                      // retain the heap-backed element for the result hash
+    hash_payload::emit_retain_staged_pointer(emitter, 48);
     emitter.instruction("b __rt_array_to_hash_rev_set");                        // continue to insertion
     emitter.label("__rt_array_to_hash_rev_string");
-    emitter.instruction("ldr x2, [x11, #8]");                                   // load the string length from the 16-byte slot
-    emitter.instruction("ldr x1, [sp, #48]");                                   // load the string pointer
-    emitter.instruction("bl __rt_str_persist");                                 // copy the string into an independent heap block, x1 = new pointer
-    emitter.instruction("str x1, [sp, #48]");                                   // save the persisted string pointer
-    emitter.instruction("str x2, [sp, #56]");                                   // save the string length
+    hash_payload::emit_persist_indexed_string_to_slots(emitter, 48);
     emitter.label("__rt_array_to_hash_rev_set");
     emitter.instruction("ldr x0, [sp, #8]");                                    // result hash pointer
     emitter.instruction("ldr x1, [sp, #16]");                                   // integer key = the preserved source index i
@@ -155,15 +151,10 @@ fn emit_array_to_hash_reverse_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_array_to_hash_rev_set");                       // scalar elements need no retain
     emitter.instruction("cmp r9, 7");                                           // is the element above the heap-backed tag range?
     emitter.instruction("jg __rt_array_to_hash_rev_set");                       // non-heap tags need no retain
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the heap-backed element pointer into the incref input register
-    emitter.instruction("call __rt_incref");                                    // retain the heap-backed element for the result hash
+    hash_payload::emit_retain_staged_pointer(emitter, 56);
     emitter.instruction("jmp __rt_array_to_hash_rev_set");                      // continue to insertion
     emitter.label("__rt_array_to_hash_rev_string");
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the string length from the 16-byte slot
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the string pointer
-    emitter.instruction("call __rt_str_persist");                               // copy the string into an independent heap block, rax = new pointer
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the persisted string pointer
-    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save the string length
+    hash_payload::emit_persist_indexed_string_to_slots(emitter, 56);
     emitter.label("__rt_array_to_hash_rev_set");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // result hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // integer key = the preserved source index i

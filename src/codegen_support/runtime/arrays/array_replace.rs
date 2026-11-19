@@ -8,6 +8,7 @@
 //! Key details:
 //! - Operates on hash tables; heap-backed and string values are retained for the cloned result before insertion.
 
+use elephc_memoir::values::hash_payload;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -53,15 +54,10 @@ pub fn emit_array_replace(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_array_replace_insert");                      // scalar values need no retain
     emitter.instruction("cmp x5, #7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("b.gt __rt_array_replace_insert");                      // non-heap tags need no retain
-    emitter.instruction("ldr x0, [sp, #40]");                                   // load the heap-backed value pointer from the saved value low word
-    emitter.instruction("bl __rt_incref");                                      // retain the heap-backed value for the result hash owner
+    hash_payload::emit_retain_staged_pointer(emitter, 40);
     emitter.instruction("b __rt_array_replace_insert");                         // continue to the insertion
     emitter.label("__rt_array_replace_persist");
-    emitter.instruction("ldr x1, [sp, #40]");                                   // string pointer to persist
-    emitter.instruction("ldr x2, [sp, #48]");                                   // string length to persist
-    emitter.instruction("bl __rt_str_persist");                                 // copy the string into an independent heap block, x1 = new pointer
-    emitter.instruction("str x1, [sp, #40]");                                   // store the persisted string pointer
-    emitter.instruction("str x2, [sp, #48]");                                   // store the persisted string length
+    hash_payload::emit_persist_staged_string(emitter, 40, hash_payload::StringSlotStore::Separate);
     emitter.label("__rt_array_replace_insert");
     emitter.instruction("ldr x0, [sp, #8]");                                    // x0 = result hash pointer
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload key pointer
@@ -111,15 +107,10 @@ fn emit_array_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_array_replace_insert");                        // scalar values need no retain
     emitter.instruction("cmp r9, 7");                                           // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_array_replace_insert");                        // non-heap tags need no retain
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // load the heap-backed value pointer into the incref input register
-    emitter.instruction("call __rt_incref");                                    // retain the heap-backed value for the result hash owner
+    hash_payload::emit_retain_staged_pointer(emitter, 48);
     emitter.instruction("jmp __rt_array_replace_insert");                       // continue to the insertion
     emitter.label("__rt_array_replace_persist");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // string pointer to persist
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // string length to persist
-    emitter.instruction("call __rt_str_persist");                               // copy the string into an independent heap block, rax = new pointer
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // store the persisted string pointer
-    emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // store the persisted string length
+    hash_payload::emit_persist_staged_string(emitter, 48, hash_payload::StringSlotStore::Separate);
     emitter.label("__rt_array_replace_insert");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // rdi = result hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // reload key pointer
