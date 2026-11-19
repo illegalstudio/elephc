@@ -11,6 +11,7 @@ use crate::{codegen_support::platform::Target, ir::Op, source::SourceMode};
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
 const SOURCE: &str = include_str!("../../../tests/fixtures/strict/nullable_receivers.php");
+const PROPERTIES: &str = include_str!("../../../tests/fixtures/strict/nullable_properties.php");
 
 /// Quiet receiver roots remain legal but ordinary reads in their selectors do not become probes.
 #[test]
@@ -83,5 +84,49 @@ fn nullable_receiver_guards_respect_source_policy() {
         let module = super::semantic_sources::lower_capturing_arguments(source, Target::detect_host(), profile, false, mode);
         assert!(!module.functions.iter().flat_map(|function| &function.instructions)
             .any(|inst| inst.op == Op::ThrowTypeError));
+    }
+}
+
+/// Ordinary property receivers are guarded on every target while probes keep their own protocol.
+#[test]
+fn nullable_property_receivers_emit_on_every_target() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let module = super::semantic_sources::lower_capturing_arguments(PROPERTIES, target, profile, false, SourceMode::Php);
+        crate::ir::validate_module(&module).unwrap();
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains(elephc_semantics::nullability::NON_NULL_MESSAGE), "{name}");
+    }
+}
+
+/// Named/dynamic reads, nullsafe continuation, nested probes and owned receivers stay balanced.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn nullable_property_receivers_native_values_and_owners() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for optimize in [false, true] {
+        for mode in [SourceMode::Php, SourceMode::Lfc] {
+            let module = super::semantic_sources::lower_capturing_arguments(PROPERTIES, Target::detect_host(), profile, optimize, mode);
+            let output = super::native_module::run(&module);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{optimize} {mode:?}: stdout={}; {stderr}", String::from_utf8_lossy(&output.stdout));
+            assert_eq!(String::from_utf8_lossy(&output.stdout), "P|8|KN|q:0:1:q|q|CN|O|Q", "{stderr}");
+            assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+            assert!(!stderr.contains("Warning:"), "{stderr}");
+        }
+    }
+}
+
+/// Known null receivers are rejected even when nested in a probe's runtime name expression.
+#[test]
+fn nullable_property_receivers_preserve_precise_static_probes() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for source in ["<?php $value=null; echo $value->property;",
+        "<?php $value=null;$outer=null;echo isset($outer->{$value->property});"] {
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        let error = crate::types::checker::check_staged_semantics(&program, Target::detect_host(), profile).unwrap_err();
+        assert!(error.message.contains("strict-nullability"), "{source}: {error:?}");
     }
 }

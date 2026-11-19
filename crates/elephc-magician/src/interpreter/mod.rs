@@ -43,6 +43,7 @@ mod native_results;
 mod numeric_domains;
 mod libc_shims;
 mod null_object_boundaries;
+mod nullsafe_chains;
 mod reflection;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod repl;

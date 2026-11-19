@@ -63,6 +63,11 @@ pub(super) fn eval_null_coalesce_value(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
+        && super::nullsafe_chains::has_nullsafe(expr) {
+        return super::nullsafe_chains::evaluate_receiver(expr, true, context, scope, values)?
+            .map_or_else(|| values.null(), Ok);
+    }
     match expr {
         EvalExpr::PropertyGet { object, property } => {
             with_eval_probe_operands(&[object], context, scope, values, |args, context, _, values| {
@@ -99,6 +104,11 @@ fn eval_expr_with_result_ownership(
     values: &mut impl RuntimeValueOps,
     own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
+        && super::nullsafe_chains::has_nullsafe(expr) {
+        return super::nullsafe_chains::evaluate_receiver(expr, false, context, scope, values)?
+            .map_or_else(|| values.null(), Ok);
+    }
     match expr {
         EvalExpr::DeferredDefaultError(message) => throwables::eval_throw_error(message, context, values),
         EvalExpr::Array(elements) => {

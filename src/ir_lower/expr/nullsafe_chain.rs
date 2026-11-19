@@ -336,6 +336,9 @@ fn lower_nullsafe_postfix_segment(
             nullsafe,
         } => {
             let current = refine_member_receiver(ctx, current, expr);
+            if warn_on_missing && !nullsafe {
+                crate::ir_lower::nullability::require_non_null(ctx, current, &[], &[], expr.span);
+            }
             if nullsafe && !guard_nullsafe_chain_receiver(ctx, current, null_block, expr) {
                 return None;
             }

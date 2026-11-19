@@ -27,7 +27,8 @@ pub(super) fn eval_owned(expr: &EvalExpr, context: &mut ElephcEvalContext,
                 let value = eval_array_get_quiet_result(args[0].borrowed(), args[1].borrowed(), context, values)?;
                 if value.is_borrowed() { values.retain(value) } else { Ok(value) }
             }),
-        EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. } =>
+        EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. }
+        | EvalExpr::NullsafePropertyGet { .. } | EvalExpr::NullsafeDynamicPropertyGet { .. } =>
             super::expressions::eval_null_coalesce_value(expr, true, context, scope, values),
         _ => eval_owned_expr(expr, context, scope, values),
     }

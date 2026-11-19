@@ -181,7 +181,7 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
                 let receiver = lower_array_access_with_missing_warning(ctx, array, index, object, false);
                 refine_member_receiver(ctx, receiver, object)
             }
-            _ => lower_member_receiver(ctx, object, value),
+            _ => lower_member_probe_receiver(ctx, object, value),
         };
         if native_property_method_for_value(ctx, object.value, property,
             elephc_builtin_contract::ObjectProperty::Probe).is_some()
@@ -192,7 +192,8 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
             || union_hook_probe_class(ctx, object.value, property).is_some() {
             return lower_initialized_property_value(ctx, object, property, value);
         }
-        if needs_probe || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization) {
+        if needs_probe || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization)
+            || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability) {
             return lower_property_probe_from_value(ctx, object, property, value);
         }
         return lower_property_get_from_value(ctx, object, property, Op::PropGet, value);

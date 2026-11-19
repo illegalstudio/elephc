@@ -241,6 +241,20 @@ pub(super) fn lower_subscript_receiver_silently(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
 ) -> LoweredValue {
+    if crate::ir_lower::semantic_guards::source_feature_enabled(ctx, elephc_semantics::StrictFeature::Nullability) {
+        if let Some(value) = super::nullsafe_chain::lower_with_missing_warning(ctx, array, false) { return value; }
+        match &array.kind {
+            ExprKind::PropertyAccess { object, property } => {
+                let receiver = lower_subscript_receiver_silently(ctx, object);
+                return lower_property_probe_from_value(ctx, receiver, property, array);
+            }
+            ExprKind::DynamicPropertyAccess { object, property } => {
+                let receiver = lower_subscript_receiver_silently(ctx, object);
+                return lower_dynamic_property_fetch_from_value(ctx, receiver, property, PropertyFetchMode::Probe, array);
+            }
+            _ => {}
+        }
+    }
     if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
     }

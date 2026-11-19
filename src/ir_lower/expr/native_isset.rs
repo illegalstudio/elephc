@@ -241,21 +241,21 @@ pub(super) fn lower_lazy_property_isset_operand(
     arg: &Expr,
 ) -> Option<LoweredValue> {
     if needs_native_xml_property_dispatch(ctx, object, property) {
-        let object = lower_member_receiver(ctx, object, arg);
+        let object = lower_member_probe_receiver(ctx, object, arg);
         return Some(lower_boxed_xml_property_isset(ctx, object, property, arg));
     }
     match property_isset_action(ctx, object, property, arg)? {
         IssetPropertyAction::Fallback => None,
         IssetPropertyAction::Magic => {
-            let object = lower_member_receiver(ctx, object, arg);
+            let object = lower_member_probe_receiver(ctx, object, arg);
             Some(lower_magic_property_isset(ctx, object, property, arg))
         }
         IssetPropertyAction::AlwaysFalse => {
-            lower_member_receiver(ctx, object, arg);
+            lower_member_probe_receiver(ctx, object, arg);
             Some(emit_bool_literal(ctx, false, Some(arg.span)))
         }
         IssetPropertyAction::Initialized => {
-            let object = lower_member_receiver(ctx, object, arg);
+            let object = lower_member_probe_receiver(ctx, object, arg);
             Some(lower_initialized_property_isset(ctx, object, property, arg))
         }
     }

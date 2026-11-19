@@ -116,10 +116,11 @@ pub(super) fn lower_lazy_isset_operand(
             // answer, so the eager fallback would take the RAISING value-read arm of the Mixed
             // declared-slot ladder. php answers `false` for a property this scope may not reach.
             if !property_probe_needs_runtime_name_form(ctx, object)
-                && !ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization) {
+                && !ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization)
+                && !ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability) {
                 return None;
             }
-            let object = lower_expr(ctx, object);
+            let object = lower_member_probe_receiver(ctx, object, arg);
             let probed = lower_property_isset_probe_from_value(ctx, object, property, arg);
             Some(probe_value_is_set(ctx, probed, arg))
         }
@@ -262,7 +263,7 @@ pub(super) fn lower_lazy_empty_without_native(
             property_isset_action(ctx, object, property, &args[0]),
             Some(IssetPropertyAction::Initialized)
         ) {
-            let object = lower_member_receiver(ctx, object, &args[0]);
+            let object = lower_member_probe_receiver(ctx, object, &args[0]);
             return Some(lower_initialized_property_empty(
                 ctx, object, property, name, &args[0],
             ));
@@ -270,8 +271,9 @@ pub(super) fn lower_lazy_empty_without_native(
         // Same reason as `isset()`: php's `empty()` is a silent probe, so an inaccessible or
         // never-created name answers `true` instead of raising.
         if property_probe_needs_runtime_name_form(ctx, object)
-            || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization) {
-            let object = lower_expr(ctx, object);
+            || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization)
+            || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability) {
+            let object = lower_member_probe_receiver(ctx, object, &args[0]);
             let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
         }
@@ -280,7 +282,7 @@ pub(super) fn lower_lazy_empty_without_native(
         if property_existence_magic_class(ctx, object, property, "__get").is_some()
             && property_existence_magic_class(ctx, object, property, "__isset").is_none()
         {
-            let object = lower_expr(ctx, object);
+            let object = lower_member_probe_receiver(ctx, object, &args[0]);
             let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
         }

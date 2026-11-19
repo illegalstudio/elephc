@@ -54,12 +54,16 @@ impl Checker {
         if let Some(key) = Self::narrowed_property_env_key(object, property) {
             if let Some(narrowed) = env.get(&key) {
                 if let Ok(obj_ty) = self.infer_type(object, env) {
+                    crate::semantics::nullability::validate_receiver(self.semantic_profile,
+                        self.semantic_source_mode, &obj_ty, self.null_probe_operations.contains(&expr.span), expr.span)?;
                     self.record_member_receiver_type(expr.span, &obj_ty);
                 }
                 return Ok(narrowed.clone());
             }
         }
         let obj_ty = self.infer_type(object, env)?;
+        crate::semantics::nullability::validate_receiver(self.semantic_profile,
+            self.semantic_source_mode, &obj_ty, self.null_probe_operations.contains(&expr.span), expr.span)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         // A `?ptr<T>` reaches its fields like `ptr<T>`: the value is the bare address, and a
         // null one faults with the null-pointer dereference fatal a null `ptr<T>` raises.
@@ -216,6 +220,10 @@ impl Checker {
         nullsafe: bool,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        if !nullsafe {
+            crate::semantics::nullability::validate_receiver(self.semantic_profile,
+                self.semantic_source_mode, &obj_ty, self.null_probe_operations.contains(&expr.span), expr.span)?;
+        }
         self.record_member_receiver_type(expr.span, &obj_ty);
         if nullsafe && matches!(obj_ty, PhpType::Void) {
             return Ok(PhpType::Void);

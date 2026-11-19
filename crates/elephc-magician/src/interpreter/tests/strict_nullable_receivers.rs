@@ -116,3 +116,67 @@ fn strict_nullability_eval_creation_and_independent_controls() {
         finish(&mut context, &mut scope, &mut values, source);
     }
 }
+
+/// Property reads share native nullability while quiet roots and computed names stay distinct.
+#[test]
+fn strict_nullability_eval_property_receivers_and_owners() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    let fixture = include_str!("../../../../../tests/fixtures/strict/nullable_properties.php").strip_prefix("<?php\ndeclare(strict_types=0);").unwrap();
+    for fallback in [false, true] {
+        let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        let result = execute(fixture, fallback, &mut context, &mut scope, &mut values);
+        assert!(result.is_ok(), "{:?}; {}", result.as_ref().err(), values.output);
+        assert_eq!(values.output, "P|8|KN|q:0:1:q|q|CN|O|Q");
+        assert!(values.warnings.is_empty(), "{:?}", values.warnings);
+        finish(&mut context, &mut scope, &mut values, "property receivers");
+    }
+}
+
+/// Keeps the shared native/eval receiver fixture inside the fragment parser's supported syntax.
+#[test]
+fn strict_nullability_eval_property_fixture_parse_contract() {
+    let source = include_str!("../../../../../tests/fixtures/strict/nullable_properties.php").strip_prefix("<?php\ndeclare(strict_types=0);").unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for (index, line) in source.lines().enumerate() {
+        let result = crate::parser::parse_fragment_with_semantics(line.as_bytes(), profile);
+        assert!(result.is_ok(), "line {}: {line}: {:?}", index + 1, result.err());
+    }
+    let result = crate::parser::parse_fragment_with_semantics(source.as_bytes(), profile);
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+/// A skipped hop suppresses selectors, while a real null returned by a successful hop stays visible.
+#[test]
+fn strict_nullability_eval_nullsafe_chains_preserve_steps() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for fallback in [false, true] {
+        for (source, expected, stdout) in [
+            ("$gap=[];$n=null;return $n?->child->value;", Some(FakeValue::Null), ""),
+            ("$gap=[];function nullableChainName(){echo 'bad';return 'child';}$n=null;return $n?->{nullableChainName()}->value;", Some(FakeValue::Null), ""),
+            ("$gap=[];class NullableChainNode{public mixed $child=null;}$n=new NullableChainNode();return $n?->child->value;", None, ""),
+            ("$gap=[];function nullableChainKey(){echo 'K';return 0;}class NullableChainNode{public mixed $child=null;}$n=new NullableChainNode();return $n?->child[nullableChainKey()];", None, "K"),
+            ("$gap=[];class NullableChainNode{public mixed $child=null;}$n=new NullableChainNode();return $n?->child->value??'q';", Some(FakeValue::String("q".into())), ""),
+            ("$gap=[];class NullableChainNode{public mixed $child=null;}$n=new NullableChainNode();return empty($n?->child->value);", Some(FakeValue::Bool(true)), ""),
+        ] {
+            let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+            let result = execute(source, fallback, &mut context, &mut scope, &mut values);
+            if let Some(expected) = expected {
+                let EvalControl::Return(value) = result.unwrap() else { panic!("return"); };
+                assert_eq!(values.get(value), expected, "{source}"); values.release(value).unwrap();
+            } else { assert!(matches!(result, Err(EvalStatus::UncaughtThrowable)), "{source}: {:?}", result.as_ref().err()); }
+            assert_eq!(values.output, stdout, "{source}");
+            finish(&mut context, &mut scope, &mut values, source);
+        }
+    }
+    for strict in [false, true] {
+        let mut context = ElephcEvalContext::new(); context.install_semantic_profile(
+            SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, strict)).unwrap();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        let source = "$gap=[];function nullableEmptyName(){echo 'bad';return 'child';}$n=null;return empty($n?->{nullableEmptyName()}->value);";
+        let EvalControl::Return(value) = execute(source, true, &mut context, &mut scope, &mut values).unwrap() else { panic!("return"); };
+        assert_eq!(values.get(value), FakeValue::Bool(true)); assert!(values.output.is_empty());
+        values.release(value).unwrap(); finish(&mut context, &mut scope, &mut values, source);
+    }
+}

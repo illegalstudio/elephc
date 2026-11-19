@@ -2698,3 +2698,33 @@ array getter does not model strings, so no string success is claimed from this
 fixture; actual native string coverage remains part of final admission.
 Public Nullability and opaque eval execution stay gated until all remaining
 consumers are integrated. No additional family is admitted.
+
+### Verified219: property receivers and shared nullsafe chains
+
+Ordinary named and dynamic property receivers now reuse non-null EIR guards.
+Known null receivers are rejected through the checker, including ordinary member
+expressions used inside a probe's computed property name. Native quiet receiver
+lowering recursively preserves only access spines; existing isset, empty and
+coalesce protocols select their terminal getter/existence behavior. All-five
+emission and PHP/LFC optimized/unoptimized native runs pass with clean heap,
+selector effects, present values, typed nullable receivers and owned nulls.
+
+Interpreted property reads use the shared pending-TypeError guard. Nullability's
+quiet property-isset path answers false for null without calling an ordinary
+getter. Whole nullsafe receiver traversal is extracted from the existing empty
+adapter into interpreter/nullsafe_chains.rs and reused by ordinary expressions
+and coalescing. None represents an upstream short circuit, while Some(null)
+remains a real value that ordinary continuation must check. The empty adapter
+keeps its terminal protocol and permissive behavior. Keys and runtime member
+names remain ordinary expressions and later selectors are skipped only after an
+actual nullsafe short circuit.
+
+A shared property fixture covers named/dynamic reads, nested probes, nullable
+root versus null child, normal continuation, selector evaluation, owned receivers
+and precise ordinary selectors inside probes. The native fixture retains
+strict_types=0; eval explicitly strips that host-owned declaration because the
+fragment parser does not accept it. A parse-contract gate validates every
+complete fixture line and the full fragment. Separate walker/fallback cases
+cover nullsafe selector suppression, actual-null array continuation effects,
+quiet coalescing/empty, permissive empty and owner balance. Public admission and
+opaque eval remain gated pending declared and builtin value consumers.

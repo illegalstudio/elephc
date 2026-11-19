@@ -101,6 +101,9 @@ pub(super) fn lower_property_get(
     expr: &Expr,
 ) -> LoweredValue {
     let object = lower_expr(ctx, object);
+    if op == Op::PropGet {
+        crate::ir_lower::nullability::require_non_null(ctx, object, &[], &[], expr.span);
+    }
     lower_property_get_from_value(ctx, object, property, op, expr)
 }
 
@@ -1201,6 +1204,9 @@ pub(super) fn lower_dynamic_property_fetch_or_select(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
     result_type: PhpType, mode: PropertyFetchMode, known_native: bool, write_select: bool, expr: &Expr,
 ) -> LoweredValue {
+    if mode == PropertyFetchMode::Read && !write_select {
+        crate::ir_lower::nullability::require_non_null(ctx, object, &[property], &[], expr.span);
+    }
     let object = box_opaque_property_receiver(ctx, object, expr.span);
     let ty = ctx.builder.value_php_type(object.value);
     let may_be_native = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))

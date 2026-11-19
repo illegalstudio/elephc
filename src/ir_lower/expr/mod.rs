@@ -237,7 +237,7 @@ pub(crate) use property_access::lower_native_dimension_incdec_select_from_values
 use property_probes::*;
 use method_calls::*;
 use closure_binding::*;
-use member_receivers::{checked_member_receiver_type, lower_member_receiver, refine_member_receiver};
+use member_receivers::{checked_member_receiver_type, lower_member_receiver, lower_member_probe_receiver, refine_member_receiver};
 pub(crate) use member_receivers::refine_member_receiver_at_span;
 use reflection_array_calls::*;
 use reflection_class_calls::*;

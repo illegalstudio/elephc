@@ -46,6 +46,7 @@ pub(super) fn eval_property_read_result(
     object: RuntimeCellHandle, property_name: &str, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps, owned: Option<&mut Vec<RuntimeCellHandle>>, quiet: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !quiet { super::super::checked_nullability::require_non_null(object, context, values)?; }
     let Ok(identity) = values.object_identity(object) else {
         return values.property_get(object, property_name);
     };
@@ -873,6 +874,8 @@ pub(in crate::interpreter) fn eval_property_isset_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
+        && values.is_null(object)? { return Ok(false); }
     if let Some(result) = super::super::runtime_ops::simplexml_properties::invoke(
         values, object, property_name, elephc_builtin_contract::ObjectProperty::Isset, None,
     )? {
