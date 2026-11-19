@@ -12,7 +12,7 @@ use crate::codegen_support::{emit::Emitter, sentinels::UNINITIALIZED_TYPED_PROPE
 use elephc_memoir::hydration_owners::{self, Context};
 
 /// Supplies the decoder's existing marker and scope/payload ownership protocols.
-const OWNER_CONTEXT: Context<'static> = Context {
+pub(super) const OWNER_CONTEXT: Context<'static> = Context {
     uninitialized: UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
     defer_data: "__rt_unserialize_defer_data",
     active_depth: "_unser_active",

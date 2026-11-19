@@ -10,6 +10,7 @@
 //! - The fresh array preserves ordinary COW metadata and owns each copied binary string.
 
 use super::*;
+use elephc_memoir::values::packed_mixed_prefix;
 
 /// Emits the packed string-array materializer for the selected target architecture.
 pub(super) fn emit(emitter: &mut Emitter) {
@@ -55,13 +56,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x9, x10, [sp]");                                   // preserve framing state across runtime allocation
     emitter.instruction("mov x0, #1");                                          // select the runtime string tag for the borrowed payload
     emitter.instruction("bl __rt_mixed_from_value");                            // copy the bytes into a fresh owned string cell
-    emitter.instruction("ldr x9, [sp, #32]");                                   // recover the exclusively owned array
-    emitter.instruction("ldr x10, [sp, #24]");                                  // recover the next insertion index
-    emitter.instruction("add x11, x9, #24");                                    // address the array payload after its fixed header
-    emitter.instruction("str x0, [x11, x10, lsl #3]");                          // transfer the fresh cell directly into the array owner
-    emitter.instruction("add x10, x10, #1");                                    // advance the initialized element count
-    emitter.instruction("str x10, [x9]");                                       // expose only initialized cells to partial cleanup
-    emitter.instruction("str x10, [sp, #24]");                                  // save the next insertion index
+    packed_mixed_prefix::emit_append_from_stack(emitter, 32, 24);
     emitter.instruction("b __rt_mbstring_array_loop");                          // materialize the next binary string
     emitter.label("__rt_mbstring_array_done");
     emitter.instruction("ldr x9, [sp, #8]");                                    // inspect the remaining packed byte count
@@ -117,12 +112,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 8], r11");                        // preserve the remaining range across runtime allocation
     emitter.instruction("mov eax, 1");                                          // select the runtime string tag for the borrowed payload
     emitter.instruction("call __rt_mixed_from_value");                          // copy the bytes into a fresh owned string cell
-    emitter.instruction("mov r10, QWORD PTR [rsp + 32]");                       // recover the exclusively owned array
-    emitter.instruction("mov r11, QWORD PTR [rsp + 24]");                       // recover the next insertion index
-    emitter.instruction("mov QWORD PTR [r10 + r11 * 8 + 24], rax");             // transfer the fresh cell directly into the array owner
-    emitter.instruction("inc r11");                                             // advance the initialized element count
-    emitter.instruction("mov QWORD PTR [r10], r11");                            // expose only initialized cells to partial cleanup
-    emitter.instruction("mov QWORD PTR [rsp + 24], r11");                       // save the next insertion index
+    packed_mixed_prefix::emit_append_from_stack(emitter, 32, 24);
     emitter.instruction("jmp __rt_mbstring_array_loop");                        // materialize the next binary string
     emitter.label("__rt_mbstring_array_done");
     emitter.instruction("cmp QWORD PTR [rsp + 8], 0");                          // inspect the remaining packed byte count

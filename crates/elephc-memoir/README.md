@@ -46,6 +46,9 @@ string buffer growth, protected transfer of previous Throwable owners, and
 acquisition of staged hash payloads.
 Memoir also builds packed offset rows and callback argument vectors, copies retained
 Mixed slots, and emits weak resource cell and hosted replacement owner storage.
+It builds packed slice destinations from normalized bounds, publishes initialized
+prefixes in preallocated Mixed arrays, and initializes resource inventory nodes
+before linking them in creation order.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
@@ -80,8 +83,9 @@ The compiler supplies its chain symbol and selects the surviving activation;
 Memoir detaches every abandoned record before invoking its cleanup callback.
 `hydration_owners` likewise uses only assembly and target ABI capabilities. Its
 context names the host uninitialized marker, box deferral entry and saved-payload
-release entry. Wire parsing, property validation, duplicate-key selection and
-parser completion stay in the compiler.
+release entry. Property and duplicate-key replacement share the in-frame box
+transfer and saved-payload release. Wire parsing, property validation,
+duplicate-key selection and parser completion stay in the compiler.
 `weak_cache` receives the compiler's wrapper class-id symbol. It publishes cached
 observers without retaining referents and clears both directions before storage
 reuse. `hash_entry_references` separates shared Mixed boxes before moving the

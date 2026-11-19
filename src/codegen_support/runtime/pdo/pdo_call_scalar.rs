@@ -47,6 +47,7 @@
 //!   exception object is a later hardening step; the load-bearing guarantee is that the
 //!   `throw` never unwinds past this C boundary.
 
+use elephc_memoir::values::packed_mixed_prefix;
 use elephc_memoir::{callables::argument_storage, cleanup_preserve, values::array_header};
 use crate::codegen_support::callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET;
 use crate::codegen_support::try_handlers::{
@@ -150,19 +151,7 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
     // -- box the (tag, lo, hi) triple and store it into args array slot k --
     emitter.label("__rt_pdo_call_scalar_box_call");
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = owned boxed Mixed argument
-    emitter.instruction("ldr x9, [sp, #296]");                                  // reload the loop index (clobbered by the call)
-    // The args-array reload uses the caller-saved temporary x10 (like the collation
-    // template's x9), NOT a callee-saved register: this adapter's prologue saves only
-    // x29/x30, so clobbering an x19-x28 register would corrupt a value the bridge's
-    // x_scalar caller may be holding live across the call. x9 (loop index) and x12
-    // (element offset) are the only other live temporaries here.
-    emitter.instruction("ldr x10, [sp, #272]");                                 // reload the args array pointer
-    emitter.instruction("lsl x12, x9, #3");                                     // k * 8 (boxed-Mixed slot stride)
-    emitter.instruction("add x12, x12, #24");                                   // element region begins 24 bytes past the header
-    emitter.instruction("str x0, [x10, x12]");                                  // store the boxed arg into slot k
-    emitter.instruction("add x9, x9, #1");                                      // advance the loop index
-    emitter.instruction("str x9, [sp, #296]");                                  // persist the loop index
-    emitter.instruction("str x9, [x10, #0]");                                   // update the array length field to k+1
+    packed_mixed_prefix::emit_append_from_frame(emitter, 272, 296, 0);
     emitter.instruction("b __rt_pdo_call_scalar_loop");                         // box the next argument
     emitter.label("__rt_pdo_call_scalar_loop_done");
 
@@ -376,15 +365,7 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     // -- box the (tag, lo, hi) triple and store it into args array slot k --
     emitter.label("__rt_pdo_call_scalar_box_call_x86");
     emitter.instruction("call __rt_mixed_from_value");                          // rax = owned boxed Mixed argument
-    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the loop index (clobbered by the call)
-    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the args array pointer
-    emitter.instruction("mov rcx, r9");                                         // compute the element byte offset
-    emitter.instruction("shl rcx, 3");                                          // k * 8 (boxed-Mixed slot stride)
-    emitter.instruction("add rcx, 24");                                         // element region begins 24 bytes past the header
-    emitter.instruction("mov QWORD PTR [r11 + rcx], rax");                      // store the boxed arg into slot k
-    emitter.instruction("add r9, 1");                                           // advance the loop index
-    emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // persist the loop index
-    emitter.instruction("mov QWORD PTR [r11], r9");                             // update the array length field to k+1
+    packed_mixed_prefix::emit_append_from_frame(emitter, 40, 64, 0);
     emitter.instruction("jmp __rt_pdo_call_scalar_loop_x86");                   // box the next argument
     emitter.label("__rt_pdo_call_scalar_loop_done_x86");
 
