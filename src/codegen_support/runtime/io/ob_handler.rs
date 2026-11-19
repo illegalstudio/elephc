@@ -30,6 +30,7 @@
 //!   the handler's first run and sets `_ob_in_handler` around the call so
 //!   handler-produced output is discarded and nested `ob_start()` is fatal.
 
+use elephc_memoir::callables::argument_storage;
 use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -297,10 +298,7 @@ pub fn emit_ob_invoke_descriptor(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #8");                                          // elem_size = 8 (Mixed cell pointers)
     emitter.instruction("bl __rt_array_new");                                   // allocate the invoker argument array
     emitter.instruction("ldr x1, [sp, #24]");                                   // append value = the boxed buffer-string cell
-    emitter.instruction("bl __rt_array_push_refcounted");                       // append (and retain) the string cell
-    emitter.instruction("str x0, [sp, #16]");                                   // save the (possibly grown) argument array
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed buffer-string cell
-    emitter.instruction("bl __rt_decref_any");                                  // drop the temp retain (the array owns the cell)
+    argument_storage::emit_append_owned_cell(emitter, 16, 24);
     emitter.instruction("ldr x1, [sp, #8]");                                    // phase value = the saved phase argument
     emitter.instruction("mov x2, #0");                                          // integer payloads do not use a high word
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer payload
@@ -308,18 +306,9 @@ pub fn emit_ob_invoke_descriptor(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #24]");                                   // save the boxed phase cell
     emitter.instruction("mov x1, x0");                                          // append value = the boxed phase cell
     emitter.instruction("ldr x0, [sp, #16]");                                   // append target = the argument array
-    emitter.instruction("bl __rt_array_push_refcounted");                       // append (and retain) the phase cell
-    emitter.instruction("str x0, [sp, #16]");                                   // save the (possibly grown) argument array
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed phase cell
-    emitter.instruction("bl __rt_decref_any");                                  // drop the temp retain (the array owns the cell)
+    argument_storage::emit_append_owned_cell(emitter, 16, 24);
     // -- box the argument array itself as a Mixed indexed array (tag 4) --
-    emitter.instruction("ldr x1, [sp, #16]");                                   // Mixed payload low word = the argument array
-    emitter.instruction("mov x2, #0");                                          // heap payloads do not use a high word
-    emitter.instruction("mov x0, #4");                                          // runtime tag 4 = indexed array payload
-    emitter.instruction("bl __rt_mixed_from_value");                            // box (and retain) the argument array
-    emitter.instruction("str x0, [sp, #32]");                                   // save the boxed argument container
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the raw argument array
-    emitter.instruction("bl __rt_decref_any");                                  // drop the extra array retain (the box owns it)
+    argument_storage::emit_box_arguments(emitter, 16, 32);
     emitter.instruction("ldr x0, [sp, #32]");                                   // retain the boxed argument container throughout PHP execution
     crate::codegen_support::runtime::exceptions::guards::guard(emitter, 48, 80);
     // -- call the descriptor's uniform invoker --
@@ -385,10 +374,7 @@ fn emit_ob_invoke_descriptor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_new");                                 // allocate the invoker argument array
     emitter.instruction("mov rdi, rax");                                        // append target = the argument array
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // append value = the boxed buffer-string cell
-    emitter.instruction("call __rt_array_push_refcounted");                     // append (and retain) the string cell
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the (possibly grown) argument array
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed buffer-string cell
-    emitter.instruction("call __rt_decref_any");                                // drop the temp retain (the array owns the cell)
+    argument_storage::emit_append_owned_cell(emitter, 24, 32);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // Mixed payload low word = the phase value
     emitter.instruction("xor esi, esi");                                        // integer payloads do not use a high word
     emitter.instruction("xor eax, eax");                                        // runtime tag 0 = integer payload
@@ -396,18 +382,9 @@ fn emit_ob_invoke_descriptor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the boxed phase cell
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // append target = the argument array
     emitter.instruction("mov rsi, rax");                                        // append value = the boxed phase cell
-    emitter.instruction("call __rt_array_push_refcounted");                     // append (and retain) the phase cell
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the (possibly grown) argument array
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed phase cell
-    emitter.instruction("call __rt_decref_any");                                // drop the temp retain (the array owns the cell)
+    argument_storage::emit_append_owned_cell(emitter, 24, 32);
     // -- box the argument array itself as a Mixed indexed array (tag 4) --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // Mixed payload low word = the argument array
-    emitter.instruction("xor esi, esi");                                        // heap payloads do not use a high word
-    emitter.instruction("mov eax, 4");                                          // runtime tag 4 = indexed array payload
-    emitter.instruction("call __rt_mixed_from_value");                          // box (and retain) the argument array
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed argument container
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the raw argument array
-    emitter.instruction("call __rt_decref_any");                                // drop the extra array retain (the box owns it)
+    argument_storage::emit_box_arguments(emitter, 24, 40);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // guard the caller-owned argument container across PHP exceptions
     crate::codegen_support::runtime::exceptions::guards::guard(emitter, 48, 80);
     // -- call the descriptor's uniform invoker --
