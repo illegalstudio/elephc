@@ -11,6 +11,7 @@
 //! - A descriptor with no recorded `DIR*` is a no-op.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::interop::glob_storage;
 
 /// closedir: close a directory stream opened by `opendir()`.
 /// Input:  AArch64 x0 = directory descriptor / x86_64 rdi = directory descriptor
@@ -34,8 +35,8 @@ pub fn emit_closedir(emitter: &mut Emitter) {
     emitter.instruction("cbz x10, __rt_closedir_libc");                         // no glob handle: fall through to libc closedir
     emitter.instruction("str xzr, [x9, x0, lsl #3]");                           // clear the fd → glob_state entry
     emitter.instruction("str x0, [sp, #16]");                                   // stash the fd across the libc calls
-    emitter.instruction("add x0, x10, #24");                                    // &struct.glob_t lives at offset 24
-    emitter.bl_c("globfree");                                                   // free the kernel/libc-allocated gl_pathv entries
+    emitter.instruction("str x10, [sp, #24]");                                  // keep the envelope across the libc release
+    glob_storage::emit_release(emitter, 24);
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the dup-minted fd
     emitter.bl_c("close");                                                      // close the synthetic fd that opendir_glob handed out
     emitter.instruction("b __rt_closedir_done");                                // skip the libc DIR* path
@@ -72,8 +73,8 @@ fn emit_closedir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_closedir_libc_x86");                           // no glob handle: fall through to libc closedir
     emitter.instruction("mov QWORD PTR [r9 + rdi * 8], 0");                     // clear the fd → glob_state entry
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // stash the fd across the libc calls
-    emitter.instruction("lea rdi, [r10 + 24]");                                 // &struct.glob_t lives at offset 24
-    emitter.instruction("call globfree");                                       // free the kernel/libc-allocated gl_pathv entries
+    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // keep the envelope across the libc release
+    glob_storage::emit_release(emitter, 16);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the dup-minted fd
     emitter.instruction("call close");                                          // close the synthetic fd that opendir_glob handed out
     emitter.instruction("jmp __rt_closedir_done_x86");                          // skip the libc DIR* path
