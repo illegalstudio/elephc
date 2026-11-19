@@ -15,8 +15,17 @@ pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
     args: &[Expr], op: Op, expr: &Expr,
 ) -> Option<LoweredValue> {
-    if method_signature(ctx, object.value, method).is_some() { return None; }
     let object_ty = ctx.builder.value_php_type(object.value);
+    if method_signature(ctx, object.value, method).is_some() {
+        // `method_signature` also answers from the classes BELOW the receiver (a signature narrowed
+        // across descendants), so a native XML class whose only declarations of the method sit in
+        // abstract subclasses would skip its own `__call`. Its instances reach `__call` directly.
+        let own_xml_class = singular_object_class(&object_ty).is_some_and(|(class, _)| {
+            class_extends_class(ctx, class, "SimpleXMLElement")
+                && class_method_signature(ctx, class, &php_symbol_key(method)).is_none()
+        });
+        if !own_xml_class { return None; }
+    }
     let (class, _) = singular_object_class(&object_ty)?;
     let signature = class_method_signature(ctx, class, "__call")?.clone();
     let span = expr.span;
