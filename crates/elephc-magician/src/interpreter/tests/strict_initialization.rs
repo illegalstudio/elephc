@@ -136,3 +136,34 @@ fn strict_initialization_eval_extended_fixture_and_owners() {
         assert_clean(&mut context, &mut scope, &mut values, "extended reads");
     }
 }
+
+/// Dynamic containers and physical reflection retain initialized-read parity.
+#[test]
+fn strict_initialization_eval_object_fixture_and_owners() {
+    let fixture = include_str!("../../../../../tests/fixtures/strict/initialized_object_reads.php").strip_prefix("<?php").unwrap();
+    for locals in [false, true] {
+        for dynamic_reflection in [false, true] {
+            let source = if dynamic_reflection {
+                fixture.replace("RuntimeInitializedReflection::class, 'value'", "RuntimeInitializedReflection::class, $name")
+            } else { fixture.to_string() };
+            for dispatch in [false, true] {
+                let mut context = ElephcEvalContext::new();
+                context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Initialization, true)
+                    .with(StrictFeature::Locals, locals)).unwrap();
+                let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+                assert!(context.set_global_scope(&mut scope));
+                let program = crate::parser::parse_fragment_with_semantics(format!("$argc=1;{source}").as_bytes(), context.semantic_profile()).unwrap();
+                let result = if dispatch { bytecode::try_execute(&mut context, &program, &mut scope, &mut values) }
+                    else { Ok(None) };
+                let result = result.and_then(|control| match control {
+                    Some(control) => Ok(control),
+                    None => execute_statements(program.statements(), &mut context, &mut scope, &mut values),
+                }).unwrap_or_else(|error| panic!("dispatch={dispatch}: {error:?}; output={}", values.output));
+                assert!(matches!(result, EvalControl::None | EvalControl::ReturnVoid));
+                assert_eq!(values.output, "NULL|I|I|AE:missing|I|I:A|I|I|N|", "locals={locals}, dispatch={dispatch}");
+                assert!(values.warnings.is_empty(), "{:?}", values.warnings);
+                assert_clean(&mut context, &mut scope, &mut values, "object reads");
+            }
+        }
+    }
+}

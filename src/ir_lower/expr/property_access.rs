@@ -590,6 +590,7 @@ pub(super) fn lower_direct_property_read(ctx: &mut LoweringContext<'_, '_>, obje
         Immediate::ProfiledData { data, profile: crate::source::EvalSourceProfile::new(
             crate::php_only::is_enabled(), ctx.semantic_profile) }
     } else { Immediate::Data(data) };
+    let pins = crate::ir_lower::initialization::pin_read_operands(ctx, &[object.value], expr.span);
     let result = ctx.emit_value(
         op,
         vec![object.value],
@@ -598,6 +599,7 @@ pub(super) fn lower_direct_property_read(ctx: &mut LoweringContext<'_, '_>, obje
         op.default_effects(),
         Some(expr.span),
     );
+    super::call_operand_owners::unpin_in_flight_owners(ctx, pins, expr.span);
     if reads_extern_cstr {
         // A C `char*` field reads as a borrowed view of C memory the program may free or
         // rewrite at any time, so the value PHP keeps is an owned copy taken right here.
@@ -1105,7 +1107,9 @@ pub(super) fn lower_dynamic_property_fetch(
         // PHP fetches a variable receiver after the property expression has evaluated.
         let name = super::super::scoped_writes::property_name(ctx, property, expr.span)
             .unwrap_or_else(|| { let name = lower_expr(ctx, property); coerce_runtime_property_name(ctx, name, expr.span) });
+        let pins = super::call_operand_owners::pin_in_flight_owners(ctx, &[name.value], expr.span);
         let object = lower_member_receiver(ctx, object, expr);
+        super::call_operand_owners::unpin_in_flight_owners(ctx, pins, expr.span);
         let ty = ctx.builder.value_php_type(object.value);
         known_native |= singular_object_class(&ty).is_some_and(|(class, nullable)| !nullable
             && crate::types::builtin_classes::has_native_dimensions(class, ctx.classes));
@@ -1151,8 +1155,10 @@ pub(super) fn lower_dynamic_property_fetch_from_value(
         }
     }
     let result_type = dynamic_property_fetch_result_type(ctx, object.value, property, mode, expr);
+    let pins = super::call_operand_owners::pin_in_flight_owners(ctx, &[object.value], expr.span);
     let property = super::super::scoped_writes::property_name(ctx, property, expr.span)
         .unwrap_or_else(|| { let property = lower_expr(ctx, property); coerce_runtime_property_name(ctx, property, expr.span) });
+    super::call_operand_owners::unpin_in_flight_owners(ctx, pins, expr.span);
     lower_dynamic_property_fetch_from_operands(
         ctx, object, property, result_type, mode, false, expr,
     )
@@ -1232,6 +1238,7 @@ fn lower_dynamic_property_fetch_without_runtime_hooks(
         Immediate::ProfiledPropertyFetch { mode, profile: crate::source::EvalSourceProfile::new(
             crate::php_only::is_enabled(), ctx.semantic_profile) }
     } else { Immediate::PropertyFetchMode(mode) };
+    let pins = crate::ir_lower::initialization::pin_read_operands(ctx, &[object.value, property.value], expr.span);
     let result = ctx.emit_value(
         Op::DynamicPropGet,
         vec![object.value, property.value],
@@ -1242,6 +1249,7 @@ fn lower_dynamic_property_fetch_without_runtime_hooks(
         } else { crate::ir::Effects::PURE },
         Some(expr.span),
     );
+    super::call_operand_owners::unpin_in_flight_owners(ctx, pins, expr.span);
     // A name computed for this read (`$o->{(string) $mixed}`) is a temporary the
     // lookup only reads; the result borrows from the object, never from it.
     if ctx.value_is_owning_temporary(property) {

@@ -181,6 +181,7 @@ mod dynamic_pdo;
 mod dynamic_class_flags;
 mod property_defaults;
 mod known_property_reads;
+mod property_hash_reads;
 mod mixed_property_reads;
 mod runtime_magic_reads;
 mod dynamic_property_read_entry;

@@ -136,6 +136,19 @@ macro_rules! impl_fake_collection_call_ops {
     ) -> Result<(), EvalStatus> {
         self.runtime_property_set(object, property, value)
     }
+    /// Removes a fake property entry through the existing authorized native-unset capability.
+    fn unset_native_typed_property(
+        &mut self, object: RuntimeCellHandle, property: &str,
+    ) -> Result<bool, EvalStatus> {
+        let Some(FakeValue::Object(properties)) = self.values.get_mut(&(object.as_ptr() as usize)) else {
+            return Ok(false);
+        };
+        // Fake property entries borrow stable handles, as in runtime_property_set.
+        if let Some(index) = properties.iter().position(|(name, _)| name == property) {
+            properties.remove(index);
+        }
+        Ok(true)
+    }
     /// Reports no fake AOT static property match.
     fn static_property_get(
         &mut self,

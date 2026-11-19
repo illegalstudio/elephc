@@ -723,6 +723,9 @@ pub(super) fn emit_stdclass_get_call(
             abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
         }
     }
+    if ctx.property_read_requires_initialization() {
+        return super::property_hash_reads::emit_initialized_stdclass_get(ctx, Some(property));
+    }
     abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
     Ok(())
 }
@@ -975,42 +978,8 @@ pub(super) fn lower_runtime_allow_dynamic_prop_get(
     name_offset: usize,
     frame_bytes: usize,
 ) -> Result<()> {
-    let target = ctx.emitter.target;
-    let miss_label = ctx.next_label("runtime_dynamic_prop_hash_miss");
-    let done_label = ctx.next_label("runtime_dynamic_prop_hash_done");
-    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, receiver_offset);
-    abi::emit_load_from_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
-        object_reg,
-        hash_offset,
-    );
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), name_offset);
-    abi::emit_load_temporary_stack_slot(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 2),
-        name_offset + 8,
-    );
-    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-    // Released before the found test so the branch reads freshly computed flags on every target.
-    abi::emit_release_temporary_stack(ctx.emitter, frame_bytes);
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &miss_label);
-    match target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
-        }
-    }
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-    abi::emit_jump(ctx.emitter, &done_label);
-    ctx.emitter.label(&miss_label);
-    if ctx.property_read_requires_initialization() {
-        super::super::exceptions::emit_error(ctx, elephc_semantics::initialization::DYNAMIC_PROPERTY_MESSAGE);
-    }
-    emit_boxed_null(ctx);
-    ctx.emitter.label(&done_label);
+    super::property_hash_reads::emit_stacked_property_hash_get(
+        ctx, hash_offset, receiver_offset, name_offset, frame_bytes,
+        elephc_semantics::initialization::DYNAMIC_PROPERTY_MESSAGE)?;
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())
 }

@@ -598,7 +598,7 @@ pub trait RuntimeValueOps {
         Ok(())
     }
 
-    /// Uninitializes an authorized typed native slot, returning false for eval-only storage.
+    /// Uninitializes an authorized native slot or removes a public dynamic entry, returning false for eval-only storage.
     /// The native owner is released after the slot receives its uninitialized marker.
     fn unset_native_typed_property(
         &mut self,

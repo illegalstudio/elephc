@@ -886,3 +886,5 @@ mod initialized_extended_reads;
 mod initialized_eval_reads;
 
 mod initialized_global_imports;
+
+mod initialized_object_reads;

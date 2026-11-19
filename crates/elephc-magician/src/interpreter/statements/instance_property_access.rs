@@ -79,10 +79,14 @@ pub(super) fn eval_property_read_result(
                 );
             }
         }
-        if quiet && !values.object_dynamic_property_exists(object, property_name)?
+        if (quiet || context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization))
+            && !values.object_dynamic_property_exists(object, property_name)?
             && values.reflection_method_flags(&class_name, "__get")?.is_none()
         {
-            return eval_missing_unset_property(object, &class_name, property_name, context, values);
+            if quiet {
+                return eval_missing_unset_property(object, &class_name, property_name, context, values);
+            }
+            return initialization::missing_property(property_name, context, values);
         }
         return values.property_get(object, property_name);
     };

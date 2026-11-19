@@ -27,7 +27,11 @@ pub(super) fn lower_runtime_dynamic_stdclass_prop_get(
             ctx.load_string_value_to_regs(property_value, "rsi", "rdx")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
+    if ctx.property_read_requires_initialization() {
+        super::property_hash_reads::emit_initialized_stdclass_get(ctx, None)?;
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
+    }
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }

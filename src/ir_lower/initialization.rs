@@ -55,3 +55,11 @@ pub(super) fn guard_read(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Sp
     ctx.builder.terminate(Terminator::Unreachable);
     ctx.builder.position_at_end(ready);
 }
+
+/// Protects independent property operands while an initialized read or its operand evaluation can throw.
+pub(super) fn pin_read_operands(ctx: &mut LoweringContext<'_, '_>, operands: &[crate::ir::ValueId],
+    span: Span,
+) -> Vec<super::expr::call_operand_owners::PinnedInFlightOwner> {
+    if !enabled(ctx) { return Vec::new(); }
+    super::expr::pin_in_flight_owners(ctx, operands, span)
+}
