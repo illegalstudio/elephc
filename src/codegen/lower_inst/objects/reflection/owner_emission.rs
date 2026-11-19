@@ -410,6 +410,23 @@ pub(super) fn emit_reflection_owner_metadata(
         )?;
         emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
     }
+    if owner_class_name == "ReflectionClassConstant" {
+        if let Some(value) = &metadata.constant_value {
+            let rendered = reflection_class_constant_to_string(
+                metadata.reflected_name.as_deref().unwrap_or(""),
+                value,
+                metadata.type_metadata.as_ref(),
+                metadata.member_flags,
+                metadata.is_final,
+            );
+            emit_reflection_owner_string_property_by_name(
+                ctx,
+                class_name,
+                "__string",
+                &rendered,
+            )?;
+        }
+    }
     if owner_class_name == "ReflectionEnumBackedCase" {
         if let Some(value) = &metadata.backing_value {
             abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));

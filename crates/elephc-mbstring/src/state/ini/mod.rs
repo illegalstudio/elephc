@@ -115,8 +115,10 @@ impl State {
             let value = if details {
                 let child = arrays.len();
                 let global = if entry.original.is_some() { &entry.original } else { &entry.local };
+                let builtin = directive.default.map(|value| IniString::interned(value.as_bytes()));
                 arrays.push(vec![(ArrayKey::String(b"global_value".to_vec()), raw(global, child, 0)),
                     (ArrayKey::String(b"local_value".to_vec()), raw(&entry.local, child, 1)),
+                    (ArrayKey::String(b"builtin_default_value".to_vec()), raw(&builtin, child, 2)),
                     (ArrayKey::String(b"access".to_vec()), Value::Int(entry.access as i64))]);
                 Value::Array(child)
             } else { raw(&entry.local, 0, index) };

@@ -21,8 +21,9 @@
 //!   contract for a method, printed under the module's registered name (`SPL`).
 
 use super::{
-    ReflectionDefaultArrayKey, ReflectionListedMember, ReflectionMemberFlags,
-    ReflectionParameterDefaultValue, ReflectionParameterMember, ReflectionParameterTypeMetadata,
+    ReflectionConstantValue, ReflectionDefaultArrayKey, ReflectionListedMember,
+    ReflectionMemberFlags, ReflectionParameterDefaultValue, ReflectionParameterMember,
+    ReflectionParameterTypeMetadata,
 };
 use crate::names::is_generated_local_name;
 use elephc_builtin_contract::PhpModule;
@@ -356,6 +357,95 @@ pub(super) fn reflection_listed_method_to_string(
         &member.parameters,
         member.type_metadata.as_ref(),
     )
+}
+
+/// Renders `ReflectionClassConstant::__toString()` for one class constant.
+///
+/// php-src prints `Constant [ <final?><visibility> <type> <name> ] { <value> }`. PHP 8.6
+/// fixed the boolean value branch, which previously fell back to the generic scalar text,
+/// so `true`/`false` now come from the dedicated rendering below.
+pub(super) fn reflection_class_constant_to_string(
+    name: &str,
+    value: &ReflectionConstantValue,
+    type_metadata: Option<&ReflectionParameterTypeMetadata>,
+    flags: ReflectionMemberFlags,
+    is_final: bool,
+) -> String {
+    let visibility = if flags.is_private {
+        "private"
+    } else if flags.is_protected {
+        "protected"
+    } else {
+        "public"
+    };
+    let final_prefix = if is_final { "final " } else { "" };
+    let type_name = type_metadata
+        .map(reflection_constant_type_to_string)
+        .unwrap_or_else(|| reflection_constant_value_type_name(value).to_string());
+    format!(
+        "Constant [ {final_prefix}{visibility} {type_name} {name} ] {{ {} }}\n",
+        reflection_constant_value_text(value)
+    )
+}
+
+/// Renders a reflected constant type the way `ReflectionType::__toString()` does.
+fn reflection_constant_type_to_string(metadata: &ReflectionParameterTypeMetadata) -> String {
+    match metadata {
+        ReflectionParameterTypeMetadata::Named(named) => {
+            format!("{}{}", if named.allows_null { "?" } else { "" }, named.name)
+        }
+        ReflectionParameterTypeMetadata::Union(union) => {
+            let mut rendered = union
+                .types
+                .iter()
+                .map(|named| named.name.as_str())
+                .collect::<Vec<_>>()
+                .join("|");
+            if union.allows_null {
+                rendered.push_str("|null");
+            }
+            rendered
+        }
+        ReflectionParameterTypeMetadata::Intersection(intersection) => intersection
+            .types
+            .iter()
+            .map(|named| named.name.as_str())
+            .collect::<Vec<_>>()
+            .join("&"),
+    }
+}
+
+/// Renders one constant value in php-src's `_class_const_string` form.
+fn reflection_constant_value_text(value: &ReflectionConstantValue) -> String {
+    match value {
+        ReflectionConstantValue::Int(number) => number.to_string(),
+        ReflectionConstantValue::Bool(true) => "true".to_string(),
+        ReflectionConstantValue::Bool(false) => "false".to_string(),
+        ReflectionConstantValue::Float(number) => format!("{number}"),
+        ReflectionConstantValue::Str(text) => text.clone(),
+        ReflectionConstantValue::Null => String::new(),
+        ReflectionConstantValue::EnumCase { .. } => "Object".to_string(),
+        ReflectionConstantValue::Evaluated { value, .. } => reflection_constant_value_text(value),
+        ReflectionConstantValue::Array(_) | ReflectionConstantValue::AssocArray(_) => {
+            "Array".to_string()
+        }
+    }
+}
+
+/// Returns php-src's type name for an untyped constant value.
+fn reflection_constant_value_type_name(value: &ReflectionConstantValue) -> &'static str {
+    match value {
+        ReflectionConstantValue::Int(_) => "int",
+        ReflectionConstantValue::Bool(_) => "bool",
+        ReflectionConstantValue::Float(_) => "float",
+        ReflectionConstantValue::Str(_) => "string",
+        ReflectionConstantValue::Null => "null",
+        ReflectionConstantValue::EnumCase { .. } => "object",
+        ReflectionConstantValue::Evaluated { value, .. } => {
+            reflection_constant_value_type_name(value)
+        }
+        ReflectionConstantValue::Array(_) | ReflectionConstantValue::AssocArray(_) => "array",
+    }
 }
 
 /// Internal deprecation precedes the module suffix in both callable headers.

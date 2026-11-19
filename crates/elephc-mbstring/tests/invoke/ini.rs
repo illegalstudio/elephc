@@ -91,3 +91,29 @@ fn mbstring_invoke_ini_discards_completed_leases_on_cleanup_failure() {
         }
     }
 }
+
+/// PHP 8.6 reports the built-in default in every `ini_get_all()` detail row.
+#[test]
+fn mbstring_invoke_ini_details_include_builtin_default() {
+    use elephc_mbstring::arrays::{Key as ArrayKey, Value as ArrayValue};
+    elephc_mbstring_reset_v1();
+    let (status, mut output) = invoke(INI_GET_ALL, b"mbstring", b"", true, &mut Host::new("observe"));
+    assert_eq!(status, 0);
+    let (graph, _) = decode_ini_array(&bytes(&output), output.value as u64).expect("decodable graph");
+    let language = graph.arrays()[0]
+        .iter()
+        .find_map(|(key, value)| match (key, value) {
+            (ArrayKey::String(name), ArrayValue::Array(child)) if name == b"mbstring.language" => {
+                Some(*child)
+            }
+            _ => None,
+        })
+        .expect("mbstring.language row");
+    assert!(
+        graph.arrays()[language]
+            .iter()
+            .any(|(key, _)| matches!(key, ArrayKey::String(name) if name == b"builtin_default_value")),
+        "PHP 8.6 detail rows include the builtin default"
+    );
+    unsafe { elephc_mbstring_release_v1(&mut output); }
+}

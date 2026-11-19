@@ -21,9 +21,23 @@ pub(super) fn apply(state: &mut impl Access, key: Key, value: Option<&[u8]>, cal
             None => { state.language = Language::default(); false },
         }),
         Key::Detect => {
-            let Some(value) = value else { state.with(|state| state.ini.configured_detect = None); return true; };
+            // PHP 8.6: mbstring.detect_order is INI_ALL, so a runtime ini_set() must move the
+            // live detection order immediately, not only the startup configuration.
+            let Some(value) = value else {
+                state.with(|state| {
+                    state.ini.configured_detect = None;
+                    state.detect_order = state.auto_language.detect_order();
+                });
+                return true;
+            };
             match encoding_list(state, value, caller, emit) {
-                Some(order) if !order.is_empty() => { state.with(|state| state.ini.configured_detect = Some(order)); true },
+                Some(order) if !order.is_empty() => {
+                    state.with(|state| {
+                        state.ini.configured_detect = Some(order.clone());
+                        state.detect_order = order;
+                    });
+                    true
+                }
                 _ => false,
             }
         },

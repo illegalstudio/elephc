@@ -69,6 +69,8 @@ mod dynamic_dispatch;
 mod misc;
 #[path = "oop/attributes.rs"]
 mod attributes;
+#[path = "oop/reflection_class_constant_to_string_php86.rs"]
+mod reflection_class_constant_to_string_php86;
 #[path = "oop/reflection_array_constants.rs"]
 mod reflection_array_constants;
 #[path = "oop/reflection_static_lifetimes.rs"]

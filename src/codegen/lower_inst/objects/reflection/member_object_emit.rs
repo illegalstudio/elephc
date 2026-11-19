@@ -183,6 +183,23 @@ pub(super) fn emit_reflection_member_object(
         )?;
         emit_reflection_owner_type_property(ctx, member_class_name, member.type_metadata.as_ref())?;
     }
+    if member_class_name == "ReflectionClassConstant" {
+        if let Some(value) = &member.constant_value {
+            let rendered = reflection_class_constant_to_string(
+                &member.name,
+                value,
+                member.type_metadata.as_ref(),
+                member.flags,
+                member.flags.is_final,
+            );
+            emit_reflection_owner_string_property_by_name(
+                ctx,
+                member_class_name,
+                "__string",
+                &rendered,
+            )?;
+        }
+    }
     if matches!(
         member_class_name,
         "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"

@@ -107,19 +107,23 @@ impl CoreIni {
         let mut arrays = vec![Vec::new()];
         let mut strings = Vec::new();
         for (index, directive) in DIRECTIVES.iter().enumerate() {
-            let mut raw = |value: &IniString, array, entry| {
-                strings.push((array, entry, value.clone()));
-                Value::String(value.to_vec())
+            let mut raw = |value: &Option<IniString>, array, entry| {
+                value.as_ref().map_or(Value::Null, |value| {
+                    strings.push((array, entry, value.clone()));
+                    Value::String(value.to_vec())
+                })
             };
             let value = if details {
                 let child = arrays.len();
+                let builtin = directive.default.map(|value| IniString::interned(value.as_bytes()));
                 arrays.push(vec![
-                    (ArrayKey::String(b"global_value".to_vec()), raw(&self.global[index], child, 0)),
-                    (ArrayKey::String(b"local_value".to_vec()), raw(&self.local[index], child, 1)),
+                    (ArrayKey::String(b"global_value".to_vec()), raw(&Some(self.global[index].clone()), child, 0)),
+                    (ArrayKey::String(b"local_value".to_vec()), raw(&Some(self.local[index].clone()), child, 1)),
+                    (ArrayKey::String(b"builtin_default_value".to_vec()), raw(&builtin, child, 2)),
                     (ArrayKey::String(b"access".to_vec()), Value::Int(directive.access as i64)),
                 ]);
                 Value::Array(child)
-            } else { raw(&self.local[index], 0, index) };
+            } else { raw(&Some(self.local[index].clone()), 0, index) };
             arrays[0].push((ArrayKey::String(directive.name.as_bytes().to_vec()), value));
         }
         (ArrayGraph::new(0, arrays).expect("unique Core keys and complete detail children"), strings)
