@@ -8,10 +8,11 @@
 //! - The compiler supplies placement, chain symbols and cleanup/visitor entry points.
 //! - Exact unlink preserves newer records and live arguments without runtime calls.
 
+use crate::activation_records::{CLEANUP, DATA, OPERAND_STACK_BASE, OWNER_VISITOR, PREFIX_BYTES, PREVIOUS};
 use crate::{Arch, AssemblyEmitter, TargetAbi, FrameOffset};
 
 /// Complete six-word owner activation shared by temporary, fixed-frame and external records.
-pub const RECORD_BYTES: usize = 48;
+pub use crate::activation_records::EXTENDED_BYTES as RECORD_BYTES;
 
 /// Compiler-selected storage and callbacks for one complete owner activation.
 #[derive(Clone, Copy)]
@@ -30,16 +31,16 @@ pub fn publish_stack<E: AssemblyEmitter + TargetAbi>(
 ) {
     let scratch = emitter.secondary_scratch_reg();
     emitter.comment("publish temporary call operand owner");
-    emitter.emit_store_to_sp(owner_address, record_offset + 16);
+    emitter.emit_store_to_sp(owner_address, record_offset + DATA);
     emitter.emit_load_symbol_to_reg(scratch, context.head, 0);
     emitter.emit_store_to_sp(scratch, record_offset);
     emitter.emit_symbol_address(scratch, context.cleanup);
-    emitter.emit_store_to_sp(scratch, record_offset + 8);
+    emitter.emit_store_to_sp(scratch, record_offset + CLEANUP);
     emitter.emit_load_int_immediate(scratch, 0);
-    emitter.emit_store_to_sp(scratch, record_offset + 24);
-    emitter.emit_store_to_sp(scratch, record_offset + 32);
+    emitter.emit_store_to_sp(scratch, record_offset + PREFIX_BYTES);
+    emitter.emit_store_to_sp(scratch, record_offset + OPERAND_STACK_BASE);
     emitter.emit_symbol_address(scratch, context.visitor);
-    emitter.emit_store_to_sp(scratch, record_offset + 40);
+    emitter.emit_store_to_sp(scratch, record_offset + OWNER_VISITOR);
     emitter.emit_temporary_stack_address(scratch, record_offset);
     emitter.emit_store_reg_to_symbol(scratch, context.head, 0);
 }
@@ -61,15 +62,15 @@ pub fn link_frame<E: AssemblyEmitter + TargetAbi>(
     let scratch = emitter.symbol_scratch_reg();
     emitter.emit_frame_slot_address(record, frame_offset.bytes());
     emitter.comment("publish pending reference return owner");
-    emitter.emit_store_to_address(owner_address, record, 16);
+    emitter.emit_store_to_address(owner_address, record, DATA);
     emitter.emit_load_symbol_to_reg(scratch, context.head, 0);
-    emitter.emit_store_to_address(scratch, record, 0);
+    emitter.emit_store_to_address(scratch, record, PREVIOUS);
     emitter.emit_symbol_address(scratch, context.cleanup);
-    emitter.emit_store_to_address(scratch, record, 8);
-    emitter.emit_store_zero_to_address(record, 24);
-    emitter.emit_store_zero_to_address(record, 32);
+    emitter.emit_store_to_address(scratch, record, CLEANUP);
+    emitter.emit_store_zero_to_address(record, PREFIX_BYTES);
+    emitter.emit_store_zero_to_address(record, OPERAND_STACK_BASE);
     emitter.emit_symbol_address(scratch, context.visitor);
-    emitter.emit_store_to_address(scratch, record, 40);
+    emitter.emit_store_to_address(scratch, record, OWNER_VISITOR);
     emitter.emit_store_reg_to_symbol(record, context.head, 0);
 }
 
@@ -90,7 +91,7 @@ pub fn unlink_record<E: AssemblyEmitter + TargetAbi>(emitter: &mut E, head_symbo
         emitter.instruction(&format!("cmp {link}, {record}"));                  // compare the head with the exact record being retired
         emitter.instruction("jne 961f");                                        // preserve newer pending-return records through the slow path
     }
-    emitter.emit_load_from_address(record, record, 0);
+    emitter.emit_load_from_address(record, record, PREVIOUS);
     emitter.emit_store_reg_to_symbol(record, head_symbol, 0);
     emitter.instruction(if emitter.arch() == Arch::AArch64 {
         "b 964f"
@@ -100,7 +101,7 @@ pub fn unlink_record<E: AssemblyEmitter + TargetAbi>(emitter: &mut E, head_symbo
     emitter.emit_store_to_sp(current, 0);
     emitter.emit_symbol_address(link, head_symbol);
     emitter.label("962");
-    emitter.emit_load_from_address(current, link, 0);
+    emitter.emit_load_from_address(current, link, PREVIOUS);
     if emitter.arch() == Arch::AArch64 {
         emitter.instruction(&format!("cbz {current}, 963f"));                   // tolerate records already removed by exceptional unwinding
         emitter.instruction(&format!("cmp {current}, {record}"));               // identify the exact older cleanup record
@@ -116,8 +117,8 @@ pub fn unlink_record<E: AssemblyEmitter + TargetAbi>(emitter: &mut E, head_symbo
         "b 962b"
     } else { "jmp 962b" });                                                     // continue through each activation's previous-record link
     emitter.label("965");
-    emitter.emit_load_from_address(current, record, 0);
-    emitter.emit_store_to_address(current, link, 0);
+    emitter.emit_load_from_address(current, record, PREVIOUS);
+    emitter.emit_store_to_address(current, link, PREVIOUS);
     emitter.label("963");
     emitter.emit_load_temporary_stack_slot(current, 0);
     emitter.emit_release_temporary_stack(16);
@@ -145,12 +146,12 @@ pub struct ExternalRecord<'a> {
 pub fn publish_external<E: AssemblyEmitter + TargetAbi>(emitter: &mut E, context: ExternalRecord<'_>) {
     let scratch = emitter.secondary_scratch_reg();
     emitter.emit_load_symbol_to_reg(scratch, context.head_symbol, 0);
-    emitter.emit_store_to_address(scratch, context.record_address, 0);
-    emitter.emit_store_to_address(context.data, context.record_address, 16);
-    emitter.emit_store_to_address(context.visitor, context.record_address, 40);
-    emitter.emit_store_zero_to_address(context.record_address, 24);
-    emitter.emit_store_zero_to_address(context.record_address, 32);
+    emitter.emit_store_to_address(scratch, context.record_address, PREVIOUS);
+    emitter.emit_store_to_address(context.data, context.record_address, DATA);
+    emitter.emit_store_to_address(context.visitor, context.record_address, OWNER_VISITOR);
+    emitter.emit_store_zero_to_address(context.record_address, PREFIX_BYTES);
+    emitter.emit_store_zero_to_address(context.record_address, OPERAND_STACK_BASE);
     emitter.emit_symbol_address(scratch, context.cleanup_symbol);
-    emitter.emit_store_to_address(scratch, context.record_address, 8);
+    emitter.emit_store_to_address(scratch, context.record_address, CLEANUP);
     emitter.emit_store_reg_to_symbol(context.record_address, context.head_symbol, 0);
 }

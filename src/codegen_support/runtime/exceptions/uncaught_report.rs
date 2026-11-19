@@ -78,6 +78,7 @@
 //!   restores its own saved registers on exit. x86_64 realigns `rsp` once at the entry because the
 //!   tail jump may arrive 8-off.
 
+use elephc_memoir::activation_records::FRAME_READER;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::data::{DEBUGINFO_FATAL_MSG, DEBUGINFO_WARNING_PREFIX};
 use crate::codegen_support::{abi, emit::Emitter};
@@ -400,7 +401,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [x0, #16]");                                  // activation self-pointer, or an owned-value payload
     emitter.instruction("cmp x11, x0");                                         // an ownership guard stores its own address here
     emitter.instruction("b.eq __rt_uncaught_write_trace_next");                 // guards are not PHP frames
-    emitter.instruction("ldr x10, [x0, #24]");                                  // the frame reader published by the function prologue
+    emitter.instruction(&format!("ldr x10, [x0, #{FRAME_READER}]"));            // the frame reader published by the function prologue
     emitter.instruction("cbz x10, __rt_uncaught_write_trace_next");             // a hidden or synthetic frame exposes no reader
     emitter.instruction("mov x1, #0");                                          // options 0: print the arguments
     emitter.instruction("ldr x2, [sp, #8]");                                    // the zero-based output index of this frame
@@ -790,7 +791,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_uncaught_write_trace_done");                   // nothing left to print
     emitter.instruction("cmp QWORD PTR [rdi + 16], rdi");                       // an ownership guard stores its own address here
     emitter.instruction("je __rt_uncaught_write_trace_next");                   // guards are not PHP frames
-    emitter.instruction("mov r10, QWORD PTR [rdi + 24]");                       // the frame reader published by the function prologue
+    emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {FRAME_READER}]")); // the frame reader published by the function prologue
     emitter.instruction("test r10, r10");                                       // a hidden or synthetic frame exposes no reader
     emitter.instruction("jz __rt_uncaught_write_trace_next");                   // skip frames without a reader
     emitter.instruction("xor esi, esi");                                        // options 0: print the arguments

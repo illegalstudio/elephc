@@ -9,6 +9,7 @@
 //! - Arguments are read from their current local slots and copied into fresh Mixed storage.
 //! - Negative limits produce no frames, while zero means no explicit limit.
 
+use elephc_memoir::activation_records::{DATA, FRAME_CALLER_LINE, FRAME_READER, PREVIOUS};
 use crate::codegen::platform::Arch;
 use crate::codegen::{
     abi, emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,
@@ -54,16 +55,16 @@ pub(super) fn lower_diagnostic_caller_line(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&scan);
     ctx.emitter.instruction(&if arm { format!("cmp {cursor}, #0") } else { format!("test {cursor}, {cursor}") }); // detect the end of the activation chain
     ctx.emitter.instruction(&format!("{} {empty}", if arm { "b.eq" } else { "jz" })); // fall back when no source caller remains
-    abi::emit_load_from_address(ctx.emitter, result, cursor, 16);
+    abi::emit_load_from_address(ctx.emitter, result, cursor, DATA);
     ctx.emitter.instruction(&format!("cmp {result}, {cursor}"));                // ownership guards are 32-byte records without a source-line field
     ctx.emitter.instruction(&format!("{} {next}", if arm { "b.eq" } else { "je" })); // skip guards before reading the larger PHP activation layout
-    abi::emit_load_from_address(ctx.emitter, result, cursor, 32);
+    abi::emit_load_from_address(ctx.emitter, result, cursor, FRAME_CALLER_LINE);
     ctx.emitter.instruction(&if arm { format!("cmp {result}, #0") } else { format!("test {result}, {result}") }); // skip frames with no source coordinate
     ctx.emitter.instruction(&format!("{} {next}", if arm { "b.eq" } else { "jz" })); // continue past generated frame entries
     ctx.emitter.instruction(&format!("cmp {result}, {limit}"));                 // distinguish real PHP lines from synthetic AST identities
     ctx.emitter.instruction(&format!("{} {done}", if arm { "b.lo" } else { "jb" })); // retain the nearest real call-site line
     ctx.emitter.label(&next);
-    abi::emit_load_from_address(ctx.emitter, cursor, cursor, 0);
+    abi::emit_load_from_address(ctx.emitter, cursor, cursor, PREVIOUS);
     abi::emit_jump(ctx.emitter, &scan);
     // -- return an unknown line only when no source frame survives --
     ctx.emitter.label(&empty);
@@ -329,7 +330,7 @@ fn emit_active_trace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         Arch::AArch64 => "x10",
         Arch::X86_64 => "r10",
     };
-    abi::emit_load_from_address(ctx.emitter, callback_reg, cursor_reg, 24);
+    abi::emit_load_from_address(ctx.emitter, callback_reg, cursor_reg, FRAME_READER);
     emit_branch_if_zero(ctx, callback_reg, &next_label);
     emit_frame_reader_call(ctx, callback_reg);
     append_trace_frame(ctx);
@@ -376,12 +377,12 @@ fn emit_trace_limit_guard(ctx: &mut FunctionContext<'_>, done: &str) {
 fn emit_skip_owned_guard(ctx: &mut FunctionContext<'_>, cursor: &str, next: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr x11, [{cursor}, #16]"));      // load the activation self-pointer or an owned-value payload
+            ctx.emitter.instruction(&format!("ldr x11, [{cursor}, #{DATA}]"));  // load the activation self-pointer or an owned-value payload
             ctx.emitter.instruction(&format!("cmp x11, {cursor}"));             // distinguish activation records from ownership guards
             ctx.emitter.instruction(&format!("b.eq {next}"));                   // continue only when this record exposes a frame reader
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp QWORD PTR [{cursor} + 16], {cursor}")); // distinguish activation records from ownership guards
+            ctx.emitter.instruction(&format!("cmp QWORD PTR [{cursor} + {DATA}], {cursor}")); // distinguish activation records from ownership guards
             ctx.emitter.instruction(&format!("je {next}"));                     // continue only when this record exposes a frame reader
         }
     }
@@ -448,7 +449,7 @@ fn increment_trace_count(ctx: &mut FunctionContext<'_>) {
 fn advance_trace_cursor(ctx: &mut FunctionContext<'_>) {
     let cursor_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, cursor_reg, TRACE_CURSOR_OFFSET);
-    abi::emit_load_from_address(ctx.emitter, cursor_reg, cursor_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, cursor_reg, cursor_reg, PREVIOUS);
     abi::emit_store_to_sp(ctx.emitter, cursor_reg, TRACE_CURSOR_OFFSET);
 }
 
@@ -522,20 +523,20 @@ fn emit_frame_reader_prologue(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #64");                         // reserve callback state and saved frame linkage
             ctx.emitter.instruction("stp x29, x30, [sp, #48]");                 // preserve the callback caller frame
-            ctx.emitter.instruction("ldr x9, [x0, #32]");                       // load the source frame's caller line
+            ctx.emitter.instruction(&format!("ldr x9, [x0, #{FRAME_CALLER_LINE}]"));                       // load the source frame's caller line
             ctx.emitter.instruction("str x9, [sp]");                            // save the caller line for frame materialization
             ctx.emitter.instruction("str x1, [sp, #8]");                        // save the original debug options mask
             ctx.emitter.instruction("str x2, [sp, #24]");                       // save the materialize or print mode selector
-            ctx.emitter.instruction("ldr x29, [x0, #16]");                      // switch local reads to the suspended PHP frame
+            ctx.emitter.instruction(&format!("ldr x29, [x0, #{DATA}]"));        // switch local reads to the suspended PHP frame
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("push rbp");                                // preserve the callback caller frame pointer
             ctx.emitter.instruction("sub rsp, 48");                             // reserve callback state with SysV alignment
-            ctx.emitter.instruction("mov rax, QWORD PTR [rdi + 32]");           // load the source frame's caller line
+            ctx.emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {FRAME_CALLER_LINE}]"));           // load the source frame's caller line
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the caller line for frame materialization
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rsi");            // save the original debug options mask
             ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rdx");           // save the materialize or print mode selector
-            ctx.emitter.instruction("mov rbp, QWORD PTR [rdi + 16]");           // switch local reads to the suspended PHP frame
+            ctx.emitter.instruction(&format!("mov rbp, QWORD PTR [rdi + {DATA}]")); // switch local reads to the suspended PHP frame
         }
     }
 }
@@ -986,7 +987,7 @@ pub(super) fn lower_debug_print_backtrace(
         Arch::AArch64 => "x10",
         Arch::X86_64 => "r10",
     };
-    abi::emit_load_from_address(ctx.emitter, callback_reg, cursor_reg, 24);
+    abi::emit_load_from_address(ctx.emitter, callback_reg, cursor_reg, FRAME_READER);
     emit_branch_if_zero(ctx, callback_reg, &next_label);
     emit_frame_printer_call(ctx, callback_reg);
     increment_trace_count(ctx);

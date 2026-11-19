@@ -9,6 +9,7 @@
 //! - Each abandoned record is detached before its non-escaping callback executes.
 //! - The host supplies chain storage and selects the survivor through the native ABI.
 
+use crate::activation_records::{CLEANUP, DATA};
 use crate::{abi, Arch, AssemblyEmitter, TargetAbi};
 
 /// Emits detached activation cleanup using the host chain and native survivor argument.
@@ -37,8 +38,8 @@ pub fn emit<E: AssemblyEmitter + TargetAbi>(emitter: &mut E, head_symbol: &str) 
     emitter.instruction("cbz x20, __rt_exception_cleanup_frames_done");         // stop defensively if the stack unexpectedly bottoms out
     emitter.instruction("ldr x11, [x20]");                                      // unlink the activation before a cleanup callback can reenter PHP unwinding
     abi::emit_store_reg_to_symbol(emitter, "x11", head_symbol, 0);
-    emitter.instruction("ldr x10, [x20, #8]");                                  // load the cleanup callback pointer for this activation
-    emitter.instruction("ldr x11, [x20, #16]");                                 // load the saved frame pointer for this activation
+    emitter.instruction(&format!("ldr x10, [x20, #{CLEANUP}]"));                // load the cleanup callback pointer for this activation
+    emitter.instruction(&format!("ldr x11, [x20, #{DATA}]"));                   // load the saved frame pointer for this activation
     emitter.instruction("ldr x20, [x20]");                                      // detach this abandoned activation before cleanup invokes user destructors
     abi::emit_store_reg_to_symbol(emitter, "x20", head_symbol, 0);
     emitter.instruction("cbz x10, __rt_exception_cleanup_frames_next");         // skip callbacks for activations that have no cleanup work
@@ -81,8 +82,8 @@ fn emit_x86_64<E: AssemblyEmitter + TargetAbi>(emitter: &mut E, head_symbol: &st
     emitter.instruction("je __rt_exception_cleanup_frames_done");               // stop defensively when no more activation records remain
     emitter.instruction("mov r11, QWORD PTR [r13]");                            // unlink the activation before reentrant cleanup can inspect the chain
     abi::emit_store_reg_to_symbol(emitter, "r11", head_symbol, 0);
-    emitter.instruction("mov r10, QWORD PTR [r13 + 8]");                        // load the cleanup callback pointer for the current unwound activation
-    emitter.instruction("mov r11, QWORD PTR [r13 + 16]");                       // load the saved frame pointer for the current unwound activation
+    emitter.instruction(&format!("mov r10, QWORD PTR [r13 + {CLEANUP}]"));      // load the cleanup callback pointer for the current unwound activation
+    emitter.instruction(&format!("mov r11, QWORD PTR [r13 + {DATA}]"));         // load the saved frame pointer for the current unwound activation
     emitter.instruction("mov r13, QWORD PTR [r13]");                            // detach this abandoned activation before cleanup invokes user destructors
     abi::emit_store_reg_to_symbol(emitter, "r13", head_symbol, 0);
     emitter.instruction("test r10, r10");                                       // does this activation record have cleanup work to run?

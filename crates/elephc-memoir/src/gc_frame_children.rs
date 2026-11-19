@@ -10,6 +10,7 @@
 //! - Only suspended native coroutine stacks are inspected; frame edges remain opaque proofs.
 
 use super::gc_candidates::{load, op, restore, save};
+use crate::activation_records::{CLEANUP, DATA, EXTENDED_BYTES, GUARD_BYTES, GUARD_OWNER, OWNER_VISITOR};
 use crate::{abi, Emitter, Arch};
 
 /// Emits saved-frame traversal and adapters for transferred guard and call-operand owners.
@@ -50,7 +51,7 @@ pub fn emit_gc_frame_children(e: &mut impl Emitter) {
     op(e, "ldr x9, [sp, #32]", "mov r10, QWORD PTR [rsp + 32]", "keep saved activations inside their owning mapped stack");
     op(e, "cmp x0, x9", "cmp rax, r10", "reject a foreign or retired activation link");
     op(e, "b.lo __rt_gc_frames_done", "jb __rt_gc_frames_done", "stop before reading outside the coroutine stack");
-    op(e, "add x9, x0, #32", "lea r10, [rax + 32]", "require the complete shared activation and guard prefix");
+    op(e, &format!("add x9, x0, #{GUARD_BYTES}"), &format!("lea r10, [rax + {GUARD_BYTES}]"), "require the complete shared activation and guard prefix");
     op(e, "ldr x10, [sp, #40]", "mov r11, QWORD PTR [rsp + 40]", "bound the record by the mapped stack's usable top");
     op(e, "cmp x9, x10", "cmp r10, r11", "exclude incomplete records at the stack boundary");
     op(e, "b.hi __rt_gc_frames_done", "ja __rt_gc_frames_done", "do not inspect a partial activation");
@@ -63,21 +64,21 @@ pub fn emit_gc_frame_children(e: &mut impl Emitter) {
     e.label("__rt_gc_frames_record_charged");
     op(e, "ldr x9, [x0]", "mov r10, QWORD PTR [rax]", "advance independently of child traversal and nested coroutine walks");
     op(e, "str x9, [sp, #24]", "mov QWORD PTR [rsp + 24], r10", "retain the next saved activation before invoking its visitor");
-    op(e, "ldr x9, [x0, #16]", "mov r10, QWORD PTR [rax + 16]", "the compact guard ABI identifies itself through its callback data pointer");
+    op(e, &format!("ldr x9, [x0, #{DATA}]"), &format!("mov r10, QWORD PTR [rax + {DATA}]"), "the compact guard ABI identifies itself through its callback data pointer");
     op(e, "cmp x9, x0", "cmp r10, rax", "compact transferred-owner guards remain valid without expanding native records");
     op(e, "b.eq __rt_gc_frames_guard", "je __rt_gc_frames_guard", "select the compact guard adapter before reading extended frame metadata");
     op(e, "ldr x10, [sp, #40]", "mov r11, QWORD PTR [rsp + 40]", "recover the stack bound after classifying compact guard records");
-    op(e, "add x9, x0, #48", "lea r10, [rax + 48]", "regular frames and call-operand records publish an extended owner visitor");
+    op(e, &format!("add x9, x0, #{EXTENDED_BYTES}"), &format!("lea r10, [rax + {EXTENDED_BYTES}]"), "regular frames and call-operand records publish an extended owner visitor");
     op(e, "cmp x9, x10", "cmp r10, r11", "require the complete extended record inside its mapped stack");
     op(e, "b.hi __rt_gc_frames_done", "ja __rt_gc_frames_done", "reject a truncated extended activation record");
-    op(e, "ldr x10, [x0, #40]", "mov r11, QWORD PTR [rax + 40]", "read the pure typed owner visitor published with this activation");
+    op(e, &format!("ldr x10, [x0, #{OWNER_VISITOR}]"), &format!("mov r11, QWORD PTR [rax + {OWNER_VISITOR}]"), "read the pure typed owner visitor published with this activation");
     op(e, "cmp x10, #0", "test r11, r11", "synthetic non-owning activations publish no owner visitor");
     op(e, "b.eq __rt_gc_frames_loop", "jz __rt_gc_frames_loop", "skip activations that own no PHP values");
     abi::emit_jump(e, "__rt_gc_frames_visit");
     e.label("__rt_gc_frames_guard");
     abi::emit_symbol_address(e, if e.arch() == Arch::AArch64 { "x10" } else { "r11" }, "__rt_gc_guard_frame_owners");
     e.label("__rt_gc_frames_visit");
-    op(e, "ldr x0, [x0, #16]", "mov rdi, QWORD PTR [rax + 16]", "pass the original cleanup frame or owner-slot address");
+    op(e, &format!("ldr x0, [x0, #{DATA}]"), &format!("mov rdi, QWORD PTR [rax + {DATA}]"), "pass the original cleanup frame or owner-slot address");
     op(e, "add x1, sp, #64", "lea rsi, [rsp + 64]", "pass this walk's private mode, result and slot-set context");
     op(e, "blr x10", "call r11", "enumerate initialized owners without retaining values or invoking PHP");
     abi::emit_jump(e, "__rt_gc_frames_loop");
@@ -90,10 +91,10 @@ pub fn emit_gc_frame_children(e: &mut impl Emitter) {
     restore(e, 80);
     abi::emit_frame_restore(e, 144);
     abi::emit_return(e);
-    for (name, offset) in [("guard", 24), ("operand", 0)] {
+    for (name, offset) in [("guard", GUARD_OWNER), ("operand", 0)] {
         e.label_global(&format!("__rt_gc_{name}_frame_owners"));
         if name == "guard" {
-            op(e, "ldr x9, [x0, #8]", "mov r8, QWORD PTR [rdi + 8]", "classify compact native activations by their cleanup callback");
+            op(e, &format!("ldr x9, [x0, #{CLEANUP}]"), &format!("mov r{CLEANUP}, QWORD PTR [rdi + {CLEANUP}]"), "classify compact native activations by their cleanup callback");
             abi::emit_symbol_address(e, if e.arch() == Arch::AArch64 { "x10" } else { "r9" }, "__rt_error_handler_restore");
             op(e, "cmp x9, x10", "cmp r8, r9", "suspended error handlers retain registration owners beyond the compact prefix");
             op(e, "b.ne __rt_gc_guard_regular_owner", "jne __rt_gc_guard_regular_owner", "ordinary compact guards use their single payload slot");
@@ -104,7 +105,7 @@ pub fn emit_gc_frame_children(e: &mut impl Emitter) {
             op(e, "b.eq __rt_gc_guard_frame_done", "je __rt_gc_guard_frame_done", "never interpret a native descriptor as a pointer-shaped PHP value");
         }
         op(e, "mov x2, x1", "mov rdx, rsi", "forward the traversal context before materializing the slot descriptor");
-        if offset != 0 { op(e, "add x0, x0, #24", "add rdi, 24", "the transferred guard owns its separate payload word"); }
+        if offset != 0 { op(e, &format!("add x0, x0, #{offset}"), &format!("add rdi, {offset}"), "the transferred guard owns its separate payload word"); }
         op(e, "mov x1, #0", "xor esi, esi", "guard slots own a direct managed value without raw-cell normalization");
         abi::emit_jump(e, "__rt_gc_frame_owner_slot");
         if name == "guard" { e.label("__rt_gc_guard_frame_done"); abi::emit_return(e); }
