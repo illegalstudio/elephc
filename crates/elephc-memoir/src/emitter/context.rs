@@ -23,6 +23,4 @@ pub trait MemoryContext {
     fn uninitialized_property_sentinel(&self) -> i64;
     /// Emits PHP resource policy inside the Mixed boxing frame, including its resource entry label.
     fn emit_mixed_resource_identity(&mut self);
-    /// Publishes the boxed result through the compiler's weak resource inventory layout.
-    fn emit_mixed_resource_publication(&mut self);
 }

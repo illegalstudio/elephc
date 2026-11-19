@@ -177,8 +177,6 @@ impl elephc_memoir::MemoryContext for Emitter {
     fn emit_reference_source_success(&mut self) { super::reference_cells::require_source_success(self); }
     /// Keeps PHP resource identity and subtype decisions in the compiler adapter.
     fn emit_mixed_resource_identity(&mut self) { resources::emit_identity(self); }
-    /// Keeps the resource inventory's weak-pointer layout authoritative in the compiler.
-    fn emit_mixed_resource_publication(&mut self) { resources::emit_publication(self); }
 }
 
 impl From<crate::codegen_support::RuntimeFeatures> for elephc_memoir::ValueFeatures {
