@@ -231,3 +231,34 @@ fn nullable_builtin_reflection_unknown_targets_are_explicit() {
         super::semantic_sources::try_lower_capturing_arguments(source, Target::detect_host(), SemanticProfile::PERMISSIVE, false, SourceMode::Php).unwrap();
     }
 }
+
+/// Alias writes enforce surviving property declarations and release the contract after detach.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn nullable_property_aliases_preserve_contracts_and_owners() {
+    let source = include_str!("../../../tests/fixtures/strict/nullable_aliases.php");
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for optimize in [false, true] {
+        let module = super::semantic_sources::lower_capturing_arguments(source, Target::detect_host(), profile, optimize, SourceMode::Php);
+        let output = super::native_module::run(&module);
+        let stdout = String::from_utf8_lossy(&output.stdout); let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "optimize={optimize}: {stdout}; {stderr}");
+        assert_eq!(stdout, "R:kept|S:saved|P:kept|string:7|NULL", "{stderr}");
+        assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+    }
+}
+
+/// Managed aliases and implicit Mixed reference parameters use the same ABI on every target.
+#[test]
+fn nullable_property_aliases_emit_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/nullable_aliases.php");
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let module = super::semantic_sources::lower_capturing_arguments(source, target, profile, false, SourceMode::Php);
+        assert!(module.required_runtime_features.native_reference_validation, "{name}");
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

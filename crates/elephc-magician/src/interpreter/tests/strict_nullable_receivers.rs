@@ -225,3 +225,23 @@ fn strict_nullability_eval_builtin_original_contracts_and_owners() {
         finish(&mut context, &mut scope, &mut values, "builtin contracts");
     }
 }
+
+/// Persistent property aliases reject null before later effects and retire constraints on unset.
+#[test]
+fn strict_nullability_eval_property_aliases_and_owners() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    // Eval's supported reference syntax binds a property to an existing variable cell.
+    let source = include_str!("../../../../../tests/fixtures/strict/nullable_aliases.php")
+        .strip_prefix("<?php\ndeclare(strict_types=0);").unwrap()
+        .replace("$alias =& $slot->value;", "$alias = 'kept'; $slot->value =& $alias;")
+        .replace("$staticAlias =& NullableAliasSlot::$shared;",
+            "$staticAlias = 'saved'; NullableAliasSlot::$shared =& $staticAlias;");
+    for fallback in [false, true] {
+        let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        let result = execute(&source, fallback, &mut context, &mut scope, &mut values);
+        assert!(result.is_ok(), "{:?}; {}", result.as_ref().err(), values.output);
+        assert_eq!(values.output, "R:kept|S:saved|P:kept|string:7|NULL");
+        finish(&mut context, &mut scope, &mut values, "property aliases");
+    }
+}

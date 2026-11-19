@@ -275,7 +275,7 @@ impl Checker {
             return Ok(());
         }
         if *expected_ty == PhpType::Mixed
-            && self.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+            && crate::types::checked_property_references(self.semantic_profile)
             && self.promote_live_property_reference_argument(arg, env)?
         {
             return Ok(());

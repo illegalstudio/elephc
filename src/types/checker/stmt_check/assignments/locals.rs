@@ -464,6 +464,8 @@ pub(super) fn check_ref_assign(
         ExprKind::PropertyAccess { object, property } => {
             let object_ty = checker.infer_type_with_assignment_effects(object, env)?;
             let target_ty = checker.infer_type(source, env)?;
+            target_has_boxed_ref_provenance = crate::types::checked_property_references(checker.semantic_profile)
+                && checker.promote_live_property_reference_argument(source, env)?;
             checker.record_operation_exception_flow(source, env);
             if let Some(class) =
                 crate::types::checker::single_object_class_name(&object_ty)
@@ -479,7 +481,9 @@ pub(super) fn check_ref_assign(
         }
         ExprKind::StaticPropertyAccess { .. } => {
             let target_ty = checker.infer_type(source, env)?;
-            target_has_boxed_ref_provenance = target_ty.codegen_repr() == PhpType::Mixed;
+            target_has_boxed_ref_provenance = target_ty.codegen_repr() == PhpType::Mixed
+                || (crate::types::checked_property_references(checker.semantic_profile)
+                    && checker.promote_live_property_reference_argument(source, env)?);
             env.insert(target.to_string(), target_ty);
             checker.active_ref_params.insert(target.to_string());
             clear_callable_metadata(checker, target);

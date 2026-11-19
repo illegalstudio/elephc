@@ -101,7 +101,8 @@ mod tests {
         let profile = elephc_semantics::SemanticProfile::PERMISSIVE;
         for (name, original) in &class.static_properties {
             assert_eq!(static_property_storage_type(class, name, profile), Some(original.clone()));
-            for feature in [elephc_semantics::StrictFeature::Casts, elephc_semantics::StrictFeature::Coercions] {
+            for feature in [elephc_semantics::StrictFeature::Casts, elephc_semantics::StrictFeature::Coercions,
+                elephc_semantics::StrictFeature::Nullability] {
                 assert_eq!(static_property_storage_type(class, name,
                     profile.with(feature, true)), Some(PhpType::Mixed));
             }

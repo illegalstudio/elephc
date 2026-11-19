@@ -60,7 +60,8 @@ pub(crate) fn eval_validate_property_reference(
             }
         }
     }
-    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) { return Ok(()); }
+    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)
+        && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability) { return Ok(()); }
     for source in context.property_reference_types(reference) {
         eval_validate_property_contract(&source.owner, &source.property, &source.declared,
             value, context, values)?;

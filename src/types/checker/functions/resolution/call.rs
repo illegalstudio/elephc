@@ -482,6 +482,9 @@ impl Checker {
                         Some(expected_ty) => {
                             self.by_ref_property_place(arg, expected_ty, caller_env)?
                         }
+                        None if crate::types::checked_property_references(self.semantic_profile) => {
+                            self.by_ref_property_place(arg, &PhpType::Mixed, caller_env)?
+                        }
                         None => false,
                     };
                     if !property_place && !self.is_by_ref_argument_lvalue(arg, caller_env)? {

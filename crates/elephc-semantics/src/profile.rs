@@ -42,9 +42,10 @@ impl SemanticProfile {
         Self(FEATURES.iter().fold(0, |bits, spec| bits | spec.feature.bit()))
     }
 
-    /// Selects persistent declaration validation shared by checked explicit and implicit conversions.
+    /// Selects persistent declaration validation without enabling another guarantee's conversion rules.
     pub const fn checked_property_references(self) -> bool {
         self.contains(StrictFeature::Casts) || self.contains(StrictFeature::Coercions)
+            || self.contains(StrictFeature::Nullability)
     }
 
     /// Checks whether this profile enables a guarantee.

@@ -2798,3 +2798,11 @@ modes, all-five EIR validation/emission, explicit unknown Reflection refusal,
 existing ArrayKeys join diagnostics, existing builtin Coercions controls and the
 prior native declaration boundary regression. Public NN and opaque eval remain
 gated pending remaining alias/typed-store/callable/host/proof and admission work.
+
+### Verified222: non-null property reference publication
+
+Nullability independently selects the existing managed property-reference ABI and weak candidate planner. Persistent property aliases reject null before replacing the property or executing later callee effects, retain ordinary weak conversion of non-null values, and release the declaration constraint after unset. The interpreter validation entry also observes Nullability without enabling exact Coercions membership.
+
+Checker boxed-storage admission and first-call resolution now agree on canonical property references, including the implicit Mixed contract of an untyped reference parameter. Instance and static aliases record managed-cell provenance independently of their logical scalar value type. The existing exact-Coercions callable alias regression exposed the missing provenance and passes after this shared fix. Static declaration metadata remains intact. The test helper builds the reference archive with one Cargo worker.
+
+Eight focused tests pass: native optimized/unoptimized aliases and clean heap, all-five EIR validation/emission, walker/fallback aliases and owner retirement, declared static metadata, existing Casts weak candidates, existing Coercions reference assignment points, exact Coercions all-target emission and the prior native declared-boundary regression. Default build, diff hygiene and assembly comments are checked separately. Native and eval fixtures use their existing supported reference syntax; no grammar was expanded. Public Nullability remains gated while remaining declared-store, callable and host consumers are audited.

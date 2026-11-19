@@ -82,7 +82,7 @@ fn run_with_optional_c_source(module: &crate::ir::Module, c_source: Option<&str>
 fn reference_validation_archive() -> &'static std::path::Path {
     static ARCHIVE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     ARCHIVE.get_or_init(|| {
-        let output = Command::new("cargo").args(["build", "-j4", "--package", "elephc-reference",
+        let output = Command::new("cargo").args(["build", "-j1", "--package", "elephc-reference",
             "--lib", "--message-format=json"])
             .current_dir(env!("CARGO_MANIFEST_DIR")).output().expect("build native reference bridge");
         assert!(output.status.success(), "reference bridge build: {}", String::from_utf8_lossy(&output.stderr));
