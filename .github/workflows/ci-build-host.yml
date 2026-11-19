@@ -44,6 +44,7 @@ env:
     -p elephc-bcmath
     -p elephc-gmp
     -p elephc-random
+    -p elephc-uri
     -p elephc-mbstring
     -p elephc-iconv
     -p elephc-phar
@@ -237,7 +238,9 @@ jobs:
           cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
           (cd "$RUNNER_TEMP" && shasum -a 256 cargo-nextest > cargo-nextest.sha256)
           mkdir -p "$RUNNER_TEMP/codegen-archive"
-          cargo nextest archive --locked --profile ci -p elephc --test codegen_tests \
+          cargo nextest archive --locked --profile ci -p elephc \
+            --test codegen_tests_core --test codegen_tests_data --test codegen_tests_oop \
+            --test codegen_tests_runtime --test codegen_tests_ext --test codegen_tests_eval \
             --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
           cp "$RUNNER_TEMP/cargo-nextest" "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/codegen-archive/"
 
@@ -568,7 +571,9 @@ jobs:
           cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
           (cd "$RUNNER_TEMP" && sha256sum cargo-nextest > cargo-nextest.sha256)
           mkdir -p "$RUNNER_TEMP/codegen-archive"
-          cargo nextest archive --locked --profile ci -p elephc --test codegen_tests \
+          cargo nextest archive --locked --profile ci -p elephc \
+            --test codegen_tests_core --test codegen_tests_data --test codegen_tests_oop \
+            --test codegen_tests_runtime --test codegen_tests_ext --test codegen_tests_eval \
             --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
           cp "$RUNNER_TEMP/cargo-nextest" "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/codegen-archive/"
 
@@ -894,7 +899,9 @@ jobs:
           cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
           (cd "$RUNNER_TEMP" && sha256sum cargo-nextest > cargo-nextest.sha256)
           mkdir -p "$RUNNER_TEMP/codegen-archive"
-          cargo nextest archive --locked --profile ci -p elephc --test codegen_tests \
+          cargo nextest archive --locked --profile ci -p elephc \
+            --test codegen_tests_core --test codegen_tests_data --test codegen_tests_oop \
+            --test codegen_tests_runtime --test codegen_tests_ext --test codegen_tests_eval \
             --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
           cp "$RUNNER_TEMP/cargo-nextest" "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/codegen-archive/"
 

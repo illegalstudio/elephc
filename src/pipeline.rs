@@ -3,7 +3,7 @@
 //! Resolves typed managed dependencies only when the selected path performs a final link.
 //!
 //! Called from:
-//! - `crate::main()` after `crate::cli::parse_args()`.
+//! - `crate::entry::run()` after `crate::cli::parse_args()`.
 //!
 //! Key details:
 //! - Pass ordering is observable: magic constants and conditionals run before resolver/name resolution and type checking.
@@ -129,10 +129,16 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
 }
 
 /// Runs compiler passes with the output kind's host-callback profile installed.
-fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
+fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
+    // A direct pipeline caller may hand us a config whose project `[ini]` table was merged
+    // without the CLI helper. Reapply the floor, quantity parse, and arena sizing here so the
+    // emitted `_heap_limit` always reflects the final merged list. Main's earlier application
+    // is idempotent: refused values are already gone and a valid limit never shrinks the arena.
+    crate::cli::apply_startup_memory_limit(&mut config, true);
     let CliConfig {
         filename,
         heap_size,
+        heap_size_explicit: _,
         gc_stats,
         counters,
         instrument,
@@ -171,6 +177,20 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     } = config;
     let filename = filename.as_str();
     crate::progress::init(quiet);
+    // ext/uri ships with PHP 8.5. Force-linking its bridge on an older profile would make
+    // `extension_loaded('uri')` true while every URI class stays undeclared, so reject the
+    // combination instead of exposing a false extension promise.
+    if with_crates.contains("uri") && php_version < crate::php_version::PhpVersion::Php85 {
+        crate::progress::clear();
+        errors::report(
+            &errors::CompileError::new(
+                Span::new(0, 0),
+                "--with-uri requires --php-version 8.5 or later",
+            )
+            .with_file(filename.to_string()),
+        );
+        process::exit(1);
+    }
     // Reject incompatible options before check/EIR output can return without the backend.
     if emit == Emit::Phpext && (web || !extra_link_libs.is_empty()
         || !extra_link_paths.is_empty() || !extra_frameworks.is_empty()
@@ -344,6 +364,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         (with_crates.contains("bcmath"), "bcmath"),
         (with_crates.contains("gmp"), "gmp"),
         (with_crates.contains("random"), "random"),
+        (with_crates.contains("uri"), "uri"),
     ]
     .into_iter()
     .filter_map(|(forced, group)| forced.then_some(group.to_string()))
@@ -555,6 +576,22 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         with_crates.contains("tokenizer") || autoloaded("tokenizer"),
         &mut prelude_inventory,
     );
+    let uri_supported = php_version >= crate::php_version::PhpVersion::Php85;
+    let uri_used = uri_supported
+        && (with_crates.contains("uri")
+            || autoloaded("uri")
+            || crate::uri_prelude::program_uses_uri(&ast));
+    let ast = crate::uri_prelude::inject_if_used_for_version(
+        ast,
+        uri_used,
+        php_version,
+        &mut prelude_inventory,
+    );
+    if uri_used {
+        linked_php_surfaces.push("uri".to_string());
+    }
+    // Declare the URI surface before the core prelude so every later injected prelude sees a
+    // complete class set; the URI prelude itself depends only on checker-injected core classes.
     let ast = crate::core_prelude::inject_if_used(
         ast,
         autoloaded("weak_map"),
@@ -976,6 +1013,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     for warning in errors::take_deferred_warnings().iter().chain(&check_result.warnings) {
         errors::report_warning(warning);
     }
+    crate::uri_prelude::apply_reflection_signatures(&mut check_result);
     // The instantiation report is printed here, before declaration pruning and codegen: every
     // template is already gone and every remaining `<...>` name is a concrete instantiation, so
     // this is the complete monomorphization set. It is diagnostic only and changes nothing.

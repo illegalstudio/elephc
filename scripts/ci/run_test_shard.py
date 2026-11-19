@@ -6,11 +6,16 @@ from pathlib import Path
 import shutil
 import subprocess
 
+INTEGRATION_SUITES = (r"(web_tests|web_session_tests|opcache_\w+|eval_\w+|php_profile_\w+"
+                      r"|extension_loaded_tests|php_version_surface_tests)")
+CLI_SUITES = (r"(opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests"
+              r"|php_version_surface_tests)")
+
 FILTERS = {
-    "non-codegen": "not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))",
-    "cli": "binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)",
-    "web": "binary(web_tests) or binary(web_session_tests)",
-    "codegen": "binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)",
+    "non-codegen": f"not binary(/^codegen_tests_/) and not (binary_id(elephc::integration) and test(/^{INTEGRATION_SUITES}::/))",
+    "cli": f"binary_id(elephc::integration) and test(/^{CLI_SUITES}::/)",
+    "web": "binary_id(elephc::integration) and test(/^(web_tests|web_session_tests)::/)",
+    "codegen": "binary(/^codegen_tests_/) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)",
 }
 
 
@@ -37,7 +42,7 @@ def run(family, target, shard, count, root, env):
         execute(["tar", "-xzf", root / f"managed-native-curl-{target}.tar.gz",
                  "-C", cache, "--strip-components=1"], env)
     if family in {"codegen", "pdo", "curl", "eval"}:
-        execute(common + ["--no-run", "-E", "binary(codegen_tests)"], env)
+        execute(common + ["--no-run", "-E", "binary(/^codegen_tests_/)"], env)
     compiler = extracted / "target/debug/elephc"
     if family == "codegen":
         execute([compiler, "native", "install", "--locked", "--target", target,
@@ -61,15 +66,23 @@ def run(family, target, shard, count, root, env):
     if family in {"codegen", "pdo", "curl", "eval"}:
         env.update(CARGO_NET_OFFLINE="true", ELEPHC_TEST_PREBUILT_BRIDGES="1")
     if family in {"pdo", "curl", "eval"}:
-        binaries = [path for path in (extracted / "target/debug/deps").glob("codegen_tests-*")
+        # The codegen suite is split by domain: eval owns its own binary, and every
+        # database/cURL bridge module lives in the extension binary.
+        owner = "codegen_tests_eval" if family == "eval" else "codegen_tests_ext"
+        binaries = [path for path in (extracted / "target/debug/deps").glob(f"{owner}-*")
                     if path.is_file() and os.access(path, os.X_OK)]
         if len(binaries) != 1:
-            raise ValueError("Expected one archived codegen test executable")
+            raise ValueError(f"Expected one archived {owner} executable, found {len(binaries)}")
         if family == "eval":
             env.update(EVAL_SHARD_NEXTEST_BIN=str(root / "cargo-nextest"),
                        EVAL_SHARD_NEXTEST_ARCHIVE=str(root / "nextest-archive.tar.zst"),
                        EVAL_SHARD_NEXTEST_EXTRACT_DIR=str(extracted),
                        EVAL_SHARD_JUNIT_FILE="target/nextest/ci/junit-pass1.xml")
+            if macos:
+                # The heaviest `codegen::eval*` cases lower the catalog for 324-430s here.
+                # Let the single-process pass finish them instead of forcing a duplicate
+                # nextest pass that hits the same per-test budget.
+                env.setdefault("EVAL_SHARD_STALL_TIMEOUT", "720")
         execute(["bash", f"scripts/ci/run_{family}_codegen_shard.sh", binaries[0], shard, count], env)
         return
     workers = {"non-codegen": 3 if macos else 4, "cli": 2, "web": 1,

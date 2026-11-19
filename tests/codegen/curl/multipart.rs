@@ -5,7 +5,7 @@
 //! `curl_setopt()` return value.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl` through Rust's test harness.
 //!
 //! Key details:
 //! - Every fixture writes its own real temporary file with `std::fs::write` before

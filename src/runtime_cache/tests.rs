@@ -257,6 +257,164 @@ use super::*;
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// Verifies `ELEPHC_RUNTIME_CACHE_DIR` moves only the runtime objects: they are prepared in
+    /// that directory, which is hardened like the default one, and nothing is written under
+    /// the `XDG_CACHE_HOME` root the same compile would otherwise use.
+    #[cfg(unix)]
+    #[test]
+    fn runtime_cache_dir_override_moves_only_runtime_objects() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const TEST_NAME: &str = "runtime_cache_dir_override_moves_only_runtime_objects";
+        if std::env::var("ELEPHC_RUNTIME_CACHE_OVERRIDE_PROBE").as_deref() != Ok(TEST_NAME) {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "elephc-runtime-cache-override-{}-{unique}",
+                std::process::id()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([TEST_NAME, "--nocapture", "--test-threads=1"])
+                .env("ELEPHC_RUNTIME_CACHE_OVERRIDE_PROBE", TEST_NAME)
+                .env("XDG_CACHE_HOME", root.join("xdg"))
+                .env("ELEPHC_RUNTIME_CACHE_DIR", root.join("shared-runtime"))
+                .output()
+                .expect("spawn isolated runtime-cache override probe");
+            let _ = fs::remove_dir_all(&root);
+            assert!(
+                output.status.success(),
+                "isolated runtime-cache override probe failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let shared = std::path::PathBuf::from(
+            std::env::var_os("ELEPHC_RUNTIME_CACHE_DIR").expect("probe sets the override"),
+        );
+        let xdg = std::path::PathBuf::from(
+            std::env::var_os("XDG_CACHE_HOME").expect("probe sets the cache root"),
+        );
+        let prepared = prepare_runtime_object(
+            8 * 1024 * 1024,
+            Target::detect_host(),
+            RuntimeFeatures::none(),
+            false,
+        )
+        .expect("prepare runtime in the overridden cache");
+        assert_eq!(
+            prepared.path.parent(),
+            Some(shared.as_path()),
+            "the runtime object must be prepared in ELEPHC_RUNTIME_CACHE_DIR"
+        );
+        let mode = fs::metadata(&shared).expect("stat overridden cache").permissions().mode();
+        assert_eq!(mode & 0o077, 0, "the overridden cache must be owner-only");
+        assert!(
+            !xdg.join("elephc").exists(),
+            "nothing may be written under XDG_CACHE_HOME/elephc"
+        );
+    }
+
+    /// Verifies a cache directory this user owns but cannot write is not selected.
+    ///
+    /// `create_dir_all` accepts an existing directory and the ownership hardening only inspects
+    /// the group and other bits, so mode `0500` used to pass the gate and then fail while writing
+    /// the assembly. Root bypasses the permission bits, so the probe skips there.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_without_the_owner_write_bit_does_not_accept_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!(
+            "elephc-runtime-cache-readonly-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create the probe root");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o500))
+            .expect("drop the owner write bit");
+        let accepted = directory_accepts_files(&root);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("restore the mode");
+        let _ = fs::remove_dir_all(&root);
+        assert!(!accepted, "a read-only cache must fall back to the temporary directory");
+    }
+
+    /// Verifies the temporary fallback cache belongs to one user.
+    ///
+    /// `/tmp` serves every user on a Linux machine and the cache directory is hardened to
+    /// owner-only, so a fixed name would let the first user's directory reject every other
+    /// user's compile.
+    #[cfg(unix)]
+    #[test]
+    fn temporary_runtime_cache_directory_is_per_user() {
+        let expected = format!("elephc-runtime-cache-{}", unsafe { libc::geteuid() });
+        assert_eq!(temporary_runtime_cache_dir_name(), expected);
+    }
+
+    /// Verifies an unusable cache directory degrades to the temporary directory.
+    ///
+    /// A CI test job restores `target/` from an artifact built by another user, so tests that
+    /// point `ELEPHC_RUNTIME_CACHE_DIR` at it cannot create the cache there. The compile must
+    /// still succeed: the runtime is prepared in the fallback cache instead. The blocker is a
+    /// regular file, not a permission bit, so the probe fails to create the directory even when
+    /// the container runs as root.
+    #[cfg(unix)]
+    #[test]
+    fn unusable_runtime_cache_falls_back_to_the_temporary_directory() {
+        const TEST_NAME: &str = "unusable_runtime_cache_falls_back_to_the_temporary_directory";
+        if std::env::var("ELEPHC_RUNTIME_CACHE_FALLBACK_PROBE").as_deref() != Ok(TEST_NAME) {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "elephc-runtime-cache-fallback-{}-{unique}",
+                std::process::id()
+            ));
+            let blocker = root.join("blocker");
+            let fallback_root = root.join("tmp");
+            fs::create_dir_all(&root).expect("create the probe root");
+            fs::create_dir_all(&fallback_root).expect("create the fallback root");
+            fs::write(&blocker, b"not a directory").expect("write the blocking file");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([TEST_NAME, "--nocapture", "--test-threads=1"])
+                .env("ELEPHC_RUNTIME_CACHE_FALLBACK_PROBE", TEST_NAME)
+                .env("ELEPHC_RUNTIME_CACHE_DIR", blocker.join("shared"))
+                .env("TMPDIR", &fallback_root)
+                .output()
+                .expect("spawn isolated runtime-cache fallback probe");
+            let _ = fs::remove_dir_all(&root);
+            assert!(
+                output.status.success(),
+                "isolated runtime-cache fallback probe failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let fallback = std::path::PathBuf::from(
+            std::env::var_os("TMPDIR").expect("probe sets TMPDIR"),
+        )
+        .join(temporary_runtime_cache_dir_name());
+        let prepared = prepare_runtime_object(
+            8 * 1024 * 1024,
+            Target::detect_host(),
+            RuntimeFeatures::none(),
+            false,
+        )
+        .expect("an unusable cache directory must not fail the compile");
+        assert_eq!(
+            prepared.path.parent(),
+            Some(fallback.as_path()),
+            "the runtime object must be prepared in the fallback cache"
+        );
+    }
+
     /// Guards the warm-cache architecture: lookup and integrity metadata must
     /// be resolved before the expensive full runtime generator is invoked.
     #[test]
@@ -510,4 +668,33 @@ use super::*;
         );
         assert!(competing.path.exists(), "competing active runtime object was pruned");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Verifies `_heap_limit` participates in cache identity even when the reservation is unchanged.
+    #[test]
+    fn runtime_cache_key_covers_compile_memory_limit() {
+        let target = Target::detect_host();
+        let build = b"same-emitter";
+        let unlimited = runtime_cache_key_with_build_identity(
+            128 * 1024 * 1024,
+            target,
+            80_500,
+            RuntimeFeatures::none(),
+            false,
+            build,
+        );
+        crate::codegen_support::set_ini_overrides(vec![(
+            "memory_limit".to_string(),
+            "8M".to_string(),
+        )]);
+        let limited = runtime_cache_key_with_build_identity(
+            128 * 1024 * 1024,
+            target,
+            80_500,
+            RuntimeFeatures::none(),
+            false,
+            build,
+        );
+        crate::codegen_support::set_ini_overrides(Vec::new());
+        assert_ne!(unlimited, limited, "a different runtime ceiling must not reuse a cached object");
     }

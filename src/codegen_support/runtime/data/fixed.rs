@@ -67,6 +67,11 @@ pub(crate) fn emit_runtime_data_fixed(
     target: Target,
     php_version: PhpVersion,
 ) -> String {
+    // A compile-time `--ini memory_limit` lowers the allocator's runtime ceiling below the
+    // reserved heap capacity. The runtime cache key includes the same value, so one cached
+    // object never serves two different limits.
+    let memory_limit = crate::codegen_support::memory_limit_bytes()
+        .map_or(heap_size, |limit| limit.min(heap_size));
     let mut out = String::new();
     out.push_str(".data\n");
     out.push_str(&format!("_native_debug_info_fatal:\n    .ascii {:?}\n", elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL));
@@ -482,8 +487,11 @@ pub(crate) fn emit_runtime_data_fixed(
     // runs __rt_stack_limit_init keeps the pre-guard behavior. _stack_limit_main remembers
     // the OS-thread floor so __rt_fiber_switch can restore it when control leaves a fiber
     // stack; while a fiber runs, _stack_limit holds that fiber's own floor instead.
-    out.push_str(&comm_directive("_stack_limit", 8, target));
-    out.push_str(&comm_directive("_stack_limit_main", 8, target));
+    // These two are read by every compiled prologue, so keep them in `.data` near the
+    // text: a large `--heap-size` pushes `.comm` far enough that ADRP cannot reach the
+    // end of the common block from `__text` (a 2G heap already crosses the 4G window).
+    out.push_str(".p2align 3\n.globl _stack_limit\n_stack_limit:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _stack_limit_main\n_stack_limit_main:\n    .quad 0\n");
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_closure_bind_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_wrap_callback_fn", 8, target));
@@ -713,7 +721,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // and for `php -r`. elephc already renders STDIN/STDOUT/STDERR as 1/2/3, so
     // starting user resources at 5 reproduces reference numbering end to end.
     out.push_str(".globl _resource_id_next\n_resource_id_next:\n    .quad 5\n");
-    elephc_memoir::data::append_heap_limits(&mut out, heap_size);
+    elephc_memoir::data::append_heap_limits(&mut out, heap_size, memory_limit);
 
     out.push_str(&format!(
         ".globl _stack_err_msg\n_stack_err_msg:\n    .ascii {:?}\n",
@@ -1986,18 +1994,33 @@ mod tests {
         }
     }
 
-    /// Pins the symbol whose under-alignment broke linux-aarch64 linking, so a future
-    /// hand-written `.comm` for it cannot regress past the sweep above.
+    /// Large arenas reserve exactly the bounded scratch capacity published to the runtime.
     #[test]
-    fn test_stack_limit_is_eight_byte_aligned_on_elf() {
+    fn test_large_heap_uses_bounded_concat_reservation() {
+        let target = Target::new(Platform::Linux, Arch::AArch64);
+        let asm = emit_runtime_data_fixed(1 << 31, target, PhpVersion::Php85);
+        assert!(asm.contains(&comm_directive("_concat_buf", 1 << 30, target)));
+        assert!(asm.contains("_concat_capacity:\n    .quad 1073741824\n"));
+    }
+
+    /// Pins the stack-guard symbols in `.data`, aligned, rather than in `.comm`.
+    ///
+    /// A large `--heap-size` pushes the end of the common block past AArch64's ±4 GiB
+    /// `ADRP` window; every compiled prologue reads `_stack_limit`, so it must stay near
+    /// the text. Under-alignment previously broke linux-aarch64 linking.
+    #[test]
+    fn test_stack_limit_symbols_live_in_aligned_data() {
         let asm = emit_runtime_data_fixed(
             8_388_608,
             Target::new(Platform::Linux, Arch::AArch64),
             PhpVersion::Php85,
         );
 
-        assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
-        assert!(asm.contains(".comm _stack_limit_main, 8, 8\n"));
+        assert!(asm.contains(".p2align 3\n.globl _stack_limit\n_stack_limit:\n    .quad 0\n"));
+        assert!(asm.contains(
+            ".p2align 3\n.globl _stack_limit_main\n_stack_limit_main:\n    .quad 0\n"
+        ));
+        assert!(!asm.contains(".comm _stack_limit,"));
     }
 
     /// Verifies the initial reporting mask follows PHP's version-specific `E_ALL` value.

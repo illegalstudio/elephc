@@ -2,7 +2,7 @@
 //! Exercises generic specializations through the real Magician bridge and runtime cells.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval_generics`.
+//! - `cargo test --test codegen_tests_eval eval_generics`.
 //!
 //! Key details:
 //! - Runtime-selected source prevents literal eval from taking AOT's shortcut.

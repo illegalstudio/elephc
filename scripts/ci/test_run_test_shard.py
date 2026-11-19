@@ -20,10 +20,13 @@ class ShardExecution(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory(prefix=".shard-execution.", dir=ROOT)
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
-        binary = self.root / "nextest/target/debug/deps/codegen_tests-fixture"
-        binary.parent.mkdir(parents=True)
-        binary.write_text("#!/bin/sh\nexit 0\n")
-        binary.chmod(0o755)
+        deps = self.root / "nextest/target/debug/deps"
+        deps.mkdir(parents=True)
+        # The eval shard and the bridge shards each own one split codegen binary.
+        for name in ("codegen_tests_ext", "codegen_tests_eval"):
+            binary = deps / f"{name}-fixture"
+            binary.write_text("#!/bin/sh\nexit 0\n")
+            binary.chmod(0o755)
         self.calls = []
 
     def execute(self, family, target, shard="1", count="4"):
@@ -34,9 +37,9 @@ class ShardExecution(unittest.TestCase):
 
     def test_normal_filters_and_worker_counts_match_each_platform(self):
         for target in ("macos-aarch64", "linux-x86_64", "linux-aarch64"):
-            for family, marker, workers in (("non-codegen", "not binary(codegen_tests)", 3 if target.startswith("macos") else 4),
-                                            ("cli", "binary(/^(opcache_|eval_|php_profile_)/)", 2),
-                                            ("web", "binary(web_tests) or binary(web_session_tests)", 1)):
+            for family, marker, workers in (("non-codegen", "not binary(/^codegen_tests_/)", 3 if target.startswith("macos") else 4),
+                                            ("cli", "binary_id(elephc::integration) and test(/^(opcache_", 2),
+                                            ("web", "binary_id(elephc::integration) and test(/^(web_tests|web_session_tests)::/)", 1)):
                 self.calls.clear()
                 self.execute(family, target, "2", "6")
                 self.assertEqual(len(self.calls), 1)

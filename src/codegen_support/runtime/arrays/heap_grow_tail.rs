@@ -77,7 +77,7 @@ mod tests {
                 let assembly = emitter.output();
 
                 assert!(assembly.contains("_heap_off"), "{name}, pic={pic}");
-                assert!(assembly.contains("_heap_max"), "{name}, pic={pic}");
+                assert!(assembly.contains("_heap_limit"), "{name}, pic={pic}");
                 assert!(assembly.contains("_gc_live"), "{name}, pic={pic}");
                 assert!(assembly.contains("_gc_peak"), "{name}, pic={pic}");
                 assert!(!assembly.contains("_gc_allocs"), "{name}, pic={pic}");

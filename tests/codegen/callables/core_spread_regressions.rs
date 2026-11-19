@@ -2,7 +2,7 @@
 //! Exercises class introspection through shared named and unpacked call planning.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests test_core_introspection_spread_`.
+//! - `cargo test --test codegen_tests_core test_core_introspection_spread_`.
 //!
 //! Key details:
 //! - Targets are statically known while argument containers can be runtime values.

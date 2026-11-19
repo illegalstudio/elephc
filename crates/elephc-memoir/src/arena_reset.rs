@@ -44,9 +44,11 @@ pub fn emit_heap_arena_reset(emitter: &mut impl Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
     abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
     abi::emit_call_label(emitter, "__rt_heap_bins_clear");
+    let value = abi::int_result_reg(emitter);
+    abi::emit_load_symbol_to_reg(emitter, value, "_heap_limit_startup", 0);
+    abi::emit_store_reg_to_symbol(emitter, value, "_heap_limit", 0);
     // Bulk reclamation also retires every block that remained after typed cleanup.
     // Keep cumulative allocation totals, but do not carry their live footprint into a new arena.
-    let value = abi::int_result_reg(emitter);
     abi::emit_load_symbol_to_reg(emitter, value, "_gc_allocs", 0);
     abi::emit_store_reg_to_symbol(emitter, value, "_gc_frees", 0);
     abi::emit_store_zero_to_symbol(emitter, "_gc_live", 0);

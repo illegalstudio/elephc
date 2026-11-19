@@ -12,47 +12,21 @@ use super::*;
 use crate::codegen_support::{emit::Emitter, platform::Target};
 use sha2::{Digest, Sha256};
 
-// Captured before extraction from main 67760076f89c9d0eaaa0863b0fe25e3ce67d5b75.
-const BASELINE: [[&str; 6]; 3] = [
-    [
-        "c741cbff75bfb12e4810c4a654fd2636131ebd7a31e043c4f99b62bc34eff5be",
-        "d5017ccc0aa1ee5042214a9897b639f04d77a86cb7a884febbd08424cf6dd231",
-        "1d273b68346c615b0536c9bd952f442e11432aba4a36b309312bdcd12720ad4d",
-        "1e1dc87c029f774e0776b749c61deaedd8b73291ad466b5172b18b2bf1aa3608",
-        "8730987ab5a56f2d9efb50ab193a174d8939185ca1d64aa19face5ff3e3b4d11",
-        "1a5b22f53c133cf86eca3bb40994e48c1687c9d511069e89bfd682fa0d957db3",
-    ],
-    [
-        "369e99a9eb961ac4a3dd34c55468d98d8d3b100b2201b536dfa813005a542755",
-        "5ab05bfc2f73bf19420e92f869d8f0fcea152435db2aaf282733858c411662b8",
-        "ad243f9629aed665d996c93c8d4b87109997bc54c1d653e2d41f9d427ffe414e",
-        "9f1e5e7c8a3c9822c7b9caf74b62ca6e1f29a2016d1799b74f11c4d9e8b052b0",
-        "a8c57d6efcbba29bf9e07476909a11f29ce41ae8115224e63cca15fdc2c6ebd4",
-        "369e99a9eb961ac4a3dd34c55468d98d8d3b100b2201b536dfa813005a542755",
-    ],
-    [
-        "7a185f8156cc32cc95e290effc22191d24af8fdf39fa62089c1203aa278fb928",
-        "62cdadf3f500a2cfcc9f649c753b230f218208996f654a40ffaa236f6062cc00",
-        "82c8dcb19eb4726135458f296f9ad8ab88a7df1acc11b4e82f507958f64a6fa5",
-        "c19a8ca5a7c2b9037e997b7841bd79029ddf63e4495b53679894e548ef28889d",
-        "51ad84c453d177860ab0c5ff81643e9108625dea9c9832381592491888ea46ff",
-        "7a185f8156cc32cc95e290effc22191d24af8fdf39fa62089c1203aa278fb928",
-    ],
-];
-
 /// Preserves target assembly and local-label identities across the Memoir extraction.
 #[test]
 fn memoir_extraction_preserves_memory_assembly() {
+    let mut actual = Vec::new();
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         for mode in 0..6 {
             let mut emitter = emit_memory_helpers(Target::parse(name).unwrap(), mode);
             let mut labels = emitter.take_internal_labels().into_iter().collect::<Vec<_>>();
             labels.sort();
             let hash = format!("{:x}", Sha256::digest(format!("{}\n{labels:?}", emitter.output())));
-            let platform = match name { "linux-aarch64" => 1, "linux-x86_64" => 2, _ => 0 };
-            assert_eq!(hash, BASELINE[platform][mode], "{name}, mode {mode}");
+            actual.push(format!("{name} {mode} {hash}"));
         }
     }
+    assert_eq!(actual.join("\n"), include_str!("memoir_extraction_baseline.txt").trim(),
+        "allocator or collector assembly changed");
 }
 
 /// Emits the exact original allocator/collector inventory for fingerprints and target assembly.

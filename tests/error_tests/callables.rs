@@ -1227,3 +1227,20 @@ fn test_issue_828_dynamic_first_class_callable_factory_unknown_named_argument() 
         "has no parameter $nope",
     );
 }
+
+/// A property whose declared type is incompatible with a concretely typed by-reference
+/// parameter is a legal PLACE: PHP binds the reference and raises its call-site `TypeError` at
+/// runtime, which `codegen::references` pins. This includes static-method receivers and array
+/// properties, not only scalar instance slots.
+#[test]
+fn test_property_ref_argument_to_incompatible_typed_parameter_is_a_runtime_error() {
+    for source in [
+        "<?php class C { public string $s = '5'; } function inc(int &$n): void { $n++; } $c = new C(); inc($c->s);",
+        "<?php class C { public int $n = 1; } function set(string &$s): void { $s = 'x'; } $c = new C(); set($c->n);",
+    ] {
+        expect_no_error(source);
+    }
+    expect_no_error(
+        "<?php class C { public array $a = []; public static function set(int &$n): void {} } $c = new C(); C::set($c->a);",
+    );
+}

@@ -3,7 +3,7 @@
 //! of the PHP-visible variable set, and that `$this` does too for the separate reason PHP gives.
 //!
 //! Called from:
-//! - `cargo test` through the `codegen_tests` integration harness.
+//! - `cargo test` through the `codegen_tests_core` integration harness.
 //!
 //! Key details:
 //! - Every expected value is the verbatim stdout of `LC_ALL=C php` 8.4 for the same fixture.

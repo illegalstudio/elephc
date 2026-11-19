@@ -5,7 +5,7 @@
 //! `CURLOPT_XFERINFOFUNCTION`, and `CURLOPT_DEBUGFUNCTION`.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl::callbacks` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl::callbacks` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expectation here was MEASURED against the host PHP 8.4.20 + ext/curl before it

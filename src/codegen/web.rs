@@ -447,6 +447,9 @@ mod handler_reset_tests {
             let live = asm.find("_gc_live").unwrap();
             let peak = asm.find("_gc_peak").expect("the live-byte watermark is reset per request");
             assert!(heap_reset < allocs && allocs < frees && frees < live && live < peak, "{name}");
+            let startup_limit = asm.find("_heap_limit_startup").expect("the startup ceiling is restored");
+            let reset_limit = asm.rfind("_heap_limit").expect("the runtime ceiling is reset");
+            assert!(startup_limit < reset_limit, "{name}: the startup ceiling must feed the reset");
             assert!(bases < extent_reset, "{name}: live bases must retire before the extent resets");
             assert!(!asm.contains("__rt_heap_alloc"), "{name}");
         }

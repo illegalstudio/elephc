@@ -2,7 +2,7 @@
 //! Regression coverage for selective native-scope synchronization around dynamic eval.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval_scope_access_mask`.
+//! - `cargo test --test codegen_tests_eval eval_scope_access_mask`.
 //!
 //! Key details:
 //! - Named variables remain visible and write back across normal and throwing fragments.

@@ -232,29 +232,16 @@ pub(in crate::types::checker) fn record_scope_dynamic_mixed_receiver_mutation(
     checker: &mut Checker,
     property: &str,
 ) {
-    let scope = checker.current_class.clone();
-    let targets = checker
-        .classes
-        .iter()
-        .filter(|(class_name, class_info)| {
-            !class_info.methods.contains_key("__set")
-                && crate::types::property_name_shadows_ancestor_private_slot(
-                    &checker.classes,
-                    class_name,
-                    property,
-                    scope.as_deref(),
-                )
-        })
-        .map(|(class_name, _)| class_name.clone())
-        .collect::<Vec<_>>();
+    // A boxed Mixed receiver names no class, and a STATIC name can be undeclared on ANY
+    // runtime class; PHP creates a dynamic property there unless the class's `__set` handles
+    // it. Reserving only classes whose layout shadows an ancestor private slot left every
+    // ordinary class without a hash, so the mixed write ladder addressed storage the class
+    // never owned. Record the runtime-name site on each class: it expands over subclasses and
+    // reserves the same per-class hash the mixed write ladder dispatches to.
+    let _ = property;
+    let targets = checker.classes.keys().cloned().collect::<Vec<_>>();
     for class_name in targets {
-        record_site(
-            checker,
-            &class_name,
-            Some(property.to_string()),
-            "__set",
-            false,
-        );
+        record_scope_dynamic_runtime_name_mutation(checker, &class_name);
     }
 }
 
@@ -322,6 +309,63 @@ pub(in crate::types::checker) fn magic_set_reentry_property_is_readable(
                 || checker.is_subclass_of(class_name, &site.class_name))
             && (storage_installed || site_needs_storage_on_class(checker, site, class_name))
     })
+}
+
+/// Records the exact name an ordinary PHP 8.5 property write creates on a class without
+/// `#[\AllowDynamicProperties]`.
+///
+/// The write itself still needs the per-instance hash, which
+/// [`record_scope_dynamic_runtime_name_mutation`] reserves. This set answers the OTHER half of
+/// the same feature: a later read of that name has no declared slot, so the checker would
+/// otherwise reject the program even though the runtime hash holds the value.
+pub(in crate::types::checker) fn record_dynamic_property_creation(
+    checker: &mut Checker,
+    class_name: &str,
+    property: &str,
+) {
+    checker.dynamic_property_creations.insert((
+        class_name.trim_start_matches('\\').to_string(),
+        property.to_string(),
+    ));
+}
+
+/// Returns whether a reachable write created `property` dynamically on `class_name`.
+///
+/// A receiver typed `Parent` can hold a `Child` instance whose hash was populated through a
+/// `Child`-typed write, and a `Child`-typed read can observe a hash entry created through its
+/// parent, so both directions of the hierarchy answer together.
+pub(in crate::types::checker) fn dynamic_property_creation_is_readable(
+    checker: &Checker,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    let class_name = class_name.trim_start_matches('\\');
+    checker
+        .dynamic_property_creations
+        .iter()
+        .any(|(owner, name)| {
+            name == property
+                && (owner == class_name
+                    || checker.is_subclass_of(class_name, owner)
+                    || checker.is_subclass_of(owner, class_name))
+        })
+}
+
+/// Returns whether PHP's engine forbids creating a dynamic property on this class.
+///
+/// A user `readonly` class carries the no-dynamic-properties flag directly; the URI prelude
+/// classes are php-src `internal readonly` classes that elephc declares from PHP source, so
+/// their engine flag comes from the reviewed catalog list instead of `ClassInfo`.
+pub(in crate::types::checker) fn class_forbids_dynamic_properties(
+    checker: &Checker,
+    class_name: &str,
+) -> bool {
+    let class_name = class_name.trim_start_matches('\\');
+    elephc_builtin_contract::is_internal_readonly_class(class_name)
+        || checker
+            .classes
+            .get(class_name)
+            .is_some_and(|class_info| class_info.is_readonly_class)
 }
 
 /// Reserves the per-instance property hash on every class a recorded mutation can reach.
@@ -433,7 +477,7 @@ fn reserve_property_hash_storage(checker: &mut Checker, class_name: &str) {
     let Some(info) = checker.classes.get_mut(class_name) else {
         return;
     };
-    if info.is_readonly_class {
+    if info.is_readonly_class || elephc_builtin_contract::is_internal_readonly_class(class_name) {
         return;
     }
     if info.has_property_hash_storage() {

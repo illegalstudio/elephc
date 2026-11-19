@@ -284,8 +284,22 @@ impl Checker {
         let boxed_object_reference = matches!(expected_ty, PhpType::Object(_))
             && storage_ty.codegen_repr() == PhpType::Mixed
             && matches!(arg.kind, ExprKind::Variable(_));
+        // A property whose declared union/mixed storage cannot statically satisfy the parameter
+        // is NOT bound as typed reference storage: `require_bound_param_arg_type` records a
+        // call-boundary guard, and lowering reads the property into a parameter-typed temporary
+        // plus the ordinary write-back. Valid current values (`int|string` holding an int for an
+        // `int &$x`) must be allowed to reach the callee instead of being refused as "mixed
+        // storage".
+        let property_runtime_guard = matches!(arg.kind, ExprKind::PropertyAccess { .. })
+            && crate::types::param_binding::by_ref_property_writeback_supported(expected_ty)
+            && crate::types::param_binding::by_ref_property_writeback_supported(actual_ty)
+            && (matches!(actual_ty, PhpType::Union(_) | PhpType::Mixed)
+                || actual_ty.codegen_repr() != expected_ty.codegen_repr()
+                || !Self::types_compatible(expected_ty, actual_ty)
+                || !self.type_accepts(expected_ty, actual_ty));
         if expected_ty.codegen_repr() != PhpType::Mixed
             && !boxed_object_reference
+            && !property_runtime_guard
             && self.by_ref_argument_uses_mixed_or_hash_storage(&storage_ty, arg, env)?
         {
             return Err(CompileError::new(
@@ -376,11 +390,19 @@ impl Checker {
             }
             // `lower_by_ref_array_element_arg_with_signature` widens a local
             // indexed array to Mixed slots before taking the element address.
-            // Only that addressable shape has this conversion, not arbitrary
-            // scalar locals, properties, nested places or tagged nullable slots.
+            // Only an addressable element or property has this conversion, not arbitrary
+            // scalar locals, nested places or tagged nullable slots.
+            let storage_arg = match &arg.kind {
+                ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) => value.as_ref(),
+                _ => arg,
+            };
             if expected_ty.codegen_repr() == PhpType::Mixed
-                && matches!(arg.kind, ExprKind::ArrayAccess { .. })
-                && self.is_by_ref_argument_lvalue(arg, env)?
+                && matches!(
+                    storage_arg.kind,
+                    ExprKind::ArrayAccess { .. } | ExprKind::PropertyAccess { .. }
+                )
+                && (self.is_by_ref_argument_lvalue(storage_arg, env)?
+                    || self.is_addressable_direct_property_place(storage_arg, env)?)
             {
                 return Ok(());
             }
@@ -409,6 +431,7 @@ impl Checker {
             expected_ty.codegen_repr(),
             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
         ) && supports_by_ref_boxed_storage(&storage_ty)
+            && !property_runtime_guard
         {
             return Err(CompileError::new(
                 arg.span,

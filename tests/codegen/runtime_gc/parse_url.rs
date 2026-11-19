@@ -2,7 +2,7 @@
 //! Heap-debug regression coverage for owned `parse_url()` array and component results.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests runtime_gc::parse_url` through the runtime-GC suite.
+//! - `cargo test --test codegen_tests_runtime runtime_gc::parse_url` through the runtime-GC suite.
 //!
 //! Key details:
 //! - Each iteration releases both a Mixed-valued hash and a selected owned string,

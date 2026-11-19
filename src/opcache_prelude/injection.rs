@@ -263,6 +263,9 @@ fn inject_if_used_on_compiler_stack(
             if ini_get_used || ini_set_used || ini_get_all_used {
                 needs_env_helpers = true;
                 declarations.extend(ini_helper_declarations(php_version, overrides));
+                declarations.extend(crate::shared_ini_prelude::memory_limit_state_decls(
+                    &crate::shared_ini_prelude::memory_limit_initial(overrides),
+                ));
                 if ini_get_used {
                     declarations.push(build::cli_ini_get_decl());
                 }

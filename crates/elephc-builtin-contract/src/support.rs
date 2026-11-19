@@ -400,12 +400,12 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
-        // Also includes the SimpleXML allocation and diagnostic adapters, and
+        // Also includes the SimpleXML allocation and diagnostic adapters,
         // `__elephc_reflection_class_build` / `__elephc_eval_reflection_class_build`, which
         // only compiled reflector getters call. The two internal libc setlocale helpers and
         // the internal nl_langinfo helper join the internal eval inventory, as does the
         // random prelude's `__elephc_call_strict_types` reader.
-        assert_eq!(eval_internal, 142);
+        assert_eq!(eval_internal, 143);
         // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 381);
@@ -421,8 +421,9 @@ mod tests {
         // compiled and eval `ReflectionClass` builder calls two more. The seven ctype
         // contracts, two internal setlocale helpers, the internal nl_langinfo helper, and
         // the random prelude's `__elephc_call_strict_types` reader join the AOT registry,
-        // and `preg_last_error` and `preg_last_error_msg` add two more.
-        assert_eq!(aot_registry, 841);
+        // `preg_last_error` and `preg_last_error_msg` add two more, as does the internal
+        // `__elephc_set_memory_limit` setter.
+        assert_eq!(aot_registry, 842);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
         // The two PHP-visible locale functions are prelude-provided.
@@ -483,9 +484,9 @@ mod tests {
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
-        // the internal nl_langinfo helper, and the random prelude's
-        // `__elephc_call_strict_types` reader.
-        assert_eq!(unsupported, 523);
+        // the internal nl_langinfo helper, the random prelude's
+        // `__elephc_call_strict_types` reader, and `__elephc_set_memory_limit`.
+        assert_eq!(unsupported, 524);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

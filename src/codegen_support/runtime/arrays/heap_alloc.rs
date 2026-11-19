@@ -58,6 +58,23 @@ mod tests {
         assert!(asm.contains("__rt_heap_alloc_size_overflow:\n"));
     }
 
+    /// Verifies the bump path checks arena position against `_heap_max` and the live budget
+    /// against `_heap_limit`, so a lowered limit does not reject allocations while free arena
+    /// space remains.
+    #[test]
+    fn bump_path_checks_arena_position_and_live_budget_separately() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_heap_alloc(&mut emitter);
+            let asm = emitter.output();
+            let bump = asm.find("__rt_heap_alloc_bump").unwrap();
+            let section = &asm[bump..];
+            assert!(section.contains("_heap_max"), "{name}: position check");
+            assert!(section.contains("_gc_live"), "{name}: live-byte check");
+            assert!(section.contains("_heap_limit"), "{name}: runtime ceiling check");
+        }
+    }
+
     /// Verifies PIC allocators recover through the cdylib boundary instead of exiting.
     #[test]
     fn pic_heap_allocator_routes_exhaustion_to_cdylib_boundary() {

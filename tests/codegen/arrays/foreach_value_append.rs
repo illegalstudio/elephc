@@ -3,7 +3,7 @@
 //! another array that crosses a function-return boundary (issue #405).
 //!
 //! Called from:
-//! - `cargo test` through the `codegen_tests` harness via `crate::support`.
+//! - `cargo test` through the `codegen_tests_data` harness via `crate::support`.
 //!
 //! Key details:
 //! - `foreach_value_type` now keeps concrete scalar element types (`int`,

@@ -3,7 +3,7 @@
 //! Keeps `elephc native` isolated while preserving every legacy compile invocation.
 //!
 //! Called from:
-//! - `crate::main()` before invoking `crate::pipeline::compile()`.
+//! - `crate::entry::run()` before invoking `crate::pipeline::compile()`.
 //!
 //! Key details:
 //! - Only an exact `args[1]` of `native`, `repl`, `monitor`, or `test` selects a subcommand.
@@ -178,8 +178,8 @@ Codegen:
                           Count each call of a method as a transaction of its own,
                           named after it (repeatable; FUNCTION for a function)
   --heap-debug            Enable heap debug instrumentation
-  --define SYMBOL        Define a symbol for `ifdef` conditional compilation
-  --ini KEY=VALUE         Bake an INI directive override (OPcache and mbstring startup)
+  --define SYMBOL         Define a symbol for `ifdef` conditional compilation
+  --ini KEY=VALUE         Bake an INI directive override (memory_limit, OPcache, mbstring startup)
   --strict-opcache        Throw when opcache_invalidate() targets AOT-frozen code
 
 Linking:
@@ -210,6 +210,9 @@ Other:
 pub(crate) struct CliConfig {
     pub(crate) filename: String,
     pub(crate) heap_size: usize,
+    /// Whether `--heap-size` was supplied explicitly, so a later project `[ini]`
+    /// `memory_limit` may grow the arena but must not silently exceed an explicit cap.
+    pub(crate) heap_size_explicit: bool,
     pub(crate) gc_stats: bool,
     /// Embed per-function call counters and print exact counts to stderr at exit.
     pub(crate) counters: bool,
@@ -380,6 +383,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     }
 
     let mut heap_size: usize = 134_217_728; // 128 MB, PHP's default memory_limit
+    let mut heap_size_explicit = false;
     let mut gc_stats = false;
     let mut counters = false;
     let mut instrument = crate::codegen::Instrumentation::Off;
@@ -440,6 +444,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         let arg = &args[i];
         if let Some(val) = arg.strip_prefix("--heap-size=") {
             heap_size = parse_heap_size(val);
+            heap_size_explicit = true;
         } else if arg == "--target" {
             i += 1;
             target = parse_required_target(args, i);
@@ -543,7 +548,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         } else if arg == "--quiet" || arg == "-q" {
             quiet = true;
         } else if arg == "--mascotte" {
-            // Already handled in main() before parse_args ran (so the banner
+            // Already handled in entry::run() before parse_args ran (so the banner
             // prints before --help/errors/compilation); recognized here only
             // so it isn't mistaken for an unknown flag.
         } else if let Some(value) = arg.strip_prefix("--null-repr=") {
@@ -737,9 +742,10 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         }
     }
 
-    CliConfig {
+    let mut config = CliConfig {
         filename,
         heap_size,
+        heap_size_explicit,
         gc_stats,
         counters,
         instrument,
@@ -775,6 +781,82 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         apm_transactions,
         quiet,
         ini_overrides,
+    };
+    apply_startup_memory_limit(&mut config, false);
+    config
+}
+
+/// Applies the startup `memory_limit` floor and arena sizing to the merged INI list.
+///
+/// Called once after CLI parsing and again after the project manifest's `[ini]` entries are
+/// prepended, because those entries can add a `memory_limit` that the CLI-only heap-sizing
+/// pass never saw. The explicit `--heap-size` cap is carried through, so a project limit above
+/// it fails instead of being silently clamped.
+pub(crate) fn apply_startup_memory_limit(config: &mut CliConfig, warn: bool) {
+    refuse_startup_memory_limit_below_floor(&mut config.ini_overrides);
+    let Some((_, value)) = config
+        .ini_overrides
+        .iter()
+        .rev()
+        .find(|(key, _)| key.eq_ignore_ascii_case("memory_limit"))
+    else {
+        return;
+    };
+    // The final pipeline call owns php-src's one startup quantity diagnostic; earlier sizing
+    // passes (CLI parse, project merge, direct callers) stay silent.
+    let limit = if warn {
+        crate::codegen_support::parse_startup_memory_limit_bytes(value)
+            .ok()
+            .flatten()
+    } else {
+        crate::codegen_support::startup_memory_limit_value(value)
+    };
+    if let Some(limit) = limit {
+        if config.heap_size_explicit && limit > config.heap_size {
+            fail(&format!(
+                "--ini memory_limit={value} exceeds --heap-size={}",
+                config.heap_size
+            ));
+        }
+        if !config.heap_size_explicit && limit > config.heap_size {
+            // The runtime layout cannot address more than `MAX_HEAP_SIZE` of arena on
+            // AArch64. Keep PHP's reported limit but reserve the largest supported arena,
+            // so `--ini memory_limit=2G` links instead of failing in the linker.
+            config.heap_size = limit.min(MAX_HEAP_SIZE);
+        }
+    }
+}
+
+/// Drops every startup `memory_limit` below PHP's 2 MiB startup floor.
+///
+/// php-src refuses each setting with `Failed to set memory limit …` and keeps the value that
+/// was already installed, so an invalid attempt must not become the reported value or the
+/// emitted `_heap_limit`. Later valid overrides still win in list order, and a manifest value
+/// that is shadowed by a CLI value still follows PHP's attempt-then-replace order.
+pub(crate) fn refuse_startup_memory_limit_below_floor(overrides: &mut Vec<(String, String)>) {
+    const STARTUP_MEMORY_FLOOR: usize = 2_097_152;
+    let mut index = overrides.len();
+    while index > 0 {
+        index -= 1;
+        if !overrides[index].0.eq_ignore_ascii_case("memory_limit") {
+            continue;
+        }
+        let value = overrides[index].1.clone();
+        // Sizing runs again after the project manifest merges and at compilation start, so it
+        // uses the silent parser; the CLI's one warning pass owns the diagnostic text.
+        let limit = crate::codegen_support::startup_memory_limit_value(&value);
+        if let Some(limit) = limit {
+            if limit < STARTUP_MEMORY_FLOOR {
+                // A malformed spelling can parse below the floor ("oops" -> 0). PHP still
+                // reports its quantity diagnostic before the failed-set warning, and removing
+                // the override here means the later one-warning pass can no longer see it.
+                let _ = crate::codegen_support::parse_startup_memory_limit_bytes(&value);
+                eprintln!(
+                    "Warning: Failed to set memory limit to {limit} bytes (Current memory usage is {STARTUP_MEMORY_FLOOR} bytes)"
+                );
+                overrides.remove(index);
+            }
+        }
     }
 }
 
@@ -977,10 +1059,23 @@ fn parse_emit(value: &str) -> Emit {
     }
 }
 
+/// Largest heap arena the emitted data layout can address on every supported target.
+///
+/// The runtime reserves the heap, the concat scratch arena and the object-handle side
+/// tables as one common block, and compiled code reaches every one of those symbols with
+/// a single AArch64 `ADRP` (±4 GiB). A larger arena pushes later symbols out of that
+/// window and the linker fails with a raw `ADRP out of range` fixup, so the ceiling is
+/// enforced here instead.
+pub(crate) const MAX_HEAP_SIZE: usize = 1 << 30;
+
 /// Parse a heap size value, returning a value >= 65536 or exit with an error.
 fn parse_heap_size(value: &str) -> usize {
     match value.parse::<usize>() {
-        Ok(n) if n >= 65536 => n,
+        Ok(n) if (65_536..=MAX_HEAP_SIZE).contains(&n) => n,
+        Ok(n) if n > MAX_HEAP_SIZE => fail(&format!(
+            "Invalid --heap-size: {} exceeds the maximum supported heap of {} bytes",
+            n, MAX_HEAP_SIZE
+        )),
         _ => fail("Invalid --heap-size: must be a number >= 65536"),
     }
 }
@@ -1452,6 +1547,28 @@ mod tests {
         let config = compile_config(&args);
         assert!(config.with_crates.contains("mysqli"));
         assert!(!config.web);
+    }
+
+    /// Verifies a project `[ini]` memory_limit added after CLI parsing still grows the
+    /// default arena, and that a hexadecimal startup quantity is accepted by the same pass.
+    #[test]
+    fn merged_project_memory_limit_sizes_the_arena() {
+        let args = ["elephc", "app.php"].map(str::to_string);
+        let mut config = compile_config(&args);
+        config.ini_overrides = vec![("memory_limit".into(), "256M".into())];
+        config.heap_size = 134_217_728;
+        config.heap_size_explicit = false;
+        super::apply_startup_memory_limit(&mut config, false);
+        assert_eq!(config.heap_size, 256 * 1024 * 1024);
+
+        config.ini_overrides = vec![("memory_limit".into(), "0x800000".into())];
+        config.heap_size = 134_217_728;
+        super::apply_startup_memory_limit(&mut config, false);
+        assert_eq!(config.heap_size, 134_217_728);
+        assert_eq!(
+            crate::codegen_support::startup_memory_limit_value("0x800000"),
+            Some(8 * 1024 * 1024)
+        );
     }
 
     /// Verifies multiple `--with-<name>` flags accumulate into the forced set.

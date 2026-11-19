@@ -51,6 +51,7 @@ pub mod __elephc_reflection_class_build;
 pub mod __elephc_nl_langinfo;
 pub mod __elephc_setlocale_query;
 pub mod __elephc_setlocale_set;
+pub mod __elephc_set_memory_limit;
 pub mod __elephc_pdo_called_class_status;
 pub mod __elephc_pdo_statement_class_status;
 pub mod __elephc_simplexml_warning;
