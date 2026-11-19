@@ -94,6 +94,11 @@ path = "tests/embedder_stack_tests.rs"
 name = "phpext_tests"
 path = "tests/phpext_tests.rs"
 
+# The ignored PHP tokenizer corpus runs in its own CI job with an extended timeout.
+[[test]]
+name = "tokenizer_php_src"
+path = "tests/tokenizer_php_src.rs"
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
