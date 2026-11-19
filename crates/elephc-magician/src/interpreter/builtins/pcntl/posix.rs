@@ -7,8 +7,9 @@
 //!
 //! Key details:
 //! - Errno state lives in the bridge, so eval and compiled code observe one `posix_get_last_error()`.
-//! - Integer operands follow PHP's coercive `int` parameter rules before any bridge call, so a
-//!   refused `posix_kill()` operand throws instead of coercing to a process-group id.
+//! - Integer operands follow PHP's `int` parameter rules for the caller's mode (exact ints under
+//!   `strict_types`, coercion otherwise) before any bridge call, so a refused `posix_kill()`
+//!   operand throws instead of coercing to a process-group id.
 //! - `posix_isatty()` resolves eval-owned streams to their host descriptor; host stream payloads
 //!   below the eval namespace already are native descriptors.
 
@@ -95,10 +96,11 @@ fn eval_posix_isatty(
             }
         }
     } else {
-        match eval_weak_int_param(operand, "posix_isatty", 1, "file_descriptor", values)? {
+        match eval_mode_int_param(operand, "posix_isatty", 1, "file_descriptor", context, values)? {
             Some(fd) => fd,
             None => {
-                // PHP's own int|resource check warns and returns false instead of throwing.
+                // PHP's own int|resource check warns and returns false instead of throwing, in strict
+                // mode for every non-int scalar too.
                 let given = eval_given_type_name(operand, context, values)?;
                 values.warning(&format!(
                     "Warning: posix_isatty(): Argument #1 ($file_descriptor) must be of type int|resource, {given} given\n"

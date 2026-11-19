@@ -153,7 +153,29 @@ pub(in crate::interpreter) fn eval_weak_int_param(
     Ok(None)
 }
 
-/// Applies `eval_weak_int_param()` and throws PHP's `TypeError` for a refused value.
+/// Applies PHP's `int` parameter rules for the calling code's mode.
+///
+/// Under `declare(strict_types=1)` only an int passes, so strings, floats, bools and null are
+/// all refused; otherwise `eval_weak_int_param()` applies the coercive rules. Returns `None`
+/// for a refused value so the caller can throw or warn before any side effect.
+pub(in crate::interpreter) fn eval_mode_int_param(
+    value: RuntimeCellHandle,
+    name: &str,
+    number: usize,
+    parameter: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<i64>, EvalStatus> {
+    if context.strict_types() {
+        if values.type_tag(value)? == EVAL_TAG_INT {
+            return eval_int_value(value, values).map(Some);
+        }
+        return Ok(None);
+    }
+    eval_weak_int_param(value, name, number, parameter, values)
+}
+
+/// Applies `eval_mode_int_param()` and throws PHP's `TypeError` for a refused value.
 pub(in crate::interpreter) fn eval_int_param(
     value: RuntimeCellHandle,
     name: &str,
@@ -162,7 +184,7 @@ pub(in crate::interpreter) fn eval_int_param(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
-    if let Some(integer) = eval_weak_int_param(value, name, number, parameter, values)? {
+    if let Some(integer) = eval_mode_int_param(value, name, number, parameter, context, values)? {
         return Ok(integer);
     }
     let given = eval_given_type_name(value, context, values)?;
