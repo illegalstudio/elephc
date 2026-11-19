@@ -817,7 +817,10 @@ fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &s
         abi::emit_load_int_immediate(ctx.emitter, callback_reg, 0);
     }
     abi::emit_frame_slot_address(ctx.emitter, record_reg, offset);
-    let helper = if ctx.backtrace_activation {
+    // Synthetic cleanup frames still retain their incoming source coordinate: their reader stays
+    // absent so PHP backtraces omit them, while generated diagnostics (a reflection getter's
+    // deprecation at its caller's line) recover the coordinate from the activation.
+    let helper = if ctx.backtrace_activation || ctx.backtrace_enabled {
         "__rt_php_frame_publish_bt"
     } else {
         "__rt_php_frame_publish"
