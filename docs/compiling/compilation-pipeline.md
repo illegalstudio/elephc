@@ -35,10 +35,13 @@ Physical source (.php or .lfc)
   -> testing-prelude    inject the Elephc\Testing runtime when used (forced by elephc test)
   -> curl-prelude       inject the curl prelude when used
   -> xml-prelude        inject the XML/XMLWriter/SimpleXML prelude when used
+  -> tidy-prelude       inject the tidy/tidyNode prelude when used
   -> fileinfo-prelude   inject the finfo class prelude when used
+  -> locale-prelude     inject the libc-backed setlocale/nl_langinfo prelude when used
   -> dom-html-prelude   inject the DOM HTML fragment-walker prelude when used
   -> web-prelude        inject the web runtime prelude with --web
   -> version-prelude    inject requested PHP version/SAPI surface functions
+  -> pcre-prelude       inject the preg_grep() prelude when used
   -> extension-prelude inject declarations for the project's hosted PHP extensions
   -> name-resolve       apply namespace/use rules, canonicalize names
   -> autoload-run       run autoload insertion
@@ -46,6 +49,7 @@ Physical source (.php or .lfc)
   -> dom-html-autoload-prelude discover DOM usage in newly autoloaded classes
   -> testing-autoload-prelude discover testing runtime use in newly autoloaded classes
   -> object-cast-prelude inject stdClass declarations when object casts need them
+  -> apm-prelude        inject transaction boundaries for --apm-transaction and Messenger
   -> func-args          desugar func_num_args/get_args/get_arg to a hidden variadic
   -> opcache-manifest-bake complete and bake the post-autoload OPcache script manifest
   -> opt-fold           seed CLI superglobals + AST constant folding
@@ -92,7 +96,8 @@ Physical source (.php or .lfc)
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
   resolved, declarations are discovered, and demand-loaded PHP preludes for PDO,
   mysqli, timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
-  OPcache, image processing, incremental hash contexts, curl, XML/XMLWriter/SimpleXML, fileinfo,
+  OPcache, image processing, incremental hash contexts, curl, XML/XMLWriter/SimpleXML,
+  [tidy](../php/tidy.md), fileinfo, libc locale queries, `preg_grep()`,
   the [DOM HTML subset](../php/dom-html.md),
   object-cast `stdClass`, and the PHP version/SAPI surface are injected only
   when referenced. The web runtime
@@ -107,6 +112,12 @@ Physical source (.php or .lfc)
   resolves their built surfaces and injects wrappers before name resolution.
   Unused wrappers remain eligible for declaration reachability pruning. See
   [Hosting PHP extensions](../beyond-php/php-extensions.md).
+- **apm-prelude**: in a build that carries transaction monitoring
+  (`--with-apm` or `--with-monitoring`), wraps Symfony Messenger's
+  `Worker::handleMessage` and every boundary named by `--apm-transaction` so
+  each call counts as a transaction. It runs after autoload insertion because
+  those boundaries mostly live in vendor classes. See
+  [Transaction monitoring](../beyond-php/apm.md).
 - **func-args** — rewrites `func_num_args()`, `func_get_args()`, and
   `func_get_arg()` into a hidden variadic parameter plus ordinary PHP operations.
   This happens after autoloading but before manifest baking, optimization, and

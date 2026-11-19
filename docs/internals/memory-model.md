@@ -1526,6 +1526,11 @@ reservation. Heap exhaustion prints php-src's
 `Fatal error: Allowed memory size of N bytes exhausted (tried to allocate M bytes) …` and exits
 with status 255. The runtime cache key includes the limit so a cached object never serves two
 different ceilings.
+The fixed data section keeps the startup ceiling in `_heap_limit_startup` (the `--web`
+request boundary copies it back into `_heap_limit`, so one request's `ini_set()` cannot cap
+the next), and the exhaustion path stores the failed request size in `_heap_fail_request`
+while it writes the `_heap_fatal_prefix`, `_heap_fatal_middle` and `_heap_fatal_suffix`
+message pieces around the two decimal values.
 
 `memory_limit` is also a runtime directive. `ini_get('memory_limit')` returns the configured
 string exactly as `--ini` (or PHP's `128M` default) spelled it, including suffixes and
