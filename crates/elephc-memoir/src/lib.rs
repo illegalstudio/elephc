@@ -76,6 +76,7 @@ pub mod interop;
 pub mod cleanup_fast_paths;
 
 pub mod activation_cleanup;
+pub mod activation_records;
 pub mod guarded_owners;
 pub mod hydration_owners;
 pub mod scoped_owners;

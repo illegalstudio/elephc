@@ -99,7 +99,7 @@ pub struct GuardLayout {
 impl GuardLayout {
     /// Keeps the owner beyond the standard previous/callback/data activation prefix.
     pub const fn new(owner: RecordOffset, argument: FrameOffset) -> Self {
-        assert!(owner.bytes() >= 24, "guard owner must follow the activation prefix");
+        assert!(owner.bytes() >= crate::activation_records::PREFIX_BYTES, "guard owner must follow the activation prefix");
         Self { owner, argument }
     }
     /// Returns the owner location relative to its guard record.
