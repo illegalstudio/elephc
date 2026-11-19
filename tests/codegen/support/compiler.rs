@@ -1594,9 +1594,21 @@ pub(crate) fn asm_without_embedded_script_path(user_asm: &str) -> String {
                     .is_some_and(|next| next.trim_start().starts_with(".ascii"))
         })
         .and_then(|(index, _)| lines.get(index + 1).copied());
+    // The same bytes are also spliced into longer literals (`... called in <path>` of the
+    // throwable-to-string helper), so every occurrence of the path text is dropped, not only
+    // the lines that hold nothing else.
+    let path_text = script_path_line.and_then(|line| {
+        let start = line.find('"')? + 1;
+        let end = line.rfind('"')?;
+        (end > start).then(|| &line[start..end])
+    });
     lines
         .into_iter()
         .filter(|line| Some(*line) != script_path_line)
+        .map(|line| match path_text {
+            Some(path) => line.replace(path, ""),
+            None => line.to_string(),
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
