@@ -15,6 +15,9 @@
 //! - Integer operands pass `emit_int_param_guard()` first: values PHP's coercive `int` check
 //!   refuses throw `TypeError` (or warn and return false for `posix_isatty()`) instead of
 //!   reaching the weak cast, which would turn `[]` or `"abc"` into pid 0.
+//! - `posix_isatty()` range-checks float operands, direct or boxed, before converting them:
+//!   NaN, the infinities and out-of-range floats warn and return false like PHP's
+//!   `int|resource` check, instead of reaching `load_as_int()`'s `TypeError`.
 
 use crate::codegen::context::FunctionContext;
 use crate::codegen::platform::Arch;
@@ -29,6 +32,10 @@ use super::{ensure_arg_count, expect_operand, store_if_result};
 const MIXED_TAG_RESOURCE: i64 = 9;
 /// Runtime `Mixed` tag carried by boxed string values.
 const MIXED_TAG_STRING: u8 = 1;
+/// Runtime `Mixed` tag carried by boxed float values.
+const MIXED_TAG_FLOAT: i64 = 2;
+/// `posix_isatty()`'s refusal message up to the runtime type word.
+const ISATTY_PARAM_PREFIX: &str = "posix_isatty(): Argument #1 ($file_descriptor) must be of type int|resource, ";
 
 /// What a refused integer operand does once its diagnostic is built.
 #[derive(Clone, Copy)]
@@ -101,12 +108,7 @@ pub(super) fn lower_isatty(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     let done = ctx.next_label("posix_isatty_done");
     if !matches!(raw_type, PhpType::Resource(_)) {
         // Resources pass the guard; PHP warns and returns false for any other refused value.
-        emit_int_param_guard(
-            ctx,
-            operand,
-            "posix_isatty(): Argument #1 ($file_descriptor) must be of type int|resource, ",
-            IntParamRejection::WarnFalse(&done),
-        )?;
+        emit_int_param_guard(ctx, operand, ISATTY_PARAM_PREFIX, IntParamRejection::WarnFalse(&done))?;
     }
     if let PhpType::Resource(_) = raw_type {
         ctx.load_value_to_result(operand)?;
@@ -114,7 +116,10 @@ pub(super) fn lower_isatty(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     } else if raw_type.codegen_repr() == PhpType::Mixed {
         // Only a boxed `Mixed` cell can hold a resource; `?int` keeps its union metadata but is
         // stored inline as a `TaggedScalar`, which the weak integer conversion handles.
-        emit_boxed_descriptor(ctx, operand)?;
+        emit_boxed_descriptor(ctx, operand, &done)?;
+    } else if raw_type.codegen_repr() == PhpType::Float {
+        ctx.load_value_to_result(operand)?;
+        emit_float_descriptor(ctx, &done);
     } else {
         load_as_int(ctx, operand, "posix_isatty file_descriptor")?;
     }
@@ -141,11 +146,14 @@ pub(super) fn lower_isatty(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 
 /// Loads a boxed `int|resource` operand as a descriptor, unwrapping resources to their fd.
 ///
-/// Non-resource payloads fall back to PHP's weak integer conversion of the same operand.
+/// Floats take `emit_float_descriptor()` so an unrepresentable one warns instead of throwing;
+/// other non-resource payloads fall back to PHP's weak integer conversion of the same operand.
 fn emit_boxed_descriptor(
     ctx: &mut FunctionContext<'_>,
     operand: crate::ir::ValueId,
+    done: &str,
 ) -> Result<()> {
+    let float = ctx.next_label("posix_isatty_float");
     let scalar = ctx.next_label("posix_isatty_scalar");
     let loaded = ctx.next_label("posix_isatty_fd_loaded");
     ctx.load_value_to_result(operand)?;
@@ -153,12 +161,16 @@ fn emit_boxed_descriptor(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             // -- unwrap a boxed stream resource to its native descriptor --
+            ctx.emitter.instruction(&format!("cmp x0, #{MIXED_TAG_FLOAT}"));    // does the boxed operand hold a float?
+            ctx.emitter.instruction(&format!("b.eq {float}"));                  // floats need PHP's range check before conversion
             ctx.emitter.instruction(&format!("cmp x0, #{MIXED_TAG_RESOURCE}")); // does the boxed operand hold a stream resource?
             ctx.emitter.instruction(&format!("b.ne {scalar}"));                 // integers and other scalars use weak int conversion
             ctx.emitter.instruction("mov x0, x1");                              // the resource payload is its native descriptor
         }
         Arch::X86_64 => {
             // -- unwrap a boxed stream resource to its native descriptor --
+            ctx.emitter.instruction(&format!("cmp rax, {MIXED_TAG_FLOAT}"));    // does the boxed operand hold a float?
+            ctx.emitter.instruction(&format!("je {float}"));                    // floats need PHP's range check before conversion
             ctx.emitter.instruction(&format!("cmp rax, {MIXED_TAG_RESOURCE}")); // does the boxed operand hold a stream resource?
             ctx.emitter.instruction(&format!("jne {scalar}"));                  // integers and other scalars use weak int conversion
             ctx.emitter.instruction("mov rax, rdi");                            // the resource payload is its native descriptor
@@ -166,10 +178,32 @@ fn emit_boxed_descriptor(
     }
     emit_reject_closed_stream(ctx);
     abi::emit_jump(ctx.emitter, &loaded);
+    ctx.emitter.label(&float);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("fmov d0, x1"),                // move the unboxed float payload into the FP result register
+        Arch::X86_64 => ctx.emitter.instruction("movq xmm0, rdi"),              // move the unboxed float payload into the FP result register
+    }
+    emit_float_descriptor(ctx, done);
+    abi::emit_jump(ctx.emitter, &loaded);
     ctx.emitter.label(&scalar);
     load_as_int(ctx, operand, "posix_isatty file_descriptor")?;
     ctx.emitter.label(&loaded);
     Ok(())
+}
+
+/// Converts the float in the FP result register to a descriptor in the int result register.
+///
+/// PHP's `int|resource` check refuses NaN, the infinities and floats outside the `int` range
+/// with a warning and `false`, so those jump to `done` here instead of reaching
+/// `load_as_int()`'s `TypeError`. Representable floats keep the lossy-precision deprecation.
+fn emit_float_descriptor(ctx: &mut FunctionContext<'_>, done: &str) {
+    let refused = ctx.next_label("posix_isatty_float_refused");
+    let accepted = ctx.next_label("posix_isatty_float_ok");
+    super::strings::emit_float_result_int_coercion_diagnostics(ctx, &refused);
+    abi::emit_jump(ctx.emitter, &accepted);
+    ctx.emitter.label(&refused);
+    emit_int_param_rejection(ctx, ISATTY_PARAM_PREFIX, "float", IntParamRejection::WarnFalse(done));
+    ctx.emitter.label(&accepted);
 }
 
 /// Throws PHP's `TypeError` when the stream descriptor in the int result register is closed.

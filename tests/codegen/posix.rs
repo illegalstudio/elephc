@@ -380,6 +380,33 @@ fn test_posix_isatty_warns_for_non_integer_operands() {
     }
 }
 
+/// Warns and returns false for unrepresentable float descriptors instead of throwing, as PHP does.
+///
+/// NaN, the infinities and floats outside PHP's `int` range fail the `int|resource` check;
+/// direct and boxed floats must both warn, while a lossy in-range float still only deprecates.
+#[test]
+fn test_posix_isatty_warns_for_unrepresentable_float_operands() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        function probe(mixed $fd): string {
+            return var_export(posix_isatty($fd), true);
+        }
+        $inf = INF;
+        echo var_export(posix_isatty($inf), true), '|', var_export(posix_isatty(1e30), true), '|';
+        echo probe(NAN), '|', probe(-INF), '|', probe(1e30), '|';
+        echo var_export(posix_isatty(1.5), true), '|', probe(1.0), '|done';"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false|false|false|false|false|false|false|done");
+    let warning = "posix_isatty(): Argument #1 ($file_descriptor) must be of type int|resource, float given";
+    assert_eq!(out.stderr.matches(warning).count(), 5, "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("Implicit conversion from float 1.5 to int loses precision"),
+        "stderr: {}",
+        out.stderr
+    );
+}
+
 /// Keeps stores read only by a catch block alive across refused `int` operands.
 ///
 /// The int guard throws before the bridge runs, so each call must be treated as throwing:
