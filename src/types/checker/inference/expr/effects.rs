@@ -1708,6 +1708,21 @@ impl Checker {
                         .map(|(_, ty)| ty)
                         .unwrap_or(&PhpType::Mixed);
                     let current = env.get(name).cloned();
+                    // A declared-type local bound to a nullable parameter of its own kind keeps
+                    // its typed slot: the call writes the boxed cell back and verifies its kind
+                    // (`nullable_reference_keeps_concrete_storage`), so the binding is not
+                    // re-typed to the parameter's union here.
+                    if !internal_callable
+                        && declared
+                        && current.as_ref().is_some_and(|current| {
+                            self.nullable_reference_keeps_concrete_storage(
+                                declared_expected, current, argument,
+                            )
+                        })
+                    {
+                        param_index += 1;
+                        continue;
+                    }
                     // The cell's REPRESENTATION, which is the declared type unless the callee's
                     // own body stores something that type cannot hold. The callee's cell IS this
                     // slot, so a widening there has to reach the caller before the slot is typed.
