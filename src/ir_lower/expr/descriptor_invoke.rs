@@ -332,9 +332,24 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
     );
     let owner = publish_constructed_container(ctx, array, span);
     for (index, item) in items.iter().enumerate() {
-        let value = lower_signature_invoker_ref_arg_marker(ctx, sig, index, item, false)
+        let reference_source = match &item.kind {
+            ExprKind::Reference(inner) => Some(inner.as_ref()),
+            _ => None,
+        };
+        let value_expr = reference_source.unwrap_or(item);
+        let value = lower_signature_invoker_ref_arg_marker(ctx, sig, index, value_expr, false)
             .unwrap_or_else(|| {
-                let value = lower_expr(ctx, item);
+                // An inline `[&$x]` marker binds the pushed entry to `$x`, exactly like the
+                // ordinary array-literal builder; lower_expr alone would drop the marker.
+                let value = if reference_source.is_some() {
+                    ctx.begin_quiet_undefined_reads(value_expr);
+                    let value = super::assoc_array_literals::lower_reference_literal_value(ctx, value_expr)
+                        .unwrap_or_else(|| lower_expr(ctx, value_expr));
+                    ctx.end_quiet_undefined_reads();
+                    value
+                } else {
+                    lower_expr(ctx, value_expr)
+                };
                 coerce_variadic_tail_value(ctx, value, &array_ty, item.span)
             });
         let array = load_published_container(ctx, owner, array_ty.clone(), item.span);
@@ -345,6 +360,32 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
             Op::ArrayPush.default_effects(),
             Some(item.span),
         );
+        if let Some(source) = reference_source {
+            let key = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(index as i64)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(item.span),
+            );
+            let array = load_published_container(ctx, owner, array_ty.clone(), item.span);
+            let cell = ctx.emit_value(
+                Op::LoadArrayElemRefCell,
+                vec![array.value, key.value],
+                None,
+                PhpType::Pointer(None),
+                Op::LoadArrayElemRefCell.default_effects(),
+                Some(item.span),
+            );
+            super::assoc_array_literals::bind_reference_literal_source(
+                ctx,
+                source,
+                cell,
+                PhpType::Mixed,
+                item.span,
+            );
+        }
         ctx.refresh_argument_array_guard(array, item.span);
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&elem_ty), value, item.span);
     }
@@ -369,8 +410,21 @@ fn lower_descriptor_invoker_assoc_arg_array(
     let owner = publish_constructed_container(ctx, hash, expr.span);
     for (key, value) in pairs {
         let entry_span = value.span;
+        let reference_source = match &value.kind {
+            ExprKind::Reference(inner) => Some(inner.as_ref()),
+            _ => None,
+        };
+        let value_expr = reference_source.unwrap_or(value);
         let key = lower_expr(ctx, key);
-        let value = lower_expr(ctx, value);
+        let value = if reference_source.is_some() {
+            ctx.begin_quiet_undefined_reads(value_expr);
+            let value = super::assoc_array_literals::lower_reference_literal_value(ctx, value_expr)
+                .unwrap_or_else(|| lower_expr(ctx, value_expr));
+            ctx.end_quiet_undefined_reads();
+            value
+        } else {
+            lower_expr(ctx, value_expr)
+        };
         let hash = load_published_container(ctx, owner, hash_ty.clone(), entry_span);
         ctx.emit_void(
             Op::HashSet,
@@ -379,6 +433,15 @@ fn lower_descriptor_invoker_assoc_arg_array(
             Op::HashSet.default_effects(),
             Some(entry_span),
         );
+        if let Some(source) = reference_source {
+            super::assoc_array_literals::bind_reference_literal_entry(
+                ctx,
+                hash.value,
+                key.value,
+                source,
+                value_expr.span,
+            );
+        }
         ctx.refresh_argument_array_guard(hash, entry_span);
     }
     take_published_container(ctx, owner, hash_ty, expr.span)

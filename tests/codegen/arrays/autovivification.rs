@@ -68,3 +68,17 @@ var_dump($result);
         "array(3) {\n  [\"k1\"]=>\n  int(10)\n  [\"k2\"]=>\n  int(20)\n  [\"k3\"]=>\n  int(30)\n}\n"
     );
 }
+
+/// The write receiver is reloaded after operand evaluation, so an assignment inside the value
+/// expression is not overwritten by the pre-evaluation snapshot (`$a[0] = count($a = [...])`).
+#[test]
+fn test_array_write_reloads_receiver_after_value_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[0] = count($a = [10, 20]);
+echo $a[0], "|", $a[1];
+"#,
+    );
+    assert_eq!(out, "2|20");
+}

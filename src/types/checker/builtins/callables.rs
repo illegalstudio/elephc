@@ -78,15 +78,27 @@ fn validate_call_user_func_array_dynamic_arg_array(
             "call_user_func_array() second argument must be an array",
         ));
     }
-    if matches!(arg_array.kind, ExprKind::ArrayLiteralAssoc(_))
-        && sig.ref_params.iter().any(|is_ref| *is_ref)
-    {
-        return Err(CompileError::new(
-            arg_array.span,
-            "call_user_func_array() does not support associative argument literals for callbacks with by-reference parameters",
-        ));
+    if let ExprKind::ArrayLiteralAssoc(pairs) = &arg_array.kind {
+        if !assoc_argument_literal_is_sequential_list(pairs)
+            && sig.ref_params.iter().any(|is_ref| *is_ref)
+        {
+            return Err(CompileError::new(
+                arg_array.span,
+                "call_user_func_array() does not support associative argument literals for callbacks with by-reference parameters",
+            ));
+        }
     }
     Ok(())
+}
+
+/// Returns whether an associative literal is really a positional list (`[0 => ..., 1 => ...]`).
+///
+/// Reference elements (`[&$x]`) parse into this shape. Their numeric keys are positional
+/// arguments, so a by-reference callback can bind them exactly like an indexed literal.
+fn assoc_argument_literal_is_sequential_list(pairs: &[(Expr, Expr)]) -> bool {
+    pairs.iter().enumerate().all(|(index, (key, _))| {
+        matches!(key.kind, ExprKind::IntLiteral(value) if value == index as i64)
+    })
 }
 
 /// Returns true when `call_user_func_array()` can validate the argument container statically or at runtime.

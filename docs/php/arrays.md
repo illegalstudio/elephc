@@ -622,7 +622,10 @@ completion; their results can be used as boolean expressions.
 ### Mixed-valued associative arrays
 
 `array_reverse()`, `array_shift()`, `array_unshift()`, and `rsort()` also support
-associative arrays whose values use boxed `mixed` storage. Reverse honors
+associative arrays whose values use boxed `mixed` storage. Hash-backed value sorts use a
+stable merge schedule with the shared PHP `<=>` comparator; PHP leaves the relative order of
+`NAN` comparisons unspecified, so the position of a `NAN` can differ from a particular PHP
+build even though every ordered scalar keeps PHP's ordering. Reverse honors
 `$preserve_keys`; shift and unshift renumber numeric keys while preserving string
 keys. `rsort()` sorts supported scalar values in descending order and renumbers
 the keys. Mutations preserve copy-on-write snapshots and retain removed values

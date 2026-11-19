@@ -483,12 +483,14 @@ fn lower_array_assign_from_value(
     value_value = ctx.borrow_write_operand_if_needed(value_value, span);
     let container_ty = ctx.builder.value_php_type(array_value.value);
     value_value = ctx.retype_value_for_container_element(&container_ty, value_value, Some(value.span));
-    // The offset and value expressions have run; publish the auto-vivified container now.
+    // The offset and value expressions have run, and a local receiver may have been
+    // reassigned by one of them (`$a[0] = count($a = [10, 20])`). Reload the receiver here:
+    // the pre-evaluation snapshot would otherwise overwrite that assignment on store-back.
     let array_value = match auto_viv {
         Some(ty) => super::array_write_storage::publish_auto_vivified_container(
             ctx, array, array_value, ty, span,
         ),
-        None => array_value,
+        None => load_array_local_for_write(ctx, array, span),
     };
     // A hash whose stamped value type cannot hold the assigned value widens its storage first,
     // like the indexed path does; PHP's untyped arrays keep the runtime value (#1951).

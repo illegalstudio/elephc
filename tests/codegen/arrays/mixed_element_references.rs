@@ -494,3 +494,37 @@ array(2) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(1)\n}\n"
         out.stderr
     );
 }
+
+/// Nested arrays in a reference-promoted hash still fail closed before the sort mutates it.
+#[test]
+fn test_sort_reference_hash_rejects_non_scalar_values() {
+    let error = compile_and_run_expect_failure(
+        r#"<?php
+$x = [2]; $y = [1];
+$a = [&$x, &$y];
+sort($a);
+"#,
+    );
+    assert!(
+        error.contains("sorting Mixed arrays containing non-scalar values is not supported"),
+        "unexpected runtime diagnostic: {error}"
+    );
+}
+
+/// Inline `[&$x]` callback arguments bind the pushed entry to the source variable.
+#[test]
+fn test_call_user_func_array_inline_reference_argument() {
+    let out = compile_and_run(
+        r#"<?php
+$set = function (&$v) { $v = 2; };
+$x = 1;
+call_user_func_array($set, [&$x]);
+echo $x, "|";
+$y = 3;
+$args = [&$y];
+call_user_func_array($set, $args);
+echo $y;
+"#,
+    );
+    assert_eq!(out, "2|2");
+}
