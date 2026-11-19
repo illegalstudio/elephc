@@ -2,7 +2,7 @@
 //! Compares automatic conversion, source filtering, and diagnostic ordering with PHP.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test detected_conversion`.
+//! - `cargo test -p elephc-mbstring --test engine detected_conversion::`.
 //!
 //! Key details:
 //! - Single transfer sources bypass detection; mixed source lists filter transfer encodings.
