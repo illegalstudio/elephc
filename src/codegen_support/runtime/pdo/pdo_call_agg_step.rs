@@ -43,6 +43,7 @@
 //!   a callee-saved register would corrupt a value the bridge's `x_agg_step` caller
 //!   holds live across the call.
 
+use elephc_memoir::values::packed_mixed_prefix;
 use elephc_memoir::{callables::argument_storage, cleanup_preserve, values::array_header};
 use crate::codegen_support::callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET;
 use crate::codegen_support::try_handlers::{
@@ -176,16 +177,7 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
     emitter.instruction("b __rt_pdo_call_agg_step_box_call");                   // box the string via the shared boxing tail
     emitter.label("__rt_pdo_call_agg_step_box_call");
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = owned boxed Mixed row value
-    emitter.instruction("ldr x9, [sp, #312]");                                  // reload the loop index (clobbered by the call)
-    emitter.instruction("ldr x10, [sp, #288]");                                 // reload the args array pointer (caller-saved temp)
-    emitter.instruction("add x12, x9, #2");                                     // element index = k + 2 (past [context, rownumber])
-    emitter.instruction("lsl x12, x12, #3");                                    // (k + 2) * 8
-    emitter.instruction("add x12, x12, #24");                                   // element region begins 24 bytes past the header
-    emitter.instruction("str x0, [x10, x12]");                                  // store the boxed row value into slot k+2
-    emitter.instruction("add x9, x9, #1");                                      // advance the loop index
-    emitter.instruction("str x9, [sp, #312]");                                  // persist the loop index
-    emitter.instruction("add x11, x9, #2");                                     // total element count = (k+1) + 2
-    emitter.instruction("str x11, [x10, #0]");                                  // update the array length field
+    packed_mixed_prefix::emit_append_from_frame(emitter, 288, 312, 2);
     emitter.instruction("b __rt_pdo_call_agg_step_loop");                       // box the next row value
     emitter.label("__rt_pdo_call_agg_step_loop_done");
 
@@ -365,17 +357,7 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_pdo_call_agg_step_box_call_x86");             // box the string via the shared boxing tail
     emitter.label("__rt_pdo_call_agg_step_box_call_x86");
     emitter.instruction("call __rt_mixed_from_value");                          // rax = owned boxed Mixed row value
-    emitter.instruction("mov r9, QWORD PTR [rbp - 80]");                        // reload the loop index (clobbered by the call)
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the args array pointer
-    emitter.instruction("mov rcx, r9");                                         // compute the element byte offset
-    emitter.instruction("add rcx, 2");                                          // element index = k + 2 (past [context, rownumber])
-    emitter.instruction("shl rcx, 3");                                          // (k + 2) * 8
-    emitter.instruction("add rcx, 24");                                         // element region begins 24 bytes past the header
-    emitter.instruction("mov QWORD PTR [r11 + rcx], rax");                      // store the boxed row value into slot k+2
-    emitter.instruction("add r9, 1");                                           // advance the loop index
-    emitter.instruction("mov QWORD PTR [rbp - 80], r9");                        // persist the loop index
-    emitter.instruction("add r9, 2");                                           // total element count = (k+1) + 2
-    emitter.instruction("mov QWORD PTR [r11], r9");                             // update the array length field
+    packed_mixed_prefix::emit_append_from_frame(emitter, 56, 80, 2);
     emitter.instruction("jmp __rt_pdo_call_agg_step_loop_x86");                 // box the next row value
     emitter.label("__rt_pdo_call_agg_step_loop_done_x86");
 

@@ -200,12 +200,23 @@ fn emit_reuse_box_aarch64<E: AssemblyEmitter + TargetAbi>(
     abi::emit_frame_prologue(emitter, 96);
     abi::store_at_offset(emitter, "x0", 40);
     abi::store_at_offset(emitter, "x1", 32);
+    emit_replacement_aarch64(emitter, context, ReuseSite::PropertySlot);
+    abi::load_at_offset(emitter, "x0", 40);
+    abi::emit_frame_restore(emitter, 96);
+    abi::emit_return(emitter);
+}
+
+/// Emits AArch64 replacement with the old and new boxes in frame slots 40 and 32.
+fn emit_replacement_aarch64(
+    emitter: &mut (impl AssemblyEmitter + TargetAbi), context: Context<'_>, site: ReuseSite,
+) {
+    let prefix = site.label_prefix();
     abi::load_at_offset(emitter, "x9", 40);
-    emitter.instruction("ldr x10, [x9]");                                       // previous value tag
+    site.arm_instruction(emitter, "ldr x10, [x9]", "previous value tag");
     abi::store_at_offset(emitter, "x10", 48);
-    emitter.instruction("ldr x10, [x9, #8]");                                   // previous payload low word
+    site.arm_instruction(emitter, "ldr x10, [x9, #8]", "previous payload low word");
     abi::store_at_offset(emitter, "x10", 56);
-    emitter.instruction("ldr x10, [x9, #16]");                                  // previous payload high word
+    site.arm_instruction(emitter, "ldr x10, [x9, #16]", "previous payload high word");
     abi::store_at_offset(emitter, "x10", 64);
     abi::load_at_offset(emitter, "x0", 48);
     abi::load_at_offset(emitter, "x1", 56);
@@ -219,68 +230,65 @@ fn emit_reuse_box_aarch64<E: AssemblyEmitter + TargetAbi>(
     abi::emit_call_label(emitter, context.release_payload);
 
     abi::load_at_offset(emitter, "x9", 32);
-    emitter.instruction("ldr x10, [x9]");                                       // replacement value tag
+    site.arm_instruction(emitter, "ldr x10, [x9]", "replacement value tag");
     abi::store_at_offset(emitter, "x10", 48);
-    emitter.instruction("ldr x10, [x9, #8]");                                   // replacement payload low word
+    site.arm_instruction(emitter, "ldr x10, [x9, #8]", "replacement payload low word");
     abi::store_at_offset(emitter, "x10", 56);
-    emitter.instruction("ldr x10, [x9, #16]");                                  // replacement payload high word
+    site.arm_instruction(emitter, "ldr x10, [x9, #16]", "replacement payload high word");
     abi::store_at_offset(emitter, "x10", 64);
     abi::load_at_offset(emitter, "x9", 40);
     abi::load_at_offset(emitter, "x10", 48);
-    emitter.instruction("str x10, [x9]");                                       // publish the replacement tag in the destination box
+    site.arm_instruction(emitter, "str x10, [x9]", "publish the replacement tag in the existing box");
     abi::load_at_offset(emitter, "x10", 56);
-    emitter.instruction("str x10, [x9, #8]");                                   // publish the replacement low payload word
+    site.arm_instruction(emitter, "str x10, [x9, #8]", "publish the replacement low payload word");
     abi::load_at_offset(emitter, "x10", 64);
-    emitter.instruction("str x10, [x9, #16]");                                  // publish the replacement high payload word
+    site.arm_instruction(emitter, "str x10, [x9, #16]", "publish the replacement high payload word");
 
     abi::load_at_offset(emitter, "x10", 48);
-    emitter.instruction("cmp x10, #4");                                         // is the replacement an array or hash?
-    emitter.instruction("b.lo __rt_unser_reuse_scalar");                        // scalars discard their parsed box
-    emitter.instruction("cmp x10, #5");                                         // does the replacement use container storage?
-    emitter.instruction("b.ls __rt_unser_reuse_container");                     // arrays and hashes keep a wrapper slot
-    emitter.instruction("cmp x10, #6");                                         // is the replacement an object?
-    emitter.instruction("b.eq __rt_unser_reuse_object");                        // objects keep a retained wrapper slot
-    emitter.instruction("b __rt_unser_reuse_scalar");                           // other wire values discard their box
+    site.arm_instruction(emitter, "cmp x10, #4", "is the replacement an indexed array or hash?");
+    site.arm_instruction(emitter, &format!("b.lo {prefix}_scalar"), "scalars have no reference slot to preserve");
+    site.arm_instruction(emitter, "cmp x10, #5", "does the replacement use container storage?");
+    site.arm_instruction(emitter, &format!("b.ls {prefix}_container"), "arrays and hashes own retained payload storage");
+    site.arm_instruction(emitter, "cmp x10, #6", "is the replacement an object?");
+    site.arm_instruction(emitter, &format!("b.eq {prefix}_object"), "objects need a retained nested wrapper");
+    site.arm_instruction(emitter, &format!("b {prefix}_scalar"), "other wire values cannot be published references");
 
-    emitter.label("__rt_unser_reuse_container");
+    emitter.label(&format!("{prefix}_container"));
     abi::load_at_offset(emitter, "x9", 32);
-    emitter.instruction("mov x10, #7");                                         // nested Mixed wrapper tag
-    emitter.instruction("str x10, [x9]");                                       // repurpose the parsed box as a wrapper
+    site.arm_instruction(emitter, "mov x10, #7", "nested Mixed wrapper tag");
+    site.arm_instruction(emitter, "str x10, [x9]", "repurpose the parsed box as a wrapper");
     abi::load_at_offset(emitter, "x10", 40);
-    emitter.instruction("str x10, [x9, #8]");                                   // point the wrapper at the reused box
-    emitter.instruction("str xzr, [x9, #16]");                                  // nested wrappers carry no high payload word
+    site.arm_instruction(emitter, "str x10, [x9, #8]", "point the wrapper at the reused box");
+    site.arm_instruction(emitter, "str xzr, [x9, #16]", "nested wrappers carry no high payload word");
     abi::load_at_offset(emitter, "x0", 40);
     abi::emit_call_label(emitter, "__rt_incref");
     abi::load_at_offset(emitter, "x0", 32);
     abi::emit_call_label(emitter, "__rt_decref_mixed");
-    emitter.instruction("b __rt_unser_reuse_return");                           // preserve the container's wrapper slot
+    site.arm_instruction(emitter, &format!("b {prefix}_return"), "preserve the wrapper published by the array parser");
 
-    emitter.label("__rt_unser_reuse_object");
+    emitter.label(&format!("{prefix}_object"));
     abi::load_at_offset(emitter, "x9", 32);
-    emitter.instruction("mov x10, #7");                                         // nested Mixed wrapper tag
-    emitter.instruction("str x10, [x9]");                                       // repurpose the parsed box as a wrapper
+    site.arm_instruction(emitter, "mov x10, #7", "nested Mixed wrapper tag");
+    site.arm_instruction(emitter, "str x10, [x9]", "repurpose the parsed box as a wrapper");
     abi::load_at_offset(emitter, "x10", 40);
-    emitter.instruction("str x10, [x9, #8]");                                   // point the wrapper at the reused box
-    emitter.instruction("str xzr, [x9, #16]");                                  // nested wrappers carry no high payload word
+    site.arm_instruction(emitter, "str x10, [x9, #8]", "point the wrapper at the reused box");
+    site.arm_instruction(emitter, "str xzr, [x9, #16]", "nested wrappers carry no high payload word");
     abi::load_at_offset(emitter, "x0", 40);
     abi::emit_call_label(emitter, "__rt_incref");
     abi::load_at_offset(emitter, "x0", 32);
     abi::emit_call_label(emitter, context.defer_data);
-    emitter.instruction("b __rt_unser_reuse_return");                           // keep the duplicate object's reference slot valid
+    site.arm_instruction(emitter, &format!("b {prefix}_return"), "keep the duplicate object's reference slot valid");
 
-    emitter.label("__rt_unser_reuse_scalar");
+    emitter.label(&format!("{prefix}_scalar"));
     abi::load_at_offset(emitter, "x9", 32);
-    emitter.instruction("mov x10, #8");                                         // canonical null tag
-    emitter.instruction("str x10, [x9]");                                       // clear the discarded box payload
-    emitter.instruction("str xzr, [x9, #8]");                                   // null has no low payload word
-    emitter.instruction("str xzr, [x9, #16]");                                  // null has no high payload word
+    site.arm_instruction(emitter, "mov x10, #8", "canonical null tag");
+    site.arm_instruction(emitter, "str x10, [x9]", "clear the discarded box payload");
+    site.arm_instruction(emitter, "str xzr, [x9, #8]", "null has no low payload word");
+    site.arm_instruction(emitter, "str xzr, [x9, #16]", "null has no high payload word");
     abi::load_at_offset(emitter, "x0", 32);
     abi::emit_call_label(emitter, "__rt_decref_mixed");
 
-    emitter.label("__rt_unser_reuse_return");
-    abi::load_at_offset(emitter, "x0", 40);
-    abi::emit_frame_restore(emitter, 96);
-    abi::emit_return(emitter);
+    emitter.label(&format!("{prefix}_return"));
 }
 
 /// Emits the x86_64 in-place Mixed box reuse used by duplicate hash keys and properties.
@@ -295,6 +303,17 @@ fn emit_reuse_box_x86_64<E: AssemblyEmitter + TargetAbi>(
     abi::emit_frame_prologue(emitter, 96);
     abi::store_at_offset(emitter, "rdi", 40);
     abi::store_at_offset(emitter, "rsi", 32);
+    emit_replacement_x86_64(emitter, context, ReuseSite::PropertySlot);
+    abi::load_at_offset(emitter, "rax", 40);
+    abi::emit_frame_restore(emitter, 96);
+    abi::emit_return(emitter);
+}
+
+/// Emits x86_64 replacement with the old and new boxes in frame slots 40 and 32.
+fn emit_replacement_x86_64(
+    emitter: &mut (impl AssemblyEmitter + TargetAbi), context: Context<'_>, site: ReuseSite,
+) {
+    let prefix = site.label_prefix();
     abi::load_at_offset(emitter, "r9", 40);
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // previous value tag
     abi::store_at_offset(emitter, "r10", 48);
@@ -307,7 +326,13 @@ fn emit_reuse_box_x86_64<E: AssemblyEmitter + TargetAbi>(
     abi::load_at_offset(emitter, "rsi", 64);
     abi::emit_call_label(emitter, "__rt_mixed_from_value");
     abi::store_at_offset(emitter, "rax", 72);
-    abi::load_at_offset(emitter, "rax", 72);
+    // Both sites still have the old owner in rax from boxing. Preserve the
+    // hash store's additional reload into its original argument register.
+    let old_owner_reload = match site {
+        ReuseSite::PropertySlot => "rax",
+        ReuseSite::HashEntry => "rdi",
+    };
+    abi::load_at_offset(emitter, old_owner_reload, 72);
     abi::emit_call_label(emitter, context.defer_data);
     abi::load_at_offset(emitter, "rdi", 48);
     abi::load_at_offset(emitter, "rsi", 56);
@@ -330,14 +355,14 @@ fn emit_reuse_box_x86_64<E: AssemblyEmitter + TargetAbi>(
 
     abi::load_at_offset(emitter, "r10", 48);
     emitter.instruction("cmp r10, 4");                                          // is the replacement an array or hash?
-    emitter.instruction("jl __rt_unser_reuse_scalar_x");                        // scalars discard their parsed box
+    emitter.instruction(&format!("jl {prefix}_scalar_x"));                      // scalars discard their parsed box
     emitter.instruction("cmp r10, 5");                                          // does the replacement use container storage?
-    emitter.instruction("jle __rt_unser_reuse_container_x");                    // arrays and hashes keep a wrapper slot
+    emitter.instruction(&format!("jle {prefix}_container_x"));                  // arrays and hashes keep a wrapper slot
     emitter.instruction("cmp r10, 6");                                          // is the replacement an object?
-    emitter.instruction("je __rt_unser_reuse_object_x");                        // objects keep a retained wrapper slot
-    emitter.instruction("jmp __rt_unser_reuse_scalar_x");                       // other wire values discard their box
+    emitter.instruction(&format!("je {prefix}_object_x"));                      // objects keep a retained wrapper slot
+    emitter.instruction(&format!("jmp {prefix}_scalar_x"));                     // other wire values discard their box
 
-    emitter.label("__rt_unser_reuse_container_x");
+    emitter.label(&format!("{prefix}_container_x"));
     abi::load_at_offset(emitter, "r9", 32);
     emitter.instruction("mov QWORD PTR [r9], 7");                               // repurpose the parsed box as a wrapper
     abi::load_at_offset(emitter, "r10", 40);
@@ -347,9 +372,9 @@ fn emit_reuse_box_x86_64<E: AssemblyEmitter + TargetAbi>(
     abi::emit_call_label(emitter, "__rt_incref");
     abi::load_at_offset(emitter, "rax", 32);
     abi::emit_call_label(emitter, "__rt_decref_mixed");
-    emitter.instruction("jmp __rt_unser_reuse_return_x");                       // preserve the container's wrapper slot
+    emitter.instruction(&format!("jmp {prefix}_return_x"));                     // preserve the container's wrapper slot
 
-    emitter.label("__rt_unser_reuse_object_x");
+    emitter.label(&format!("{prefix}_object_x"));
     abi::load_at_offset(emitter, "r9", 32);
     emitter.instruction("mov QWORD PTR [r9], 7");                               // repurpose the parsed box as a wrapper
     abi::load_at_offset(emitter, "r10", 40);
@@ -359,9 +384,9 @@ fn emit_reuse_box_x86_64<E: AssemblyEmitter + TargetAbi>(
     abi::emit_call_label(emitter, "__rt_incref");
     abi::load_at_offset(emitter, "rax", 32);
     abi::emit_call_label(emitter, context.defer_data);
-    emitter.instruction("jmp __rt_unser_reuse_return_x");                       // keep the duplicate object's reference slot valid
+    emitter.instruction(&format!("jmp {prefix}_return_x"));                     // keep the duplicate object's reference slot valid
 
-    emitter.label("__rt_unser_reuse_scalar_x");
+    emitter.label(&format!("{prefix}_scalar_x"));
     abi::load_at_offset(emitter, "r9", 32);
     emitter.instruction("mov QWORD PTR [r9], 8");                               // canonical null tag
     emitter.instruction("mov QWORD PTR [r9 + 8], 0");                           // null has no low payload word
@@ -369,8 +394,95 @@ fn emit_reuse_box_x86_64<E: AssemblyEmitter + TargetAbi>(
     abi::load_at_offset(emitter, "rax", 32);
     abi::emit_call_label(emitter, "__rt_decref_mixed");
 
-    emitter.label("__rt_unser_reuse_return_x");
-    abi::load_at_offset(emitter, "rax", 40);
-    abi::emit_frame_restore(emitter, 96);
+    emitter.label(&format!("{prefix}_return_x"));
+}
+
+/// Reuses a duplicate hash entry's box in place.
+///
+/// The caller stages the replacement at frame offset 32 and the existing box at 40.
+pub fn emit_replace_hash_entry(emitter: &mut (impl AssemblyEmitter + TargetAbi), context: Context<'_>) {
+    match emitter.arch() {
+        Arch::AArch64 => emit_replacement_aarch64(emitter, context, ReuseSite::HashEntry),
+        Arch::X86_64 => emit_replacement_x86_64(emitter, context, ReuseSite::HashEntry),
+    }
+}
+
+/// Emits the shared saved-payload release helper after the decoder's duplicate store.
+pub fn emit_release_payload(emitter: &mut (impl AssemblyEmitter + TargetAbi)) {
+    match emitter.arch() {
+        Arch::AArch64 => emit_release_payload_aarch64(emitter),
+        Arch::X86_64 => emit_release_payload_x86_64(emitter),
+    }
+}
+
+/// Identifies the two callers of the in-place box replacement.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReuseSite {
+    PropertySlot,
+    HashEntry,
+}
+
+impl ReuseSite {
+    /// Keeps the assembler labels stable at both call sites.
+    fn label_prefix(self) -> &'static str {
+        match self {
+            Self::PropertySlot => "__rt_unser_reuse",
+            Self::HashEntry => "__rt_unser_store_duplicate",
+        }
+    }
+
+    /// Preserves the annotated ARM listing at the hash site and the plain property listing.
+    fn arm_instruction(self, emitter: &mut impl AssemblyEmitter, instruction: &str, comment: &str) {
+        if self == Self::HashEntry {
+            let padding = 76usize.saturating_sub(instruction.len()).max(1);
+            let annotation = "//";
+            emitter.instruction(&format!("{instruction}{:padding$}{annotation} {comment}", "")); // emit the existing annotated listing
+        } else {
+            emitter.instruction(instruction);                                   // emit the existing plain listing
+        }
+    }
+}
+
+/// Emits the AArch64 payload-only release helper used when a duplicate key replaces a value.
+///
+/// Input: x0=boxed value tag, x1=payload low word. Scalar tags own nothing.
+fn emit_release_payload_aarch64(emitter: &mut (impl AssemblyEmitter + TargetAbi)) {
+    emitter.blank();
+    emitter.comment("--- runtime: unserialize replaced-payload release ---");
+    emitter.label_global("__rt_unser_release_payload");
+    emitter.instruction("cmp x0, #1");                                          // is the replaced payload an owned string?
+    emitter.instruction("b.eq __rt_unser_release_payload_string");              // strings release through the safe heap helper
+    emitter.instruction("cmp x0, #4");                                          // is the replaced payload below the container tag range?
+    emitter.instruction("b.lo __rt_unser_release_payload_done");                // scalars, bools, floats, and null own no payload
+    emitter.instruction("cmp x0, #7");                                          // does the replaced tag stay inside the refcounted range?
+    emitter.instruction("b.hi __rt_unser_release_payload_done");                // other tags do not come from the wire decoder
+    emitter.instruction("mov x0, x1");                                          // pass the replaced container payload to the uniform release dispatcher
+    abi::emit_jump(emitter, "__rt_decref_any");
+    emitter.label("__rt_unser_release_payload_string");
+    emitter.instruction("mov x0, x1");                                          // pass the replaced string payload to the safe free helper
+    abi::emit_jump(emitter, "__rt_heap_free_safe");
+    emitter.label("__rt_unser_release_payload_done");
+    abi::emit_return(emitter);
+}
+
+/// Emits the x86_64 payload-only release helper used when a duplicate key replaces a value.
+///
+/// Input: rdi=boxed value tag, rsi=payload low word. Scalar tags own nothing.
+fn emit_release_payload_x86_64(emitter: &mut (impl AssemblyEmitter + TargetAbi)) {
+    emitter.blank();
+    emitter.comment("--- runtime: unserialize replaced-payload release ---");
+    emitter.label_global("__rt_unser_release_payload");
+    emitter.instruction("cmp rdi, 1");                                          // is the replaced payload an owned string?
+    emitter.instruction("je __rt_unser_release_payload_string_x");              // strings release through the safe heap helper
+    emitter.instruction("cmp rdi, 4");                                          // is the replaced payload below the container tag range?
+    emitter.instruction("jb __rt_unser_release_payload_done_x");                // scalars, bools, floats, and null own no payload
+    emitter.instruction("cmp rdi, 7");                                          // does the replaced tag stay inside the refcounted range?
+    emitter.instruction("ja __rt_unser_release_payload_done_x");                // other tags do not come from the wire decoder
+    emitter.instruction("mov rax, rsi");                                        // pass the replaced container payload to the uniform release dispatcher
+    abi::emit_jump(emitter, "__rt_decref_any");
+    emitter.label("__rt_unser_release_payload_string_x");
+    emitter.instruction("mov rax, rsi");                                        // pass the replaced string payload to the safe free helper
+    abi::emit_jump(emitter, "__rt_heap_free_safe");
+    emitter.label("__rt_unser_release_payload_done_x");
     abi::emit_return(emitter);
 }
