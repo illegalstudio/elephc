@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step235 (this commit). Remaining feature integration is active. Issue:
+Verified through step236 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2894,3 +2894,9 @@ Eleven exact focused tests pass, including automatic literals/copies/aliases, at
 A generated pending conditional schema distinguishes empty inferred arrays from explicit open element contracts and from ordinary declared array<never>. Indexed/append writes compute a prospective key/element schema before mutation and publish it only after successful storage write-back. Copies made before the first write infer independently; aliases retain the shared established contract. Whole-array replacement also refines a pending empty origin. Source intersections retain every closed constraint while pending/open members remain neutral.
 
 Fourteen exact focused tests pass. New cases cover first indexed/append writes, alias and pre/post-write copies, Locals composition, invalid exact keys, rejected nested heterogeneous candidates, whole-array refinement and an explicitly mixed first value. Candidate failures preserve pending inference and owners. Previous runtime origins, actual bytecode copy stores, generic union controls and nullability aliases remain green. Default build, diff/assembly hygiene and source stability passed in jobba6e577c. Other producer/declaration contexts, builtin mutations, property/static/native origin lifetimes and runtime Mixed remain unfinished, so public admission is unchanged.
+
+### Verified236: array declaration and capture contexts
+
+Parameter bindings retain conditional array contents independently from Locals, including explicit open bare arrays, mixed and variadic element declarations. Shared local-contract collection follows caller variable/cell reference targets with cycle protection, so an untyped reference parameter cannot mutate past its caller's closed array schema. Compound pending capture metadata remains neutral until first successful write. Null-only classification now reads complete source unions/intersections and conditional content schemas, preserving legal captured scalar/null stores under independent Nullability.
+
+Eighteen exact tests pass in job31f83f8e. New cases verify typed and open parameters, variadics, by-reference rejection before mutation, captured closed/pending arrays with and without Nullability, and explicit heterogeneous union/mixed typed initializers. Previous first-write, source-origin, actual VM store, generic union and nullability regressions remain green with balanced owners. Default build, diff/assembly hygiene and unchanged-source verification pass. Scalar source views without Locals, other literal/compound producers, builtins, properties/statics/native channels and runtime Mixed still require implementation; public admission remains unchanged.

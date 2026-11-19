@@ -11,17 +11,25 @@ use super::*;
 
 /// Collects contracts from a local alias group and its persistent shared storage.
 pub(in crate::interpreter) fn generic_local_contracts(scope: &ElephcEvalScope, name: &str, context: &ElephcEvalContext) -> Vec<EvalParameterType> {
-    let mut types = scope.local_type_contracts(name);
-    if let Some(cell) = visible_scope_cell(context, scope, name) {
-        for ty in context.local_reference_types(cell) {
-            if !types.contains(&ty) { types.push(ty); }
+    let mut types = Vec::new();
+    let mut pending = vec![(scope as *const ElephcEvalScope, name.to_string())];
+    let mut seen = std::collections::HashSet::new();
+    while let Some((scope, name)) = pending.pop() {
+        if !seen.insert((scope, name.clone())) { continue; }
+        let Some(scope) = (unsafe { scope.as_ref() }) else { continue; };
+        for ty in scope.local_type_contracts(&name) { if !types.contains(&ty) { types.push(ty); } }
+        if let Some(cell) = visible_scope_cell(context, scope, &name) {
+            for ty in context.local_reference_types(cell) { if !types.contains(&ty) { types.push(ty); } }
         }
-    }
-    if let Some(global_name) = scope.global_alias_target(name) {
-        if let Some(global) = context.global_scope_ptr().filter(|global| *global != scope as *const _ as *mut _) {
-            if let Some(global) = unsafe { global.as_ref() } {
-                for ty in global.local_type_contracts(global_name) { if !types.contains(&ty) { types.push(ty); } }
+        if let Some(global_name) = scope.global_alias_target(&name) {
+            if let Some(global) = context.global_scope_ptr() { pending.push((global, global_name.to_string())); }
+        }
+        match scope.reference_target(&name) {
+            Some(EvalReferenceTarget::Variable { scope, name }) => pending.push((*scope, name.clone())),
+            Some(EvalReferenceTarget::Cell { cell }) => {
+                for ty in context.local_reference_types(*cell) { if !types.contains(&ty) { types.push(ty); } }
             }
+            _ => {}
         }
     }
     types

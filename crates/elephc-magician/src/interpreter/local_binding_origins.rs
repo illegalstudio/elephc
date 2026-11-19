@@ -121,6 +121,14 @@ fn binding_kind_type(ty: Type) -> Type {
 pub(in crate::interpreter) fn bind_parameter_origin(scope: &mut ElephcEvalScope, name: &str,
     declared: Option<&EvalParameterType>, variadic: bool, context: &ElephcEvalContext,
 ) -> Result<(), EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+        let declared = declared.map(generic_type).unwrap_or_else(|| Type::atom("mixed"));
+        let schema = if variadic { Some(Type::Apply("array".to_string(), vec![Type::atom("int"), declared])) }
+            else { arrays::source_schema(&declared) };
+        if let Some(schema) = schema.and_then(crate::eval_ir::array_contents_type) {
+            scope.infer_array_local_type(name.to_string(), parameter_type(&schema));
+        }
+    }
     if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals) { return Ok(()); }
     let ty = if variadic { Type::atom("array") }
         else { declared.map(generic_type).unwrap_or_else(|| Type::atom("mixed")) };

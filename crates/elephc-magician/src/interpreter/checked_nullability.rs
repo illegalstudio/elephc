@@ -34,11 +34,18 @@ pub(super) fn declared(value: RuntimeCellHandle, ty: &EvalParameterType,
 
 /// Classifies the complete declaration before a reference preparation can retarget storage.
 pub(super) fn non_null_contract(ty: &EvalParameterType) -> bool {
-    if ty.allows_null() || !ty.is_intersection() && ty.variants().iter().any(|variant|
-        matches!(variant, EvalParameterTypeVariant::Mixed | EvalParameterTypeVariant::Void)
-            || matches!(variant, EvalParameterTypeVariant::Generic(ty)
-                if crate::eval_ir::array_contents_schema(ty).is_some())) {
-        return false;
+    !type_accepts_null(&crate::eval_ir::generic_type(ty))
+}
+
+/// Reads compound source contracts without projecting internal content schemas to a PHP kind.
+fn type_accepts_null(ty: &elephc_generics::Type) -> bool {
+    use elephc_generics::Type;
+    if crate::eval_ir::array_contents_schema(ty).is_some() { return true; }
+    match ty {
+        Type::Atom(name) => matches!(name.as_str(), "mixed" | "null" | "void"),
+        Type::Nullable(_) => true,
+        Type::Union(members) => members.iter().any(type_accepts_null),
+        Type::Intersection(members) => members.iter().all(type_accepts_null),
+        _ => false,
     }
-    true
 }

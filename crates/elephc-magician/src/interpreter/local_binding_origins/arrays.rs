@@ -22,7 +22,8 @@ pub(super) fn prepare(scope: &ElephcEvalScope, name: &str, producer: Option<&Eva
     }
     let declared = scope.local_type(name).or_else(|| scope.inferred_local_type(name)
         .filter(|ty| contains_contents(&generic_type(ty))));
-    let retained = declared.and_then(|ty| source_schema(&generic_type(ty)));
+    let retained = declared.and_then(|ty| source_schema(&generic_type(ty)))
+        .filter(|schema| array_contents_type(schema.clone()).is_none_or(|ty| !pending_array_contents(&ty)));
     let schema = if let Some(schema) = retained { schema }
     else if let Some(producer) = producer {
         source_schema(&generic_type(producer)).unwrap_or_else(|| Type::atom("array"))
@@ -37,7 +38,7 @@ pub(super) fn prepare(scope: &ElephcEvalScope, name: &str, producer: Option<&Eva
 }
 
 /// Projects array alternatives without narrowing explicitly open declaration arms.
-fn source_schema(ty: &Type) -> Option<Type> {
+pub(super) fn source_schema(ty: &Type) -> Option<Type> {
     if let Some(schema) = array_contents_schema(ty) { return Some(schema.clone()); }
     match ty {
         Type::Atom(name) if matches!(name.as_str(), "array" | "mixed") => Some(Type::atom("array")),
@@ -116,7 +117,7 @@ pub(in crate::interpreter) fn prepare_write(scope: &ElephcEvalScope, name: &str,
         || scope.local_type(name).is_some() || values.array_len(array)? != 0
         || generic_local_contracts(scope, name, context).iter().any(|ty| {
             let ty = generic_type(ty);
-            contains_contents(&ty) && !pending_array_contents(&ty)
+            contains_closed_contents(&ty)
         }) { return Ok(None); }
     let key = match index.map(|key| values.type_tag(key)).transpose()? {
         None | Some(EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL) => Type::atom("int"),
@@ -148,4 +149,14 @@ pub(in crate::interpreter) fn publish_write(scope: &mut ElephcEvalScope, name: &
         }
     }
     Ok(())
+}
+
+/// Finds an established content constraint while keeping pending captures neutral until first write.
+fn contains_closed_contents(ty: &Type) -> bool {
+    if array_contents_schema(ty).is_some() { return !pending_array_contents(ty); }
+    match ty {
+        Type::Union(members) | Type::Intersection(members) => members.iter().any(contains_closed_contents),
+        Type::Nullable(inner) => contains_closed_contents(inner),
+        _ => false,
+    }
 }

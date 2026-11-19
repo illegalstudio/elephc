@@ -203,3 +203,57 @@ fn strict_array_origins_empty_replacements_and_explicit_mixed_values() {
         assert_eq!(output, "R"); assert_eq!(returned, FakeValue::Int(3));
     }
 }
+
+/// Parameter declarations own element alternatives without imposing unrelated local kind stability.
+#[test]
+fn strict_array_origins_parameter_declarations_and_variadics() {
+    let source = "function closed(array<int> $items){ \
+        try{$items[]='bad';}catch(TypeError $error){echo 'T';} \
+        $items=7;$items=null;$items=[2];return $items[0];} \
+        function open_parameter(array $items){$items[]=1;$items[]='allowed';return count($items);} \
+        function variadic_items(int ...$items){try{$items[]='bad';}catch(TypeError $error){echo 'V';}return count($items);} \
+        echo closed([1]),open_parameter([]),variadic_items(1,2);return 7;";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "T22V2"); assert_eq!(returned, FakeValue::Int(7));
+    }
+}
+
+/// Captured schemas preserve copies and permit null stores independently from Nullability.
+#[test]
+fn strict_array_origins_closure_copies_pending_and_null_stores() {
+    let source = "$items=[1];$closed=function()use($items){ \
+        try{$items[]='bad';}catch(TypeError $error){echo 'C';} \
+        $items=7;$items=null;return 1;};echo $closed(); \
+        $empty=[];$pending=function()use($empty){$empty[]=1; \
+        try{$empty[]='bad';}catch(TypeError $error){echo 'P';}return count($empty);}; \
+        echo $pending(),count($empty);return count($items);";
+    for dispatch in [false, true] {
+        for features in [vec![StrictFeature::ArrayTypes], vec![StrictFeature::ArrayTypes, StrictFeature::Nullability]] {
+            let (output, returned) = run_source(source, None, &features, dispatch);
+            assert_eq!(output, "C1P10"); assert_eq!(returned, FakeValue::Int(1));
+        }
+    }
+}
+
+/// An untyped by-reference callee cannot bypass a caller's established array contents.
+#[test]
+fn strict_array_origins_reference_parameters_check_before_mutation() {
+    let source = "function corrupt(&$value){$value[]='bad';} \
+        $items=[1];try{corrupt($items);}catch(TypeError $error){echo 'R';}return count($items);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "R"); assert_eq!(returned, FakeValue::Int(1));
+    }
+}
+
+/// Explicit heterogeneous typed initializers retain their declared alternatives through copying.
+#[test]
+fn strict_array_origins_typed_heterogeneous_initializers_preserve_context() {
+    let source = "array<int|string> $items=[1,'allowed'];$copy=$items;$copy[]='more'; \
+        array<mixed> $open=[1,'allowed'];$open[]=false;return count($copy)+count($open);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert!(output.is_empty()); assert_eq!(returned, FakeValue::Int(6));
+    }
+}
