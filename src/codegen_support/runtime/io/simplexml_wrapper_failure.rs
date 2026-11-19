@@ -64,8 +64,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
 
 /// Allocates and initializes one compact AArch64 Throwable in `x0`.
 fn emit_error_aarch64(emitter: &mut Emitter, class_id: &str, message: &str, length: usize) {
-    abi::emit_load_int_immediate(emitter, "x0", throwable_storage::PAYLOAD_BYTES as i64); // request one compact Throwable payload
-    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_allocate(emitter);
     throwable_storage::emit_class_id(emitter, class_id);
     throwable_storage::emit_static_message(emitter, message, length as i64, throwable_storage::LengthStore::Register);
     throwable_storage::emit_default_fields(emitter, "x0");
@@ -101,8 +100,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
 /// Allocates and initializes one compact x86_64 Throwable in `rax`.
 fn emit_error_x86_64(emitter: &mut Emitter, class_id: &str, message: &str, length: usize) {
-    emitter.instruction(&format!("mov rax, {}", throwable_storage::PAYLOAD_BYTES));         // request one compact Throwable payload
-    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_allocate(emitter);
     throwable_storage::emit_class_id(emitter, class_id);
     throwable_storage::emit_static_message(emitter, message, length as i64, throwable_storage::LengthStore::Register);
     throwable_storage::emit_default_fields(emitter, "rax");

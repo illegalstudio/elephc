@@ -165,8 +165,7 @@ fn emit_class_named_throw_aarch64(emitter: &mut Emitter, spec: &ClassNamedThrow)
     emitter.instruction("bl __rt_str_persist");                                 // give the Throwable stable message ownership
     emitter.instruction("stp x1, x2, [sp]");                                    // preserve the message pair across the allocation
 
-    emitter.instruction("mov x0, #56");                                         // canonical Throwable payload size
-    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_allocate(emitter);
     throwable_storage::emit_class_id(emitter, spec.class_id_symbol);
     emitter.instruction("ldp x10, x11, [sp]");                                  // recover the persisted message pair
     throwable_storage::emit_message_pair(emitter, "x10", "x11");
@@ -246,8 +245,7 @@ fn emit_class_named_throw_x86_64(emitter: &mut Emitter, spec: &ClassNamedThrow) 
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the message pointer across the allocation
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the message byte length
 
-    emitter.instruction("mov rax, 56");                                         // canonical Throwable payload size
-    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_allocate(emitter);
     throwable_storage::emit_class_id(emitter, spec.class_id_symbol);
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // recover the message pointer
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // recover the message byte length

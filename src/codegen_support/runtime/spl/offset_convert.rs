@@ -298,8 +298,7 @@ fn emit_throw_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // recover the first concatenation buffer
     emitter.instruction("bl __rt_heap_free");                                   // release heap-backed storage; concat scratch is ignored
     // -- create the canonical Throwable object with owned message storage --
-    emitter.instruction("mov x0, #56");                                         // canonical Throwable payload size
-    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_allocate(emitter);
     throwable_storage::emit_class_id(emitter, "_spl_type_error_class_id");
     emitter.instruction("ldp x10, x11, [sp]");                                  // recover the persisted message pair
     throwable_storage::emit_message_pair(emitter, "x10", "x11");
@@ -527,8 +526,7 @@ fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // recover the first concatenation buffer
     abi::emit_call_label(emitter, "__rt_heap_free");                            // release heap-backed storage; concat scratch is ignored
     // -- create the canonical Throwable object with owned message storage --
-    emitter.instruction("mov rax, 56");                                         // canonical Throwable payload size
-    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_allocate(emitter);
     throwable_storage::emit_class_id(emitter, "_spl_type_error_class_id");
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // recover the message pointer
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // recover the message byte length

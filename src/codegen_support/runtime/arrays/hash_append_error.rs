@@ -15,12 +15,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
     emitter.label_global("__rt_hash_append_error");
     emitter.instruction(if arm { "stp x29, x30, [sp, #-16]!" } else { "sub rsp, 8" }); // preserve linkage and align exception allocation
-    emitter.instruction(if arm { "mov x0, #56" } else { "mov eax, 56" });       // request the compact Throwable payload
-    if arm {
-        elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
-    } else {
-        elephc_memoir::values::object_storage::emit_allocate_throwable_x86_64(emitter);
-    }
+    throwable_storage::emit_allocate_cold(emitter, "eax");
     throwable_storage::emit_class_id(emitter, "_spl_error_class_id");
     let len = super::super::data::HASH_APPEND_ERROR_MSG.len() as i64;
     throwable_storage::emit_static_message(emitter, "_hash_append_err_msg", len, throwable_storage::LengthStore::Immediate);

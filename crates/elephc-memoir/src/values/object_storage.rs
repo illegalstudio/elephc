@@ -17,12 +17,12 @@ pub fn emit_allocate_object(emitter: &mut impl Emitter) {
 }
 
 /// Allocates a compact Throwable with the requested size in the native integer-result register.
-pub fn emit_allocate_throwable(emitter: &mut impl Emitter) {
+pub(super) fn emit_allocate_throwable(emitter: &mut impl Emitter) {
     emit_allocate_with_handle(emitter, THROWABLE_HEAP_KIND);
 }
 
 /// Allocates a compact Throwable through the x86-64 cold-path instruction form.
-pub fn emit_allocate_throwable_x86_64(emitter: &mut impl Emitter) {
+pub(super) fn emit_allocate_throwable_x86_64(emitter: &mut impl Emitter) {
     emitter.emit_call_label("__rt_heap_alloc");
     let kind = crate::layout::x86_64_heap_kind_word(THROWABLE_HEAP_KIND);
     emitter.emit_load_int_immediate("r10", kind as i64);
