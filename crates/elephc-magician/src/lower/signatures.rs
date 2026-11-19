@@ -74,7 +74,7 @@ pub(super) fn lower_signature(
     for (name, ty, default, parameter_by_ref) in params {
         names.push(name);
         types.push(lower_type_in_scope(scope, ty, param_scope)?);
-        defaults.push(lower_default(scope, default)?);
+        defaults.push(lower_parameter_default(scope, default)?);
         by_ref.push(parameter_by_ref);
     }
     let mut is_variadic = vec![false; names.len()];
@@ -99,8 +99,8 @@ pub(super) fn lower_signature(
     })
 }
 
-/// Converts a default value only when Magician supports materializing it.
-pub(super) fn lower_default(scope: &Scope<'_>, value: Option<Expr>) -> Option<Option<EvalExpr>> {
+/// Converts a parameter default only when Magician supports materializing it.
+fn lower_parameter_default(scope: &Scope<'_>, value: Option<Expr>) -> Option<Option<EvalExpr>> {
     let Some(value) = value else { return Some(None) };
     let value = lower_expression(scope, value)?;
     crate::parser::method_parameter_default_is_supported(&value).then_some(Some(value))

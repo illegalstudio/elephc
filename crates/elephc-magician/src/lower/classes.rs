@@ -18,7 +18,7 @@ use elephc_chopper::syntax::{
 
 use crate::eval_ir::{EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalParameterTypeVariant, EvalSourceLocation, EvalStmt, EvalTraitAdaptation, EvalVisibility};
 
-use super::{Scope, attributes::lower_attributes, lower_branch, lower_expression, ordinary_class_name, signatures::{RelativeTypes, lower_default, lower_signature, lower_type_in_scope}};
+use super::{Scope, attributes::lower_attributes, lower_branch, lower_expression, ordinary_class_name, signatures::{RelativeTypes, lower_signature, lower_type_in_scope}};
 
 /// Converts a concrete class containing ordinary properties and methods.
 pub(super) fn lower_class(scope: &Scope<'_>, stmt: Stmt) -> Option<EvalClass> {
@@ -146,13 +146,17 @@ fn lower_property(scope: &Scope<'_>, property: ClassProperty) -> Option<EvalClas
     if ty.as_ref().is_some_and(|ty| ty.variants().contains(&EvalParameterTypeVariant::Callable)) {
         return None;
     }
+    let default = match property.default {
+        Some(value) => Some(lower_expression(scope, value)?),
+        None => None,
+    };
     let value = EvalClassProperty::with_visibility_static_final_and_readonly(
         property.name,
         lower_visibility(property.visibility),
         property.is_static,
         property.is_final,
         property.readonly,
-        lower_default(scope, property.default)?,
+        default,
     )
     .with_type(ty)
     .with_set_visibility(property.set_visibility.map(lower_visibility))

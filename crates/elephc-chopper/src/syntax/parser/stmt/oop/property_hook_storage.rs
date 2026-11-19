@@ -5,7 +5,7 @@
 //! - `super::body::parse_property_hooks()` before optimizer rewrites can remove syntax.
 //!
 //! Key details:
-//! - Only direct `$this->property` accesses establish backing storage, not variable names.
+//! - Direct `$this->property` accesses establish backing storage.
 //! - Reads, writes, and branches are inspected without crossing function or class boundaries.
 
 use crate::syntax::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
@@ -17,7 +17,12 @@ pub(super) fn body_uses_backing_slot(body: &[Stmt], property: &str) -> bool {
 
 /// Recognizes a direct access to the backing property on the hook's bound receiver.
 fn is_backing_property(object: &Expr, name: &str, property: &str) -> bool {
-    matches!(object.kind, ExprKind::This) && name == property
+    name == property && match &object.kind {
+        ExprKind::This => true,
+        // Runtime eval retains `$this` as a named variable, including in method bodies.
+        ExprKind::Variable(name) => crate::syntax::parser::runtime_fragment() && name == "this",
+        _ => false,
+    }
 }
 
 /// Visits executable statements without crossing into a separately declared class or function.

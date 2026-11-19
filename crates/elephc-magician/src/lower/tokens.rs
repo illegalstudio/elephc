@@ -115,7 +115,7 @@ fn shared_token(kind: &TokenKind, previous: Option<&TokenKind>, next: Option<&To
         TokenKind::Ident(name) if name.eq_ignore_ascii_case("endwhile") => Token::EndWhile,
         TokenKind::Ident(name) if name.eq_ignore_ascii_case("endforeach") => Token::EndForeach,
         TokenKind::Ident(name) if name.eq_ignore_ascii_case("default") => Token::Default,
-        TokenKind::Ident(name) if ["eval", "isset", "empty", "unset"]
+        TokenKind::Ident(name) if ["eval", "isset", "empty", "unset", "exit", "die"]
             .iter().any(|keyword| name.eq_ignore_ascii_case(keyword)) => Token::Identifier(name.clone()),
         TokenKind::Ident(name) if name.eq_ignore_ascii_case("throw") => Token::Throw,
         TokenKind::Ident(name) if name.eq_ignore_ascii_case("try") => Token::Try,
@@ -145,8 +145,6 @@ fn shared_token(kind: &TokenKind, previous: Option<&TokenKind>, next: Option<&To
             EvalMagicConst::Line(_) => Token::DunderLine,
         },
         TokenKind::String(value) => Token::StringLiteral(value.clone()),
-        TokenKind::DollarIdent(name) if name == "this"
-            && !matches!(previous, Some(TokenKind::Arrow | TokenKind::QuestionArrow | TokenKind::DoubleColon)) => Token::This,
         TokenKind::DollarIdent(name) => Token::Variable(name.clone()),
         TokenKind::DollarLBrace if matches!(previous, Some(TokenKind::DoubleColon)) => Token::DollarBrace,
         TokenKind::Plus => Token::Plus,
