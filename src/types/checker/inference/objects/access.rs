@@ -25,6 +25,9 @@ impl Checker {
             PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
             | PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. }
             | PhpType::Mixed => true,
+            // The element of an empty array literal (`foreach ([] as $column)`) is the bottom
+            // type: the body never runs, so its property name is vacuously a valid one.
+            PhpType::Never => true,
             PhpType::Object(class) => self.object_type_implements_interface(class, "Stringable")
                 || self.classes.get(class).is_some_and(|info| {
                     let key = crate::names::php_symbol_key("__toString");

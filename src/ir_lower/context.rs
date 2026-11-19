@@ -7692,6 +7692,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let op = if matches!(source, PhpType::Mixed | PhpType::Union(_)) {
             Op::MixedClone
         } else { Op::MixedBox };
+        // A tagged nullable scalar is the representation of the SOURCE, never of its box: a
+        // `MixedBox` typed `TaggedScalar` made the next boxing wrap the cell again, so a null
+        // read back as a non-null box.
+        let php_type = if php_type.codegen_repr() == PhpType::TaggedScalar { PhpType::Mixed } else { php_type };
         let boxed = self.emit_value(
             op,
             vec![value.value],

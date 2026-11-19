@@ -359,7 +359,10 @@ pub(super) fn lower_quiet_element_property(
     let boxed = if matches!(fetched_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         fetched
     } else {
-        ctx.box_value_as_mixed(fetched, fetched_type, Some(expr.span))
+        // The result type is the box's own: a tagged nullable scalar boxed "as" itself came back
+        // typed `TaggedScalar`, was boxed again by the temp store, and `??=` then saw a non-null
+        // box around a null.
+        ctx.box_value_as_mixed(fetched, PhpType::Mixed, Some(expr.span))
     };
     store_value_into_temp(ctx, &temp_name, PhpType::Mixed, boxed, expr.span);
     branch_to(ctx, merge);
