@@ -16,7 +16,8 @@ use crate::support::*;
 /// Emits one deprecation per offending constructor/destructor, in declaration order.
 #[test]
 fn test_constructor_deprecation_php86_php_src_fixture() {
-    let out = compile_and_run_capture_merged(r#"<?php
+    let out = compile_and_run_capture_merged_with_php_version(
+        r#"<?php
 
 class A {
     public function __construct() { return ''; }
@@ -35,8 +36,10 @@ class Gen {
     public function __destruct() { yield ''; }
 }
 
-"#);
-    let messages: Vec<&str> = out.stdout
+"#,
+        elephc::php_version::PhpVersion::Php86,
+    );
+    let messages: Vec<&str> = out
         .lines()
         .filter(|line| !line.is_empty())
         .map(|line| line.split(" in ").next().unwrap_or(line))

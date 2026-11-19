@@ -1,28 +1,37 @@
 //! Purpose:
-//! Emits PHP 8.6's declaration-time deprecations for constructors and destructors.
+//! Emits PHP 8.6's declaration-time deprecations: returning a value from (or making a
+//! generator of) a constructor/destructor, a nullable `__debugInfo()` return type, a class
+//! constant named `namespace`, a function named `readonly`, and the reserved `let`/`is`
+//! identifiers plus `_` as a constant name.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` and the codegen test harness before name resolution.
 //!
 //! Key details:
-//! - PHP reports `Returning a value from a constructor/destructor is deprecated` when a
-//!   magic method returns a value, and `Making a constructor/destructor a Generator is
-//!   deprecated` when it contains `yield`.
-//! - The diagnostic is emitted once when the class declaration runs. elephc compiles class
-//!   declarations away, so the generated program calls one helper at startup; its body is a
-//!   `trigger_error(..., E_USER_DEPRECATED)` per offending method.
+//! - PHP reports these when the declaration is compiled, so elephc's startup helper calls
+//!   `trigger_error(..., E_USER_DEPRECATED)` once per offending declaration. The whole pass is
+//!   gated on `--php-version=8.6`: every message below is new in that profile, and earlier
+//!   profiles must stay silent.
 //! - Only declarations whose execution is unconditional (top level, namespace block,
 //!   `Synthetic`, or an include-once guard) are scanned, matching the point at which the
 //!   helper call runs. Nested closures and nested declarations are not entered.
+//! - `define('name', ...)` is scanned too: the deprecation is about the constant NAME, which
+//!   the call introduces at the same top-level point.
 
-use crate::parser::ast::{Program, Stmt, StmtKind};
+use crate::parser::ast::{ClassConst, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr};
 use crate::synthetic_class::*;
 
 /// Internal helper that emits every collected declaration deprecation.
 const HELPER: &str = "__elephc_php86_declaration_deprecations";
 
 /// Injects the deprecation helper and its startup call when the program needs them.
+///
+/// Returns the program unchanged on profiles older than PHP 8.6 and when no declaration is
+/// affected.
 pub fn inject(program: Program) -> Program {
+    if crate::codegen_support::compile_php_version() < crate::php_version::PhpVersion::Php86 {
+        return program;
+    }
     let mut messages = Vec::new();
     collect_statements(&program, &mut messages);
     if messages.is_empty() {
@@ -33,7 +42,7 @@ pub fn inject(program: Program) -> Program {
         for message in &messages {
             body.push(s_expr(e_call(
                 "\\trigger_error",
-                vec![e_str(message), e_const("E_USER_DEPRECATED")],
+                vec![e_str(message.as_str()), e_const("E_USER_DEPRECATED")],
             )));
         }
         vec![function(HELPER).body(body).build()]
@@ -48,12 +57,52 @@ pub fn inject(program: Program) -> Program {
 }
 
 /// Collects deprecations from declarations that execute at the top level.
-fn collect_statements(statements: &[Stmt], messages: &mut Vec<&'static str>) {
+fn collect_statements(statements: &[Stmt], messages: &mut Vec<String>) {
     for statement in statements {
         match &statement.kind {
-            StmtKind::ClassDecl { methods, .. } | StmtKind::EnumDecl { methods, .. } => {
-                collect_methods(methods, messages);
+            StmtKind::ClassDecl {
+                name,
+                methods,
+                constants,
+                ..
+            } => {
+                collect_reserved_name(name, "class", messages);
+                collect_methods(name, methods, messages);
+                collect_class_constant_names(constants, messages);
             }
+            StmtKind::InterfaceDecl {
+                name,
+                methods,
+                constants,
+                ..
+            } => {
+                collect_reserved_name(name, "interface", messages);
+                collect_methods(name, methods, messages);
+                collect_class_constant_names(constants, messages);
+            }
+            StmtKind::TraitDecl {
+                name,
+                methods,
+                constants,
+                ..
+            } => {
+                collect_reserved_name(name, "trait", messages);
+                collect_methods(name, methods, messages);
+                collect_class_constant_names(constants, messages);
+            }
+            StmtKind::EnumDecl {
+                name,
+                methods,
+                constants,
+                ..
+            } => {
+                collect_reserved_name(name, "enum", messages);
+                collect_methods(name, methods, messages);
+                collect_class_constant_names(constants, messages);
+            }
+            StmtKind::FunctionDecl { name, .. } => collect_function_name(name, messages),
+            StmtKind::ConstDecl { name, .. } => collect_constant_name(name, messages),
+            StmtKind::ExprStmt(expr) => collect_define_name(expr, messages),
             StmtKind::NamespaceBlock { body, .. }
             | StmtKind::Synthetic(body)
             | StmtKind::IncludeOnceGuard { body, .. } => collect_statements(body, messages),
@@ -62,10 +111,76 @@ fn collect_statements(statements: &[Stmt], messages: &mut Vec<&'static str>) {
     }
 }
 
-/// Collects the constructor/destructor deprecations of one class-like declaration.
-fn collect_methods(methods: &[crate::parser::ast::ClassMethod], messages: &mut Vec<&'static str>) {
+/// Reports `let`/`is` used as a class, interface, trait, enum, function, or constant name.
+fn collect_reserved_name(name: &str, kind: &str, messages: &mut Vec<String>) {
+    let lower = name.to_ascii_lowercase();
+    if matches!(lower.as_str(), "let" | "is") {
+        messages.push(format!("Using {lower} as a {kind} name is deprecated"));
+    }
+}
+
+/// Reports `readonly` and the reserved identifiers declared as a function name.
+fn collect_function_name(name: &str, messages: &mut Vec<String>) {
+    if name.eq_ignore_ascii_case("readonly") {
+        messages.push("Declaring a function named readonly is deprecated".to_string());
+    }
+    collect_reserved_name(name, "function", messages);
+}
+
+/// Reports the reserved identifiers declared as a global constant name.
+fn collect_constant_name(name: &str, messages: &mut Vec<String>) {
+    if name == "_" {
+        messages.push("Using _ as a constant name is deprecated".to_string());
+    }
+    collect_reserved_name(name, "constant", messages);
+}
+
+/// Reports the reserved identifiers declared as a class constant name.
+fn collect_class_constant_names(constants: &[ClassConst], messages: &mut Vec<String>) {
+    for constant in constants {
+        if constant.name.eq_ignore_ascii_case("namespace") {
+            messages.push("Declaring a class constant named namespace is deprecated".to_string());
+        }
+        collect_constant_name(&constant.name, messages);
+    }
+}
+
+/// Reports a literal `define('name', ...)` call that introduces a reserved constant name.
+fn collect_define_name(expr: &Expr, messages: &mut Vec<String>) {
+    let ExprKind::FunctionCall { name, args } = &expr.kind else {
+        return;
+    };
+    if !name.as_str().eq_ignore_ascii_case("define") {
+        return;
+    }
+    if let Some(Expr {
+        kind: ExprKind::StringLiteral(value),
+        ..
+    }) = args.first()
+    {
+        collect_constant_name(value, messages);
+    }
+}
+
+/// Collects the constructor/destructor and `__debugInfo()` deprecations of one class-like
+/// declaration.
+fn collect_methods(
+    class_name: &str,
+    methods: &[crate::parser::ast::ClassMethod],
+    messages: &mut Vec<String>,
+) {
     for method in methods {
         let key = method.name.to_ascii_lowercase();
+        if key == "__debuginfo" {
+            if let Some(TypeExpr::Nullable(inner)) = &method.return_type {
+                if type_expr_is_array(inner) {
+                    messages.push(format!(
+                        "Declaring a nullable return type for {class_name}::__debugInfo() is deprecated"
+                    ));
+                }
+            }
+            continue;
+        }
         let (generator, value) = match key.as_str() {
             "__construct" => (
                 "Making a constructor a Generator is deprecated",
@@ -78,10 +193,19 @@ fn collect_methods(methods: &[crate::parser::ast::ClassMethod], messages: &mut V
             _ => continue,
         };
         if crate::types::checker::yield_validation::body_contains_yield(&method.body) {
-            messages.push(generator);
+            messages.push(generator.to_string());
         } else if body_returns_value(&method.body) {
-            messages.push(value);
+            messages.push(value.to_string());
         }
+    }
+}
+
+/// Returns whether a type expression spells PHP's `array` family.
+fn type_expr_is_array(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Array(_) | TypeExpr::AssocArray { .. } => true,
+        TypeExpr::Named(name) => name.as_str().eq_ignore_ascii_case("array"),
+        _ => false,
     }
 }
 
@@ -158,30 +282,94 @@ mod tests {
         crate::parser::parse(&tokens).expect("parse")
     }
 
+    /// Collects the deprecation messages of one source.
+    fn messages_of(source: &str) -> Vec<String> {
+        let mut messages = Vec::new();
+        collect_statements(&parse(source), &mut messages);
+        messages
+    }
+
     /// A value-returning constructor produces one deprecation message.
     #[test]
     fn value_returning_constructor_is_collected() {
-        let program = parse("<?php class A { public function __construct() { return 1; } }");
-        let mut messages = Vec::new();
-        collect_statements(&program, &mut messages);
-        assert_eq!(messages, vec!["Returning a value from a constructor is deprecated"]);
+        assert_eq!(
+            messages_of("<?php class A { public function __construct() { return 1; } }"),
+            vec!["Returning a value from a constructor is deprecated"]
+        );
     }
 
     /// A generator constructor produces the generator message instead of the value one.
     #[test]
     fn generator_constructor_is_collected() {
-        let program = parse("<?php class A { public function __construct() { yield 1; } }");
-        let mut messages = Vec::new();
-        collect_statements(&program, &mut messages);
-        assert_eq!(messages, vec!["Making a constructor a Generator is deprecated"]);
+        assert_eq!(
+            messages_of("<?php class A { public function __construct() { yield 1; } }"),
+            vec!["Making a constructor a Generator is deprecated"]
+        );
     }
 
     /// A plain constructor in a class with other methods emits nothing.
     #[test]
     fn ordinary_constructor_is_ignored() {
-        let program = parse("<?php class A { public function __construct() { } public function f(): int { return 1; } }");
-        let mut messages = Vec::new();
-        collect_statements(&program, &mut messages);
-        assert!(messages.is_empty());
+        assert!(messages_of(
+            "<?php class A { public function __construct() { } public function f(): int { return 1; } }"
+        )
+        .is_empty());
+    }
+
+    /// A nullable `__debugInfo()` return is deprecated with the declaring class named.
+    #[test]
+    fn nullable_debug_info_return_is_collected() {
+        assert_eq!(
+            messages_of(
+                "<?php class A { public function __debugInfo(): ?array { return null; } }"
+            ),
+            vec!["Declaring a nullable return type for A::__debugInfo() is deprecated"]
+        );
+    }
+
+    /// A class constant named `namespace` is deprecated, methods of that name are not.
+    #[test]
+    fn namespace_class_constant_is_collected() {
+        assert_eq!(
+            messages_of("<?php class A { const namespace = 1; }"),
+            vec!["Declaring a class constant named namespace is deprecated"]
+        );
+        assert!(messages_of("<?php class A { public function namespace() {} }").is_empty());
+    }
+
+    /// `readonly` as a function name and `let`/`is`/`_` as declaration names are deprecated.
+    #[test]
+    fn reserved_identifier_declarations_are_collected() {
+        assert_eq!(
+            messages_of("<?php function readonly() {}"),
+            vec!["Declaring a function named readonly is deprecated"]
+        );
+        assert_eq!(
+            messages_of("<?php function is() {}"),
+            vec!["Using is as a function name is deprecated"]
+        );
+        assert_eq!(
+            messages_of("<?php class let {}"),
+            vec!["Using let as a class name is deprecated"]
+        );
+        assert_eq!(
+            messages_of("<?php const _ = 1;"),
+            vec!["Using _ as a constant name is deprecated"]
+        );
+        assert_eq!(
+            messages_of("<?php define('let', 1);"),
+            vec!["Using let as a constant name is deprecated"]
+        );
+    }
+
+    /// The whole pass is gated on the 8.6 profile.
+    #[test]
+    fn declaration_deprecations_require_php_86() {
+        let profile = crate::codegen_support::compile_php_version();
+        crate::codegen_support::set_compile_profile(crate::php_version::PhpVersion::Php85, false);
+        let program = parse("<?php class A { public function __construct() { return 1; } }");
+        let injected = inject(program);
+        assert_eq!(injected.len(), 1, "PHP 8.5 must not inject the helper");
+        crate::codegen_support::set_compile_profile(profile, false);
     }
 }

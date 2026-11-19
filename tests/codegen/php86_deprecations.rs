@@ -31,3 +31,35 @@ fn test_sort_locale_string_read_is_deprecated_php86() {
     );
     assert!(older.contains('5'), "{older}");
 }
+
+/// PHP 8.6's declaration-time deprecations run once at startup and stay silent on 8.5.
+#[test]
+fn test_declaration_deprecations_php86() {
+    let source = r#"<?php
+class A {
+    const namespace = 1;
+    public function __debugInfo(): ?array { return null; }
+}
+function readonly() {}
+const let = 5;
+class is {}
+echo A::namespace + let;
+"#;
+    let out = compile_and_run_capture_merged_with_php_version(source, PhpVersion::Php86);
+    for needle in [
+        "Declaring a nullable return type for A::__debugInfo() is deprecated",
+        "Declaring a class constant named namespace is deprecated",
+        "Declaring a function named readonly is deprecated",
+        "Using let as a constant name is deprecated",
+        "Using is as a class name is deprecated",
+    ] {
+        assert!(out.contains(needle), "missing {needle:?} in {out}");
+    }
+
+    let older = compile_and_run_capture_merged_with_php_version(source, PhpVersion::Php85);
+    assert!(
+        !older.contains("Deprecated:"),
+        "PHP 8.5 must not report 8.6 declaration deprecations: {older}"
+    );
+    assert!(older.contains('6'), "{older}");
+}

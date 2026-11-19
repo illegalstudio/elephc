@@ -35,6 +35,10 @@ pub(super) fn parse_function_decl(
 
     let name = match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Identifier(n)) => n.clone(),
+        // php-src carries a lexer exception for `function readonly()`: the keyword lexes as a
+        // name in this position so an existing userland function keeps working (PHP 8.6 then
+        // deprecates it; the declaration scan reports that).
+        Some(Token::ReadOnly) => "readonly".to_string(),
         _ => return Err(CompileError::new(span, "Expected function name")),
     };
     *pos += 1;
