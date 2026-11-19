@@ -1776,7 +1776,7 @@ These helpers support `stdClass`, `json_decode()` object results, boxed Mixed pr
 | `__rt_stdclass_set` | Store a boxed Mixed value into a dynamic property hash | object pointer + property string + boxed value | — |
 | `__rt_mixed_property_get` | Unbox a Mixed object payload and dispatch stdClass property reads | boxed `mixed` + property string | boxed `mixed` payload |
 | `__rt_mixed_property_set` | Unbox a Mixed object payload and dispatch stdClass property writes; every other class silently drops the write, so it is only the FALLBACK behind the call-site class-id dispatch described in [the code generator](the-codegen.md) | boxed `mixed` + property string + boxed value | — |
-| `__rt_mixed_array_get` | Read Mixed array/hash/string/object dimensions with warning, write-fetch, checked or presence-report policy | boxed receiver, key tuple, mode bits `1`/`2`/`4`/`8` | owned Mixed value; report mode returns zero for absence |
+| `__rt_mixed_array_get` | Read Mixed array/hash/string/object dimensions with warning, write-fetch, checked or presence-report policy | boxed receiver, key tuple, mode bits `1`/`2`/`4`/`8` and normalized-tuple bit `16` | owned Mixed value; report mode returns zero for absence |
 | `__rt_mixed_array_set` | Unbox a Mixed indexed-array/hash payload and write a boxed Mixed value for `$mixed[$key] = ...`; consumes the boxed value on success | boxed `mixed` + normalized key tuple + boxed value | — |
 | `__rt_json_encode_stdclass` | Encode the dynamic-property hash backing stdClass as a JSON object | stdClass hash pointer | `x1`/`x2` = JSON string |
 

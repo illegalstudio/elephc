@@ -176,8 +176,8 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed associative-array Mixed cell to Rust
 
-    for (name, mode) in [("__elephc_eval_value_array_get", 0),
-        ("__elephc_eval_value_array_get_checked", elephc_semantics::indexing::REPORT_MISSING)] {
+    for (name, mode) in [("__elephc_eval_value_array_get", elephc_semantics::indexing::NORMALIZED_KEY_TUPLE),
+        ("__elephc_eval_value_array_get_checked", elephc_semantics::indexing::REPORT_MISSING | elephc_semantics::indexing::NORMALIZED_KEY_TUPLE)] {
         label_c_global(emitter, name);
         emitter.instruction("push rbp");                                        // preserve the Rust caller frame pointer across helper calls
         emitter.instruction("mov rbp, rsp");                                    // establish a stable wrapper frame pointer

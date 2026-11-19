@@ -607,8 +607,8 @@ order. Repeating an explicit feature option uses the last value.
 Integration is in progress. This build accepts the existing strict-locals and
 strict-opcache rules plus strict-dynamic-code, strict-bools, strict-arithmetic,
 strict-overflow, strict-strings, strict-coercions, strict-casts, strict-comparisons,
-strict-array-keys and strict-initialization.
-Other registered guarantees,
+strict-array-keys, strict-initialization and strict-indexing.
+The remaining strict-nullability, strict-mixed and strict-array-types guarantees,
 including the complete umbrella, fail explicitly until their enforcement is
 complete. Eval embedding entry points reject execution with those profiles too. The [implementation plan](https://github.com/illegalstudio/elephc/issues/2347)
 tracks the remaining work.
@@ -636,6 +636,31 @@ function displaySetting(bool $load): void {
 ```
 
 See `examples/strict-initialization/main.php` for a runnable example.
+
+### Checked indexing
+
+`--strict-indexing` makes an ordinary missing array/hash key or an out-of-range
+string byte offset throw `OutOfBoundsException`. Initialized null is a present
+value. Valid negative string offsets keep PHP byte indexing. The rule applies
+to literal source, included files, runtime eval and REPL submissions, independently
+of `declare(strict_types=0)`.
+
+Intentional `isset`, `empty`, `??` and supported writable-root probes retain
+their absence behavior. A key expression still runs ordinarily and may throw;
+receivers and keys are evaluated once. Writes and explicit reference slot
+creation retain their existing protocols. Overloaded object dimensions keep
+their `ArrayAccess` or native object hooks, without an additional `offsetExists`
+call. Key coercion, non-null requirements and mixed-value narrowing remain
+independent rules.
+
+```php
+$stock = ['pens' => 12, 'paper' => null];
+echo $stock['ink'] ?? 'optional';
+try { echo $stock['ink']; }
+catch (OutOfBoundsException $error) { echo 'unknown item'; }
+```
+
+See `examples/strict-indexing/main.php` for a runnable example.
 
 ### Exact array keys
 

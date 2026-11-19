@@ -344,6 +344,9 @@ elephc --strict-locals app.php
 # Check ordinary variable and property reads for initialized storage
 elephc --strict-initialization app.php
 
+# Throw on missing array keys or out-of-range string reads
+elephc --strict-indexing app.php
+
 # Print per-phase compiler timings
 elephc --timings hello.php
 

@@ -151,6 +151,13 @@ when direct read parameters would lose binding presence. Native frame/global
 synchronization preserves an eval `unset()` as absence instead of initialized
 null, including when the next read occurs outside eval.
 
+[`--strict-indexing`](../compiling/cli-reference.md#checked-indexing) distinguishes
+missing array/hash keys and out-of-range string byte offsets from present values.
+Ordinary missing reads throw `OutOfBoundsException`; intentional probes remain
+quiet. Native callbacks report presence to Rust without throwing across its
+stack frames, and the interpreter schedules the same catchable exception.
+Array expressions currently use the normal bytecode-to-walker fallback.
+
 Inside closures, `use ($x)` captures synchronize only the closure's captured
 copy. `use (&$x)` captures write through the shared source variable, so eval
 writes are visible to the outer scope after the closure runs.

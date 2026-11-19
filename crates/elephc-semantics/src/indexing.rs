@@ -15,6 +15,8 @@ pub const FOR_WRITE: i64 = 2;
 pub const CHECKED: i64 = 4;
 /// Reports absence to a Rust caller without unwinding across its stack.
 pub const REPORT_MISSING: i64 = 8;
+/// The caller already supplied its canonical key tuple; skip receiver-side normalization.
+pub const NORMALIZED_KEY_TUPLE: i64 = 16;
 /// Stable diagnostic for an absent array or hash entry.
 pub const MISSING_ARRAY_KEY: &str = "--strict-indexing: missing array key";
 /// Stable diagnostic for an invalid string byte offset.

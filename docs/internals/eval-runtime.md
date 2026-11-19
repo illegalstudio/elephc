@@ -923,7 +923,7 @@ boundary.
 
 ## Checked element-read boundary
 
-The staged Indexing implementation shares the existing native lookup instead of
+The Indexing implementation shares the existing native lookup instead of
 probing and then reading the same key. `RuntimeValueOps::array_get_checked`
 returns `Some(owned_cell)` for a present element, including initialized null,
 and `None` for a missing element. Its reference-preserving mode keeps a stored
@@ -931,7 +931,8 @@ reference identity; ordinary reads detach reference cells through the existing
 copy contract. Providers implement this operation explicitly.
 
 The generated `__elephc_eval_value_array_get_checked` callback normalizes its key
-once and uses report mode `8` in `__rt_mixed_array_get`. A real array/hash/string
+once and uses report mode `8` plus canonical-tuple mode `16` in
+`__rt_mixed_array_get`. The receiver-side reader skips repeat normalization. A real array/hash/string
 miss returns a null pointer with no cell owner. Successful reads return owned
 Mixed cells. Rust creates `OutOfBoundsException` through the interpreter's
 pending-throwable channel, so missing-read failure does not unwind across a Rust
@@ -944,5 +945,5 @@ their ordinary initialization and indexing checks. Slot creation, unset probes,
 ArrayAccess hooks and native object dimension protocols keep their existing
 contracts. Array expressions and `ArrayGet` currently cause the bytecode
 selector to fall back to the tree walker; these checks do not claim a new array
-bytecode opcode. Public Indexing admission remains gated until native eval and
-public entry-point validation is complete.
+bytecode opcode. The public checker, CLI, interpreter API, includes and REPL
+share the same independently selected profile.

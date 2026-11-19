@@ -49,7 +49,7 @@ pub const INTEGRATED_FEATURE_BITS: u64 = StrictFeature::Locals.bit() | StrictFea
     | StrictFeature::DynamicCode.bit() | StrictFeature::Opcache.bit() | StrictFeature::Arithmetic.bit()
     | StrictFeature::Overflow.bit() | StrictFeature::Strings.bit() | StrictFeature::Coercions.bit()
     | StrictFeature::Casts.bit() | StrictFeature::Comparisons.bit() | StrictFeature::ArrayKeys.bit()
-    | StrictFeature::Initialization.bit();
+    | StrictFeature::Initialization.bit() | StrictFeature::Indexing.bit();
 
 /// User-facing metadata for one strict feature.
 #[derive(Clone, Copy, Debug)]

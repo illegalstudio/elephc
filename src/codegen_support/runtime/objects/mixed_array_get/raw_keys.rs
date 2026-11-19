@@ -44,12 +44,16 @@ pub(super) fn prepare_receiver_key(emitter: &mut Emitter) {
     let done = "__rt_mixed_array_get_prepared_key";
     match emitter.target.arch {
         Arch::AArch64 => {
+            emitter.instruction("ldr x9, [sp, #40]");                           // read the caller's canonical-key mode
+            emitter.instruction(&format!("tbnz x9, #4, {done}"));               // a completed tuple must not be normalized again
             emitter.instruction(&format!("cbz x0, {normalize}"));               // null receivers retain their existing key evaluation
             emitter.instruction("ldr x9, [x0]");                                // inspect the concrete receiver before key normalization
             emitter.instruction("cmp x9, #6");                                  // object methods define their own offset argument rules
             emitter.instruction(&format!("b.eq {done}"));                       // retain the original object key representation
         }
         Arch::X86_64 => {
+            emitter.instruction("test QWORD PTR [rbp - 32], 16");               // read the caller's canonical-key mode
+            emitter.instruction(&format!("jnz {done}"));                        // a completed tuple must not be normalized again
             emitter.instruction("test rdi, rdi");                               // null receivers retain their existing key evaluation
             emitter.instruction(&format!("je {normalize}"));                    // normalize before the ordinary null receiver path
             emitter.instruction("cmp QWORD PTR [rdi], 6");                      // object methods define their own offset argument rules

@@ -124,6 +124,27 @@ fn indexed_eval_presence_callbacks_emit_on_every_target() {
         let bridge = runtime.split("__elephc_eval_value_array_get_checked:").nth(1).unwrap()
             .split("__elephc_eval_value_array_key_exists:").next().unwrap();
         assert!(bridge.contains("__rt_mixed_array_get"));
+        assert_eq!(bridge.matches("__elephc_eval_key_normalize").count(), 1,
+            "{name}: convert once before the reader consumes the completed tuple");
         assert!(!bridge.contains("__rt_throw_missing"), "{name}: Rust receives a presence result");
+    }
+}
+
+/// Public checking admits the completed profile and preserves it through every target's EIR.
+#[test]
+fn indexed_public_checker_emits_on_every_target() {
+    let source = "<?php $a=[1];try{echo $a[$argc+9];}catch(Throwable $error){echo 'X';}";
+    let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Indexing, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::check_with_target_and_options(&program, target,
+            crate::types::CheckOptions { semantic_profile: profile, ..Default::default() },
+            &crate::generics::GenericContext::default()).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        assert_eq!(module.semantic_profile, profile);
+        assert!(module.functions.iter().flat_map(|function| &function.instructions)
+            .any(|inst| inst.immediate == Some(Immediate::CheckedElementRead)));
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

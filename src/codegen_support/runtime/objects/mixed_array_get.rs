@@ -8,7 +8,7 @@
 //! Key details:
 //! - Key pairs use high word -1 for integers, nonnegative lengths for strings, or -2 for an original cell.
 //! - Mode bits select warnings (1), attached internal SPL storage (2), checked failure (4),
-//!   or a nonthrowing missing marker for the Rust interpreter (8).
+//!   a nonthrowing missing marker for Rust (8), or an already normalized key tuple (16).
 //! - Callers pass an explicit warning flag so normal reads diagnose missing/null
 //!   offsets while `isset()`/`??` keep the same helper quiet.
 //! - Boxed strings share PHP's negative-index, numeric-string, missing-offset, and TypeError rules.
@@ -956,6 +956,9 @@ mod tests {
             let report = if target == "linux-x86_64" { "jnz __rt_mixed_array_get_absent" }
                 else { "tbnz x9, #3, __rt_mixed_array_get_absent" };
             assert_eq!(assembly.matches(report).count(), 4, "{target}");
+            let prepared = if target == "linux-x86_64" { "test QWORD PTR [rbp - 32], 16" }
+                else { "tbnz x9, #4, __rt_mixed_array_get_prepared_key" };
+            assert!(assembly.contains(prepared), "{target}: completed tuple bypass");
             let absent = assembly.split_once("__rt_mixed_array_get_absent:\n").unwrap().1
                 .split_once("__rt_mixed_array_get_null_container:\n").unwrap().0;
             assert!(absent.contains("ret"), "{target}: {absent}");

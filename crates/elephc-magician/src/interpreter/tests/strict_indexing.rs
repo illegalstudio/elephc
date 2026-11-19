@@ -156,3 +156,43 @@ fn strict_indexing_eval_feature_policies_remain_independent() {
         finish(&mut context, &mut scope, &mut values, source);
     }
 }
+
+/// The opaque native fixture must parse under the same selected profile before execution.
+#[test]
+fn strict_indexing_opaque_fixture_parse_contract() {
+    let source = format!("{}{}",
+        include_str!("../../../../../tests/fixtures/strict/indexed_eval_reads.php").strip_prefix("<?php").unwrap(),
+        include_str!("../../../../../tests/fixtures/strict/indexed_eval_edge_reads.php").strip_prefix("<?php declare(strict_types=0);").unwrap());
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Indexing, true);
+    let result = crate::parser::parse_fragment_with_semantics(source.as_bytes(), profile);
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+/// Public interpreter entries preserve the guarantee across permissive and strict cache warmups.
+#[test]
+fn strict_indexing_public_entries_preserve_profiles_and_owners() {
+    for walker in [false, true] {
+        for strict in [false, true, false] {
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Indexing, strict);
+            let source = b"$indexingCacheArray=[1];return $indexingCacheArray[8];";
+            let program = crate::parser::parse_fragment_with_semantics(source, profile).unwrap();
+            let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+            values.fixed_profile = Some(profile);
+            let result = with_executable_cache_key(source, || if walker {
+                execute_program_statements(&program, &mut context, &mut scope, &mut values)
+                    .and_then(|control| match control { EvalControl::Return(value) => Ok(value), _ => values.null() })
+            } else { execute_program_with_context(&mut context, &program, &mut scope, &mut values) });
+            if !walker {
+                assert!(bytecode::lookup_executable(source, profile).expect("cached fallback").is_err());
+                assert!(!bytecode::last_execution_used_vm());
+            }
+            if strict {
+                assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+                let error = context.take_pending_throw().unwrap();
+                assert!(values.object_is_a(error, "OutOfBoundsException", false).unwrap()); values.release(error).unwrap();
+            } else { assert_eq!(values.get(result.as_ref().copied().unwrap()), FakeValue::Null); values.release(result.unwrap()).unwrap(); }
+            finish(&mut context, &mut scope, &mut values, "public profile/cache");
+        }
+    }
+}

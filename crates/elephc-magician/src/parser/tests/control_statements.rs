@@ -268,7 +268,8 @@ fn parse_fragment_rejects_unterminated_alternative_body() {
 fn parse_reference_foreach_preserves_fragment_subset_boundary() {
     use elephc_semantics::{SemanticProfile, StrictFeature};
     for profile in [SemanticProfile::PERMISSIVE,
-        SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true)] {
+        SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true),
+        SemanticProfile::PERMISSIVE.with(StrictFeature::Indexing, true)] {
         for source in [b"foreach ($items as &$item) {}".as_slice(),
             b"foreach ($items as $key => &$item) {}"] {
             let error = crate::parser::parse_fragment_with_semantics(source, profile).unwrap_err();

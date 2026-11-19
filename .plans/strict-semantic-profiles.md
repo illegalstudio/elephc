@@ -371,14 +371,14 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step215 (this commit). Remaining feature integration is active. Issue:
+Verified through step216 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
 commit for every verified step and no partial delivery. Do not expose unfinished
 flags as successful no-ops. The public integrated mask contains Locals, Bools, DynamicCode, Opcache,
-Arithmetic, Overflow, Strings, Coercions, Casts, Comparisons, ArrayKeys and
-Initialization. Nullability, Mixed, ArrayTypes and Indexing remain gated, as does
+Arithmetic, Overflow, Strings, Coercions, Casts, Comparisons, ArrayKeys,
+Initialization and Indexing. Nullability, Mixed and ArrayTypes remain gated, as does
 the complete umbrella, until their whole contracts are enforced. The verified
 steps below retain the source, reference, eval, ownership and target evidence.
 
@@ -2609,3 +2609,44 @@ REPL, source/cache/boundary checks and its example.
 
 Default compiler/Magician archive build, diff hygiene and assembly-comment
 checks pass in jobb3f7bebb. The existing warning baseline is unchanged.
+
+### Verified216: public checked indexing admission
+
+Indexing is independently admitted through the public checker, CLI, interpreter
+API, opaque native eval and REPL. Thirteen families are integrated; Nullability,
+Mixed, ArrayTypes and the complete umbrella remain gated. A CLI smoke test can
+explicitly disable those three pending families while retaining the other thirteen.
+The negative Indexing override is tested with an ordinary missing read that
+returns to its permissive warning path, rather than a probe valid in both modes.
+
+Public fixtures cover PHP-only source, both optimizer modes, tagless LFC includes,
+literal missing reads, initialized null, negative string offsets, missing-read
+statements, source/key effects, one float-key diagnostic, finally and owner
+cleanup. Native reference element selection, supported slot creation, removal,
+coalescing assignment and read-modify-write cases are distinguished. The eval
+fixture uses supported by-value foreach and explicit writes, since reference
+foreach is an existing parser boundary; its profile-independent refusal is pinned.
+Object hooks are authoritative: direct and boxed ArrayAccess reads invoke one
+getter and no extra offsetExists, and nullsafe probes stay quiet in AOT and eval.
+The new stock example distinguishes initialized null, missing items and probes.
+
+The C reader callback retains the established alias-key planning and conversion.
+A canonical-tuple bit16 now tells the shared receiver reader not to normalize
+that completed tuple again. This avoids duplicate work without the double float
+deprecation produced by a discarded original-boxed-key transport experiment.
+Existing warning/write/throw/report bits1/2/4/8 remain independent. Both permissive
+and exact-key real native bridge regression families pass. Runtime assembly also
+passes clang for every supported target, including both iOS variants.
+
+Public API warmups explicitly install a bytecode cache key and verify the cached
+array fallback across permissive/strict/permissive profiles, with clean owners.
+The runtime-cache identity gate runs from its actual binary harness, not --lib.
+All-five public checker/emitter checks, native CLI/eval/REPL/source tests and
+legacy bridge controls are recorded in the step216 evidence ledger. The existing
+escaping eval parameter/global alias value issue was measured without strict too
+and recorded separately as taskc1397da5 (knowledgecfa9012a); no new alias lifetime
+behavior is claimed here. Public and internal docs match the admitted boundary.
+
+Seventeen distinct focused feature/boundary gates pass. The final compiler and
+Magician archive build, diff hygiene and assembly-comment checks pass in
+job9511b229. Existing warnings are unchanged; no broad local suite was run.

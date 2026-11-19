@@ -86,3 +86,12 @@ fn test_repl_strict_initialization_public_profile_and_recovery() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "IquietNULL");
 }
+
+/// A cached public host preserves checked indexing and executes later input after recovery.
+#[test]
+fn test_repl_strict_indexing_public_profile_and_recovery() {
+    let fixture = Fixture::new();
+    let output = fixture.run("$a=[null,7];try{echo $a[9];}catch(OutOfBoundsException $error){echo 'I';}\necho $a[9]??'quiet';\necho gettype($a[0]), ':', $a[1];\n", &["--strict-indexing"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "IquietNULL:7");
+}

@@ -230,6 +230,18 @@ existing ambiguity and AST-duplication guards apply to these decisions too.
 
 `eval()` reads and writes locals through boxed `Mixed` scope cells rather than compiled typed frame slots (see [eval() scope behavior](../php/eval.md#scope-behavior)). With `--strict-locals`, source binding contracts remain independent from that physical representation: literal AOT fragments and the Magician walker/VM validate stores before publication, and a successful `unset` permits a fresh origin. Explicit `mixed` and imported values without source contracts remain open. The native body that calls `eval()` also keeps its slots addressable by name: because the scope cell is addressed by NAME, shapes 1 and 2 would hand the fragment a slot the rest of the body no longer uses, so `mixed_storage_scan` records a per-body "contains eval" flag (`Checker::body_contains_eval`) and `local_binding_is_killable` refuses both there; body-scoped rather than point-in-time, since `eval_barrier_active` only rises once the walk has PASSED an `eval` and the hazard includes an `eval` below the site. See [`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode) for the CLI flag.
 
+### Checked element reads
+
+`strict-indexing` marks ordinary dimensions with `Immediate::CheckedElementRead`.
+The shared effect contract includes catchable allocation and unwind effects, and
+the validator requires the matching module feature. Existing native lookups
+prove absence before raising `OutOfBoundsException`; a separate callback presence
+result lets eval schedule its exception without unwinding through Rust. Probes
+and slot creation remain explicit separate paths. A proven bounds optimization
+discharges both the check and its metadata. Throwable registration and runtime
+metadata retain the implicit exception and its ancestors even when source only
+catches `Throwable`. Internal source retains its previous read policy.
+
 ### Initialized reads
 
 The semantic profile controls `strict-initialization` independently of binding

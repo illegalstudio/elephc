@@ -176,8 +176,8 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the assoc-new wrapper frame
     emitter.instruction("ret");                                                 // return the boxed associative-array Mixed cell to Rust
 
-    for (name, mode) in [("__elephc_eval_value_array_get", 0),
-        ("__elephc_eval_value_array_get_checked", elephc_semantics::indexing::REPORT_MISSING)] {
+    for (name, mode) in [("__elephc_eval_value_array_get", elephc_semantics::indexing::NORMALIZED_KEY_TUPLE),
+        ("__elephc_eval_value_array_get_checked", elephc_semantics::indexing::REPORT_MISSING | elephc_semantics::indexing::NORMALIZED_KEY_TUPLE)] {
         label_c_global(emitter, name);
         emitter.instruction("sub sp, sp, #32");                                 // allocate a wrapper frame for key coercion
         emitter.instruction("stp x29, x30, [sp, #16]");                         // save frame pointer and return address across helper calls
