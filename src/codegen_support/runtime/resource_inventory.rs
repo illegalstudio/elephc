@@ -43,23 +43,15 @@ fn emit_resource_inventory_aarch64(emitter: &mut Emitter, features: RuntimeFeatu
     emit_get_resources_aarch64(emitter);
 }
 
-/// Closes live owned handles, frees every node, and restores resource state on AArch64.
+/// Routes native handle cleanup during the Memoir-owned inventory reset.
 fn emit_reset_aarch64(emitter: &mut Emitter, features: RuntimeFeatures) {
-    emitter.blank();
-    emitter.comment("--- runtime: resource_inventory_reset ---");
-    emitter.label_global("__rt_resource_inventory_reset");
-    emitter.instruction("sub sp, sp, #32");                                     // reserve an aligned frame and one next-node spill
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve caller frame state across heap frees
-    emitter.instruction("add x29, sp, #16");                                    // establish the reset frame
-    abi::emit_symbol_address(emitter, "x9", "_resource_inventory_head");
-    emitter.instruction("ldr x9, [x9]");                                        // start at the oldest node
-    emitter.label("__rt_resource_inventory_reset_loop");
-    emitter.instruction("cbz x9, __rt_resource_inventory_reset_done");          // finish after the final node
-    emitter.instruction("ldr x10, [x9]");                                       // preserve next before freeing this node
-    emitter.instruction("str x10, [sp, #0]");                                   // heap free may clobber all scratch registers
-    emitter.instruction("str x9, [sp, #8]");                                    // preserve the current node across handle cleanup
-    emitter.instruction(&format!("ldr x10, [x9, #{STATE_OFFSET}]"));            // inspect whether an ordinary close already consumed it
-    emitter.instruction("cbnz x10, __rt_resource_inventory_reset_free");        // never close one native handle twice
+    resource_weak::emit_drain(emitter, 5, |emitter| {
+        emit_close_open_aarch64(emitter, features);
+    });
+}
+
+/// Emits the compiler-selected closer for the live record supplied by Memoir.
+fn emit_close_open_aarch64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction(&format!("ldr x10, [x9, #{SUBTYPE_OFFSET}]"));          // load the resource cleanup subtype
     emitter.instruction("cmp x10, #1");                                         // kind 1 owns a native stream descriptor
     emitter.instruction("b.eq __rt_resource_inventory_reset_stream");           // close a leaked stream descriptor directly
@@ -98,20 +90,6 @@ fn emit_reset_aarch64(emitter: &mut Emitter, features: RuntimeFeatures) {
         emitter.instruction("b.hs __rt_resource_inventory_reset_free");         // synthetic directories own no descriptor
         abi::emit_call_label(emitter, "__rt_closedir");
     }
-    emitter.label("__rt_resource_inventory_reset_free");
-    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the node after cleanup helper calls
-    emitter.instruction("mov x0, x9");                                          // free the raw inventory node
-    abi::emit_call_label(emitter, "__rt_heap_free");
-    emitter.instruction("ldr x9, [sp, #0]");                                    // continue from the saved next pointer
-    emitter.instruction("b __rt_resource_inventory_reset_loop");                // process the next incarnation
-    emitter.label("__rt_resource_inventory_reset_done");
-    abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_head", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_tail", 0);
-    abi::emit_load_int_immediate(emitter, "x9", 5);
-    abi::emit_store_reg_to_symbol(emitter, "x9", "_resource_id_next", 0);
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore caller frame state
-    emitter.instruction("add sp, sp, #32");                                     // release reset storage
-    emitter.instruction("ret");                                                 // return with an empty inventory
 }
 
 /// Registers one resource id exactly once in creation order on AArch64.
@@ -336,24 +314,15 @@ fn emit_resource_inventory_x86_64(emitter: &mut Emitter, features: RuntimeFeatur
     emit_get_resources_x86_64(emitter);
 }
 
-/// Closes live owned handles, frees every node, and restores resource state on x86_64.
+/// Routes native handle cleanup during the Memoir-owned inventory reset.
 fn emit_reset_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
-    emitter.blank();
-    emitter.comment("--- runtime: resource_inventory_reset ---");
-    emitter.label_global("__rt_resource_inventory_reset");
-    emitter.instruction("push rbp");                                            // preserve caller frame pointer and align nested calls
-    emitter.instruction("mov rbp, rsp");                                        // establish the reset frame
-    emitter.instruction("sub rsp, 16");                                         // reserve one next-node spill while keeping alignment
-    abi::emit_symbol_address(emitter, "r10", "_resource_inventory_head");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // start at the oldest node
-    emitter.label("__rt_resource_inventory_reset_loop_x86");
-    emitter.instruction("test r10, r10");                                       // did the list end?
-    emitter.instruction("jz __rt_resource_inventory_reset_done_x86");           // finish after the final node
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // preserve next before freeing this node
-    emitter.instruction("mov QWORD PTR [rbp - 8], r11");                        // heap free may clobber all scratch registers
-    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // preserve the current node across handle cleanup
-    emitter.instruction(&format!("cmp QWORD PTR [r10 + {STATE_OFFSET}], 0"));   // inspect whether an ordinary close already consumed it
-    emitter.instruction("jne __rt_resource_inventory_reset_free_x86");          // never close one native handle twice
+    resource_weak::emit_drain(emitter, 5, |emitter| {
+        emit_close_open_x86_64(emitter, features);
+    });
+}
+
+/// Emits the compiler-selected closer for the live record supplied by Memoir.
+fn emit_close_open_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {SUBTYPE_OFFSET}]")); // load the resource cleanup subtype
     emitter.instruction("cmp r11, 1");                                          // kind 1 owns a native stream descriptor
     emitter.instruction("je __rt_resource_inventory_reset_stream_x86");         // close a leaked stream descriptor directly
@@ -389,19 +358,6 @@ fn emit_reset_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
         emitter.instruction("jae __rt_resource_inventory_reset_free_x86");      // synthetic directories own no descriptor
         abi::emit_call_label(emitter, "__rt_closedir");
     }
-    emitter.label("__rt_resource_inventory_reset_free_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the node after cleanup helper calls
-    emitter.instruction("mov rax, r10");                                        // free the raw inventory node
-    abi::emit_call_label(emitter, "__rt_heap_free");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // continue from the saved next pointer
-    emitter.instruction("jmp __rt_resource_inventory_reset_loop_x86");          // process the next incarnation
-    emitter.label("__rt_resource_inventory_reset_done_x86");
-    abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_head", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_tail", 0);
-    abi::emit_load_int_immediate(emitter, "r10", 5);
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_resource_id_next", 0);
-    emitter.instruction("leave");                                               // release reset storage and restore rbp
-    emitter.instruction("ret");                                                 // return with an empty inventory
 }
 
 /// Registers one resource id exactly once in creation order on x86_64.
