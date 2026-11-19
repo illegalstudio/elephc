@@ -23,3 +23,20 @@ pub(super) fn require_non_null(value: RuntimeCellHandle, context: &mut ElephcEva
     }
     Ok(())
 }
+
+/// Keeps explicit nullable/mixed declarations open while checking original non-null candidates.
+pub(super) fn declared(value: RuntimeCellHandle, ty: &EvalParameterType,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !non_null_contract(ty) { return Ok(()); }
+    require_non_null(value, context, values)
+}
+
+/// Classifies the complete declaration before a reference preparation can retarget storage.
+pub(super) fn non_null_contract(ty: &EvalParameterType) -> bool {
+    if ty.allows_null() || !ty.is_intersection() && ty.variants().iter().any(|variant|
+        matches!(variant, EvalParameterTypeVariant::Mixed | EvalParameterTypeVariant::Void)) {
+        return false;
+    }
+    true
+}

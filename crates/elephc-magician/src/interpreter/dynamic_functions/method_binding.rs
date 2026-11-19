@@ -586,6 +586,7 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    super::super::checked_nullability::declared(value, param_type, context, values)?;
     if eval_method_parameter_type_accepts_exact(param_type, value, context, values)? {
         return Ok(value);
     }

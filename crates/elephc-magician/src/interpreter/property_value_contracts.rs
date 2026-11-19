@@ -28,6 +28,7 @@ pub(in crate::interpreter) fn eval_validate_property_contract(
     owner: &str, property: &str, ty: &EvalParameterType, value: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    checked_nullability::declared(value, ty, context, values)?;
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)
         && !eval_declared_value_type_accepts_exact(ty, Some(owner), Some(owner), value, context, values)?
     {
@@ -73,7 +74,9 @@ pub(in crate::interpreter) fn eval_preflight_property_reference_source(
 ) -> Result<(), EvalStatus> {
     if context.current_function().is_some() || scope.reference_target(source).is_some()
         || !property.property_type().is_some_and(|ty| eval_nonnull_object_boundary(ty)
-            || context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)) {
+            || context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)
+            || context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
+                && checked_nullability::non_null_contract(ty)) {
         return Ok(());
     }
     let value = match visible_scope_cell(context, scope, source) {

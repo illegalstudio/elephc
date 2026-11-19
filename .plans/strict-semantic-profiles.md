@@ -2728,3 +2728,33 @@ complete fixture line and the full fragment. Separate walker/fallback cases
 cover nullsafe selector suppression, actual-null array continuation effects,
 quiet coalescing/empty, permissive empty and owner balance. Public admission and
 opaque eval remain gated pending declared and builtin value consumers.
+
+### Verified220: original null at declared value boundaries
+
+Native non-null scalar parameter preparation now preserves original values until
+all source arguments finish, then applies a null-only guard before the existing
+parameter-order PHP adaptation. Exact Coercions storage remains a separate
+selection, so non-null weak conversions keep their prior rules. Declared return
+values are checked before return storage conversion. Nullable/mixed declarations
+and void returns remain open. Existing typed native property rejection is reused.
+The interpreter shares a complete declaration null predicate across parameter,
+return and property candidate validation; reference preflight checks a non-null
+scalar candidate before attaching its source alias or replacing live storage.
+
+Implicit argument-boundary and declared-return effects include the new failure.
+The initial native fixture exposed an uncaught TypeError when its catch was lost
+from exception reachability; adding a value guard alone was insufficient. The
+corrected effect contract preserves handlers in optimized and unoptimized native
+execution. Knowledge ff771749 records this diagnostic and passing job evidence.
+The native permissive string-boundary null conversion was measured separately
+against PHP and retained as existing default behavior, with a separate follow-up
+task rather than an unrelated permissive semantic change.
+
+Six exact gates pass: interpreted boundary and owner coverage, refused property
+reference source retaining the old slot/no lingering alias, existing Coercions
+parameter and return controls, native strict/permissive with optimization on and
+off, and all-five EIR validation/emission. The fixture proves later argument L
+runs before null rejection, nullable/mixed/void contracts accept null, non-null
+integer-to-string weak conversions remain available, and native heap cleanup is
+balanced. This step does not admit Nullability: builtin source folding, remaining
+callable/reference/host boundaries and final public/eval acceptance are pending.

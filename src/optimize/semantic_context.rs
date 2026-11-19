@@ -54,7 +54,7 @@ pub(super) fn implicit_value_boundary_may_throw(expr: &crate::parser::ast::Expr)
     if enabled(StrictFeature::Locals) && matches!(expr.kind,
         ExprKind::Assignment { .. } | ExprKind::PreIncrement(_) | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_) | ExprKind::PostDecrement(_)) { return true; }
-    enabled(StrictFeature::Coercions) && matches!(expr.kind,
+    (enabled(StrictFeature::Coercions) || enabled(StrictFeature::Nullability)) && matches!(expr.kind,
         ExprKind::FunctionCall { .. } | ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. }
         | ExprKind::MethodCall { .. } | ExprKind::NullsafeMethodCall { .. }
         | ExprKind::NullsafeDynamicMethodCall { .. } | ExprKind::StaticMethodCall { .. }

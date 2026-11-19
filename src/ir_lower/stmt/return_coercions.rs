@@ -20,6 +20,9 @@ pub(super) fn coerce_to_return_type(
     span: Option<Span>,
 ) -> LoweredValue {
     let return_php_type = ctx.return_php_type.clone();
+    if ctx.return_type_is_declared && crate::semantics::nullability::non_null_contract(&return_php_type) {
+        crate::ir_lower::nullability::require_non_null(ctx, value, &[], &[], span.unwrap_or_else(Span::dummy));
+    }
     let value = if ctx.return_type_is_declared
         && crate::ir_lower::conversion_boundaries::active(ctx, &return_php_type) {
         let span = span.unwrap_or_else(Span::dummy);

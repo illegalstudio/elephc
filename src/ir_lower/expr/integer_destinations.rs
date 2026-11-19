@@ -34,7 +34,7 @@ pub(super) fn lower_expr_for_parameter(
     if expr.producer_binding.is_some() {
         return lower_expr_for_destination(ctx, expr, destination);
     }
-    if crate::ir_lower::conversion_boundaries::active(ctx, destination) {
+    if crate::ir_lower::conversion_boundaries::parameter_active(ctx, destination) {
         return lower_expr(ctx, expr);
     }
     if destination.codegen_repr() == PhpType::Callable {

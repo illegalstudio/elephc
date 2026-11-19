@@ -19,6 +19,14 @@ pub(super) fn active(ctx: &LoweringContext<'_, '_>, destination: &PhpType) -> bo
         && crate::semantics::conversions::implicit_contract(destination).is_some()
 }
 
+/// Defers scalar parameter adaptation until all original source operands have been evaluated.
+pub(super) fn parameter_active(ctx: &LoweringContext<'_, '_>, destination: &PhpType) -> bool {
+    active(ctx, destination)
+        || (semantic_guards::source_feature_enabled(ctx, StrictFeature::Nullability)
+            && crate::semantics::conversions::scalar_contract(destination).is_some()
+            && crate::semantics::nullability::non_null_contract(destination))
+}
+
 /// Checks declared membership and returns the same value and ownership without conversion.
 pub(super) fn implicit(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
     destination: &PhpType, span: Span) -> LoweredValue {

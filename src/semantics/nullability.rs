@@ -13,6 +13,12 @@ use elephc_semantics::{SemanticProfile, nullability::{NullPlan, NullState, plan_
 
 pub(crate) use elephc_semantics::nullability::NON_NULL_MESSAGE;
 
+/// Recognizes closed declarations that exclude null without imposing exact kind membership.
+pub(crate) fn non_null_contract(ty: &PhpType) -> bool {
+    super::conversions::implicit_contract(ty).is_some_and(|allowed|
+        !allowed.allows(elephc_semantics::conversions::ValueKind::Null))
+}
+
 /// Projects logical alternatives without treating a storage representation as a null proof.
 pub(crate) fn null_state(ty: &PhpType) -> NullState {
     match ty {

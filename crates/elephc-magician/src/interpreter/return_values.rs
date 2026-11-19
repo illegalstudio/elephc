@@ -170,6 +170,7 @@ fn eval_declared_return_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    checked_nullability::declared(value, return_type, context, values)?;
     if eval_declared_value_type_accepts_exact(
         return_type,
         return_owner,

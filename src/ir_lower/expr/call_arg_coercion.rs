@@ -611,7 +611,7 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return value;
     };
-    if crate::ir_lower::conversion_boundaries::active(ctx, param_ty) {
+    if crate::ir_lower::conversion_boundaries::parameter_active(ctx, param_ty) {
         // The parameter-order pass checks original kinds after all caller expressions finish.
         return value;
     }
@@ -974,7 +974,7 @@ pub(super) fn coerce_operands_to_params(
         .map(|index| operand_needs_param_coercion(ctx, sig, &operands, index))
         .collect::<Vec<_>>();
     if needs_coercion.iter().any(|needs_coercion| *needs_coercion)
-        || sig.params.iter().take(limit).any(|(_, ty)| crate::ir_lower::conversion_boundaries::active(ctx, ty)) {
+        || sig.params.iter().take(limit).any(|(_, ty)| crate::ir_lower::conversion_boundaries::parameter_active(ctx, ty)) {
         // Source evaluation has completed, but any parameter conversion below can throw.
         // Publish the one last source value that did not need protection during source
         // evaluation, plus synthesized owned operands, before the first conversion runs.
@@ -994,6 +994,10 @@ pub(super) fn coerce_operands_to_params(
         let Some((_, param_ty)) = sig.params.get(index) else {
             continue;
         };
+        if crate::semantics::nullability::non_null_contract(param_ty) {
+            let original = lowered_value_from_id(ctx, operands[index]);
+            crate::ir_lower::nullability::require_non_null(ctx, original, &[], &[], Span::dummy());
+        }
         if crate::ir_lower::conversion_boundaries::active(ctx, param_ty) {
             let value = lowered_value_from_id(ctx, operands[index]);
             let checked = crate::ir_lower::conversion_boundaries::implicit(ctx, value, param_ty, Span::dummy());

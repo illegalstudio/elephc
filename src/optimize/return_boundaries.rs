@@ -60,6 +60,11 @@ impl ReturnBoundaryFacts {
 
     /// Retains an exact-kind failure independently of ordinary PHP return verification.
     fn implicit_may_throw(&self, source: &PhpType) -> bool {
+        if super::semantic_context::enabled(elephc_semantics::StrictFeature::Nullability)
+            && crate::semantics::nullability::non_null_contract(&self.declared_result) {
+            // A useful static heap type can still carry a logical null from its producer.
+            return true;
+        }
         matches!(crate::semantics::conversions::implicit(
             super::semantic_context::active_profile(), super::semantic_context::active_source_mode(),
             &self.declared_result, source),

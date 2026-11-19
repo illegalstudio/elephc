@@ -180,3 +180,32 @@ fn strict_nullability_eval_nullsafe_chains_preserve_steps() {
         values.release(value).unwrap(); finish(&mut context, &mut scope, &mut values, source);
     }
 }
+
+/// Non-null declarations check the source before weak scalar conversion and preserve open contracts.
+#[test]
+fn strict_nullability_eval_declared_boundaries_and_owners() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    let source = include_str!("../../../../../tests/fixtures/strict/nullable_boundaries.php")
+        .strip_prefix("<?php\ndeclare(strict_types=0);").unwrap();
+    for fallback in [false, true] {
+        let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        let result = execute(source, fallback, &mut context, &mut scope, &mut values);
+        assert!(result.is_ok(), "{:?}; {}", result.as_ref().err(), values.output);
+        assert_eq!(values.output, "LP|R|S:kept|NULL:7:8:NULL:NULL");
+        finish(&mut context, &mut scope, &mut values, "declared boundaries");
+    }
+}
+
+/// A refused null reference candidate cannot replace the published property or attach a source alias.
+#[test]
+fn strict_nullability_eval_property_reference_preflight_preserves_storage() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    let source = "class NullableRefSlot{public string $value='kept';}$slot=new NullableRefSlot();$candidate=null;try{$slot->value=&$candidate;}catch(TypeError $e){echo 'N';}$candidate='changed';echo ':',$slot->value;";
+    let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+    let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+    let result = execute(source, true, &mut context, &mut scope, &mut values);
+    assert!(result.is_ok(), "{:?}; {}", result.as_ref().err(), values.output);
+    assert_eq!(values.output, "N:kept");
+    finish(&mut context, &mut scope, &mut values, source);
+}
