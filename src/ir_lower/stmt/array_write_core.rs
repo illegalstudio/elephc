@@ -896,7 +896,20 @@ fn lower_promotable_array_local_set(
     };
     // A `?int` local read the checker viewed as `mixed` arrives freshly boxed; the write takes
     // the tagged scalar inside instead, keeps its `null`, and retires the unused box.
-    let value_value = unboxed_tagged_scalar_write_value(ctx, value_value, value_span);
+    let mut value_value = unboxed_tagged_scalar_write_value(ctx, value_value, value_span);
+    // The checker only admits an integer or a nullable integer here, so a boxed value is a `?int`
+    // read of a key (`$a[$k] = $a[$miss]`): its `null` must reach the hash as `null`, not as the
+    // zero a coercion to `int` would store.
+    if value_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed)
+        && matches!(
+            ctx.builder.value_php_type(array_value.value).codegen_repr(),
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Int
+        )
+    {
+        let boxed = value_value;
+        value_value = super::return_coercions::coerce_to_tagged_scalar(ctx, boxed, Some(value_span));
+        crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(value_span));
+    }
     // A nullable integer stays tagged: codegen keeps its `null` as a null entry of the promoted
     // hash rather than the zero a coercion to `int` would store.
     let (value_value, (array_value, updated_ty, needs_storeback)) =
