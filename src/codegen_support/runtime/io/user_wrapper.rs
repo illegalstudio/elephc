@@ -46,6 +46,14 @@ const VTABLE_SLOT_STAT: usize = 8;
 const VTABLE_SLOT_LOCK: usize = 11;
 const VTABLE_SLOT_TRUNCATE: usize = 12;
 
+/// Returns whether a failed `stream_flush()` makes `fclose()` report failure.
+///
+/// PHP 8.6 is the first release that propagates the flush result; 8.5 and earlier still
+/// call the flush but ignore whether it succeeded.
+fn reports_failed_flush() -> bool {
+    crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86
+}
+
 /// `__rt_user_wrapper_fclose`: invoke the wrapper's `stream_close` (if any)
 /// and release the handle's object owner. Always returns 1 (`true`) once the slot is
 /// freed, mirroring PHP's "fclose succeeded as far as we can tell" semantics
@@ -83,12 +91,23 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the object owner for exceptional cleanup
     guards::guard(emitter, 16, 48);
 
-    // -- invoke an optional close method with exceptional object cleanup active --
+    // -- flush before closing: PHP 8.6 makes a failed flush fail fclose() --
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the wrapper receiver after publishing the guard
     abi::emit_load_symbol_to_reg(emitter, "x11", "_stream_close_silent", 0);
     emitter.instruction("ldr x9, [sp, #8]");                                    // restore policy after the symbol helper borrows x9
-    emitter.instruction("orr x9, x9, x11");                                     // combine XML resource suppression with native fileinfo cleanup mode
-    emitter.instruction("cbnz x9, __rt_uwfclose_release");                      // skip PHP callbacks while unwinding a native-extension exception
+    emitter.instruction("orr x10, x9, x11");                                    // combine XML resource suppression with native fileinfo cleanup mode
+    emitter.instruction("mov x9, #1");                                          // fclose() succeeds unless the flush reports otherwise
+    emitter.instruction("str x9, [sp, #8]");                                    // reuse the consumed policy slot for the fclose result
+    emitter.instruction("cbnz x10, __rt_uwfclose_release");                     // skip PHP callbacks while unwinding a native-extension exception
+    emit_aarch64_method_lookup(emitter, "__rt_uwfclose_release", VTABLE_SLOT_FLUSH);
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the wrapper receiver for stream_flush()
+    emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_FLUSH, "flush");         // stream_flush() reports 0 when PHP returns false
+    if reports_failed_flush() {
+        emitter.instruction("str x0, [sp, #8]");                                // PHP 8.6: a failed flush makes fclose() report failure
+    }
+
+    // -- invoke an optional close method with exceptional object cleanup active --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the wrapper receiver for stream_close()
     emit_aarch64_method_lookup(emitter, "__rt_uwfclose_release", VTABLE_SLOT_CLOSE);
     emitter.instruction("blr x11");                                             // invoke stream_close on the wrapper object
 
@@ -98,7 +117,7 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // recover the owner after removing exceptional cleanup
     emitter.instruction("bl __rt_decref_object");                               // release properties and run the last owner's destructor
     emitter.label("__rt_uwfclose_done");
-    emitter.instruction("mov x0, #1");                                          // fclose() on a wrapper always reports success
+    emitter.instruction("ldr x0, [sp, #8]");                                    // report the flush result as fclose()'s success flag
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return to the inline fclose dispatch site
@@ -133,13 +152,23 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // provide the object through the native owner-guard convention
     guards::guard(emitter, 16, 48);
 
-    // -- protect the wrapper while its optional close method executes --
+    // -- flush before closing: PHP 8.6 makes a failed flush fail fclose() --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the receiver after guard publication
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // only the detached failing stream suppresses its callback
     abi::emit_load_symbol_to_reg(emitter, "r11", "_stream_close_silent", 0);
     emitter.instruction("or r9, r11");                                          // combine XML resource suppression with native fileinfo cleanup mode
+    emitter.instruction("mov QWORD PTR [rbp - 16], 1");                         // fclose() succeeds unless the flush reports otherwise
     emitter.instruction("test r9, r9");                                         // check the native-extension exception cleanup mode
-    emitter.instruction("jnz __rt_uwfclose_release_x86");                       // release without stream_close during native-extension unwinding
+    emitter.instruction("jnz __rt_uwfclose_release_x86");                       // release without PHP callbacks during native-extension unwinding
+    emit_x86_method_lookup(emitter, "__rt_uwfclose_release_x86", VTABLE_SLOT_FLUSH);
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the wrapper receiver for stream_flush()
+    emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_FLUSH, "flush");             // stream_flush() reports 0 when PHP returns false
+    if reports_failed_flush() {
+        emitter.instruction("mov QWORD PTR [rbp - 16], rax");                   // PHP 8.6: a failed flush makes fclose() report failure
+    }
+
+    // -- protect the wrapper while its optional close method executes --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the receiver for stream_close()
     emit_x86_method_lookup(emitter, "__rt_uwfclose_release_x86", VTABLE_SLOT_CLOSE);
     emitter.instruction("call r11");                                            // invoke stream_close on the wrapper object
 
@@ -149,7 +178,7 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the native object-release argument
     emitter.instruction("call __rt_decref_object");                             // release the wrapper and its property owners exactly once
     emitter.label("__rt_uwfclose_done_x86");
-    emitter.instruction("mov eax, 1");                                          // fclose() on a wrapper always reports success
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // report the flush result as fclose()'s success flag
     emitter.instruction("add rsp, 48");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the inline fclose dispatch site
@@ -1056,6 +1085,55 @@ mod tests {
     use crate::codegen_support::platform::{Arch, Target};
 
     use super::*;
+
+    /// PHP 8.6's `fclose()` reports a failed `stream_flush()` on BOTH architectures.
+    ///
+    /// The helper still calls the flush on every profile (PHP has always flushed before
+    /// closing); only the 8.6 result propagation is gated, so this guard pins the order
+    /// flush → close → return, which a shared-header edit could silently drop on one target.
+    #[test]
+    fn the_fclose_helper_flushes_before_closing_and_reports_the_result() {
+        let profile = crate::codegen_support::compile_php_version();
+        crate::codegen_support::set_compile_profile(crate::php_version::PhpVersion::Php86, false);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_user_wrapper_fclose(&mut emitter);
+            let asm = emitter.output();
+
+            let (flush_lookup, close_lookup) = if target.arch == Arch::X86_64 {
+                (format!("[r11 + {}]", VTABLE_SLOT_FLUSH * 8), format!("[r11 + {}]", VTABLE_SLOT_CLOSE * 8))
+            } else {
+                (format!("[x11, #{}]", VTABLE_SLOT_FLUSH * 8), format!("[x11, #{}]", VTABLE_SLOT_CLOSE * 8))
+            };
+            let flush_lookup = flush_lookup.as_str();
+            let close_lookup = close_lookup.as_str();
+            let flush_at = asm.find(flush_lookup).unwrap_or_else(|| panic!("{name}: no stream_flush lookup:\n{asm}"));
+            let close_at = asm.find(close_lookup).unwrap_or_else(|| panic!("{name}: no stream_close lookup:\n{asm}"));
+            assert!(flush_at < close_at, "{name}: stream_flush must run before stream_close:\n{asm}");
+            assert!(
+                asm.contains("__rt_uwflush") || asm.contains("__rt_uwflush_scalar"),
+                "{name}: the flush result must be normalized through the scalar helper:\n{asm}"
+            );
+
+            let done = if target.arch == Arch::X86_64 {
+                "__rt_uwfclose_done_x86:"
+            } else {
+                "__rt_uwfclose_done:"
+            };
+            let done_at = asm.find(done).unwrap_or_else(|| panic!("{name}: no done label:\n{asm}"));
+            let report = if target.arch == Arch::X86_64 {
+                "mov rax, QWORD PTR [rbp - 16]"
+            } else {
+                "ldr x0, [sp, #8]"
+            };
+            assert!(
+                asm[done_at..].contains(report),
+                "{name}: the flush result must be fclose's result:\n{asm}"
+            );
+        }
+        crate::codegen_support::set_compile_profile(profile, false);
+    }
 
     /// The read helper dispatches both result shapes on BOTH architectures.
     ///

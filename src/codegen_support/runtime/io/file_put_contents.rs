@@ -15,6 +15,14 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
+/// Returns whether a failed close makes `file_put_contents()` report failure.
+///
+/// PHP 8.6 is the first release that propagates the flush/close result; earlier profiles
+/// keep reporting the byte count of an otherwise successful write.
+fn reports_failed_close() -> bool {
+    crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86
+}
+
 /// Emits the `__rt_file_put_contents` runtime helper for PHP's `file_put_contents()`.
 ///
 /// Dispatches to the target-specific implementation:
@@ -143,9 +151,20 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.label("__rt_fpc_wrote");
     emitter.instruction("str x0, [sp, #32]");                                   // save bytes written
 
-    // -- close the file --
+    // -- close the file; PHP 8.6 reports a failed flush/close as a failed write --
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload fd
     emitter.syscall(6);
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction("cmp x0, #0");                                      // Linux: a negative result is -errno
+    }
+    if reports_failed_close() {
+        let close_ok = emitter.platform.branch_on_syscall_success("__rt_fpc_closed");
+        emitter.instruction(&close_ok);                                         // continue only when close succeeded
+        emit_raw_file_error_errno(emitter);
+        emitter.instruction("mov x0, #-1");                                     // PHP 8.6: a failed flush/close is a failed write
+        emitter.instruction("b __rt_fpc_return");                               // do not report a byte count for an unflushed file
+        emitter.label("__rt_fpc_closed");
+    }
 
     // -- return bytes written --
     emitter.instruction("ldr x0, [sp, #32]");                                   // return bytes written
@@ -269,7 +288,14 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the file descriptor as the first libc close() argument
     emitter.instruction("call close");                                          // close the destination file after the write completes
+    if reports_failed_close() {
+        emitter.instruction("test eax, eax");                                   // libc close() reports failure with a nonzero result
+        emitter.instruction("jz __rt_fpc_closed_linux_x86_64");                 // keep the byte count when the close succeeded
+        emitter.instruction("mov rax, -1");                                     // PHP 8.6: a failed flush/close is a failed write
+        emitter.instruction("jmp __rt_fpc_return_linux_x86_64");                // do not report a byte count for an unflushed file
 
+        emitter.label("__rt_fpc_closed_linux_x86_64");
+    }
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the number of bytes reported by libc write()
     emitter.instruction("jmp __rt_fpc_return_linux_x86_64");                    // skip the lock-failure exit
 
@@ -416,6 +442,60 @@ mod tests {
             before_ftruncate.ends_with("ldr x0, [sp, #8]\n    mov x1, #0\n    "),
             "the fd must reach __rt_ftruncate in x0 with the size in x1"
         );
+    }
+
+    /// PHP 8.6 turns a failed close into `-1` on both targets; 8.5 keeps the byte count.
+    ///
+    /// A native `close(2)` rarely fails, but `file_put_contents()` must not report a byte
+    /// count for a file whose flush failed, and the result is observable through `copy()`.
+    #[test]
+    fn test_failed_close_is_reported_as_failure_from_php_86() {
+        let profile = crate::codegen_support::compile_php_version();
+        crate::codegen_support::set_compile_profile(crate::php_version::PhpVersion::Php86, false);
+        for (target, closed_label, fail) in [
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "jz __rt_fpc_closed_linux_x86_64",
+                "mov rax, -1",
+            ),
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "b.cc __rt_fpc_closed",
+                "mov x0, #-1",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::AArch64),
+                "b.ge __rt_fpc_closed",
+                "mov x0, #-1",
+            ),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_file_put_contents(&mut emitter);
+            let asm = emitter.output();
+            assert!(
+                asm.contains(closed_label),
+                "{:?}: the close result must be checked:\n{asm}",
+                target.arch
+            );
+            let failure_path = asm.split(closed_label).nth(1).unwrap_or_else(|| {
+                panic!("{:?}: no close-success label after the check", target.arch)
+            });
+            assert!(
+                failure_path.contains(fail),
+                "{:?}: the failure result belongs on the close-failure path:\n{failure_path}",
+                target.arch
+            );
+        }
+
+        crate::codegen_support::set_compile_profile(crate::php_version::PhpVersion::Php85, false);
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_file_put_contents(&mut emitter);
+        let older = emitter.output();
+        assert!(
+            !older.contains("__rt_fpc_closed"),
+            "PHP 8.5 must keep ignoring the close result:\n{older}"
+        );
+        crate::codegen_support::set_compile_profile(profile, false);
     }
 
     /// A refused lock and a refused truncation take the SAME exit on both targets: close the
