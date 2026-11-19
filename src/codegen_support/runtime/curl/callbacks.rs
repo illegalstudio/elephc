@@ -54,6 +54,7 @@
 //!   can re-raise it the moment `curl_easy_perform`/`curl_multi_perform` returns, which is
 //!   what makes `try { curl_exec($ch); } catch (…)` behave as it does in php-src.
 
+use elephc_memoir::callables::argument_storage;
 use crate::codegen_support::callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET;
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
@@ -124,10 +125,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #264]");                                  // stash the cell across the append
     emitter.instruction("mov x1, x0");                                          // append value = the boxed object cell
     emitter.instruction("ldr x0, [sp, #248]");                                  // append target = the args array
-    emitter.instruction("bl __rt_array_push_refcounted");                       // append (and retain) the cell
-    emitter.instruction("str x0, [sp, #248]");                                  // save the (possibly grown) args array
-    emitter.instruction("ldr x0, [sp, #264]");                                  // reload the boxed object cell
-    emitter.instruction("bl __rt_decref_any");                                  // drop the temp retain (the array owns it)
+    argument_storage::emit_append_owned_cell(emitter, 248, 264);
     emitter.instruction("str xzr, [sp, #264]");                                 // the stash slot is free again
 
     // -- arguments 1..argc: one boxed Mixed per (tag, lo, hi) triple the bridge built --
@@ -150,10 +148,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #264]");                                  // stash the cell across the append
     emitter.instruction("mov x1, x0");                                          // append value = the boxed argument
     emitter.instruction("ldr x0, [sp, #248]");                                  // append target = the args array
-    emitter.instruction("bl __rt_array_push_refcounted");                       // append (and retain) the cell
-    emitter.instruction("str x0, [sp, #248]");                                  // save the (possibly grown) args array
-    emitter.instruction("ldr x0, [sp, #264]");                                  // reload the boxed argument cell
-    emitter.instruction("bl __rt_decref_any");                                  // drop the temp retain (the array owns it)
+    argument_storage::emit_append_owned_cell(emitter, 248, 264);
     emitter.instruction("str xzr, [sp, #264]");                                 // the stash slot is free again
     emitter.instruction("ldr x9, [sp, #272]");                                  // reload the loop index
     emitter.instruction("add x9, x9, #1");                                      // advance it
@@ -162,13 +157,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.label("__rt_curl_invoke_cb_loop_done");
 
     // -- box the argument array itself as a Mixed indexed array (tag 4 increfs it) --
-    emitter.instruction("ldr x1, [sp, #248]");                                  // Mixed payload lo = the args array
-    emitter.instruction("mov x2, #0");                                          // heap payloads use no high word
-    emitter.instruction("mov x0, #4");                                          // runtime tag 4 = indexed array
-    emitter.instruction("bl __rt_mixed_from_value");                            // x0 = boxed Mixed argument container
-    emitter.instruction("str x0, [sp, #256]");                                  // save the container (released in cleanup)
-    emitter.instruction("ldr x0, [sp, #248]");                                  // reload the raw args array
-    emitter.instruction("bl __rt_decref_any");                                  // drop the extra retain (the box owns it)
+    argument_storage::emit_box_arguments(emitter, 248, 256);
 
     // -- push a setjmp firewall so a PHP throw cannot unwind through libcurl --
     abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
@@ -310,10 +299,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // stash the cell across the append
     emitter.instruction("mov rsi, rax");                                        // append value = the boxed object cell
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // append target = the args array
-    emitter.instruction("call __rt_array_push_refcounted");                     // append (and retain) the cell
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the (possibly grown) array
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the boxed object cell
-    emitter.instruction("call __rt_decref_any");                                // drop the temp retain (the array owns it)
+    argument_storage::emit_append_owned_cell(emitter, 32, 48);
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // the stash slot is free again
 
     // -- arguments 1..argc --
@@ -335,10 +321,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // stash the cell across the append
     emitter.instruction("mov rsi, rax");                                        // append value = the boxed argument
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // append target = the args array
-    emitter.instruction("call __rt_array_push_refcounted");                     // append (and retain) the cell
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the (possibly grown) array
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the boxed argument cell
-    emitter.instruction("call __rt_decref_any");                                // drop the temp retain (the array owns it)
+    argument_storage::emit_append_owned_cell(emitter, 32, 48);
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // the stash slot is free again
     emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload the loop index
     emitter.instruction("add r9, 1");                                           // advance it
@@ -347,13 +330,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_curl_invoke_cb_loop_done_x86");
 
     // -- box the argument array itself as a Mixed indexed array (tag 4 increfs it) --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // Mixed payload lo = the args array
-    emitter.instruction("xor esi, esi");                                        // heap payloads use no high word
-    emitter.instruction("mov eax, 4");                                          // runtime tag 4 = indexed array
-    emitter.instruction("call __rt_mixed_from_value");                          // rax = boxed Mixed argument container
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the container (released in cleanup)
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the raw args array
-    emitter.instruction("call __rt_decref_any");                                // drop the extra retain (the box owns it)
+    argument_storage::emit_box_arguments(emitter, 32, 40);
 
     // -- push a setjmp firewall so a PHP throw cannot unwind through libcurl --
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
