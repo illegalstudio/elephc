@@ -464,7 +464,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut impl Emitter) {
     scans::next(emitter, "x10", "r10", "[sp]", "[rbp - 24]", "arm_sweep");
     emitter.instruction("str x10, [sp, #0]");                                   // save the next header before deep-freeing this block
     emitter.instruction("ldr w10, [x9, #4]");                                   // retain the guard left by the earlier object destructor phase
-    emitter.instruction("and w10, w10, #0x80000000");                           // clear ordinary owners while preserving destruction-in-progress
+    emitter.instruction(&format!("and w10, w10, #{:#x}", crate::values::destructor_header::RUNNING_MASK)); // clear ordinary owners while preserving destruction-in-progress
     emitter.instruction("str w10, [x9, #4]");                                   // prevent back-edge reentry without running the destructor twice
     emitter.instruction("add x0, x9, #16");                                     // convert the heap header back to the user pointer
     emitter.instruction("cmp x14, #2");                                         // is this an indexed array?

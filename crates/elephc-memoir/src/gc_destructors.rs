@@ -154,7 +154,7 @@ fn emit_destructors_aarch64(emitter: &mut impl Emitter) {
     emitter.instruction("bl __rt_gc_destructor_end");                           // finish the measured destructor interval
     emitter.instruction("ldr x9, [sp, #32]");                                   // recover the pinned receiver after user code
     emitter.instruction("ldr x10, [x9, #-8]");                                  // preserve collector marks and the snapshot pin
-    emitter.instruction("orr x10, x10, #0x4000");                               // remember completion independently of the real owner count
+    emitter.instruction(&format!("orr x10, x10, #{:#x}", crate::values::destructor_header::FINISHED_MASK)); // remember completion independently of the real owner count
     emitter.instruction("str x10, [x9, #-8]");                                  // prevent a later sweep or last-owner release from rerunning it
     emitter.instruction("ldr w10, [x9, #-12]");                                 // inspect owners accumulated or removed by the destructor
     emitter.instruction("and w10, w10, #0x7fffffff");                           // remove the temporary reentrancy guard but keep real owners
@@ -276,7 +276,7 @@ fn emit_scan_x86_64(emitter: &mut impl Emitter, fill: bool) {
         emitter.instruction("add QWORD PTR [rbp - 16], 1");                     // reserve one pointer slot for this graph candidate
         emitter.instruction("cmp ecx, 4");                                      // only objects need a PHP destructor pass
         emitter.instruction(&format!("jne {next}"));                            // other pins solely preserve reachable destructor data
-        emitter.instruction("test r11, 0x4000");                                // inspect persistent destructor completion
+        emitter.instruction(&format!("test r11, {:#x}", crate::values::destructor_header::FINISHED_MASK)); // inspect persistent destructor completion
         emitter.instruction(&format!("jnz {next}"));                            // completed destructors never request another pass
         emitter.instruction("mov QWORD PTR [rbp - 24], 1");                     // allocate a snapshot only when a new object needs processing
     }
@@ -325,7 +325,7 @@ fn emit_destructors_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("and r11d, 0xff");                                      // isolate the graph-node kind
     emitter.instruction("cmp r11d, 4");                                         // only objects execute PHP destructors
     emitter.instruction("jne __rt_gc_destructors_objects_next");                // other graph nodes only preserve data
-    emitter.instruction("test r10, 0x4000");                                    // inspect persistent destructor completion
+    emitter.instruction(&format!("test r10, {:#x}", crate::values::destructor_header::FINISHED_MASK)); // inspect persistent destructor completion
     emitter.instruction("jnz __rt_gc_destructors_objects_next");                // never run a completed destructor twice
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // preserve the receiver identity across timing and user code
     emitter.instruction("call __rt_gc_destructor_begin");                       // measure destructors separately from heap sweeping
@@ -333,7 +333,7 @@ fn emit_destructors_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("call __rt_gc_protected_destructor");                   // capture throws while every candidate has a snapshot owner
     emitter.instruction("call __rt_gc_destructor_end");                         // finish the measured destructor interval
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // recover the protected object after callback clobbers
-    emitter.instruction("or QWORD PTR [rax - 8], 0x4000");                      // persist completion independently of live owner counts
+    emitter.instruction(&format!("or QWORD PTR [rax - 8], {:#x}", crate::values::destructor_header::FINISHED_MASK)); // persist completion independently of live owner counts
     emitter.instruction("and DWORD PTR [rax - 12], 0x7fffffff");                // clear only the temporary destructor reentrancy guard
     emitter.label("__rt_gc_destructors_objects_next");
     emitter.instruction("add QWORD PTR [rbp - 32], 1");                         // advance to the next stable snapshot identity

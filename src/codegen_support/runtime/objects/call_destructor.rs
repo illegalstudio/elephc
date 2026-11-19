@@ -31,6 +31,7 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
+use elephc_memoir::values::destructor_header;
 
 /// Emits `__rt_call_object_destructor` for the active target.
 /// Input: x0/rdi = object pointer (heap-backed, non-null, an object instance).
@@ -38,41 +39,12 @@ use crate::codegen_support::abi;
 /// memory so the caller can continue the deep-free after the destructor returns.
 pub(crate) fn emit_call_object_destructor(emitter: &mut Emitter) {
     emit_eval_throwable(emitter);
-    emit_destructor_lifetime_boundary(emitter);
+    destructor_header::emit_dispatch_guard(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_call_object_destructor_x86_64(emitter);
         return;
     }
     emit_call_object_destructor_aarch64(emitter);
-}
-
-
-
-/// Marks destructor invocation once; failed construction uses the same bit to suppress invocation.
-fn emit_destructor_lifetime_boundary(emitter: &mut Emitter) {
-    let arm = emitter.target.arch == Arch::AArch64;
-    emitter.label_global("__rt_call_object_destructor");
-    if arm {
-        emitter.instruction("cbz x0, __rt_object_destructor_boundary_ret");     // reject a missing receiver before probing its header
-        emitter.instruction("ldr w10, [x0, #-12]");                             // inspect a destructor already running on this receiver
-        emitter.instruction("tbnz w10, #31, __rt_object_destructor_boundary_ret");// leave a reentrant call unmarked for its active owner
-        emitter.instruction("ldr x9, [x0, #-8]");                               // inspect persistent object destructor state
-        emitter.instruction("tbnz x9, #14, __rt_object_destructor_boundary_ret");// skip a completed destructor or failed construction permanently
-        emitter.instruction("orr x9, x9, #0x4000");                             // record invocation before any user callback or throwable
-        emitter.instruction("str x9, [x0, #-8]");                               // preserve called state in the low sixteen kind-word bits across GC
-        emitter.instruction("b __rt_call_object_destructor_body");              // let the protected caller finish temporary release state
-    } else {
-        emitter.instruction("test rdi, rdi");                                   // reject a missing receiver before reading object metadata
-        emitter.instruction("jz __rt_object_destructor_boundary_ret");          // return immediately for a null receiver
-        emitter.instruction("test DWORD PTR [rdi - 12], 0x80000000");           // inspect a destructor already running on this receiver
-        emitter.instruction("jnz __rt_object_destructor_boundary_ret");         // leave a reentrant call unmarked for its active owner
-        emitter.instruction("test QWORD PTR [rdi - 8], 0x4000");                // inspect persistent destructor-called or suppression state
-        emitter.instruction("jnz __rt_object_destructor_boundary_ret");         // completed and failed construction must not invoke PHP destruction
-        emitter.instruction("or QWORD PTR [rdi - 8], 0x4000");                  // record invocation before a callback can escape
-        emitter.instruction("jmp __rt_call_object_destructor_body");            // reuse the existing protected caller and native/eval dispatch
-    }
-    emitter.label("__rt_object_destructor_boundary_ret");
-    emitter.instruction("ret");                                                 // leave reclamation to current owners and the collector's fresh root scan
 }
 
 /// Emits the ARM64 `__rt_call_object_destructor` helper.
@@ -82,14 +54,11 @@ fn emit_call_object_destructor_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_call_object_destructor_body");
 
     emitter.instruction("cbz x0, __rt_call_object_destructor_ret");             // null receiver → nothing to destruct
-    emitter.instruction("ldr w9, [x0, #-12]");                                  // w9 = object refcount (header offset -12)
-    emitter.instruction("tbnz w9, #31, __rt_call_object_destructor_ret");       // destruction already in progress → never run twice
+    destructor_header::emit_skip_running(emitter, "__rt_call_object_destructor_ret");
     abi::emit_symbol_address(emitter, "x10", "_elephc_eval_dynamic_object_destruct_fn");
     emitter.instruction("ldr x10, [x10]");                                      // x10 = optional eval dynamic destructor callback
     emitter.instruction("cbz x10, __rt_call_object_destructor_static");         // no eval callback installed → use static class table
-    emitter.instruction("movz w12, #0x8000, lsl #16");                          // w12 = 0x80000000, the destruction-in-progress flag bit
-    emitter.instruction("orr w9, w9, w12");                                     // mark destruction in progress before boxing borrowed $this
-    emitter.instruction("str w9, [x0, #-12]");                                  // persist the guard flag in the refcount field
+    destructor_header::emit_mark_running(emitter, true);
     emitter.instruction("sub sp, sp, #32");                                     // allocate an aligned frame for the eval callback
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address before the Rust call
     emitter.instruction("add x29, sp, #16");                                    // establish the helper frame
@@ -105,10 +74,7 @@ fn emit_call_object_destructor_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x12, #2");                                         // status two transfers an escaping eval Throwable
     emitter.instruction("b.eq __rt_call_object_destructor_eval_throw");         // propagate only outside the Rust callback frame
     emitter.instruction("cbnz x12, __rt_call_object_destructor_ret");           // eval handled the dynamic object → skip static lookup
-    emitter.instruction("ldr w9, [x0, #-12]");                                  // reload the refcount after an eval miss
-    emitter.instruction("movz w12, #0x8000, lsl #16");                          // w12 = destruction-in-progress flag bit
-    emitter.instruction("bic w9, w9, w12");                                     // clear the temporary eval guard before static lookup
-    emitter.instruction("str w9, [x0, #-12]");                                  // persist the restored refcount guard state
+    destructor_header::emit_clear_running(emitter);
     emitter.instruction("b __rt_call_object_destructor_static");                // continue ordinary lookup after restoring a missed eval guard
     emitter.label("__rt_call_object_destructor_static");
     emitter.instruction("ldr x11, [x0]");                                       // x11 = runtime class_id (object payload offset 0)
@@ -119,10 +85,7 @@ fn emit_call_object_destructor_aarch64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_class_destruct_ptrs");
     emitter.instruction("ldr x10, [x10, x11, lsl #3]");                         // x10 = destructor symbol for this class (or 0)
     emitter.instruction("cbz x10, __rt_call_object_destructor_ret");            // class defines no __destruct → done
-    emitter.instruction("ldr w9, [x0, #-12]");                                  // w9 = object refcount (header offset -12)
-    emitter.instruction("movz w12, #0x8000, lsl #16");                          // w12 = 0x80000000, the destruction-in-progress flag bit
-    emitter.instruction("orr w9, w9, w12");                                     // mark destruction in progress so a balanced self-ref cannot re-enter the free path
-    emitter.instruction("str w9, [x0, #-12]");                                  // persist the guard flag in the refcount field
+    destructor_header::emit_mark_running(emitter, false);
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address before the user call
     emitter.instruction("mov x29, sp");                                         // establish the helper frame
     emitter.instruction("blr x10");                                             // invoke <class>::__destruct with x0 = $this (borrowed)
@@ -143,15 +106,12 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rdi, rdi");                                       // null receiver → nothing to destruct
     emitter.instruction("jz __rt_call_object_destructor_ret");                  // skip the lookup for a null object
-    emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // eax = object refcount (header offset -12)
-    emitter.instruction("test eax, 0x80000000");                                // is destruction already in progress?
-    emitter.instruction("jnz __rt_call_object_destructor_ret");                 // never run a destructor twice
+    destructor_header::emit_skip_running(emitter, "__rt_call_object_destructor_ret");
     abi::emit_symbol_address(emitter, "r10", "_elephc_eval_dynamic_object_destruct_fn");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // r10 = optional eval dynamic destructor callback
     emitter.instruction("test r10, r10");                                       // is the eval callback installed?
     emitter.instruction("jz __rt_call_object_destructor_static_x86");           // no eval callback installed → use static class table
-    emitter.instruction("or eax, 0x80000000");                                  // mark destruction in progress before boxing borrowed $this
-    emitter.instruction("mov DWORD PTR [rdi - 12], eax");                       // persist the guard flag in the refcount field
+    destructor_header::emit_mark_running(emitter, true);
     emitter.instruction("push rbp");                                            // align the stack and save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the eval callback frame
     emitter.instruction("sub rsp, 16");                                         // reserve a spill slot for the object pointer
@@ -167,9 +127,7 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_call_object_destructor_eval_throw");           // do not perform native unwinding inside Rust frames
     emitter.instruction("test rax, rax");                                       // did eval handle this dynamic object?
     emitter.instruction("jnz __rt_call_object_destructor_ret");                 // eval handled the dynamic object → skip static lookup
-    emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // reload the refcount after an eval miss
-    emitter.instruction("and eax, 0x7fffffff");                                 // clear the temporary eval guard before static lookup
-    emitter.instruction("mov DWORD PTR [rdi - 12], eax");                       // persist the restored refcount guard state
+    destructor_header::emit_clear_running(emitter);
     emitter.instruction("jmp __rt_call_object_destructor_static_x86");          // continue static lookup after restoring a missed eval guard
     emitter.label("__rt_call_object_destructor_static_x86");
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // rax = runtime class_id (object payload offset 0)
@@ -179,9 +137,7 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r10 + rax * 8]");                  // r10 = destructor symbol for this class (or 0)
     emitter.instruction("test r10, r10");                                       // class defines no __destruct?
     emitter.instruction("jz __rt_call_object_destructor_ret");                  // nothing to call → done
-    emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // eax = object refcount (header offset -12)
-    emitter.instruction("or eax, 0x80000000");                                  // mark destruction in progress so a balanced self-ref cannot re-enter the free path
-    emitter.instruction("mov DWORD PTR [rdi - 12], eax");                       // persist the guard flag in the refcount field
+    destructor_header::emit_mark_running(emitter, false);
     emitter.instruction("push rbp");                                            // align the stack and save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
     emitter.instruction("call r10");                                            // invoke <class>::__destruct with rdi = $this (borrowed)
