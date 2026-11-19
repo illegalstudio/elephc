@@ -2650,3 +2650,29 @@ behavior is claimed here. Public and internal docs match the admitted boundary.
 Seventeen distinct focused feature/boundary gates pass. The final compiler and
 Magician archive build, diff hygiene and assembly-comment checks pass in
 job9511b229. Existing warnings are unchanged; no broad local suite was run.
+
+### Verified217: non-null dimension receiver proofs
+
+A dependency-neutral NullState/NullPlan policy now distinguishes proven null,
+proven non-null and dynamic values without enabling Mixed, Coercions or Indexing.
+Compiler source validation audits ordinary literal-null receiver operations before
+folding and recursively within literal eval. Probe and slot-creation permissions
+track only the receiver spine. Selector and dynamic member-name expressions are
+never added to that permission set. The checker uses the same precise spine for
+ordinary dimension receiver validation, retaining writable parent creation.
+
+Native dimension reads test the actual receiver before the lookup and preserve
+selector evaluation. This catches dynamic boxed null and typed nullable array
+receivers with a TypeError, independently of missing-element policy. The reusable
+EIR guard reuses earlier operand roots and protects additional pending/local-view
+owners through failure; scalar read producers retain their logical null under
+the staged profile. Probe reads remain separate. The guard uses typed EIR
+predicates and failure control flow supported by every target.
+
+Focused gates cover the shared planner, pre-fold/literal-eval source refusals,
+known-null selectors inside probes, all-five emission, native PHP/LFC with AST
+and EIR optimization on and off, selector effects, boxed and typed nullable
+receivers, owned key/receiver cleanup, and trusted/permissive source controls.
+Nullability remains publicly gated until all remaining receiver, declaration,
+builtin and interpreted-eval consumers are integrated. No further strict family
+or umbrella is admitted by this bounded change.

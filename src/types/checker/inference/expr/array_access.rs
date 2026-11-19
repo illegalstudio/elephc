@@ -50,6 +50,10 @@ impl Checker {
         &mut self, array: &Expr, index: &Expr, expr: &Expr,
         arr_ty: PhpType, idx_ty: PhpType, for_write: bool,
     ) -> Result<PhpType, CompileError> {
+        if !for_write {
+            crate::semantics::nullability::validate_receiver(self.semantic_profile,
+                self.semantic_source_mode, &arr_ty, self.null_probe_operations.contains(&expr.span), expr.span)?;
+        }
         crate::semantics::array_keys::validate_receiver(self.semantic_profile, &arr_ty, &idx_ty, index.span)?;
         let buffer = matches!(arr_ty, PhpType::Buffer(_));
         self.buffer_read_observations.entry(expr.span)

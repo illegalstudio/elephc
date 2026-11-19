@@ -129,6 +129,7 @@ impl Checker {
             null_probe_scope_is_top_level: false,
             pending_null_probe_roots: Vec::new(),
             null_probe_depth: 0,
+            null_probe_operations: Vec::new(),
             break_continue_depth: 0,
             loop_flow_frames: Vec::new(),
             finally_flow_frames: Vec::new(),

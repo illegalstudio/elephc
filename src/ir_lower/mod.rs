@@ -51,6 +51,7 @@ mod reflection;
 mod stmt;
 mod scoped_writes;
 mod semantic_guards;
+mod nullability;
 mod conversion_boundaries;
 mod array_key_guards;
 mod offset_key_operands;

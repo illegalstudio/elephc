@@ -17,7 +17,7 @@ use crate::parser::ast::{ArrayEntry, BinOp, CastType, Expr, ExprKind, Program, S
 const SOURCE_GUARANTEES: &[StrictFeature] = &[
     StrictFeature::DynamicCode, StrictFeature::Bools, StrictFeature::Overflow,
     StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts,
-    StrictFeature::Comparisons, StrictFeature::Strings, StrictFeature::ArrayKeys,
+    StrictFeature::Comparisons, StrictFeature::Strings, StrictFeature::ArrayKeys, StrictFeature::Nullability,
 ];
 
 /// Validates syntax-dependent guarantees without pruning any branch or declaration.
@@ -25,7 +25,8 @@ pub fn validate_source(program: &Program, profile: SemanticProfile) -> Result<()
     if !SOURCE_GUARANTEES.iter().copied().any(|feature| profile.contains(feature)) { return Ok(()); }
     crate::compiler_stack::with_compiler_stack(|| {
         super::numeric_constants::validate(program, profile)?;
-        let mut validator = SourceValidator { depth: 0, error: None, profile, source_modes: Default::default() };
+        let mut validator = SourceValidator { depth: 0, error: None, profile,
+            source_modes: Default::default(), quiet_operations: Vec::new(), quiet_frames: Vec::new() };
         walk_program(program, &mut validator);
         validator.error.map_or(Ok(()), Err)
     })
@@ -37,12 +38,18 @@ struct SourceValidator {
     profile: SemanticProfile,
     source_modes: crate::ast_visit::SourcePolicy,
     error: Option<CompileError>,
+    quiet_operations: Vec<crate::span::Span>,
+    quiet_frames: Vec<usize>,
 }
 
 impl AstVisitor for SourceValidator {
     /// Tracks physical source for trusted implementation statements and validates raw conditions.
     fn statement(&mut self, stmt: &Stmt) {
         self.source_modes.enter_statement(stmt);
+        self.quiet_frames.push(self.quiet_operations.len());
+        if let StmtKind::NestedArrayAssign { target, .. } = &stmt.kind {
+            super::nullability::quiet_spine(target, &mut self.quiet_operations);
+        }
         if let StmtKind::Echo(value) = &stmt.kind {
             if let Some(ty) = literal_type(value) {
                 if let Err(error) = super::strings::validate_formatting(self.profile, stmt.source_mode, &ty, value.span) {
@@ -80,13 +87,29 @@ impl AstVisitor for SourceValidator {
 
     /// Restores the enclosing statement's source after nested bodies and declarations.
     fn statement_end(&mut self, _stmt: &Stmt) {
+        self.quiet_operations.truncate(self.quiet_frames.pop().expect("balanced quiet statement"));
         self.source_modes.leave_statement();
     }
 
     /// Requires eval source to be literal and recursively verifies its source restrictions.
     fn expression(&mut self, expr: &Expr) {
         let source_mode = self.source_modes.enter_expression(expr).mode;
+        self.quiet_frames.push(self.quiet_operations.len());
+        super::nullability::expression_quiet_spines(expr, &mut self.quiet_operations);
         if self.error.is_some() { return; }
+        let receiver = match &expr.kind {
+            ExprKind::ArrayAccess { array, .. } => Some(array),
+            ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. }
+            | ExprKind::MethodCall { object, .. } => Some(object),
+            _ => None,
+        };
+        if let Some(ty) = receiver.and_then(|receiver| literal_type(receiver)) {
+            if let Err(error) = super::nullability::validate_receiver(self.profile, source_mode,
+                &ty, self.quiet_operations.contains(&expr.span), expr.span) {
+                self.error = Some(error);
+                return;
+            }
+        }
         if self.profile.contains(StrictFeature::ArrayKeys) {
             match &expr.kind {
                 ExprKind::ArrayLiteralAssoc(entries) => {
@@ -207,6 +230,7 @@ impl AstVisitor for SourceValidator {
 
     /// Restores the enclosing producer after recursive operands and literal eval have been visited.
     fn expression_end(&mut self, _expr: &Expr) {
+        self.quiet_operations.truncate(self.quiet_frames.pop().expect("balanced quiet expression"));
         self.source_modes.leave_expression();
     }
 }

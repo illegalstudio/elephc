@@ -895,3 +895,4 @@ mod initialized_magic_reads;
 mod initialized_admission;
 
 mod indexed_reads;
+mod nullable_receivers;

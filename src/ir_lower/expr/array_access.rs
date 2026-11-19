@@ -496,6 +496,9 @@ fn lower_array_access_from_values_with_receiver_pins(
     receiver_pins: Vec<super::PinnedInFlightOwner>,
     receiver_owner: Option<crate::ir::LocalSlotId>,
 ) -> LoweredValue {
+    if warn_on_missing {
+        crate::ir_lower::nullability::require_non_null(ctx, array_value, &[index_value], &receiver_pins, expr.span);
+    }
     index_value = crate::ir_lower::array_key_guards::for_receiver(ctx, array_value, index_value, index.span);
     if !warn_on_missing && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::TaggedScalar)
@@ -579,7 +582,8 @@ fn lower_array_access_from_values_with_receiver_pins(
     let mut result_type = array_access_result_type(ctx, array_value.value, op, expr);
     // Exact-key consumers can receive this value through copies, defaults or calls. Preserve
     // the missing null at its producer, before a scalar ABI erases its original PHP kind.
-    if (preserve_null || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys))
+    if (preserve_null || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys)
+        || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability))
         && matches!(op, Op::ArrayGet | Op::ArrayGetSilent | Op::HashGet | Op::HashGetSilent)
         && matches!(result_type.codegen_repr(),
             PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Str | PhpType::Callable)

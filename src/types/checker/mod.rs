@@ -430,6 +430,8 @@ pub(crate) struct Checker {
     /// property access on `PhpType::Void` yield `Void` rather than a diagnostic. Outside a probe
     /// those accesses keep their errors.
     pub null_probe_depth: usize,
+    /// Exact quiet receiver operations; key and dynamic member-name expressions stay ordinary.
+    pub(super) null_probe_operations: Vec<Span>,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
     /// Control-flow exits owned by the current function-like frame's active loops.

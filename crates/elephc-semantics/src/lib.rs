@@ -30,6 +30,7 @@ pub mod scalar_compare;
 pub mod constant_numeric;
 pub mod native_local_contract;
 pub mod initialization;
+pub mod nullability;
 
 pub use catalog::{FeatureSpec, StrictFeature, FEATURES, INTEGRATED_FEATURE_BITS};
 pub use profile::{ProfileDecodeError, SemanticAbiError, SemanticProfile, StrictRequests, SEMANTICS_ABI_VERSION};
