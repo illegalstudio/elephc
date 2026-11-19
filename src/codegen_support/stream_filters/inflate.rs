@@ -200,13 +200,7 @@ where
     emitter.label(&sized);
     emitter.instruction("mov QWORD PTR [rsp + 152], r9");                       // save the output buffer capacity
     emitter.instruction("mov rax, r9");                                         // buffer size into the allocator argument
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the decompressed-data buffer
-    emitter.instruction(&format!(
-        // owned-string heap-kind word with the x86_64 heap marker
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));                                                                         // materialize the owned output-buffer heap kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rsp + 128], rax");                      // save the decompressed buffer pointer
 
     // -- zero the 112-byte z_stream so zalloc/zfree start NULL --

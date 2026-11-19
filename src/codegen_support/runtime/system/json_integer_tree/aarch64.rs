@@ -326,9 +326,7 @@ fn emit_try(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_json_integer_tree_probe");                     // return the exact size or zero when the tree is unsupported
     emitter.instruction("cbz x0, __rt_json_integer_tree_try_unsupported");      // allocate only after the entire tree is admitted
     emitter.instruction("str x0, [x29, #-16]");                                 // preserve the exact byte count across allocation and writing
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate one exact output payload
-    emitter.instruction(&format!("mov x9, #{}", CONCAT_TEMP_HEAP_KIND));        // mark the unowned result for one-time string adoption
-    emitter.instruction("str x9, [x0, #-8]");                                   // publish the transient string heap kind
+    elephc_memoir::strings::concat_scratch::emit_allocate_transient_string(emitter);
     emitter.instruction("str x0, [x29, #-24]");                                 // preserve the output base across the recursive writer
     emitter.instruction("mov x1, x0");                                          // pass the exact output base as the initial cursor
     emitter.instruction("ldr x0, [x29, #-8]");                                  // reload the admitted root array

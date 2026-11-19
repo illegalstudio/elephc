@@ -8,7 +8,7 @@
 //! - The caller supplies the class and message, and publishes the completed payload.
 //! - Recycled allocations require explicit initialization of each populated slot.
 
-use crate::{Arch, Emitter, TargetAbi};
+use crate::{abi, Arch, Emitter, TargetAbi};
 
 /// Native storage size for a complete compact Throwable payload.
 pub const PAYLOAD_BYTES: u64 = 56;
@@ -83,4 +83,35 @@ pub fn emit_default_fields(emitter: &mut impl TargetAbi, payload: &str) {
     emit_default_code(emitter, payload);
     emit_throwable_creation_line_unknown(emitter, payload);
     emit_empty_previous(emitter, payload);
+}
+
+/// Builds a compact error with a zeroed auxiliary word using the caller ABI scratch register.
+pub fn emit_error_with_auxiliary_zero(
+    emitter: &mut impl Emitter, class_symbol: &str, message: &str, length: i64,
+) {
+    let result = abi::int_result_reg(emitter);
+    let scratch = abi::secondary_scratch_reg(emitter);
+    abi::emit_load_int_immediate(emitter, result, PAYLOAD_BYTES as i64);
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    let kind = match emitter.arch() {
+        Arch::AArch64 => crate::layout::THROWABLE_HEAP_KIND as i64,
+        Arch::X86_64 => crate::layout::x86_64_heap_kind_word(crate::layout::THROWABLE_HEAP_KIND) as i64,
+    };
+    abi::emit_load_int_immediate(emitter, scratch, kind);
+    match emitter.arch() {
+        Arch::AArch64 => emitter.instruction("stur x10, [x0, #-8]"),            // stamp the allocated payload as a Throwable object
+        Arch::X86_64 => emitter.instruction("mov QWORD PTR [rax - 8], r10"),    // stamp the allocated payload as a Throwable object
+    }
+    abi::emit_call_label(emitter, "__rt_object_handle_acquire");
+    abi::emit_load_symbol_to_reg(emitter, scratch, class_symbol, 0);
+    abi::emit_store_to_address(emitter, scratch, result, 0);
+    abi::emit_symbol_address(emitter, scratch, message);
+    abi::emit_store_to_address(emitter, scratch, result, 8);
+    abi::emit_load_int_immediate(emitter, scratch, length);
+    abi::emit_store_to_address(emitter, scratch, result, 16);
+    abi::emit_load_int_immediate(emitter, scratch, 0);
+    for offset in [24, 40, 48] {
+        abi::emit_store_to_address(emitter, scratch, result, offset);
+    }
+    emit_throwable_creation_line_unknown(emitter, result);
 }
