@@ -232,6 +232,9 @@ pub(super) fn lower_boxed_array_sort(
     // The promotion installs a unique hash in the cell; reload it because the link sorter
     // answers a boolean and the dense rebuild replaces the table with a fresh allocation.
     load_boxed_hash_payload(ctx, array)?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // the link sorter reads its table from the first argument register
+    }
     abi::emit_call_label(ctx.emitter, helper);
     load_boxed_hash_payload(ctx, array)?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_reindex_dense");

@@ -250,7 +250,9 @@ fn lower_hash_relink_reindex(
             abi::emit_call_label(ctx.emitter, "__rt_hash_shuffle_links");
         }
     }
-    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    // The dense rebuild reads its table from the integer result register on both targets;
+    // the first-argument register is only the same register on AArch64.
+    ctx.load_value_to_result(array)?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_reindex_dense");
     ctx.store_result_value(array)?;
     receiver.store_back_after_consuming_split(ctx, array)?;
