@@ -289,6 +289,7 @@ pub(super) fn check_types_impl(
         &mut class_map,
         &declared_traits,
         register_reflection,
+        checker.semantic_profile,
     ) {
         errors.extend(error.flatten());
     }

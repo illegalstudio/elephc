@@ -16,13 +16,10 @@ pub(super) fn refuse_unresolved_reflection_call(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, class: &str, method: &str, expr: &Expr,
 ) -> Option<LoweredValue> {
     if !matches!(method, "invoke" | "invokeargs") { return None; }
-    let feature = if ctx.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys) {
-        elephc_semantics::StrictFeature::ArrayKeys
-    } else if crate::ir_lower::semantic_guards::source_feature_enabled(ctx, elephc_semantics::StrictFeature::Nullability) {
-        elephc_semantics::StrictFeature::Nullability
-    } else { return None; };
+    let user = crate::ir_lower::semantic_guards::source_feature_enabled(ctx, elephc_semantics::StrictFeature::Nullability);
+    let feature = crate::semantics::reflection::unresolved_invocation_feature(ctx.semantic_profile, user)?;
     let ty = ctx.builder.value_php_type(receiver.value).codegen_repr();
-    let message = format!("--{} requires a known {class} invocation target; targets selected at run time or lost at control flow joins are unsupported", feature.flag());
+    let message = crate::semantics::reflection::unresolved_invocation_message(feature, class);
     if matches!(&ty, PhpType::Object(name) if php_symbol_key(name) == php_symbol_key(class)) {
         crate::ir_lower::diagnostics::refuse(expr.span, &message);
         release_owning_receiver_temporary(ctx, receiver, expr.span);

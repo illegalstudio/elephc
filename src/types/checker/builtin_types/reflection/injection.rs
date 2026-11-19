@@ -26,6 +26,7 @@ pub(crate) fn inject_builtin_reflection(
     class_map: &mut HashMap<String, FlattenedClass>,
     trait_names: &HashSet<String>,
     register: bool,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<(), CompileError> {
     for builtin_name in [
         "ReflectionAttribute",
@@ -190,5 +191,24 @@ pub(crate) fn inject_builtin_reflection(
         );
     }
 
+    guard_unresolved_invocation_shells(class_map, profile);
     Ok(())
+}
+
+/// Gives every indirect invocation route an explicit error when native target facts are absent.
+fn guard_unresolved_invocation_shells(classes: &mut HashMap<String, FlattenedClass>,
+    profile: elephc_semantics::SemanticProfile) {
+    let Some(feature) = crate::semantics::reflection::unresolved_invocation_feature(profile, true) else { return; };
+    for name in ["ReflectionFunction", "ReflectionMethod"] {
+        let Some(class) = classes.get_mut(name) else { continue; };
+        let message = crate::semantics::reflection::unresolved_invocation_message(feature, name);
+        for method in &mut class.methods {
+            if !matches!(php_symbol_key(&method.name).as_str(), "invoke" | "invokeargs") { continue; }
+            let span = dummy();
+            method.body = vec![Stmt::new(StmtKind::Throw(Expr::new(ExprKind::NewObject {
+                class_name: Name::unqualified("Error"),
+                args: vec![Expr::new(ExprKind::StringLiteral(message.clone()), span)],
+            }, span)), span)];
+        }
+    }
 }

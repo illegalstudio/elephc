@@ -309,3 +309,43 @@ fn nullable_local_stores_emit_on_every_target() {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Indirect Reflection cannot bypass unsupported target checks through synthetic null bodies.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn nullable_indirect_reflection_reports_explicit_unsupported_targets() {
+    let source = include_str!("../../../tests/fixtures/strict/nullable_indirect_reflection.php");
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for optimize in [false, true] {
+        let module = super::semantic_sources::lower_capturing_arguments(source, Target::detect_host(), profile, optimize, SourceMode::Php);
+        let output = super::native_module::run(&module);
+        let stdout = String::from_utf8_lossy(&output.stdout); let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "optimize={optimize}: {stdout}; {stderr}");
+        assert_eq!(stdout, "VD|VC|VF|VAV|MV|R", "{stderr}");
+        assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+    }
+}
+
+/// Unresolved invocation shells fail through target-neutral EIR and retain permissive fallbacks.
+#[test]
+fn nullable_indirect_reflection_shells_emit_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/nullable_indirect_reflection.php");
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for feature in [Some(StrictFeature::Nullability), Some(StrictFeature::ArrayKeys), None] {
+            let profile = feature.map_or(SemanticProfile::PERMISSIVE, |feature| SemanticProfile::PERMISSIVE.with(feature, true));
+            let module = super::semantic_sources::lower_capturing_arguments(source, Target::parse(name).unwrap(), profile, false, SourceMode::Php);
+            for class in ["ReflectionFunction", "ReflectionMethod"] {
+                for method in ["invoke", "invokeargs"] {
+                    let function = module.class_methods.iter().find(|function|
+                        function.name.eq_ignore_ascii_case(&format!("{class}::{method}"))).unwrap();
+                    let throws = function.blocks.iter().any(|block|
+                        matches!(block.terminator, Some(crate::ir::Terminator::Throw { .. })));
+                    assert_eq!(throws, feature.is_some(), "{name}: {class}::{method} {feature:?}");
+                }
+            }
+            crate::ir::validate_module(&module).unwrap();
+            crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        }
+    }
+}
