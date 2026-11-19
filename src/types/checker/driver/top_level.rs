@@ -222,6 +222,9 @@ impl Checker {
             || (message.contains(" parameter $")
                 && message.ends_with(" expects callable, got null"))
             || Self::is_stale_array_argument_error(message)
+            // Same placeholder-`int` cause as above: `function_exists($o->getCallable())` on an
+            // untyped getter is refused in the first pass only.
+            || message == "function_exists() first argument must be a string in AOT mode"
     }
 
     /// Returns true for a builtin's array-argument refusal, which the first pass raises against an
