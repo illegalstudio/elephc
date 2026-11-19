@@ -113,12 +113,13 @@ reads, which emit PHP's deprecation diagnostic.
 
 ## Regular expressions
 
-Email and `FILTER_VALIDATE_REGEXP` matching run through a pure-Rust
-PCRE-compatible engine in the `elephc-filter` bridge. Delimiters and PHP's `i`,
-`m`, `s`, `x`, `A`, `D` and `u` modifiers are honoured; `$` matches before a final
-newline unless `D` is set, matching PCRE.
+Email validation uses the `elephc-filter` bridge's pure-Rust PCRE-compatible
+engine. `FILTER_VALIDATE_REGEXP` compiles and matches through the same managed
+PCRE2 path as `preg_match()`: delimiters and PHP's `i`, `m`, `s`, `x`, `A`, `D`
+and `u` modifiers are honoured, and PCRE2-only syntax (`\h`, `\R`, possessive
+quantifiers, recursion) behaves like PHP.
 
-Programs that use `FILTER_VALIDATE_REGEXP` link the managed `pcre2` package so
+Programs that use `FILTER_VALIDATE_REGEXP` link the managed `pcre2` package, so
 invalid patterns report PCRE2's exact `Compilation failed: … at offset N`
 diagnostic. Install it with `elephc native add pcre2` when a project does not
 already declare it.
@@ -154,8 +155,9 @@ sanitized string; nested arrays are walked recursively.
 
 - Strict scalar checks cover direct filter calls. A first-class callable or other dynamic
   invocation still uses the generic descriptor path and PHP's weak-mode coercion.
-- `FILTER_VALIDATE_REGEXP` compile errors come from PCRE2, while matching uses a pure-Rust
-  PCRE-compatible engine; exotic matching constructs may still differ from PCRE2.
+- A `FILTER_VALIDATE_REGEXP` call reached through a dynamic filter id does not statically
+  select the managed `pcre2` package; the bridge then uses its pure-Rust fallback. Name the
+  constant directly (or pass `--with-regex`) when PCRE2-only syntax must match.
 - `Uri\Rfc3986\Uri` and `Uri\WhatWg\Url` are accepted by `uri_parser_class` for URL
   validation. The URI objects' component methods are not exposed outside the filter surface.
 - `FILTER_SANITIZE_FULL_SPECIAL_CHARS` escapes ASCII HTML metacharacters and keeps

@@ -385,6 +385,31 @@ var_dump(filter_var("foo/bar/", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" 
     );
 }
 
+/// `FILTER_VALIDATE_REGEXP` matches through the shared PCRE2 runtime, not a Rust engine.
+#[test]
+fn test_filter_regexp_uses_pcre2_matching() {
+    let output = compile_and_run_capture(
+        r#"<?php
+var_dump(filter_var(" \t", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => "/^\h+$/"]]));
+var_dump(filter_var("abc", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => "/^\h+$/"]]));
+var_dump(filter_var("aaa", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => "/^a++$/"]]));
+var_dump(filter_var("aabb", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => "/^(a(?1)?b)$/"]]));
+var_dump(filter_var("x", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => "/[/"]]));
+"#,
+    );
+    assert_eq!(
+        output.stdout,
+        "string(2) \" \t\"\nbool(false)\nstring(3) \"aaa\"\nstring(4) \"aabb\"\nbool(false)\n"
+    );
+    assert!(
+        output.stderr.contains(
+            "Compilation failed: missing terminating ] for character class at offset 1"
+        ),
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
 /// `add_empty` is a weak `bool` parameter: arrays/objects are rejected before any body
 /// logic, including `filter_input_array()` with an empty input.
 #[test]

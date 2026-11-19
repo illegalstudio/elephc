@@ -351,7 +351,7 @@ fn build_source(body: &str, modifiers: &str) -> String {
     source
 }
 
-// PCRE2 compile-only diagnostics provided by the generated runtime when regex is linked.
+// PCRE2 diagnostics and matching provided by the generated runtime when regex is linked.
 #[cfg(not(test))]
 extern "C" {
     fn __rt_filter_pcre2_compile_check(
@@ -361,6 +361,13 @@ extern "C" {
         message: *mut u8,
         capacity: u64,
         offset_out: *mut u64,
+    ) -> i32;
+
+    fn __rt_filter_preg_match(
+        pattern: *const u8,
+        pattern_length: u64,
+        subject: *const u8,
+        subject_length: u64,
     ) -> i32;
 }
 
@@ -373,6 +380,17 @@ unsafe fn __rt_filter_pcre2_compile_check(
     _message: *mut u8,
     _capacity: u64,
     _offset_out: *mut u64,
+) -> i32 {
+    -1
+}
+
+/// Test-only fallback: unit tests do not link the generated program runtime.
+#[cfg(test)]
+unsafe fn __rt_filter_preg_match(
+    _pattern: *const u8,
+    _pattern_length: u64,
+    _subject: *const u8,
+    _subject_length: u64,
 ) -> i32 {
     -1
 }
@@ -440,6 +458,9 @@ pub(crate) fn php_pattern_with_error(
     if let Pcre2Check::Invalid(error) = &pcre2 {
         return (false, Some(error.clone()));
     }
+    if let Some(matched) = preg_match_via_runtime(pattern.as_bytes(), value) {
+        return (matched, None);
+    }
     let pcre2_unavailable = matches!(pcre2, Pcre2Check::Unavailable);
     if modifiers.contains('u') {
         if std::str::from_utf8(value).is_err() {
@@ -465,6 +486,26 @@ pub(crate) fn php_pattern_with_error(
     match build_fancy(body, modifiers) {
         Some(regex) => (regex.is_match(&value).unwrap_or(false), None),
         None => (false, pcre2_unavailable.then(|| "Compilation failed".to_string())),
+    }
+}
+
+/// Runs PHP's shared PCRE2 `preg_match()` runtime when the managed provider is linked.
+///
+/// Returns `None` when the generated runtime reports its unavailable sentinel, which
+/// keeps the pure-Rust fallback for programs that did not link the managed pcre2 package.
+fn preg_match_via_runtime(pattern: &[u8], value: &[u8]) -> Option<bool> {
+    let matched = unsafe {
+        __rt_filter_preg_match(
+            pattern.as_ptr(),
+            pattern.len() as u64,
+            value.as_ptr(),
+            value.len() as u64,
+        )
+    };
+    match matched {
+        1 => Some(true),
+        0 => Some(false),
+        _ => None,
     }
 }
 
