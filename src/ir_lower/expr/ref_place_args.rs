@@ -1294,6 +1294,11 @@ fn declared_local_ref_needs_adapter(
     if matches!(expected, PhpType::Object(_)) {
         return false;
     }
+    // A `?ptr<T> &$p` parameter reads and writes the local's own pointer-word slot (address 0 is
+    // null), so there is no boxed cell to adapt: a temporary written back would box the word.
+    if matches!(expected, PhpType::Pointer(_)) {
+        return false;
+    }
     (matches!(storage, PhpType::Mixed | PhpType::Union(_))
         || ctx.local_awaits_boxed_reference_promotion(name))
         && !matches!(expected, PhpType::Mixed | PhpType::Union(_))

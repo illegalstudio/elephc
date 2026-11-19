@@ -1747,6 +1747,23 @@ impl Checker {
                         param_index += 1;
                         continue;
                     }
+                    // A local that already is a pointer word (`?ptr<T> $x`, `ptr<T>`, a packed
+                    // record address) bound to a `?ptr<T> &$p` parameter shares its slot with the
+                    // callee: address 0 is null on both sides, so nothing is boxed or retyped.
+                    if !internal_callable
+                        && declared
+                        && matches!(declared_expected.codegen_repr(), PhpType::Pointer(_))
+                        && current.as_ref().is_some_and(|current| {
+                            crate::types::is_nullable_pointer_type(current)
+                                || matches!(
+                                    current.codegen_repr(),
+                                    PhpType::Pointer(_) | PhpType::Packed(_)
+                                )
+                        })
+                    {
+                        param_index += 1;
+                        continue;
+                    }
                     // The cell's REPRESENTATION, which is the declared type unless the callee's
                     // own body stores something that type cannot hold. The callee's cell IS this
                     // slot, so a widening there has to reach the caller before the slot is typed.
@@ -2144,6 +2161,16 @@ fn merge_conditional_storage_effects(env: &mut TypeEnv, branch_env: &TypeEnv) {
             continue;
         }
         if let (Some(outer_ty), Some(branch_ty)) = (&outer_ty, &branch_ty) {
+            // A `null` or pointer guard narrows a `?ptr<T>` to `null` in one arm and to the
+            // pointer in the other. That is a flow fact over the same pointer word, not a retype:
+            // the local keeps its declared `?ptr<T>` after the merge.
+            if crate::types::is_nullable_pointer_type(outer_ty)
+                && (matches!(branch_ty, PhpType::Void)
+                    || matches!(branch_ty, PhpType::Pointer(_))
+                    || crate::types::is_nullable_pointer_type(branch_ty))
+            {
+                continue;
+            }
             if let Some(converted) =
                 crate::types::array_storage_conversion(Some(outer_ty), branch_ty)
             {

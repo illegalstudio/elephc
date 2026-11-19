@@ -2109,6 +2109,9 @@ pub(super) fn check_typed_assign(
         span,
         &format!("Typed local ${}", name),
     )?;
+    if matches!(declared_ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Packed(_)) {
+        checker.pointer_word_locals.insert((checker.current_loop_storage_scope.clone(), name.to_string()));
+    }
     let value_ty = match checker.infer_type_with_assignment_effects(value, env) {
         Ok(value_ty) => value_ty,
         Err(error) => {
