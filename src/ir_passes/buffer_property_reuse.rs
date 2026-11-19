@@ -134,8 +134,11 @@ impl Facts {
 /// declares one and no eval bridge can declare a class later.
 pub(super) fn module_allows_property_reuse(module: &Module) -> bool {
     !module.required_runtime_features.eval_bridge
+        // Only a class the program declares counts: a built-in with a `__get` of its own
+        // (`DatePeriod`) is always registered, and its objects hold no buffer property.
         && !module.class_infos.values().any(|class| {
-            class.methods.keys().any(|method| method.eq_ignore_ascii_case("__get"))
+            !class.is_internal
+                && class.methods.keys().any(|method| method.eq_ignore_ascii_case("__get"))
         })
 }
 
