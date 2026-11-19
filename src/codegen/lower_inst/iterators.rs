@@ -1537,6 +1537,9 @@ fn lower_dynamic_iter_current_value(
     let hash_case = ctx.next_label("iter_value_dyn_hash");
     let object_case = ctx.next_label("iter_value_dyn_object");
     let done = ctx.next_label("iter_value_dyn_done");
+    // A concrete object result (a hash of objects walked through the dynamic dispatch) needs the
+    // owned object, not the Mixed box every arm below produces.
+    let object_result = matches!(iter_current_result_type(ctx, inst)?, PhpType::Object(_));
     branch_on_dynamic_source_heap_kind(ctx, offset, &indexed_case, &hash_case, &object_case);
     // -- unreachable: `IterNext` already reported "no more elements" for this state --
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -1547,15 +1550,25 @@ fn lower_dynamic_iter_current_value(
         Arch::AArch64 => load_current_dynamic_indexed_value_as_mixed_aarch64(ctx, offset, preserve_reference),
         Arch::X86_64 => load_current_dynamic_indexed_value_as_mixed_x86_64(ctx, offset, preserve_reference),
     }
+    if object_result {
+        hash_objects::unbox_owned_mixed_to_owned_object(ctx);
+    }
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&hash_case);
-    load_current_hash_call_value_as_mixed(ctx, offset, preserve_reference, promote_reference);
+    if object_result {
+        hash_objects::load_current_hash_object_value(ctx, offset, preserve_reference, promote_reference);
+    } else {
+        load_current_hash_call_value_as_mixed(ctx, offset, preserve_reference, promote_reference);
+    }
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&object_case);
     let return_ty = emit_interface_iterator_method_call(ctx, offset, "Iterator", "current")?;
     box_iterator_method_result_if_needed(ctx, inst, &return_ty)?;
+    if object_result {
+        hash_objects::unbox_owned_mixed_to_owned_object(ctx);
+    }
     ctx.emitter.label(&done);
     Ok(())
 }

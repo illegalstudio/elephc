@@ -46,6 +46,16 @@ pub(super) fn load_current_hash_object_value(
     }
     ctx.emitter.label(&boxed);
     load_current_hash_call_value_as_mixed(ctx, offset, preserve_reference, promote_reference);
+    unbox_owned_mixed_to_owned_object(ctx);
+    ctx.emitter.label(&done);
+}
+
+/// Turns the owned Mixed box in the integer result register into an owned object.
+///
+/// The unbox takes its own payload reference and the box is then released; the source entry still
+/// holds the object, so that release runs no destructor.
+pub(super) fn unbox_owned_mixed_to_owned_object(ctx: &mut FunctionContext<'_>) {
+    let object_ty = PhpType::Object(String::new());
     let result = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result);
     super::super::reference_arguments::emit_unbox_mixed_to_owned_refcounted_result(ctx, &object_ty);
@@ -54,5 +64,4 @@ pub(super) fn load_current_hash_object_value(
     abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     abi::emit_pop_reg(ctx.emitter, result);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    ctx.emitter.label(&done);
 }

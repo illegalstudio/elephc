@@ -388,6 +388,12 @@ fn lower_foreach_selected(
     // objects, so `retain_object_foreach_source` returns them untouched and the flag still
     // describes `source`.
     let source = retain_object_foreach_source(ctx, source, array.span);
+    // The static type decides whether the key can be read without user code. The object
+    // normalization below widens an `array` source to a Mixed merge, which would hide it.
+    let declared_php_array = {
+        let ty = ctx.builder.value_php_type(source.value);
+        matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || ty.is_php_array()
+    };
     // A by-value loop iterates a SNAPSHOT: `foreach ($key as $i => $s) { unset($key[$i]); }` still
     // visits every element. A boxed `mixed`/union local lends its array to the iterator without a
     // reference of its own, so the in-place `unset` shortened the very storage being walked and
@@ -623,7 +629,8 @@ fn lower_foreach_selected(
         receiver_pin,
     });
     // Only a source that is statically a PHP array reads its key without user code.
-    let array_source = matches!(source_php_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+    let array_source = declared_php_array
+        || matches!(source_php_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
         || source_php_ty.is_php_array();
     super::foreach_bindings::bind_current(
         ctx, iterator, &source_ty, key_var, value_var, value_by_ref, array_source, array.span,

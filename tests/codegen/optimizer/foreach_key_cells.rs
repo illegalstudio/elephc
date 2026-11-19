@@ -207,10 +207,16 @@ function retained(array $src): void {
 }
 function observed(array $src): void {
     $sum = 0;
+    // A by-value walk detaches each element's cell whether or not a key is bound, so the key's
+    // own cost is the difference from the same walk without one.
+    $before = memory_get_allocations();
+    foreach ($src as $v) { $sum = $sum + 1; }
+    $keyless = memory_get_allocations() - $before;
+    $sum = 0;
     $before = memory_get_allocations();
     foreach ($src as $k => $v) { $sum = $sum + $k; }
     $after = memory_get_allocations();
-    echo $sum, " observed=", $after - $before < count($src) ? "fixed" : "per-entry", "\n";
+    echo $sum, " observed=", ($after - $before) - $keyless < count($src) ? "fixed" : "per-entry", "\n";
 }
 $map = [];
 for ($i = 0; $i < 6; $i++) { $map[$i * 3 + $argc] = "v" . $i; }
