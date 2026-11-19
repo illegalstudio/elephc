@@ -197,7 +197,7 @@ and restore their capture owner around nested PHP calls.
 
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, formatting, output routing, zval pack/unpack,
-resource identity/inventory policy, class/coroutine/SPL layout definitions, platform
+resource identity and close policy, class-specific layout inputs, platform
 mapping flags, semantic runtime data, helper ordering, runtime object caching, and
 final linking.
 Memory constants live in Memoir with compatibility re-exports where needed.
@@ -254,6 +254,13 @@ descriptor construction, heap-backed string and C output buffers, and libc
 scratch-vector ownership to Memoir. Adapters preserve the allocator pairing at
 each native boundary. The compiler still supplies PHP lifetime decisions,
 descriptor metadata and the control flow for error publication.
+
+The glob envelope owns its iteration prefix and the emitted two-stage release of
+libc results and native heap storage. AOT assignment and eval writeback share
+the Mixed replacement protocol, with the caller supplying destination and
+retirement policy. Destructor heap flags, resource inventory node reclamation
+and fixed SPL backing construction also live here. Runtime handle selection,
+destructor dispatch and PHP iterator behavior remain with the compiler.
 
 ## Typed configuration
 

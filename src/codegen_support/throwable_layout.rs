@@ -8,7 +8,7 @@
 //! - The optional word follows declared properties and the dynamic-property hash.
 //! - Property, GC, and dynamic-hash offsets keep their existing layout.
 
-use elephc_memoir::layout::object_declared_slot_offset;
+use elephc_memoir::values::object_storage::declared_object_bytes;
 use std::collections::HashMap;
 
 use crate::types::ClassInfo;
@@ -23,7 +23,7 @@ pub(crate) fn ordinary_creation_line_offset(
     while let Some(name) = current {
         let ancestor = classes.get(name)?;
         if ancestor.is_internal && matches!(name, "Exception" | "Error") {
-            return Some(object_declared_slot_offset(class.properties.len()) + usize::from(class.has_property_hash_storage()) * 8);
+            return Some(declared_object_bytes(class.properties.len(), class.has_property_hash_storage(), false));
         }
         current = ancestor.parent.as_deref();
     }

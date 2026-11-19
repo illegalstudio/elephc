@@ -8,7 +8,6 @@
 //! Key details:
 //! - User data is program-specific and must match class ids, static property slots, and generated call sites.
 
-use elephc_memoir::layout::object_declared_slot_offset;
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
@@ -469,7 +468,7 @@ pub(crate) fn emit_runtime_data_user(
             let payload_size =
                 match (class_info_by_id.get(&class_id), class_name_by_id.get(&class_id)) {
                     (Some(class_info), Some(class_name)) => {
-                        class_object_payload_size(class_name, class_info)
+                        class_object_payload_size(class_name, class_info, false)
                     }
                     _ => 0,
                 };
@@ -486,7 +485,7 @@ pub(crate) fn emit_runtime_data_user(
                     (Some(class), Some(name)) => {
                         let offset = crate::codegen_support::throwable_layout::ordinary_creation_line_offset(name, classes);
                         if allocation_size {
-                            class_object_payload_size(name, class) + usize::from(offset.is_some()) * 8
+                            class_object_payload_size(name, class, offset.is_some())
                         } else { offset.unwrap_or(0) }
                     }
                     _ => 0,
@@ -3163,8 +3162,8 @@ fn emit_classes_by_name_table(
     out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
     out.push_str(".globl _classes_by_name\n_classes_by_name:\n");
     for (class_name, class_info) in sorted_classes {
-        let obj_size = class_object_payload_size(class_name, class_info)
-            + usize::from(crate::codegen_support::throwable_layout::ordinary_creation_line_offset(class_name, classes).is_some()) * 8;
+        let creation_line = crate::codegen_support::throwable_layout::ordinary_creation_line_offset(class_name, classes);
+        let obj_size = class_object_payload_size(class_name, class_info, creation_line.is_some());
         out.push_str(&format!(
             "    .quad _class_by_name_str_{}\n",
             class_info.class_id
@@ -3176,13 +3175,10 @@ fn emit_classes_by_name_table(
 }
 
 /// Returns the PHP object payload bytes required by one class layout.
-fn class_object_payload_size(class_name: &str, class_info: &ClassInfo) -> usize {
-    let dyn_props_slot = if class_uses_dynamic_property_tail(class_name, class_info) {
-        8
-    } else {
-        0
-    };
-    object_declared_slot_offset(class_info.properties.len()) + dyn_props_slot
+fn class_object_payload_size(class_name: &str, class_info: &ClassInfo, creation_line: bool) -> usize {
+    elephc_memoir::values::object_storage::declared_object_bytes(
+        class_info.properties.len(), class_uses_dynamic_property_tail(class_name, class_info), creation_line,
+    )
 }
 
 /// Returns whether this class layout stores a dynamic-property hash tail.

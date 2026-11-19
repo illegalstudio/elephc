@@ -28,7 +28,7 @@ declarations. It is an ordinary compiler dependency and is never linked as a Rus
 library into compiled PHP programs. Those programs contain the same
 assembly `__rt_*` helpers. EIR ownership analysis and optimization remain in the
 compiler, together with PHP type/reference validation, resource identity policy,
-layout definitions, PHP formatting and output routing, zval pack/unpack,
+class-specific layout inputs, PHP formatting and output routing, zval pack/unpack,
 platform mapping flags, semantic runtime data, helper ordering and linking. The
 compiler emitter adapter supplies target ABI operations and layout facts to Memoir. Capture cleanup receives a compiler callback for its mode reset. Zval
 storage cleanup releases copied strings/arrays and leaves borrowed native
@@ -91,6 +91,13 @@ reporting cleanup exceptions through the caller's context. String writes can use
 a private snapshot and an unwind guard to keep their input valid while a warning
 handler runs. The compiler supplies the layouts and controls when these
 operations run.
+AOT assignment and eval writeback share Mixed payload transfer and displaced-owner
+release. The compiler supplies the destination and chooses when to publish. Native
+destructor dispatch and the cycle collector share the same heap header flags.
+Memoir drains resource inventory nodes after the compiler-selected handle cleanup.
+For glob directories it releases libc results with `globfree` and returns the
+envelope to the native heap, including when a directory fails to open. Fixed SPL
+backing arrays and declared object payload geometry also use Memoir storage helpers.
 Memoir source changes also participate in runtime-object cache identity.
 
 The host API composes assembly output, target ABI and memory-context capabilities.

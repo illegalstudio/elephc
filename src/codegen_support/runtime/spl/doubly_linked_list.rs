@@ -14,12 +14,11 @@ use elephc_memoir::values::packed_mixed_copy::PackedMixedCopy;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use elephc_memoir::values::spl_storage;
 
 use super::offset_convert::{SPL_OFFSET_MODE_LIST, SPL_OFFSET_MODE_LIST_NULLABLE};
 use super::{SPL_DLL_ITER_INDEX_OFFSET, SPL_DLL_ITER_MODE_OFFSET, SPL_DLL_STORAGE_OFFSET};
 
-const SPL_DLL_OBJECT_SIZE: i64 = 32;
-const SPL_DLL_INITIAL_CAPACITY: i64 = 4;
 const NULL_TAG: i64 = 8;
 const INT_TAG: i64 = 0;
 const STR_TAG: i64 = 1;
@@ -96,24 +95,7 @@ fn emit_new_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish a frame for nested allocator calls
     emitter.instruction("str x0, [sp, #0]");                                    // save the concrete SPL class id
     emitter.instruction("str x1, [sp, #16]");                                   // save the requested default iterator mode
-    emitter.instruction(&format!("mov x0, #{}", SPL_DLL_OBJECT_SIZE));          // request the fixed SPL list object payload size
-    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the concrete SPL class id
-    emitter.instruction("str x9, [x0]");                                        // store the class id at the object header
-    emitter.instruction("str x0, [sp, #8]");                                    // save the object pointer while allocating storage
-    emitter.instruction(&format!("mov x0, #{}", SPL_DLL_INITIAL_CAPACITY));     // initial internal storage capacity
-    emitter.instruction("mov x1, #8");                                          // each internal storage slot holds one Mixed pointer
-    emitter.instruction("bl __rt_array_new");                                   // allocate the owned internal mixed-pointer storage
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the internal array packed kind word
-    emitter.instruction("mov x10, #0x700");                                     // runtime value_type tag 7 = boxed Mixed cells
-    emitter.instruction("orr x9, x9, x10");                                     // mark internal storage as an array of Mixed cells
-    emitter.instruction("str x9, [x0, #-8]");                                   // persist the Mixed value_type tag on internal storage
-    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the object pointer
-    emitter.instruction(&format!("str x0, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); // object.storage = internal Mixed array
-    emitter.instruction(&format!("str xzr, [x9, #{}]", SPL_DLL_ITER_INDEX_OFFSET)); // iterator index starts at zero
-    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the class default iterator mode
-    emitter.instruction(&format!("str x10, [x9, #{}]", SPL_DLL_ITER_MODE_OFFSET)); // seed the class's default mode (FIX/LIFO bits)
-    emitter.instruction("mov x0, x9");                                          // return the initialized SPL object
+    spl_storage::emit_dll_storage(emitter);
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release constructor spill slots
     emitter.instruction("ret");                                                 // return the object pointer
@@ -1295,23 +1277,7 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve class-id, object-pointer, and default-mode spill slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save concrete SPL class id
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the requested default iterator mode
-    emitter.instruction(&format!("mov rax, {}", SPL_DLL_OBJECT_SIZE));          // request fixed SPL list object payload size
-    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload concrete SPL class id
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at object header
-    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save object pointer while allocating storage
-    emitter.instruction(&format!("mov rdi, {}", SPL_DLL_INITIAL_CAPACITY));     // initial internal storage capacity
-    emitter.instruction("mov rsi, 8");                                          // each internal slot holds one Mixed pointer
-    emitter.instruction("call __rt_array_new");                                 // allocate internal mixed-pointer storage
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load internal array packed kind word
-    emitter.instruction("or r10, 0x700");                                       // mark internal storage as an array of Mixed cells
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // persist Mixed value_type tag on storage
-    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload object pointer
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", SPL_DLL_STORAGE_OFFSET)); // object.storage = internal Mixed array
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], 0", SPL_DLL_ITER_INDEX_OFFSET)); // iterator index starts at zero
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the class default iterator mode
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], r10", SPL_DLL_ITER_MODE_OFFSET)); // seed the class's default mode (FIX/LIFO bits)
-    emitter.instruction("mov rax, r11");                                        // return initialized SPL object
+    spl_storage::emit_dll_storage(emitter);
     emitter.instruction("add rsp, 32");                                         // release constructor spills
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return object pointer

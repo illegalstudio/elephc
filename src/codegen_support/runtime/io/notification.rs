@@ -74,15 +74,7 @@ pub fn emit_fire_notification(emitter: &mut Emitter) {
 
     // -- allocate a 6-slot argument array and stamp value_type = Mixed once --
     emitter.instruction("mov x0, #6");                                          // capacity: six PHP arguments (no growth needed)
-    emitter.instruction("mov x1, #8");                                          // boxed Mixed slots store one pointer each
-    abi::emit_call_label(emitter, "__rt_array_new");                            // x0 = indexed array backing storage
-    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the packed array kind word from the header
-    emitter.instruction("mov x12, #0x80ff");                                    // preserve the indexed-array kind and persistent COW flag
-    emitter.instruction("and x10, x10, x12");                                   // keep only the persistent metadata bits
-    emitter.instruction("mov x11, #7");                                         // value_type tag 7 = boxed Mixed
-    emitter.instruction("lsl x11, x11, #8");                                    // move the tag into the packed kind-word byte lane
-    emitter.instruction("orr x10, x10, x11");                                   // combine the heap kind with the value_type tag
-    emitter.instruction("str x10, [x0, #-8]");                                  // persist the stamped kind word (never re-stamped: no push_int)
+    elephc_memoir::values::array_header::emit_allocate_mixed_slots(emitter);
     emitter.instruction("str x0, [sp, #48]");                                   // save the args array pointer (fixed for all slots)
 
     // -- arg 0: code (int) --
@@ -215,15 +207,7 @@ fn emit_fire_notification_linux_x86_64(emitter: &mut Emitter) {
 
     // -- allocate a 6-slot argument array and stamp value_type = Mixed once --
     emitter.instruction("mov rdi, 6");                                          // capacity: six PHP arguments (no growth needed)
-    emitter.instruction("mov rsi, 8");                                          // boxed Mixed slots store one pointer each
-    abi::emit_call_label(emitter, "__rt_array_new");                            // rax = indexed array backing storage
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the packed array kind word from the header
-    emitter.instruction("mov r11, 0xffffffff000080ff");                         // preserve heap marker + indexed-array kind + COW bit
-    emitter.instruction("and r10, r11");                                        // keep only the persistent metadata bits
-    emitter.instruction("mov r11, 7");                                          // value_type tag 7 = boxed Mixed
-    emitter.instruction("shl r11, 8");                                          // move the tag into the packed kind-word byte lane
-    emitter.instruction("or r10, r11");                                         // combine the heap kind with the value_type tag
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // persist the stamped kind word (never re-stamped: no push_int)
+    elephc_memoir::values::array_header::emit_allocate_mixed_slots(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the args array pointer (fixed for all slots)
 
     // -- arg 0: code (int) --

@@ -36,12 +36,8 @@ pub struct GraphLayout {
     pub gen_last_value_offset: i32,
     /// Byte layout fact supplied by the compiler.
     pub gen_return_value_offset: i32,
-    /// Byte layout fact supplied by the compiler.
-    pub spl_dll_storage_offset: i32,
     /// Compiler-owned special object storage offset.
     pub fiber_stack_size_offset: i32,
-    /// Compiler-owned special object storage offset.
-    pub spl_fixed_storage_offset: i32,
 }
 
 /// EIR GC metric selectors supplied without a dependency on the compiler IR.

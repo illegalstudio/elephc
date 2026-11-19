@@ -21,22 +21,23 @@ pub(in crate::codegen::lower_inst) fn emit_object_allocation(
     owned_reference_property_offsets: &[(usize, PhpType, bool)],
 ) -> Result<()> {
     let dynamic_properties_offset = dynamic_property_hash_offset(property_count);
-    let dynamic_properties_bytes = if allow_dynamic_properties { 8 } else { 0 };
     let creation_line_offset = crate::codegen_support::throwable_layout::ordinary_creation_line_offset_by_id(
         class_id, &ctx.module.class_infos,
     );
-    let payload_size = dynamic_properties_offset + dynamic_properties_bytes + usize::from(creation_line_offset.is_some()) * 8;
+    let payload_size = elephc_memoir::values::object_storage::declared_object_bytes(
+        property_count, allow_dynamic_properties, creation_line_offset.is_some(),
+    );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("mov x0, #{}", payload_size)); // request object payload storage for the class id and property slots
+                .instruction(&format!("mov x0, #{}", payload_size));            // request object payload storage for the class id and property slots
             elephc_memoir::values::object_storage::emit_allocate_object(ctx.emitter);
             ctx.emitter.instruction(&format!("mov x10, #{}", class_id));        // materialize the compile-time class id
             ctx.emitter.instruction("str x10, [x0]");                           // store the class id at object payload offset zero
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("mov rax, {}", payload_size)); // request object payload storage for the class id and property slots
+                .instruction(&format!("mov rax, {}", payload_size));            // request object payload storage for the class id and property slots
             elephc_memoir::values::object_storage::emit_allocate_object(ctx.emitter);
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero

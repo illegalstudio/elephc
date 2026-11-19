@@ -85,3 +85,4 @@ pub mod packed_mixed_copy;
 pub mod packed_mixed_prefix;
 pub mod packed_slice;
 pub mod destructor_header;
+pub mod spl_storage;

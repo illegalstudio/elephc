@@ -82,7 +82,7 @@ pub fn emit_object_free_deep(emitter: &mut impl Emitter, features: ValueFeatures
     emitter.instruction("cbz w10, __rt_object_free_deep_not_resurrected");      // no surviving owner: release the storage as before
     emitter.instruction("str w10, [x0, #-12]");                                 // clear the guard so those owners release normally later
     emitter.instruction("ldr x10, [x0, #-8]");                                  // load the uniform heap kind word
-    emitter.instruction("orr x10, x10, #0x4000");                               // mark the destructor as completed for the final release
+    emitter.instruction(&format!("orr x10, x10, #{:#x}", crate::values::destructor_header::FINISHED_MASK)); // mark the destructor as completed for the final release
     emitter.instruction("str x10, [x0, #-8]");                                  // persist the completion mark in the header
     emitter.instruction("b __rt_object_free_deep_resurrected");                 // keep the object and unwind only this cleanup frame
     emitter.label("__rt_object_free_deep_not_resurrected");
@@ -95,7 +95,7 @@ pub fn emit_object_free_deep(emitter: &mut impl Emitter, features: ValueFeatures
     emitter.instruction("str w10, [x0, #-12]");                                 // restore the ordinary count of a resurrected receiver
     emitter.instruction("b __rt_object_free_deep_resurrected");                 // preserve its properties and pending throwable state
     emitter.label("__rt_object_free_deep_release");
-    emitter.instruction("orr w9, w9, #0x80000000");                             // suppress recursive release while dismantling the final object graph
+    emitter.instruction(&format!("orr w9, w9, #{:#x}", crate::values::destructor_header::RUNNING_MASK)); // suppress recursive release while dismantling the final object graph
     emitter.instruction("str w9, [x0, #-12]");                                  // keep an in-progress allocation distinct from a free-list block
     emitter.instruction("ldr x0, [sp]");                                        // pass the final object identity after resurrection was ruled out
     super::deep_cleanup::invoke(emitter, "__rt_weak_map_notify", "x0");
@@ -217,10 +217,10 @@ pub fn emit_object_free_deep(emitter: &mut impl Emitter, features: ValueFeatures
     emitter.instruction("b.ne __rt_object_free_deep_not_spl_dll");              // skip SPL list cleanup for ordinary objects
     emitter.label("__rt_object_free_deep_spl_dll");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved SPL list object pointer
-    emitter.instruction(&format!("ldr x0, [x0, #{}]", emitter.graph_layout().spl_dll_storage_offset)); // load the owned internal Mixed storage array
+    emitter.instruction(&format!("ldr x0, [x0, #{}]", crate::values::spl_storage::SPL_DLL_STORAGE_OFFSET)); // load the owned internal Mixed storage array
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved SPL list object pointer after storage release
-    emitter.instruction(&format!("str xzr, [x0, #{}]", emitter.graph_layout().spl_dll_storage_offset)); // clear the storage pointer after release
+    emitter.instruction(&format!("str xzr, [x0, #{}]", crate::values::spl_storage::SPL_DLL_STORAGE_OFFSET)); // clear the storage pointer after release
     emitter.instruction("b __rt_object_free_deep_no_dyn_props");                // free the custom object storage without generic descriptor walking
     emitter.label("__rt_object_free_deep_not_spl_dll");
 
@@ -230,10 +230,10 @@ pub fn emit_object_free_deep(emitter: &mut impl Emitter, features: ValueFeatures
     emitter.instruction("cmp x10, x11");                                        // is the receiver a SplFixedArray?
     emitter.instruction("b.ne __rt_object_free_deep_not_spl_fixed");            // skip fixed-array cleanup for ordinary objects
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved SplFixedArray object pointer
-    emitter.instruction(&format!("ldr x0, [x0, #{}]", emitter.graph_layout().spl_fixed_storage_offset)); // load the owned fixed-array storage
+    emitter.instruction(&format!("ldr x0, [x0, #{}]", crate::values::spl_storage::SPL_FIXED_STORAGE_OFFSET)); // load the owned fixed-array storage
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved SplFixedArray object pointer after storage release
-    emitter.instruction(&format!("str xzr, [x0, #{}]", emitter.graph_layout().spl_fixed_storage_offset)); // clear storage pointer after release
+    emitter.instruction(&format!("str xzr, [x0, #{}]", crate::values::spl_storage::SPL_FIXED_STORAGE_OFFSET)); // clear storage pointer after release
     emitter.instruction("b __rt_object_free_deep_no_dyn_props");                // free custom fixed-array storage without generic descriptor walking
     emitter.label("__rt_object_free_deep_not_spl_fixed");
 
@@ -386,12 +386,12 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut impl Emitter, features: Valu
     // new owner keeps the object alive; the completion mark stops a second `__destruct` later.
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer after the destructor returned
     emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // reload the refcount word carrying the in-progress guard
-    emitter.instruction("test r10d, 0x80000000");                               // did a destructor actually run in this call?
+    emitter.instruction(&format!("test r10d, {:#x}", crate::values::destructor_header::RUNNING_MASK)); // did a destructor actually run in this call?
     emitter.instruction("jz __rt_object_free_deep_not_resurrected_x");          // no (collector sweep, completed mark): free as before
     emitter.instruction("and r10d, 0x7fffffff");                                // isolate the real owners the destructor body left behind
     emitter.instruction("jz __rt_object_free_deep_not_resurrected_x");          // no surviving owner: release the storage as before
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // clear the guard so those owners release normally later
-    emitter.instruction("or QWORD PTR [rax - 8], 0x4000");                      // mark the destructor as completed for the final release
+    emitter.instruction(&format!("or QWORD PTR [rax - 8], {:#x}", crate::values::destructor_header::FINISHED_MASK)); // mark the destructor as completed for the final release
     emitter.instruction("jmp __rt_object_free_deep_resurrected_x");             // keep the object and unwind only this cleanup frame
     emitter.label("__rt_object_free_deep_not_resurrected_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the object identity through the C ABI
@@ -403,7 +403,7 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut impl Emitter, features: Valu
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // restore usable refcounts for a retained receiver
     emitter.instruction("jmp __rt_object_free_deep_resurrected_x");             // preserve resurrected identity while propagating pending exceptions
     emitter.label("__rt_object_free_deep_release");
-    emitter.instruction("or DWORD PTR [rax - 12], 0x80000000");                 // suppress recursive final release and preserve heap liveness during cleanup
+    emitter.instruction(&format!("or DWORD PTR [rax - 12], {:#x}", crate::values::destructor_header::RUNNING_MASK)); // suppress recursive final release and preserve heap liveness during cleanup
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the final object identity after resurrection was ruled out
     super::deep_cleanup::invoke(emitter, "__rt_weak_map_notify", "rdi");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the key after observer callbacks
@@ -509,10 +509,10 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut impl Emitter, features: Valu
     emitter.instruction("jne __rt_object_free_deep_not_spl_dll");               // skip SPL list cleanup for ordinary objects
     emitter.label("__rt_object_free_deep_spl_dll");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved SPL list object pointer
-    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", emitter.graph_layout().spl_dll_storage_offset)); // load the owned internal Mixed storage array
+    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", crate::values::spl_storage::SPL_DLL_STORAGE_OFFSET)); // load the owned internal Mixed storage array
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved SPL list object pointer after storage release
-    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", emitter.graph_layout().spl_dll_storage_offset)); // clear the storage pointer after release
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::values::spl_storage::SPL_DLL_STORAGE_OFFSET)); // clear the storage pointer after release
     emitter.instruction("jmp __rt_object_free_deep_no_dyn_props");              // free the custom object storage without generic descriptor walking
     emitter.label("__rt_object_free_deep_not_spl_dll");
 
@@ -522,10 +522,10 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut impl Emitter, features: Valu
     emitter.instruction("cmp r10, r11");                                        // is the receiver a SplFixedArray?
     emitter.instruction("jne __rt_object_free_deep_not_spl_fixed");             // skip fixed-array cleanup for ordinary objects
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved SplFixedArray object pointer
-    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", emitter.graph_layout().spl_fixed_storage_offset)); // load the owned fixed-array storage
+    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", crate::values::spl_storage::SPL_FIXED_STORAGE_OFFSET)); // load the owned fixed-array storage
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved SplFixedArray object pointer after storage release
-    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", emitter.graph_layout().spl_fixed_storage_offset)); // clear storage pointer after release
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::values::spl_storage::SPL_FIXED_STORAGE_OFFSET)); // clear storage pointer after release
     emitter.instruction("jmp __rt_object_free_deep_no_dyn_props");              // free custom fixed-array storage without generic descriptor walking
     emitter.label("__rt_object_free_deep_not_spl_fixed");
 
