@@ -8,6 +8,8 @@
 //! - These emit assembly inside the compiler and add no target-program library.
 
 pub mod c_strings;
+pub mod exported_bytes;
+pub mod glob_storage;
 pub mod zval;
 
 pub mod cstr_scratch;

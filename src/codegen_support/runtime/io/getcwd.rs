@@ -8,7 +8,6 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 
@@ -49,8 +48,7 @@ pub fn emit_getcwd(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // establish new frame pointer
 
     // -- allocate heap buffer for path --
-    emitter.instruction("mov x0, #1024");                                       // request 1024 bytes for path buffer
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate, x0=buffer pointer
+    elephc_memoir::interop::c_strings::emit_allocate_path_buffer(emitter);
     emitter.instruction("str x0, [sp, #0]");                                    // save buffer pointer on stack
 
     // -- call libc getcwd --
@@ -103,8 +101,7 @@ fn emit_getcwd_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the owned buffer pointer and recovered length
     emitter.instruction("sub rsp, 16");                                         // reserve aligned spill slots for the owned buffer pointer and the scanned string length
 
-    emitter.instruction("mov rax, 1024");                                       // request a fixed 1024-byte owned buffer for the current working directory path
-    emit_allocate_owned_string(emitter);
+    elephc_memoir::interop::c_strings::emit_allocate_path_buffer(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the owned buffer pointer across the libc getcwd() and length-scan calls
 
     emitter.instruction("mov rdi, rax");                                        // pass the owned buffer pointer as the first libc getcwd() argument

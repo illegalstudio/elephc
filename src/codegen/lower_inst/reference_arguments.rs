@@ -689,11 +689,8 @@ pub(super) fn materialize_temporary_ref_arg_cell(
     let target_ty = param_ty.codegen_repr();
     coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
     abi::emit_push_result_value(ctx.emitter, &target_ty);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
     let cell_reg = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    abi::emit_pop_reg(ctx.emitter, cell_reg);
+    elephc_memoir::reference_cells::emit_allocate_argument_pair(ctx.emitter, cell_reg);
     store_pushed_value_to_ref_cell(ctx, cell_reg, &target_ty);
     move_reg_to_int_result(ctx, cell_reg);
     Ok(())

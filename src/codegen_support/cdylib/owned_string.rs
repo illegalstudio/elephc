@@ -328,46 +328,16 @@ fn emit_copy_owned_result(
     layout: &OwnedStringBoundaryLayout,
     labels: &OwnedStringLabels,
 ) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::load_at_offset(emitter, "x0", layout.result_len_offset);
-            emitter.instruction("add x0, x0, #1");                              // include one byte for the optional trailing NUL
-            emitter.instruction("bl __rt_heap_alloc");                          // allocate caller-owned result storage
-            abi::store_at_offset(emitter, "x0", layout.owned_ptr_offset);
-            abi::load_at_offset(emitter, "x9", layout.result_ptr_offset);
-            abi::load_at_offset(emitter, "x10", layout.result_len_offset);
-            emitter.instruction("mov x11, x0");                                 // retain the owned output base across the copy loop
-            emitter.instruction("mov x12, #0");                                 // initialize the binary copy cursor
-            emitter.label(&labels.copy);
-            emitter.instruction("cmp x12, x10");                                // compare the cursor with the authoritative byte length
-            emitter.instruction(&format!("b.hs {}", labels.copied));            // finish after every result byte is copied
-            emitter.instruction("ldrb w13, [x9, x12]");                         // load one binary result byte
-            emitter.instruction("strb w13, [x11, x12]");                        // copy one byte into caller-owned storage
-            emitter.instruction("add x12, x12, #1");                            // advance the binary copy cursor
-            emitter.instruction(&format!("b {}", labels.copy));                 // continue the result copy loop
-            emitter.label(&labels.copied);
-            emitter.instruction("strb wzr, [x11, x10]");                        // append a non-authoritative trailing NUL
-        }
-        Arch::X86_64 => {
-            abi::load_at_offset(emitter, "rax", layout.result_len_offset);
-            emitter.instruction("add rax, 1");                                  // include one byte for the optional trailing NUL
-            emitter.instruction("call __rt_heap_alloc");                        // allocate caller-owned result storage
-            abi::store_at_offset(emitter, "rax", layout.owned_ptr_offset);
-            abi::load_at_offset(emitter, "r8", layout.result_ptr_offset);
-            abi::load_at_offset(emitter, "r9", layout.result_len_offset);
-            emitter.instruction("mov r10, rax");                                // retain the owned output base across the copy loop
-            emitter.instruction("xor r11d, r11d");                              // initialize the binary copy cursor
-            emitter.label(&labels.copy);
-            emitter.instruction("cmp r11, r9");                                 // compare the cursor with the authoritative byte length
-            emitter.instruction(&format!("jae {}", labels.copied));             // finish after every result byte is copied
-            emitter.instruction("movzx eax, BYTE PTR [r8 + r11]");              // load one binary result byte
-            emitter.instruction("mov BYTE PTR [r10 + r11], al");                // copy one byte into caller-owned storage
-            emitter.instruction("add r11, 1");                                  // advance the binary copy cursor
-            emitter.instruction(&format!("jmp {}", labels.copy));               // continue the result copy loop
-            emitter.label(&labels.copied);
-            emitter.instruction("mov BYTE PTR [r10 + r9], 0");                  // append a non-authoritative trailing NUL
-        }
-    }
+    elephc_memoir::interop::exported_bytes::emit_copy(
+        emitter,
+        elephc_memoir::interop::exported_bytes::Slots {
+            source: layout.result_ptr_offset,
+            length: layout.result_len_offset,
+            destination: layout.owned_ptr_offset,
+        },
+        &labels.copy,
+        &labels.copied,
+    );
 }
 
 /// Releases a runtime-owned result unless it aliases one of the host's borrowed strings.
@@ -377,35 +347,11 @@ fn emit_release_result_unless_borrowed(
     layout: &OwnedStringBoundaryLayout,
     skip_release: &str,
 ) {
-    let result = abi::int_result_reg(emitter);
-    abi::load_at_offset(emitter, result, layout.result_ptr_offset);
-    for ((_, ty), offsets) in export
-        .source_sig
-        .params
-        .iter()
-        .zip(&layout.param_offsets)
-    {
-        if *ty != PhpType::Str {
-            continue;
-        }
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                abi::load_at_offset(emitter, "x9", offsets[0]);
-                emitter.instruction("cmp x0, x9");                              // compare the result with one borrowed host string
-                emitter.instruction(&format!("b.eq {skip_release}"));           // preserve storage still owned by the host
-            }
-            Arch::X86_64 => {
-                abi::load_at_offset(emitter, "r10", offsets[0]);
-                emitter.instruction("cmp rax, r10");                            // compare the result with one borrowed host string
-                emitter.instruction(&format!("je {skip_release}"));             // preserve storage still owned by the host
-            }
-        }
-    }
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("bl __rt_heap_free_safe"),         // release runtime-owned result storage when present
-        Arch::X86_64 => emitter.instruction("call __rt_heap_free_safe"),        // release runtime-owned result storage when present
-    }
-    emitter.label(skip_release);
+    let borrowed = export.source_sig.params.iter().zip(&layout.param_offsets)
+        .filter_map(|((_, ty), offsets)| (*ty == PhpType::Str).then_some(offsets[0]));
+    elephc_memoir::interop::exported_bytes::emit_release_unless_borrowed(
+        emitter, layout.result_ptr_offset, borrowed, skip_release,
+    );
 }
 
 /// Publishes caller-owned result storage and its authoritative byte length.

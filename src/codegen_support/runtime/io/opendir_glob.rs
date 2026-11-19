@@ -40,7 +40,7 @@ pub fn emit_opendir_glob(emitter: &mut Emitter) {
         return;
     }
 
-    let pathv_off = emitter.platform.glob_pathv_offset() as i64;
+    let pathv_off = emitter.platform.glob_pathv_offset();
     emitter.blank();
     emitter.comment("--- runtime: opendir_glob ---");
     emitter.label_global("__rt_opendir_glob");
@@ -61,8 +61,7 @@ pub fn emit_opendir_glob(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #32]");                                   // save the pattern c_string across the heap alloc
 
     // -- allocate the glob_state struct on the heap --
-    emitter.instruction("mov x0, #160");                                        // 160 bytes covers struct + glob_t on both platforms
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = struct pointer
+    elephc_memoir::interop::glob_storage::emit_allocate(emitter);
     emitter.instruction("str x0, [sp, #40]");                                   // save the struct pointer
 
     // -- call libc glob(pattern, 0, NULL, &struct.glob_t) --
@@ -75,13 +74,7 @@ pub fn emit_opendir_glob(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_opendir_glob_fail");                     // glob failed → bail
 
     // -- populate the glob_state metadata fields --
-    emitter.instruction("ldr x9, [sp, #40]");                                   // struct pointer
-    emitter.instruction("ldr x10, [x9, #24]");                                  // gl_pathc lives at glob_t offset 0
-    emitter.instruction("str x10, [x9, #8]");                                   // struct.pathc = gl_pathc
-    emitter.instruction("add x11, x9, #24");                                    // &struct.glob_t
-    emitter.instruction(&format!("ldr x12, [x11, #{}]", pathv_off));            // gl_pathv at the platform-specific offset
-    emitter.instruction("str x12, [x9, #0]");                                   // struct.pathv = gl_pathv
-    emitter.instruction("str xzr, [x9, #16]");                                  // struct.index = 0
+    elephc_memoir::interop::glob_storage::emit_initialize(emitter, pathv_off);
 
     // -- dup(2) to mint a fresh fd we can hand out as the PHP resource value --
     emitter.instruction("mov x0, #2");                                          // duplicate stderr (always available)
@@ -108,7 +101,7 @@ pub fn emit_opendir_glob(emitter: &mut Emitter) {
 
 /// Emits the Linux x86_64 stream runtime helper for opendir glob.
 fn emit_opendir_glob_linux_x86_64(emitter: &mut Emitter) {
-    let pathv_off = emitter.platform.glob_pathv_offset() as i64;
+    let pathv_off = emitter.platform.glob_pathv_offset();
     emitter.blank();
     emitter.comment("--- runtime: opendir_glob ---");
     emitter.label_global("__rt_opendir_glob");
@@ -128,8 +121,7 @@ fn emit_opendir_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the pattern c_string
 
     // -- allocate the glob_state struct on the heap --
-    emitter.instruction("mov rax, 160");                                        // 160 bytes covers struct + glob_t
-    emitter.instruction("call __rt_heap_alloc");                                // rax = struct pointer
+    elephc_memoir::interop::glob_storage::emit_allocate(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the struct pointer
 
     // -- call libc glob(pattern, 0, NULL, &struct.glob_t) --
@@ -143,12 +135,7 @@ fn emit_opendir_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_opendir_glob_fail_x86");                      // bail on failure
 
     // -- populate the glob_state metadata fields --
-    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // struct pointer
-    emitter.instruction("mov r10, QWORD PTR [r9 + 24]");                        // gl_pathc lives at glob_t offset 0
-    emitter.instruction("mov QWORD PTR [r9 + 8], r10");                         // struct.pathc = gl_pathc
-    emitter.instruction(&format!("mov r10, QWORD PTR [r9 + 24 + {}]", pathv_off)); // gl_pathv at the platform-specific offset
-    emitter.instruction("mov QWORD PTR [r9 + 0], r10");                         // struct.pathv = gl_pathv
-    emitter.instruction("mov QWORD PTR [r9 + 16], 0");                          // struct.index = 0
+    elephc_memoir::interop::glob_storage::emit_initialize(emitter, pathv_off);
 
     // -- dup(2) to mint a fresh fd we can hand out as the PHP resource value --
     emitter.instruction("mov edi, 2");                                          // duplicate stderr (always available)
