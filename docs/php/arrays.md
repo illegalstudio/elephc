@@ -409,8 +409,8 @@ storage you need.
 Reference elements also constrain later array operations:
 
 - `array_shift()`, `array_unshift()`, `array_reverse()`, `array_merge()`,
-  `sort()` and `rsort()` preserve reference-cell identity. The ordering/removal
-  builtins `usort()`, `shuffle()` and `array_splice()` still detach reference
+  `sort()`, `rsort()` and `shuffle()` preserve reference-cell identity. The
+  ordering/removal builtins `usort()` and `array_splice()` still detach reference
   cells (the values stay correct, but later writes through the alias no longer
   reach the array); some reference-promoted storage shapes are rejected at
   compile time by those builtins instead of being miscompiled. `array_values()`
@@ -571,7 +571,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `krsort()` | `krsort($arr, $flags = SORT_REGULAR): bool` | Sort by key descending, comparing keys under `$flags`. A non-empty indexed array is promoted to associative storage so its numeric keys can appear in descending iteration order |
 | `natsort()` | `natsort($arr): bool` | Natural order sort |
 | `natcasesort()` | `natcasesort($arr): bool` | Case-insensitive natural sort |
-| `shuffle()` | `shuffle($arr): bool` | Randomly shuffle (in-place) |
+| `shuffle()` | `shuffle($arr): bool` | Randomly shuffle (in-place). Hash-backed arrays are supported and keep their reference cells; keys are renumbered from zero |
 | `array_multisort()` | `array_multisort($arr1, $arr2): bool` | Sort equal-length indexed arrays in place by ascending row order: compare `$arr1`, then `$arr2` for ties. AOT accepts two concrete integer arrays or two boxed scalar arrays (for example through declared `array` parameters), not one of each. Concrete string/float arrays, associative arrays, sort flags, and more than two arrays are unsupported. |
 | `array_rand()` | `array_rand(array $array, int $num = 1): int\|string\|array` | Pick one random key, or an array of keys when `$num > 1`; consumes the seeded Mt19937 state |
 | `array_map()` | `array_map($callback, $arr): array` | Apply callback to each element |

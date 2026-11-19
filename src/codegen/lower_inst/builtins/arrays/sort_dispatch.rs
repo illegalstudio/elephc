@@ -218,15 +218,45 @@ fn lower_hash_link_reindex_sort(
             )))
         }
     };
-    super::lower_hash_link_sort_with_flags(ctx, inst, helper, super::HashSortFlags::None)?;
+    lower_hash_relink_reindex(ctx, inst, name, Some(helper))
+}
+
+/// Relinks a Mixed-valued hash in place, rebuilds it under dense keys, and releases the shell.
+///
+/// `relink_helper` is `Some(__rt_hash_asort/arsort)` for a sort, or `None` for the shuffle
+/// helper (which also needs the random function pointers published). The table being replaced
+/// is parked before the rebuild because the dense helper moves its entries and leaves an
+/// emptied shell this call owns; publishing with a retiring store would drop it twice.
+fn lower_hash_relink_reindex(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    relink_helper: Option<&str>,
+) -> Result<()> {
     let array = expect_operand(inst, 0)?;
+    super::boxed_mutation::require_non_null_hash_receiver(ctx, array, name)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable(name)?;
+    receiver.prepare_consuming_storeback(ctx, array)?;
+    ensure_unique_hash_sort_source(ctx, array)?;
+    let result = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_result(array)?;
+    abi::emit_push_reg(ctx.emitter, result);
+    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    match relink_helper {
+        Some(helper) => abi::emit_call_label(ctx.emitter, helper),
+        None => {
+            crate::codegen::random::publish_elephc_random_function_pointers(ctx.emitter);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_shuffle_links");
+        }
+    }
+    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
     abi::emit_call_label(ctx.emitter, "__rt_hash_reindex_dense");
     ctx.store_result_value(array)?;
-    let receiver_ty = ctx.value_php_type(array)?;
-    receiver.store_back(ctx, array, &receiver_ty)?;
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    receiver.store_back_after_consuming_split(ctx, array)?;
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+    abi::emit_load_int_immediate(ctx.emitter, result, 1);
     store_if_result(ctx, inst)
 }
 
@@ -304,6 +334,12 @@ pub(super) fn lower_indexed_array_sort(
 pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "shuffle", 1)?;
     let array = expect_operand(inst, 0)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ) {
+        return lower_hash_shuffle(ctx, inst, array);
+    }
     eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "shuffle")?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     receiver.require_writable("shuffle")?;
@@ -326,6 +362,19 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
         1,
     );
     store_if_result(ctx, inst)
+}
+
+/// Shuffles a hash-backed array by permuting its insertion-order chain and renumbering keys.
+///
+/// `__rt_hash_shuffle_links` moves only the `prev`/`next` links, so every entry payload and
+/// managed reference cell stays in place; `__rt_hash_reindex_dense` then renumbers the keys
+/// `0..n-1` in the new chain order and moves the entries into a fresh dense hash.
+fn lower_hash_shuffle(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    _array: ValueId,
+) -> Result<()> {
+    lower_hash_relink_reindex(ctx, inst, "shuffle", None)
 }
 
 /// Calls the user-sort helper with a static comparator and optional late-static environment.

@@ -394,3 +394,54 @@ echo $total, "\n";
         out.stderr
     );
 }
+
+/// `shuffle()` permutes a reference-shaped hash's chain and renumbers its keys without moving
+/// or detaching the managed cells.
+#[test]
+fn test_shuffle_preserves_reference_cells() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1; $y = 2; $z = 3;
+$a = [&$x, &$y, &$z];
+shuffle($a);
+sort($a);
+var_dump($a);
+$x = 10; $y = 20; $z = 30;
+var_dump($a);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  &int(1)\n  [1]=>\n  &int(2)\n  [2]=>\n  &int(3)\n}\n\
+array(3) {\n  [0]=>\n  &int(10)\n  [1]=>\n  &int(20)\n  [2]=>\n  &int(30)\n}\n"
+    );
+}
+
+/// A hash copy keeps its order through a shuffle of the original, and a mixed-valued hash
+/// without references shuffles like PHP.
+#[test]
+fn test_shuffle_hash_keeps_a_copy_and_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = ["b" => 2, "a" => 1, "c" => 3];
+$copy = $a;
+shuffle($a);
+sort($a);
+var_dump($a);
+sort($copy);
+var_dump($copy);
+unset($a, $copy);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "array(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\n\
+array(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}

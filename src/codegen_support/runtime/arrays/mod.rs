@@ -626,7 +626,7 @@ pub use range::emit_range;
 /// Emit range helper.
 pub use refcount::emit_refcount;
 /// Emit reference count helper.
-pub use shuffle::emit_shuffle;
+pub use shuffle::{emit_hash_shuffle_links, emit_shuffle};
 /// Emit array shuffle helper.
 pub use sort_int::emit_sort_int;
 /// Emit string sort helper.
