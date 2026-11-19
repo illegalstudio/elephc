@@ -10,6 +10,7 @@
 //! - Callback parameter metadata selects boxed objects, scalar references and closing flags.
 //! - Output grows in owned storage instead of overflowing the shared 64 KiB filter buffer.
 
+use elephc_memoir::strings::str_new_owned;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::exceptions::guards;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
@@ -264,16 +265,8 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
     load(emitter, owner(RESULT), if arm { "x0" } else { "rax" });
     load(emitter, 56, if arm { "x1" } else { "rdi" });
     load(emitter, 72, if arm { "x2" } else { "rsi" });
-    abi::emit_call_label(emitter, "__rt_concat_grow");
-    // The grow helper returns transient concat storage. This native lease must be
-    // independently releasable even if a later getter or destructor throws.
-    if arm {
-        emitter.instruction("mov x9, #1");                                      // make the result an ordinary owned string
-        emitter.instruction("str x9, [x0, #-8]");                               // expose the result to generic exceptional release
-    } else {
-        emitter.instruction(&format!("mov r9, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1)));// preserve the validated x86 heap marker
-        emitter.instruction("mov QWORD PTR [rax - 8], r9");                     // expose the result to generic exceptional release
-    }
+    // Republish an independent string owner before any subsequent destructor can throw.
+    str_new_owned::emit_grow_owned_string(emitter, "r9");
     own(emitter, RESULT);
     emitter.label("__rt_ufbi_copy");
     load(emitter, 80, if arm { "x9" } else { "r9" });

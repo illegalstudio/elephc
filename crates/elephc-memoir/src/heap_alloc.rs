@@ -716,6 +716,13 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut impl Emitter) {
 /// The requested payload size is in the native integer-result register.
 pub(crate) fn emit_fresh_with_kind(emitter: &mut (impl crate::AssemblyEmitter + crate::TargetAbi), kind: crate::HeapKind) {
     emitter.emit_call_label("__rt_heap_alloc");
+    emit_stamp_result_kind(emitter, kind, "r10");
+}
+
+/// Stamps the result allocation using the caller's available x86_64 scratch register.
+pub(crate) fn emit_stamp_result_kind(
+    emitter: &mut (impl crate::AssemblyEmitter + crate::TargetAbi), kind: crate::HeapKind, x86_scratch: &str,
+) {
     let kind = kind.raw();
     match emitter.arch() {
         Arch::AArch64 => {
@@ -724,8 +731,8 @@ pub(crate) fn emit_fresh_with_kind(emitter: &mut (impl crate::AssemblyEmitter + 
         }
         Arch::X86_64 => {
             let word = x86_64_heap_kind_word(kind);
-            emitter.instruction(&format!("mov r10, 0x{word:x}"));               // encode the kind with the x86_64 heap magic
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the allocator header
+            emitter.instruction(&format!("mov {x86_scratch}, 0x{word:x}"));     // encode the kind with the x86_64 heap magic
+            emitter.instruction(&format!("mov QWORD PTR [rax - 8], {x86_scratch}")); // stamp the allocator header
         }
     }
 }
