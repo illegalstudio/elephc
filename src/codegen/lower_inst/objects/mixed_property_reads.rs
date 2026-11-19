@@ -65,7 +65,7 @@ pub(super) fn lower_mixed_prop_get(
     // A class answering undeclared names from `__get` needs an arm as well: the runtime helper
     // knows stdClass alone, so without one the read warned `Undefined property` instead.
     let has_magic_arms = !mixed_magic_get_arms(ctx, property, mode, &[])?.is_empty();
-    if !candidates.is_empty() || has_hash_arms || has_magic_arms {
+    if !candidates.is_empty() || has_hash_arms || has_magic_arms || ctx.property_read_requires_initialization() {
         return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates, mode);
     }
     lower_runtime_mixed_prop_get(ctx, inst, object, property)
@@ -233,7 +233,7 @@ pub(super) fn lower_declared_mixed_prop_get(
     }
 
     ctx.emitter.label(&stdclass_label);
-    emit_stdclass_get_from_loaded_object(ctx, property);
+    emit_stdclass_get_from_loaded_object(ctx, property)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_label);
@@ -828,21 +828,25 @@ pub(super) fn box_mixed_property_candidate_result(ctx: &mut FunctionContext<'_>,
 }
 
 /// Reads a static property name from an already-unboxed stdClass payload.
-pub(super) fn emit_stdclass_get_from_loaded_object(ctx: &mut FunctionContext<'_>, property: &str) {
+pub(super) fn emit_stdclass_get_from_loaded_object(ctx: &mut FunctionContext<'_>, property: &str) -> Result<()> {
     let (label, len) = ctx.data.add_string(property.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x1", &label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rdi, rax");                            // pass the unboxed stdClass object pointer to the dynamic getter
             abi::emit_symbol_address(ctx.emitter, "rsi", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
-            abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
         }
     }
+    if ctx.property_read_requires_initialization() {
+        super::property_hash_reads::emit_initialized_stdclass_get(ctx, Some(property))?;
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_stdclass_get");
+    }
+    Ok(())
 }
 
 /// Branches when `__rt_mixed_unbox` returned an object payload tag.

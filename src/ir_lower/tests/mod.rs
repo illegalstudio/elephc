@@ -888,3 +888,5 @@ mod initialized_eval_reads;
 mod initialized_global_imports;
 
 mod initialized_object_reads;
+
+mod initialized_boxed_reads;
