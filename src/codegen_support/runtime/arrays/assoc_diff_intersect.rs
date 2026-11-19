@@ -8,6 +8,7 @@
 //! Key details:
 //! - Values compare by PHP string cast: `(string)a === (string)b`. Temporary Mixed boxes are released to avoid leaks.
 
+use elephc_memoir::values::hash_payload::{self, StringSlotStore};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -104,15 +105,10 @@ pub fn emit_assoc_diff_intersect(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_assoc_diff_intersect_insert");               // scalar values need no retain
     emitter.instruction("cmp x9, #7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("b.gt __rt_assoc_diff_intersect_insert");               // non-heap tags need no retain
-    emitter.instruction("ldr x0, [sp, #56]");                                   // load the kept heap-backed value low word
-    emitter.instruction("bl __rt_incref");                                      // retain the kept heap-backed value for the result owner
+    hash_payload::emit_retain_staged_pointer(emitter, 56);
     emitter.instruction("b __rt_assoc_diff_intersect_insert");                  // continue to the insertion
     emitter.label("__rt_assoc_diff_intersect_persist");
-    emitter.instruction("ldr x1, [sp, #56]");                                   // string pointer to persist
-    emitter.instruction("ldr x2, [sp, #64]");                                   // string length to persist
-    emitter.instruction("bl __rt_str_persist");                                 // copy the string into an independent heap block, x1 = new pointer
-    emitter.instruction("str x1, [sp, #56]");                                   // store the persisted string pointer
-    emitter.instruction("str x2, [sp, #64]");                                   // store the persisted string length
+    hash_payload::emit_persist_staged_string(emitter, 56, StringSlotStore::Separate);
     emitter.label("__rt_assoc_diff_intersect_insert");
     emitter.instruction("ldr x0, [sp, #16]");                                   // x0 = result hash pointer
     emitter.instruction("ldr x1, [sp, #40]");                                   // reload key pointer
@@ -220,15 +216,10 @@ fn emit_assoc_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_assoc_diff_intersect_insert");                 // scalar values need no retain
     emitter.instruction("cmp r10, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_assoc_diff_intersect_insert");                 // non-heap tags need no retain
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the kept heap-backed value into the incref input register
-    emitter.instruction("call __rt_incref");                                    // retain the kept heap-backed value for the result owner
+    hash_payload::emit_retain_staged_pointer(emitter, 64);
     emitter.instruction("jmp __rt_assoc_diff_intersect_insert");                // continue to the insertion
     emitter.label("__rt_assoc_diff_intersect_persist");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // string pointer to persist
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // string length to persist
-    emitter.instruction("call __rt_str_persist");                               // copy the string into an independent heap block, rax = new pointer
-    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // store the persisted string pointer
-    emitter.instruction("mov QWORD PTR [rbp - 72], rdx");                       // store the persisted string length
+    hash_payload::emit_persist_staged_string(emitter, 64, StringSlotStore::Separate);
     emitter.label("__rt_assoc_diff_intersect_insert");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // rdi = result hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // reload key pointer

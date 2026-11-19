@@ -39,42 +39,24 @@ impl HashPayloadSlots {
 
     /// Persists a borrowed string pair for a new hash owner.
     pub fn emit_persist_string(self, emitter: &mut impl Emitter) {
-        let low = self.low;
-        let high = low + 8;
-        match emitter.arch() {
-            Arch::AArch64 => {
-                emitter.instruction(&format!("ldr x1, [sp, #{low}]"));          // load the borrowed string pointer
-                emitter.instruction(&format!("ldr x2, [sp, #{high}]"));         // load the borrowed string length
-                abi::emit_call_label(emitter, "__rt_str_persist");
-                if self.reload_later {
-                    emitter.instruction(&format!("str x1, [sp, #{low}]"));      // stage the acquired string owner
-                    emitter.instruction(&format!("str x2, [sp, #{high}]"));     // stage its length across helper calls
-                    self.emit_reload(emitter);
-                } else {
-                    emitter.instruction("mov x3, x1");                          // pass the acquired string without a spill
-                    emitter.instruction("mov x4, x2");                          // pass the acquired length directly
-                    self.emit_reload_tag(emitter);
-                }
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {low}]")); // load the borrowed string pointer
-                emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {high}]")); // load the borrowed string length
-                abi::emit_call_label(emitter, "__rt_str_persist");
-                emitter.instruction(&format!("mov QWORD PTR [rbp - {low}], rax")); // stage the acquired string owner
-                emitter.instruction(&format!("mov QWORD PTR [rbp - {high}], rdx")); // stage the acquired string length
-                self.emit_reload(emitter);
-            }
+        if emitter.arch() == Arch::AArch64 && !self.reload_later {
+            emit_persist_from_slots(emitter, self.low);
+            emitter.instruction("mov x3, x1");                                  // pass the acquired pointer without spilling it
+            emitter.instruction("mov x4, x2");                                  // pass its length directly
+            self.emit_reload_tag(emitter);
+            return;
         }
+        emit_persist_staged_string(emitter, self.low, StringSlotStore::Separate);
+        self.emit_reload(emitter);
     }
 
     /// Retains a borrowed pointer for insertion, clearing the unused high payload word.
     pub fn emit_retain_pointer(self, emitter: &mut impl Emitter) {
         let low = self.low;
         let high = low + 8;
+        emit_retain_staged_pointer(emitter, low);
         match emitter.arch() {
             Arch::AArch64 => {
-                emitter.instruction(&format!("ldr x0, [sp, #{low}]"));          // load the borrowed child pointer
-                abi::emit_call_label(emitter, "__rt_incref");
                 if self.reload_later {
                     emitter.instruction(&format!("str xzr, [sp, #{high}]"));    // canonicalize the high word for later reload
                 }
@@ -82,8 +64,6 @@ impl HashPayloadSlots {
                 emitter.instruction("mov x4, xzr");                             // send the canonical unused high word
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {low}]")); // load the borrowed child pointer
-                abi::emit_call_label(emitter, "__rt_incref");
                 if self.reload_later {
                     emitter.instruction(&format!("mov QWORD PTR [rbp - {high}], 0")); // canonicalize the high word for later reload
                 }
@@ -106,4 +86,62 @@ impl HashPayloadSlots {
             }
         }
     }
+}
+
+/// Selects the native writeback used by the caller's string pair spill.
+pub enum StringSlotStore {
+    /// Writes each word independently.
+    Separate,
+    /// Writes both adjacent words in one AArch64 instruction.
+    PairedOnAarch64,
+}
+
+/// Persists the borrowed string pair in the original low/length frame slots.
+pub fn emit_persist_staged_string(emitter: &mut impl Emitter, low: usize, store: StringSlotStore) {
+    emit_persist_from_slots(emitter, low);
+    let high = low + 8;
+    match emitter.arch() {
+        Arch::AArch64 => match store {
+            StringSlotStore::Separate => {
+                emitter.instruction(&format!("str x1, [sp, #{low}]"));          // replace the borrowed pointer with its owner
+                emitter.instruction(&format!("str x2, [sp, #{high}]"));         // preserve the acquired length in the paired slot
+            }
+            StringSlotStore::PairedOnAarch64 => {
+                emitter.instruction(&format!("stp x1, x2, [sp, #{low}]"));      // publish the owned pair together
+            }
+        },
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov QWORD PTR [rbp - {low}], rax"));  // replace the borrowed pointer with its owner
+            emitter.instruction(&format!("mov QWORD PTR [rbp - {high}], rdx")); // preserve the acquired length in the paired slot
+        }
+    }
+}
+
+/// Retains a pointer in a staged frame slot without altering its physical payload.
+pub fn emit_retain_staged_pointer(emitter: &mut impl Emitter, low: usize) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x0, [sp, #{low}]"));              // load the borrowed ARM child
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {low}]"));  // load the borrowed x86 child
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_incref");
+}
+
+/// Persists the string described by the two original frame words.
+fn emit_persist_from_slots(emitter: &mut impl Emitter, low: usize) {
+    let high = low + 8;
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x1, [sp, #{low}]"));              // load the borrowed string pointer
+            emitter.instruction(&format!("ldr x2, [sp, #{high}]"));             // load the borrowed string length
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {low}]"));  // load the borrowed string pointer
+            emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {high}]")); // load the borrowed string length
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_str_persist");
 }
