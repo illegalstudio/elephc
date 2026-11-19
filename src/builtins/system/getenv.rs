@@ -14,6 +14,7 @@ use crate::builtins::semantics::{
 };
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
+use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
@@ -70,8 +71,24 @@ fn may_be_null(ty: &PhpType) -> bool {
 
 /// Types the name already normalized by the shared named/positional/spread planner.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    reject_nul_name(cx)?;
     let name = cx.args.first()
         .map(|arg| cx.checker.infer_type(arg, cx.env))
         .transpose()?;
     Ok(result_type(name.as_ref()))
+}
+
+/// Rejects a literal NUL byte in `$name` on the PHP 8.6 profile.
+fn reject_nul_name(cx: &BuiltinCheckCtx) -> Result<(), CompileError> {
+    if crate::codegen_support::compile_php_version() < crate::php_version::PhpVersion::Php86 {
+        return Ok(());
+    }
+    let Some(arg) = cx.args.first() else { return Ok(()); };
+    if matches!(&arg.kind, ExprKind::StringLiteral(value) if value.contains('\0')) {
+        return Err(CompileError::new(
+            arg.span,
+            "getenv(): Argument #1 ($name) must not contain any null bytes",
+        ));
+    }
+    Ok(())
 }

@@ -997,3 +997,63 @@ fn test_error_regex_capture_retyping_raw_reference_payload() {
         }
     }
 }
+
+/// Runs the frontend at `version` and returns the first error message, if any.
+fn error_at(version: elephc::php_version::PhpVersion, source: &str) -> Option<String> {
+    elephc::codegen::set_compile_profile(version, false);
+    let result = check_source(source);
+    elephc::codegen::set_compile_profile(elephc::php_version::PhpVersion::default(), false);
+    result.err()
+}
+
+/// PHP 8.6 rejects literal NUL bytes in getenv()/putenv() names.
+#[test]
+fn test_php86_getenv_putenv_nul_value_error() {
+    use elephc::php_version::PhpVersion;
+
+    for (source, message) in [
+        (
+            "<?php getenv(\"A\\0\");",
+            "getenv(): Argument #1 ($name) must not contain any null bytes",
+        ),
+        (
+            "<?php putenv(\"A\\0\");",
+            "putenv(): Argument #1 ($assignment) must not contain any null bytes",
+        ),
+    ] {
+        let error = error_at(PhpVersion::Php86, source).expect("PHP 8.6 must reject the NUL name");
+        assert!(error.contains(message), "{error}");
+        assert!(
+            error_at(PhpVersion::Php85, source).is_none(),
+            "PHP 8.5 must accept: {source}"
+        );
+    }
+}
+
+/// PHP 8.6 adds sleep()/usleep() range validation and linkinfo()'s empty-path check.
+#[test]
+fn test_php86_sleep_usleep_range_and_linkinfo_empty() {
+    use elephc::php_version::PhpVersion;
+
+    for (source, message) in [
+        (
+            "<?php sleep(-1);",
+            "sleep(): Argument #1 ($seconds) must be between 0 and 4294967295",
+        ),
+        (
+            "<?php usleep(4294967296);",
+            "usleep(): Argument #1 ($microseconds) must be between 0 and 4294967295",
+        ),
+        (
+            "<?php linkinfo('');",
+            "linkinfo(): Argument #1 ($path) cannot be empty",
+        ),
+    ] {
+        let error = error_at(PhpVersion::Php86, source).expect("PHP 8.6 must reject the value");
+        assert!(error.contains(message), "{error}");
+        assert!(
+            error_at(PhpVersion::Php85, source).is_none(),
+            "PHP 8.5 must accept: {source}"
+        );
+    }
+}
