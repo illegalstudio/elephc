@@ -15,6 +15,7 @@
 //!   `PREG_SPLIT_NO_EMPTY` drops does not use it up. A limit of -1 or 0 is unlimited; any
 //!   other limit below 2 returns the subject as one piece.
 
+use elephc_memoir::buffers::native_words;
 use elephc_memoir::buffers::offset_pairs;
 use elephc_memoir::values::boxed_offset_row::{BoxedOffsetRow, emit_mixed_header};
 use crate::codegen_support::{emit::Emitter, platform::Arch};
@@ -229,8 +230,7 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
     // -- free regex and return --
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
+    native_words::emit_release_stack_vector(emitter, regmatches_ptr_off, native_words::RetireSlot::Keep);
     emitter.instruction(&format!("ldr x0, [sp, #{}]", array_ptr_off));          // reload result array pointer
     emitter.instruction("b __rt_preg_split_ret");                               // return through common epilogue
 
@@ -615,8 +615,7 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     );
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
+    native_words::emit_release_stack_vector(emitter, regmatches_ptr_off, native_words::RetireSlot::Keep);
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", array_ptr_off)); // return final result array pointer
     emitter.instruction("jmp __rt_preg_split_ret_linux_x86_64");                // share common epilogue
 

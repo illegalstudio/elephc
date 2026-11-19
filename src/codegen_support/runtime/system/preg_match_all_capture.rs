@@ -20,6 +20,7 @@
 //!   once, return count `0` and `[]`. A successful compile with zero matches
 //!   still materializes `nmatch` empty PATTERN_ORDER rows.
 
+use elephc_memoir::buffers::native_words;
 use elephc_memoir::buffers::offset_pairs;
 use elephc_memoir::values::boxed_offset_row::{BoxedOffsetRow, emit_mixed_header};
 use crate::codegen_support::{emit::Emitter, platform::Arch};
@@ -193,8 +194,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     );
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload the offset-pair buffer
-    emitter.bl_c("free");                                                       // release the reusable pair vector
+    native_words::emit_release_stack_vector(emitter, regmatches_ptr_off, native_words::RetireSlot::Keep);
     emitter.instruction(&format!("ldr x0, [sp, #{}]", match_count_off));        // return the match count in x0
     emitter.instruction(&format!("ldr x1, [sp, #{}]", outer_off));              // return the matches array in x1
     emitter.instruction("b __rt_pma_cap_ret");                                  // share the common epilogue
@@ -202,9 +202,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.label("__rt_pma_cap_malloc_fail");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload the opaque handle after allocation failure
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload any allocated offset-pair buffer
-    emitter.instruction("cbz x0, __rt_pma_cap_empty");                          // skip free when compile never allocated pairs
-    emitter.bl_c("free");                                                       // release the pair vector before returning []
+    native_words::emit_release_stack_vector_or_jump(emitter, regmatches_ptr_off, "__rt_pma_cap_empty");
 
     emitter.label("__rt_pma_cap_compile_fail");
     emitter.instruction("mov x0, #0");                                          // empty-array capacity
@@ -271,11 +269,7 @@ fn emit_preg_match_all_capture_init_matrix_arm64(
     emitter.instruction(&format!("ldr x9, [sp, #{}]", preg_flags_off));         // reload PHP flags before choosing matrix order
     emitter.instruction(&format!("tst x9, #{}", PREG_SET_ORDER));               // SET_ORDER grows one row per match
     emitter.instruction("b.ne __rt_pma_cap_init_set");                          // allocate an empty SET_ORDER outer array
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", nmatch_off));             // allocate one group-row pointer per compiled slot
-    emitter.instruction("lsl x0, x0, #3");                                      // group-row table is nmatch 8-byte pointers
-    emitter.bl_c("malloc");                                                     // allocate the PATTERN_ORDER group-row table
-    emitter.instruction("cbz x0, __rt_pma_cap_malloc_fail");                    // table allocation failure shares handle cleanup
-    emitter.instruction(&format!("str x0, [sp, #{}]", group_rows_off));         // save the group-row table pointer
+    native_words::emit_allocate_stack_vector(emitter, nmatch_off, group_rows_off, "__rt_pma_cap_malloc_fail");
     emitter.instruction(&format!("str xzr, [sp, #{}]", outer_off));             // PATTERN_ORDER outer is built after the search
     emitter.instruction(&format!("str xzr, [sp, #{}]", group_idx_off));         // start filling group row 0
     emitter.label("__rt_pma_cap_init_po_loop");
@@ -533,9 +527,7 @@ fn emit_preg_match_all_capture_finish_pattern_order_arm64(
     emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save the next group index
     emitter.instruction("b __rt_pma_cap_finish_loop");                          // continue boxing group rows
     emitter.label("__rt_pma_cap_finish_free");
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", group_rows_off));         // reload the group-row table
-    emitter.bl_c("free");                                                       // release the PATTERN_ORDER pointer table
-    emitter.instruction(&format!("str xzr, [sp, #{}]", group_rows_off));        // forget the freed table pointer
+    native_words::emit_release_stack_vector(emitter, group_rows_off, native_words::RetireSlot::AfterFree);
     emitter.label("__rt_pma_cap_finish_skip");
 }
 
@@ -698,8 +690,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     );
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload the offset-pair buffer
-    emitter.bl_c("free");                                                       // release the reusable pair vector
+    native_words::emit_release_stack_vector(emitter, regmatches_ptr_off, native_words::RetireSlot::Keep);
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", match_count_off)); // return the match count in rax
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", outer_off));  // return the matches array in rdx
     emitter.instruction("jmp __rt_pma_cap_ret_linux_x86_64");                   // share the common epilogue
@@ -707,10 +698,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_pma_cap_malloc_fail_linux_x86_64");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload the opaque handle after allocation failure
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload any allocated offset-pair buffer
-    emitter.instruction("test rdi, rdi");                                       // skip free when compile never allocated pairs
-    emitter.instruction("jz __rt_pma_cap_empty_linux_x86_64");                  // share the empty-result path
-    emitter.bl_c("free");                                                       // release the pair vector before returning []
+    native_words::emit_release_stack_vector_or_jump(emitter, regmatches_ptr_off, "__rt_pma_cap_empty_linux_x86_64");
 
     emitter.label("__rt_pma_cap_empty_linux_x86_64");
     emitter.instruction("xor edi, edi");                                        // empty-array capacity
@@ -757,12 +745,7 @@ fn emit_preg_match_all_capture_init_matrix_linux_x86_64(
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // reload PHP flags before choosing matrix order
     emitter.instruction(&format!("test r9, {}", PREG_SET_ORDER));               // SET_ORDER grows one row per match
     emitter.instruction("jnz __rt_pma_cap_init_set_linux_x86_64");              // allocate an empty SET_ORDER outer array
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // allocate one group-row pointer per compiled slot
-    emitter.instruction("shl rdi, 3");                                          // group-row table is nmatch 8-byte pointers
-    emitter.bl_c("malloc");                                                     // allocate the PATTERN_ORDER group-row table
-    emitter.instruction("test rax, rax");                                       // did malloc return a table?
-    emitter.instruction("jz __rt_pma_cap_malloc_fail_linux_x86_64");            // table allocation failure shares handle cleanup
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", group_rows_off)); // save the group-row table pointer
+    native_words::emit_allocate_stack_vector(emitter, nmatch_off, group_rows_off, "__rt_pma_cap_malloc_fail_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", outer_off));    // PATTERN_ORDER outer is built after the search
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); // start filling group row 0
     emitter.label("__rt_pma_cap_init_po_loop_linux_x86_64");
@@ -1013,8 +996,6 @@ fn emit_preg_match_all_capture_finish_pattern_order_linux_x86_64(
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save the next group index
     emitter.instruction("jmp __rt_pma_cap_finish_loop_linux_x86_64");           // continue boxing group rows
     emitter.label("__rt_pma_cap_finish_free_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", group_rows_off)); // reload the group-row table
-    emitter.bl_c("free");                                                       // release the PATTERN_ORDER pointer table
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_rows_off)); // forget the freed table pointer
+    native_words::emit_release_stack_vector(emitter, group_rows_off, native_words::RetireSlot::AfterFree);
     emitter.label("__rt_pma_cap_finish_skip_linux_x86_64");
 }

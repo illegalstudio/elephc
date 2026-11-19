@@ -12,10 +12,7 @@
 
 use elephc_memoir::values::throwable_storage;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-use crate::codegen_support::sentinels::{
-
-    UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
-};
+use crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::types::PhpType;
 use elephc_memoir::reference_cells::{emit_new, emit_value_release, emit_release, emit_clone, emit_owner_lookup, emit_unmanaged_borrow_lookup};
 

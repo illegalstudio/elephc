@@ -12,7 +12,7 @@ use crate::{abi, Arch, Emitter, TargetAbi};
 
 /// Native storage size for a complete compact Throwable payload.
 pub const PAYLOAD_BYTES: u64 = 56;
-/// Width of the class id word preceding the message pair.
+/// Offset of the class id word preceding the message pair.
 const CLASS_ID: usize = 0;
 /// Offset of the message pointer.
 const MESSAGE_POINTER: usize = 8;

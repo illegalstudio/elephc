@@ -5,7 +5,7 @@
 //! - Directory-glob resource construction.
 //!
 //! Key details:
-//! - The frame and libc field offset are supplied by the target-aware caller.
+//! - The caller supplies the frame spill and the target libc field offset.
 //! - libc remains the owner of the path vector inside the embedded glob state.
 
 use crate::{Arch, Emitter};
@@ -25,10 +25,10 @@ pub fn emit_allocate(emitter: &mut impl Emitter) {
 }
 
 /// Initializes the native iteration prefix after libc has filled its own structure.
-pub fn emit_initialize(emitter: &mut impl Emitter, pathv_offset: usize) {
+pub fn emit_initialize(emitter: &mut impl Emitter, slot: usize, pathv_offset: usize) {
     match emitter.arch() {
         Arch::AArch64 => {
-            emitter.instruction("ldr x9, [sp, #40]");                           // struct pointer
+            emitter.instruction(&format!("ldr x9, [sp, #{slot}]"));             // struct pointer
             emitter.instruction("ldr x10, [x9, #24]");                          // gl_pathc lives at glob_t offset 0
             emitter.instruction("str x10, [x9, #8]");                           // struct.pathc = gl_pathc
             emitter.instruction("add x11, x9, #24");                            // &struct.glob_t
@@ -37,7 +37,7 @@ pub fn emit_initialize(emitter: &mut impl Emitter, pathv_offset: usize) {
             emitter.instruction("str xzr, [x9, #16]");                          // struct.index = 0
         }
         Arch::X86_64 => {
-            emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                // struct pointer
+            emitter.instruction(&format!("mov r9, QWORD PTR [rbp - {slot}]"));  // struct pointer
             emitter.instruction("mov r10, QWORD PTR [r9 + 24]");                // gl_pathc lives at glob_t offset 0
             emitter.instruction("mov QWORD PTR [r9 + 8], r10");                 // struct.pathc = gl_pathc
             emitter.instruction(&format!("mov r10, QWORD PTR [r9 + 24 + {}]", pathv_offset)); // gl_pathv at the platform-specific offset

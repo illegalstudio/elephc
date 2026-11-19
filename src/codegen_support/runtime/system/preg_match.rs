@@ -8,6 +8,7 @@
 //! Key details:
 //! - Regex helpers preserve PHP PCRE-flavored inputs for PCRE2 and must preserve match array construction.
 
+use elephc_memoir::buffers::native_words;
 use elephc_memoir::buffers::offset_pairs;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -243,15 +244,13 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_match_capture_group_loop");                // continue materializing captures
 
     emitter.label("__rt_preg_match_capture_success");
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic offset-pair buffer for cleanup
-    emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning matches
+    native_words::emit_release_stack_vector(emitter, regmatches_ptr_off, native_words::RetireSlot::Keep);
     emitter.instruction("mov x0, #1");                                          // report that preg_match found a match
     emitter.instruction(&format!("ldr x1, [sp, #{}]", matches_array_off));      // return the matches array pointer in x1
     emitter.instruction("b __rt_preg_match_capture_ret");                       // share helper epilogue
 
     emitter.label("__rt_preg_match_capture_no_match");
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for the no-match cleanup path
-    emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
+    native_words::emit_release_stack_vector(emitter, regmatches_ptr_off, native_words::RetireSlot::Keep);
     emitter.instruction("b __rt_preg_match_capture_empty");                     // allocate and return the empty matches array
 
     emitter.label("__rt_preg_match_capture_malloc_fail");
@@ -477,15 +476,13 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_match_capture_group_loop_linux_x86_64"); // continue materializing captures
 
     emitter.label("__rt_preg_match_capture_success_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning matches
+    native_words::emit_release_stack_vector(emitter, regmatches_ptr_off, native_words::RetireSlot::Keep);
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", matches_array_off)); // return matches array pointer in rdx
     emitter.instruction("mov eax, 1");                                          // report that preg_match found a match
     emitter.instruction("jmp __rt_preg_match_capture_ret_linux_x86_64");        // share helper epilogue
 
     emitter.label("__rt_preg_match_capture_no_match_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for the no-match cleanup path
-    emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
+    native_words::emit_release_stack_vector(emitter, regmatches_ptr_off, native_words::RetireSlot::Keep);
     emitter.instruction("jmp __rt_preg_match_capture_empty_linux_x86_64");      // allocate and return the empty matches array
 
     emitter.label("__rt_preg_match_capture_malloc_fail_linux_x86_64");

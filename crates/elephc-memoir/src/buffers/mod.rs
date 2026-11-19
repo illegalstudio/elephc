@@ -39,3 +39,5 @@ pub mod output;
 pub mod offset_pairs;
 pub mod diagnostic_buffer;
 pub mod stream_state;
+
+pub mod native_words;

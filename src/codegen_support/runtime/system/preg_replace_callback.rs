@@ -28,6 +28,7 @@
 //! - Growth publishes the new output base into its stack slot before returning, so
 //!   the throw path releases that block rather than a register `setjmp` restored.
 
+use elephc_memoir::buffers::native_words;
 use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use elephc_memoir::buffers::offset_pairs;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -368,8 +369,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_heap_free_safe");                              // release the subject copy now that no cursor points into it
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
+    native_words::emit_release_stack_vector(emitter, regmatches_ptr_off, native_words::RetireSlot::Keep);
     emitter.instruction(&format!("ldr x1, [sp, #{}]", output_start_off));       // return output start pointer
     emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // reload output end pointer
     emitter.instruction("sub x2, x11, x1");                                     // compute output byte length
@@ -744,8 +744,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_free_safe");                            // release the subject copy now that no cursor points into it
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
+    native_words::emit_release_stack_vector(emitter, regmatches_ptr_off, native_words::RetireSlot::Keep);
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_start_off)); // return output start pointer
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", output_write_off)); // reload output end pointer
     emitter.instruction("sub rdx, rax");                                        // compute output byte length
@@ -967,9 +966,7 @@ fn emit_preg_replace_callback_rethrow(
             emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));     // reload the compiled PCRE2 handle
             emitter.instruction(&format!("str xzr, [sp, #{}]", handle_off));    // drop the handle slot before the free
             emitter.bl_c("elephc_pcre2_v1_free");
-            emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_off)); // reload the offset-pair vector
-            emitter.instruction(&format!("str xzr, [sp, #{}]", regmatches_off)); // drop the vector slot before the free
-            emitter.bl_c("free");
+            native_words::emit_release_stack_vector(emitter, regmatches_off, native_words::RetireSlot::BeforeFree);
             emitter.instruction("b __rt_throw_current");                        // rethrow with the original exception still pending
         }
         Arch::X86_64 => {
@@ -984,9 +981,7 @@ fn emit_preg_replace_callback_rethrow(
             emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload the compiled PCRE2 handle
             emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", handle_off)); // drop the handle slot before the free
             emitter.bl_c("elephc_pcre2_v1_free");
-            emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_off)); // reload the offset-pair vector
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", regmatches_off)); // drop the vector slot before the free
-            emitter.bl_c("free");
+            native_words::emit_release_stack_vector(emitter, regmatches_off, native_words::RetireSlot::BeforeFree);
             emitter.instruction("leave");                                       // restore entry alignment before the tail jump into the unwinder
             emitter.instruction("jmp __rt_throw_current");                      // rethrow with the original exception still pending
         }

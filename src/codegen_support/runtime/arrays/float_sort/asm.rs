@@ -54,12 +54,6 @@ impl Asm<'_> {
         abi::store_at_offset(self.emitter, r, slot);
     }
 
-    /// Preserves a nested call's return value in a private frame slot.
-    pub fn save_result(&mut self, slot: usize) {
-        let result = abi::int_result_reg(self.emitter);
-        abi::store_at_offset(self.emitter, result, slot);
-    }
-
     /// Materializes an immediate in an argument register.
     pub fn imm(&mut self, reg: usize, value: i64) {
         let r = self.reg(reg);

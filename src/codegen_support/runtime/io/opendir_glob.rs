@@ -74,7 +74,7 @@ pub fn emit_opendir_glob(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_opendir_glob_fail");                     // glob failed → bail
 
     // -- populate the glob_state metadata fields --
-    elephc_memoir::interop::glob_storage::emit_initialize(emitter, pathv_off);
+    elephc_memoir::interop::glob_storage::emit_initialize(emitter, 40, pathv_off);
 
     // -- dup(2) to mint a fresh fd we can hand out as the PHP resource value --
     emitter.instruction("mov x0, #2");                                          // duplicate stderr (always available)
@@ -135,7 +135,7 @@ fn emit_opendir_glob_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_opendir_glob_fail_x86");                      // bail on failure
 
     // -- populate the glob_state metadata fields --
-    elephc_memoir::interop::glob_storage::emit_initialize(emitter, pathv_off);
+    elephc_memoir::interop::glob_storage::emit_initialize(emitter, 32, pathv_off);
 
     // -- dup(2) to mint a fresh fd we can hand out as the PHP resource value --
     emitter.instruction("mov edi, 2");                                          // duplicate stderr (always available)
