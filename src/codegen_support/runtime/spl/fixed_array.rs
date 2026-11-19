@@ -9,6 +9,7 @@
 //! - Slots store owned boxed `Mixed` cells or null pointers for unset/null entries.
 //! - Resize and overwrite paths release replaced Mixed cells before losing ownership.
 
+use elephc_memoir::values::packed_mixed_copy::PackedMixedCopy;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -366,40 +367,9 @@ fn emit_to_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // establish toArray frame
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
     emitter.instruction("str x9, [sp, #0]");                                    // save source storage
-    emitter.instruction("ldr x10, [x9]");                                       // load fixed size
-    emitter.instruction("str x10, [sp, #8]");                                   // save fixed size
-    emitter.instruction("mov x0, x10");                                         // result array capacity equals fixed size
-    emitter.instruction("mov x1, #8");                                          // result slots hold Mixed pointers
-    emitter.instruction("bl __rt_array_new");                                   // allocate result PHP array
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load result packed kind word
-    emitter.instruction("orr x9, x9, #0x700");                                  // mark result as containing Mixed cells
-    emitter.instruction("str x9, [x0, #-8]");                                   // persist result Mixed value_type tag
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload fixed size
-    emitter.instruction("str x10, [x0]");                                       // result logical length equals fixed size
-    emitter.instruction("str x0, [sp, #16]");                                   // save result array
-    emitter.instruction("str xzr, [sp, #24]");                                  // initialize copy cursor
-    emitter.label("__rt_spl_fixed_to_array_loop");
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload fixed size
-    emitter.instruction("ldr x11, [sp, #24]");                                  // reload copy cursor
-    emitter.instruction("cmp x11, x10");                                        // have all slots been copied?
-    emitter.instruction("b.ge __rt_spl_fixed_to_array_done");                   // finish after copying fixed size slots
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload source storage
-    emitter.instruction("add x9, x9, #24");                                     // point at source slot base
-    emitter.instruction("ldr x0, [x9, x11, lsl #3]");                           // load source Mixed cell pointer
-    emitter.instruction("cbz x0, __rt_spl_fixed_to_array_null");                // unset slots become boxed null
-    emitter.instruction("bl __rt_incref");                                      // retain source Mixed cell for result array
-    emitter.instruction("b __rt_spl_fixed_to_array_store");                     // store retained slot
-    emitter.label("__rt_spl_fixed_to_array_null");
-    emit_boxed_null_call_aarch64(emitter);
-    emitter.label("__rt_spl_fixed_to_array_store");
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload result array
-    emitter.instruction("ldr x11, [sp, #24]");                                  // reload copy cursor
-    emitter.instruction("add x9, x9, #24");                                     // point at result slot base
-    emitter.instruction("str x0, [x9, x11, lsl #3]");                           // store owned Mixed cell into result array
-    emitter.instruction("add x11, x11, #1");                                    // advance copy cursor
-    emitter.instruction("str x11, [sp, #24]");                                  // save updated copy cursor
-    emitter.instruction("b __rt_spl_fixed_to_array_loop");                      // continue copying slots
-    emitter.label("__rt_spl_fixed_to_array_done");
+    let copy = PackedMixedCopy { source: 0, length: 8, array: 16, cursor: 24 };
+    copy.emit_allocate(emitter);
+    copy.emit_nullable_slots(emitter);
     emitter.instruction("ldr x0, [sp, #16]");                                   // return result array pointer
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release toArray frame
@@ -648,16 +618,6 @@ fn emit_tail_boxed_null_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x1, xzr");                                         // null payload low word is empty
     emitter.instruction("mov x2, xzr");                                         // null payload high word is empty
     emitter.instruction("b __rt_mixed_from_value");                             // tail-call boxed Mixed construction
-}
-
-/// Emits a call sequence to construct a boxed null Mixed cell on aarch64.
-/// Sets NULL_TAG (8) as runtime tag, zero payload words, and calls `__rt_mixed_from_value`.
-/// Used when a null must be allocated (e.g., unset slot in toArray).
-fn emit_boxed_null_call_aarch64(emitter: &mut Emitter) {
-    emitter.instruction(&format!("mov x0, #{}", NULL_TAG));                     // runtime tag 8 = null
-    emitter.instruction("mov x1, xzr");                                         // null payload low word is empty
-    emitter.instruction("mov x2, xzr");                                         // null payload high word is empty
-    emitter.instruction("bl __rt_mixed_from_value");                            // allocate boxed null Mixed cell
 }
 
 /// Emits all x86_64 `SplFixedArray` runtime helpers via a blank line, section comment,
@@ -991,41 +951,9 @@ fn emit_to_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // reserve source, size, result, and cursor spills
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_FIXED_STORAGE_OFFSET)); // load fixed-array storage
     emitter.instruction("mov QWORD PTR [rbp - 8], r9");                         // save source storage
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load fixed size
-    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save fixed size
-    emitter.instruction("mov rdi, r10");                                        // result array capacity equals fixed size
-    emitter.instruction("mov rsi, 8");                                          // result slots hold Mixed pointers
-    emitter.instruction("call __rt_array_new");                                 // allocate result PHP array
-    emitter.instruction("mov r9, QWORD PTR [rax - 8]");                         // load result packed kind word
-    emitter.instruction("or r9, 0x700");                                        // mark result as containing Mixed cells
-    emitter.instruction("mov QWORD PTR [rax - 8], r9");                         // persist result Mixed value_type tag
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload fixed size
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // result logical length equals fixed size
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save result array
-    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize copy cursor
-    emitter.label("__rt_spl_fixed_to_array_loop");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload fixed size
-    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload copy cursor
-    emitter.instruction("cmp r11, r10");                                        // have all slots been copied?
-    emitter.instruction("jge __rt_spl_fixed_to_array_done");                    // finish after copying fixed size slots
-    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload source storage
-    emitter.instruction("lea r9, [r9 + 24]");                                   // point at source slot base
-    emitter.instruction("mov rax, QWORD PTR [r9 + r11 * 8]");                   // load source Mixed cell pointer
-    emitter.instruction("test rax, rax");                                       // is the source slot unset?
-    emitter.instruction("jz __rt_spl_fixed_to_array_null");                     // unset slots become boxed null
-    emitter.instruction("call __rt_incref");                                    // retain source Mixed cell for result array
-    emitter.instruction("jmp __rt_spl_fixed_to_array_store");                   // store retained slot
-    emitter.label("__rt_spl_fixed_to_array_null");
-    emit_boxed_null_call_x86_64(emitter);
-    emitter.label("__rt_spl_fixed_to_array_store");
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload result array
-    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload copy cursor
-    emitter.instruction("lea r9, [r9 + 24]");                                   // point at result slot base
-    emitter.instruction("mov QWORD PTR [r9 + r11 * 8], rax");                   // store owned Mixed cell into result array
-    emitter.instruction("add r11, 1");                                          // advance copy cursor
-    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save updated copy cursor
-    emitter.instruction("jmp __rt_spl_fixed_to_array_loop");                    // continue copying slots
-    emitter.label("__rt_spl_fixed_to_array_done");
+    let copy = PackedMixedCopy { source: 8, length: 16, array: 24, cursor: 32 };
+    copy.emit_allocate(emitter);
+    copy.emit_nullable_slots(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return result array pointer
     emitter.instruction("add rsp, 48");                                         // release toArray frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -1270,16 +1198,6 @@ fn emit_tail_boxed_null_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor rdi, rdi");                                        // null payload low word is empty
     emitter.instruction("xor rsi, rsi");                                        // null payload high word is empty
     emitter.instruction("jmp __rt_mixed_from_value");                           // tail-call boxed Mixed construction
-}
-
-/// Emits a call sequence to construct a boxed null Mixed cell on x86_64.
-/// Sets NULL_TAG (8) as runtime tag, zero payload registers, and calls `__rt_mixed_from_value`.
-/// Used when a null must be allocated (e.g., unset slot in toArray).
-fn emit_boxed_null_call_x86_64(emitter: &mut Emitter) {
-    emitter.instruction(&format!("mov rax, {}", NULL_TAG));                     // runtime tag 8 = null
-    emitter.instruction("xor rdi, rdi");                                        // null payload low word is empty
-    emitter.instruction("xor rsi, rsi");                                        // null payload high word is empty
-    emitter.instruction("call __rt_mixed_from_value");                          // allocate boxed null Mixed cell
 }
 
 /// Emits the aarch64 exception-throw sequence for SplFixedArray runtime errors.

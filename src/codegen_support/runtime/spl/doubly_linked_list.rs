@@ -9,6 +9,7 @@
 //! - The object stores a class id, an owned mixed-cell indexed array, iterator index, and iterator mode.
 //! - Mutating methods take ownership of boxed `Mixed` arguments prepared by call lowering.
 
+use elephc_memoir::values::packed_mixed_copy::PackedMixedCopy;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -386,35 +387,9 @@ fn emit_serialize_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver
     emitter.instruction(&format!("ldr x9, [x0, #{}]", SPL_DLL_STORAGE_OFFSET)); // load internal Mixed storage
     emitter.instruction("str x9, [sp, #8]");                                    // save internal storage pointer
-    emitter.instruction("ldr x10, [x9]");                                       // load list length
-    emitter.instruction("str x10, [sp, #16]");                                  // save list length
-    emitter.instruction("mov x0, x10");                                         // items array capacity equals list length
-    emitter.instruction("mov x1, #8");                                          // items array stores boxed Mixed pointers
-    emitter.instruction("bl __rt_array_new");                                   // allocate serialized dllist array
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load items array packed kind word
-    emitter.instruction("orr x9, x9, #0x700");                                  // stamp items array as boxed Mixed slots
-    emitter.instruction("str x9, [x0, #-8]");                                   // persist items Mixed value_type tag
-    emitter.instruction("ldr x10, [sp, #16]");                                  // reload list length
-    emitter.instruction("str x10, [x0]");                                       // publish exact items array length
-    emitter.instruction("str x0, [sp, #24]");                                   // save items array pointer
-    emitter.instruction("str xzr, [sp, #32]");                                  // initialize item copy cursor
-    emitter.label("__rt_spl_dll_serialize_items_loop");
-    emitter.instruction("ldr x10, [sp, #32]");                                  // reload item copy cursor
-    emitter.instruction("ldr x11, [sp, #16]");                                  // reload list length
-    emitter.instruction("cmp x10, x11");                                        // have all list items been copied?
-    emitter.instruction("b.ge __rt_spl_dll_serialize_items_done");              // stop once every item is serialized
-    emitter.instruction("ldr x9, [sp, #8]");                                    // reload internal storage pointer
-    emitter.instruction("add x9, x9, #24");                                     // point at internal Mixed slot base
-    emitter.instruction("ldr x0, [x9, x10, lsl #3]");                           // load source Mixed cell
-    emitter.instruction("bl __rt_incref");                                      // retain source Mixed cell for the serialized items array
-    emitter.instruction("ldr x10, [sp, #32]");                                  // reload item copy cursor after retain
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload items array pointer
-    emitter.instruction("add x9, x9, #24");                                     // point at serialized items slot base
-    emitter.instruction("str x0, [x9, x10, lsl #3]");                           // store retained Mixed cell into serialized items
-    emitter.instruction("add x10, x10, #1");                                    // advance item copy cursor
-    emitter.instruction("str x10, [sp, #32]");                                  // save updated item copy cursor
-    emitter.instruction("b __rt_spl_dll_serialize_items_loop");                 // continue copying list items
-    emitter.label("__rt_spl_dll_serialize_items_done");
+    let copy = PackedMixedCopy { source: 8, length: 16, array: 24, cursor: 32 };
+    copy.emit_allocate(emitter);
+    copy.emit_dense_slots(emitter);
     emitter.instruction("mov x0, #4");                                          // runtime tag 4 = indexed array
     emitter.instruction("ldr x1, [sp, #24]");                                   // pass serialized items array as mixed payload
     emitter.instruction("mov x2, xzr");                                         // array mixed payload uses one word
@@ -1612,32 +1587,9 @@ fn emit_serialize_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver
     emitter.instruction(&format!("mov r9, QWORD PTR [rdi + {}]", SPL_DLL_STORAGE_OFFSET)); // load internal Mixed storage
     emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save internal storage pointer
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load list length
-    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save list length
-    emitter.instruction("mov rdi, r10");                                        // items array capacity equals list length
-    emitter.instruction("mov rsi, 8");                                          // items array stores boxed Mixed pointers
-    emitter.instruction("call __rt_array_new");                                 // allocate serialized dllist array
-    emitter.instruction("mov r9, QWORD PTR [rax - 8]");                         // load items array packed kind word
-    emitter.instruction("or r9, 0x700");                                        // stamp items array as boxed Mixed slots
-    emitter.instruction("mov QWORD PTR [rax - 8], r9");                         // persist items Mixed value_type tag
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload list length
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // publish exact items array length
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save items array pointer
-    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize item copy cursor
-    emitter.label("__rt_spl_dll_serialize_items_loop_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload item copy cursor
-    emitter.instruction("cmp r10, QWORD PTR [rbp - 24]");                       // have all list items been copied?
-    emitter.instruction("jge __rt_spl_dll_serialize_items_done_x86");           // stop once every item is serialized
-    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload internal storage pointer
-    emitter.instruction("mov rax, QWORD PTR [r9 + 24 + r10 * 8]");              // load source Mixed cell
-    emitter.instruction("call __rt_incref");                                    // retain source Mixed cell for serialized items
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload item copy cursor after retain
-    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload items array pointer
-    emitter.instruction("mov QWORD PTR [r9 + 24 + r10 * 8], rax");              // store retained Mixed cell into serialized items
-    emitter.instruction("add r10, 1");                                          // advance item copy cursor
-    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save updated item copy cursor
-    emitter.instruction("jmp __rt_spl_dll_serialize_items_loop_x86");           // continue copying list items
-    emitter.label("__rt_spl_dll_serialize_items_done_x86");
+    let copy = PackedMixedCopy { source: 16, length: 24, array: 32, cursor: 40 };
+    copy.emit_allocate(emitter);
+    copy.emit_dense_slots(emitter);
     emitter.instruction("mov rax, 4");                                          // runtime tag 4 = indexed array
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass serialized items array as mixed payload
     emitter.instruction("xor rsi, rsi");                                        // array mixed payload uses one word
