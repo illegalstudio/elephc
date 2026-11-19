@@ -4632,6 +4632,12 @@ fn decl_fn_ini_set() -> Stmt {
             s_if(
                 e_binop(e_binop(e_binop(e_binop(e_binop(e_var("option"), BinOp::StrictEq, e_str("session.cookie_samesite")), BinOp::And, e_binop(e_var("value"), BinOp::StrictNotEq, e_str(""))), BinOp::And, e_binop(e_var("value"), BinOp::StrictNotEq, e_str("Strict"))), BinOp::And, e_binop(e_var("value"), BinOp::StrictNotEq, e_str("Lax"))), BinOp::And, e_binop(e_var("value"), BinOp::StrictNotEq, e_str("None"))),
                 vec![
+                    s_if(
+                        e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80600)),
+                        vec![s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): session.cookie_samesite must be 'Strict', 'Lax', 'None' or ''"), e_const("E_WARNING")]))],
+                        vec![],
+                        None,
+                    ),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -4640,6 +4646,12 @@ fn decl_fn_ini_set() -> Stmt {
             s_if(
                 e_binop(e_binop(e_var("option"), BinOp::StrictEq, e_str("session.cookie_lifetime")), BinOp::And, e_binop(e_cast(CastType::Int, e_var("value")), BinOp::Lt, e_int(0))),
                 vec![
+                    s_if(
+                        e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80600)),
+                        vec![s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): session.cookie_lifetime must be greater than or equal to 0"), e_const("E_WARNING")]))],
+                        vec![],
+                        None,
+                    ),
                     s_return(e_bool(false)),
                 ],
                 vec![],
@@ -4752,6 +4764,27 @@ fn decl_fn_ini_set() -> Stmt {
                 None,
             ),
             s_if(
+                e_binop(
+                    e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80600)),
+                    BinOp::And,
+                    e_binop(
+                        e_binop(e_var("option"), BinOp::StrictEq, e_str("session.cache_limiter")),
+                        BinOp::And,
+                        e_binop(
+                            e_call("strpos", vec![e_cast(CastType::String, e_var("value")), e_str("\0")]),
+                            BinOp::StrictNotEq,
+                            e_bool(false),
+                        ),
+                    ),
+                ),
+                vec![
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): session.cache_limiter must not contain any null bytes"), e_const("E_WARNING")])),
+                    s_return(e_bool(false)),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
                 e_binop(e_var("option"), BinOp::StrictEq, e_str("session.cache_limiter")),
                 vec![
                     s_expr(e_call("elephc_web_session_set_cache_limiter", vec![e_cast(CastType::String, e_var("value"))])),
@@ -4768,9 +4801,51 @@ fn decl_fn_ini_set() -> Stmt {
                 None,
             ),
             s_if(
+                e_binop(
+                    e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80600)),
+                    BinOp::And,
+                    e_binop(
+                        e_binop(e_var("option"), BinOp::StrictEq, e_str("session.cookie_path")),
+                        BinOp::And,
+                        e_binop(
+                            e_call("strpos", vec![e_cast(CastType::String, e_var("value")), e_str("\0")]),
+                            BinOp::StrictNotEq,
+                            e_bool(false),
+                        ),
+                    ),
+                ),
+                vec![
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): session.cookie_path must not contain any null bytes"), e_const("E_WARNING")])),
+                    s_return(e_bool(false)),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
                 e_binop(e_var("option"), BinOp::StrictEq, e_str("session.cookie_path")),
                 vec![
                     s_expr(e_call("elephc_web_session_set_cookie_params", vec![e_call("elephc_web_session_get_cookie_lifetime", vec![]), e_cast(CastType::String, e_var("value")), e_call("elephc_web_session_get_cookie_domain", vec![]), e_call("elephc_web_session_get_cookie_secure", vec![]), e_call("elephc_web_session_get_cookie_partitioned", vec![]), e_call("elephc_web_session_get_cookie_httponly", vec![]), e_call("elephc_web_session_get_cookie_samesite", vec![])])),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80600)),
+                    BinOp::And,
+                    e_binop(
+                        e_binop(e_var("option"), BinOp::StrictEq, e_str("session.cookie_domain")),
+                        BinOp::And,
+                        e_binop(
+                            e_call("strpos", vec![e_cast(CastType::String, e_var("value")), e_str("\0")]),
+                            BinOp::StrictNotEq,
+                            e_bool(false),
+                        ),
+                    ),
+                ),
+                vec![
+                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("ini_set(): session.cookie_domain must not contain any null bytes"), e_const("E_WARNING")])),
+                    s_return(e_bool(false)),
                 ],
                 vec![],
                 None,

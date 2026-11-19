@@ -2716,3 +2716,38 @@ fn opcache_reset_is_performed_at_the_next_request_boundary() {
         "the next request must start with the restart already performed: {second:?}"
     );
 }
+
+/// PHP 8.6 validates session INI values at runtime: SameSite, lifetime and NUL bytes.
+#[test]
+fn php86_session_ini_validations() {
+    let source = r#"<?php
+var_dump(ini_set('session.cookie_samesite', 'Bogus'));
+var_dump(ini_set('session.cookie_samesite', 'Lax'));
+var_dump(ini_set('session.cookie_lifetime', -1));
+var_dump(ini_set('session.cookie_path', "a\0b"));
+var_dump(ini_set('session.cookie_path', '/ok'));
+"#;
+    let dir = make_test_dir("sess_php86_ini_validation");
+    let bin = compile_web_with_flags(&dir, source, "app", &["--php-version=8.6"]);
+    let stderr_path = dir.join("server.stderr");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server_with_stderr(&bin, &addr, &stderr_path);
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    let body = response.split_once("\r\n\r\n").map_or(response.as_str(), |(_, body)| body);
+    assert_eq!(
+        body,
+        "bool(false)\nstring(3) \"Lax\"\nbool(false)\nbool(false)\nstring(1) \"/\"\n",
+        "unexpected response: {response:?}"
+    );
+    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+    for needle in [
+        "session.cookie_samesite must be 'Strict', 'Lax', 'None' or ''",
+        "session.cookie_lifetime must be greater than or equal to 0",
+        "session.cookie_path must not contain any null bytes",
+    ] {
+        assert!(stderr.contains(needle), "missing {needle:?} in {stderr}");
+    }
+}
