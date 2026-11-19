@@ -19,11 +19,12 @@ pub(super) fn active(ctx: &LoweringContext<'_, '_>, destination: &PhpType) -> bo
         && crate::semantics::conversions::implicit_contract(destination).is_some()
 }
 
-/// Defers scalar parameter adaptation until all original source operands have been evaluated.
+/// Defers scalar and callable adaptation until original source operands have been evaluated.
 pub(super) fn parameter_active(ctx: &LoweringContext<'_, '_>, destination: &PhpType) -> bool {
     active(ctx, destination)
         || (semantic_guards::source_feature_enabled(ctx, StrictFeature::Nullability)
-            && crate::semantics::conversions::scalar_contract(destination).is_some()
+            && (crate::semantics::conversions::scalar_contract(destination).is_some()
+                || *destination == PhpType::Callable)
             && crate::semantics::nullability::non_null_contract(destination))
 }
 

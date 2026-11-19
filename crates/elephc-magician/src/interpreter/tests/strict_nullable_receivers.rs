@@ -263,3 +263,19 @@ fn strict_nullability_eval_copied_missing_values_and_owners() {
         finish(&mut context, &mut scope, &mut values, "copied missing values");
     }
 }
+
+/// Declared non-scalar parameters consume original null after all argument effects.
+#[test]
+fn strict_nullability_eval_container_arguments_and_owners() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    let source = include_str!("../../../../../tests/fixtures/strict/nullable_container_arguments.php")
+        .strip_prefix("<?php\ndeclare(strict_types=0);").unwrap();
+    for fallback in [false, true] {
+        let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        let result = execute(source, fallback, &mut context, &mut scope, &mut values);
+        assert!(result.is_ok(), "{:?}; {}", result.as_ref().err(), values.output);
+        assert_eq!(values.output, "LA|LI|LC|LO|1:1:object|1:1:object");
+        finish(&mut context, &mut scope, &mut values, "container arguments");
+    }
+}

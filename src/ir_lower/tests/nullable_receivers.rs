@@ -349,3 +349,47 @@ fn nullable_indirect_reflection_shells_emit_on_every_target() {
         }
     }
 }
+
+/// Non-scalar parameters reject original null only after every source argument has run.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn nullable_container_arguments_preserve_source_order_and_owners() {
+    let source = include_str!("../../../tests/fixtures/strict/nullable_container_arguments.php");
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for optimize in [false, true] {
+        let module = super::semantic_sources::lower_capturing_arguments(source, Target::detect_host(), profile, optimize, SourceMode::Php);
+        let output = super::native_module::run(&module);
+        let stdout = String::from_utf8_lossy(&output.stdout); let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "optimize={optimize}: {stdout}; {stderr}");
+        assert_eq!(stdout, "LA|LI|LC|LO|1:1:object|1:1:object", "{stderr}");
+        assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+    }
+}
+
+/// Nullability preserves existing explicit diagnostics for unsupported opaque non-scalar inputs.
+#[test]
+fn nullable_container_arguments_keep_opaque_subset_diagnostics() {
+    for declaration in ["array", "iterable", "callable"] {
+        let source = format!("<?php function opaqueNullableInput():mixed{{return null;}} \
+            function checkedNullableInput({declaration} $value):void{{}}checkedNullableInput(opaqueNullableInput());");
+        let program = crate::parser::parse(&crate::lexer::tokenize(&source).unwrap()).unwrap();
+        for enabled in [false, true] {
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, enabled);
+            let error = crate::types::checker::check_staged_semantics(&program, Target::detect_host(), profile).unwrap_err();
+            assert!(error.message.contains("got mixed") && error.message.contains(declaration), "{error:?}");
+        }
+    }
+}
+
+/// Non-scalar argument proofs and callable extraction preserve every supported target ABI.
+#[test]
+fn nullable_container_arguments_emit_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/nullable_container_arguments.php");
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::semantic_sources::lower_capturing_arguments(source, Target::parse(name).unwrap(), profile, false, SourceMode::Php);
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
