@@ -759,11 +759,31 @@ fn a_reset_waits_for_a_write_in_progress() {
     let base = REGION.load(Ordering::Relaxed);
     let writing = TableGate::enter(base).expect("the table is open");
     let started = std::time::Instant::now();
-    let reset = std::thread::spawn(reset_routes);
-    std::thread::sleep(std::time::Duration::from_millis(30));
-    assert!(!reset.is_finished(), "the reset waits for the write in progress");
+    let reset = std::thread::spawn(|| {
+        let started = std::time::Instant::now();
+        (reset_routes(), started.elapsed())
+    });
+    // The reset gives up on the writer after `GATE_WAIT`, so what it must have
+    // waited is measured rather than assumed from this thread's own timing: a
+    // slow runner can sleep past `GATE_WAIT`.
+    let gate = shared_word(base, ROUTES_GATE_OFFSET);
+    let raised = loop {
+        if gate.load(Ordering::Acquire) & GATE_RESETTING != 0 {
+            break Some(std::time::Instant::now());
+        }
+        if reset.is_finished() {
+            break None;
+        }
+        std::thread::yield_now();
+    };
+    let held = raised.map_or(GATE_WAIT, |raised| {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        raised.elapsed().min(GATE_WAIT)
+    });
     drop(writing);
-    assert!(reset.join().unwrap().contains("route table reset"));
+    let (report, waited) = reset.join().unwrap();
+    assert!(report.contains("route table reset"));
+    assert!(waited >= held, "the reset waits for the write in progress: {waited:?} < {held:?}");
     assert!(started.elapsed() < std::time::Duration::from_secs(1));
     // Once done, the table is open again.
     assert!(TableGate::enter(base).is_some());
