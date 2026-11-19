@@ -539,15 +539,7 @@ Lparse_url_component_string_x86:
     call Lparse_url_copy_component_x86
     mov QWORD PTR [rbp - 176], rax
     mov QWORD PTR [rbp - 184], rdx
-    mov rax, 24
-    call __rt_heap_alloc
-    mov r10, {{MIXED_HEAP_KIND}}
-    mov QWORD PTR [rax - 8], r10
-    mov QWORD PTR [rax], 1
-    mov r10, QWORD PTR [rbp - 176]
-    mov QWORD PTR [rax + 8], r10
-    mov r10, QWORD PTR [rbp - 184]
-    mov QWORD PTR [rax + 16], r10
+{{OWNED_STRING_BOX}}
     jmp Lparse_url_return_x86
 
 Lparse_url_component_port_x86:
@@ -663,14 +655,7 @@ Lparse_url_array_fragment_x86:
     mov QWORD PTR [rbp - 192], rax
 
 Lparse_url_box_array_x86:
-    mov rax, 24
-    call __rt_heap_alloc
-    mov r10, {{MIXED_HEAP_KIND}}
-    mov QWORD PTR [rax - 8], r10
-    mov QWORD PTR [rax], 5
-    mov r10, QWORD PTR [rbp - 192]
-    mov QWORD PTR [rax + 8], r10
-    mov QWORD PTR [rax + 16], 0
+{{OWNED_HASH_BOX}}
 
 Lparse_url_return_x86:
     mov rsp, rbp

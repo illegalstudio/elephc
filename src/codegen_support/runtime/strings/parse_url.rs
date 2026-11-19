@@ -9,6 +9,7 @@
 //! - AArch64 and x86_64 mirror the Magician scanner and preserve missing versus present-empty components.
 //! - Component strings are copied before ASCII control bytes are replaced, so the input string is never mutated.
 
+use elephc_memoir::values::owned_payload::{StagedBox, render_staged_box};
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -33,16 +34,17 @@ pub fn emit_parse_url(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: parse_url ---");
     emitter.label_global("__rt_parse_url");
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.raw(include_str!("parse_url/aarch64.s")),
-        Arch::X86_64 => emitter.raw(&include_str!("parse_url/x86_64.s").replace(
-            "{{MIXED_HEAP_KIND}}",
-            &format!(
-                "0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(5)
-            ),
-        )),
-    }
+    let arch = emitter.target.arch;
+    let (template, hash_slot) = match arch {
+        Arch::AArch64 => (include_str!("parse_url/aarch64.s"), 184),
+        Arch::X86_64 => (include_str!("parse_url/x86_64.s"), 192),
+    };
+    let boxed_string = render_staged_box(arch, StagedBox::StringPair(176));
+    let boxed_hash = render_staged_box(
+        arch, StagedBox::Pointer { slot: hash_slot, tag: elephc_memoir::ValueTag::new(5) },
+    );
+    emitter.raw(&template.replace("{{OWNED_STRING_BOX}}", &boxed_string)
+        .replace("{{OWNED_HASH_BOX}}", &boxed_hash));
     emit_parse_url_key_address(emitter);
     emit_parse_url_throw_component(emitter);
 }
