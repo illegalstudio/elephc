@@ -40,6 +40,26 @@ pub(crate) fn scalar_hint(hint: &crate::parser::ast::TypeExpr) -> Option<PhpType
     })
 }
 
+/// Projects contracts whose outer PHP kind needs no generic or lexical name resolution.
+pub(crate) fn context_free_hint(hint: &crate::parser::ast::TypeExpr) -> Option<PhpType> {
+    use crate::parser::ast::TypeExpr;
+    if let Some(scalar) = scalar_hint(hint) { return Some(scalar); }
+    Some(match hint {
+        TypeExpr::Named(name) => match name.as_str().to_ascii_lowercase().as_str() {
+            "mixed" => PhpType::Mixed, "object" => PhpType::Object(String::new()),
+            "array" => PhpType::php_array(), "iterable" => PhpType::Iterable,
+            "callable" => PhpType::Callable, _ => return None,
+        },
+        TypeExpr::Array(_) | TypeExpr::AssocArray { .. } | TypeExpr::CallableSig { .. } =>
+            crate::types::constant_binding::declared_type(hint),
+        TypeExpr::Iterable => PhpType::Iterable,
+        TypeExpr::Nullable(inner) => PhpType::Union(vec![context_free_hint(inner)?, PhpType::Void]),
+        TypeExpr::Union(members) => PhpType::Union(members.iter().map(context_free_hint)
+            .collect::<Option<Vec<_>>>()?),
+        _ => return None,
+    })
+}
+
 /// Extracts a scalar declaration without flattening its PHP identity into physical storage.
 pub(crate) fn scalar_contract(ty: &PhpType) -> Option<AllowedKinds> {
     Some(match ty {

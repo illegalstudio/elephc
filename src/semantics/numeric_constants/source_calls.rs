@@ -221,7 +221,6 @@ fn check_argument(sig: &FunctionSig, builtin: Option<&crate::builtins::registry:
         }
         return Ok(());
     }
-    if !evidence.profile.contains(StrictFeature::Coercions) { return Ok(()); }
     let Some(Some(hint)) = sig.param_type_exprs.get(index) else { return Ok(()); };
     declarations::check_value(hint, value, class, definitions, evidence, "call argument")
 }

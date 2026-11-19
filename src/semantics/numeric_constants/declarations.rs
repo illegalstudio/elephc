@@ -14,7 +14,8 @@ use elephc_semantics::conversions::{plan_implicit_kinds, ConversionPlan};
 /// Rejects only a proven user declaration kind that requires an implicit PHP conversion.
 pub(super) fn check(annotation: &TypeExpr, value: &Expr, source: SourceMode, class: Option<&str>,
     definitions: &Definitions, evidence: &mut Evidence) -> Result<(), CompileError> {
-    if source == SourceMode::Internal || !evidence.profile.contains(StrictFeature::Coercions) { return Ok(()); }
+    if source == SourceMode::Internal || !(evidence.profile.contains(StrictFeature::Coercions)
+        || evidence.profile.contains(StrictFeature::Nullability)) { return Ok(()); }
     check_value(annotation, value, class, definitions, evidence, "declaration value")
 }
 
@@ -22,7 +23,7 @@ pub(super) fn check(annotation: &TypeExpr, value: &Expr, source: SourceMode, cla
 pub(super) fn check_value(annotation: &TypeExpr, value: &Expr, class: Option<&str>,
     definitions: &Definitions, evidence: &mut Evidence, context: &str) -> Result<(), CompileError> {
     let expected = if evidence.profile.contains(StrictFeature::Nullability) {
-        super::super::conversions::implicit_hint(annotation)
+        super::super::conversions::context_free_hint(annotation)
     } else { super::super::conversions::scalar_hint(annotation) };
     let Some(expected) = expected else { return Ok(()); };
     check_expected(&expected, value, class, definitions, evidence, context)

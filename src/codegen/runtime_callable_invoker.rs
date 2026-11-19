@@ -198,7 +198,7 @@ impl InvokerEmitContext {
             .map(|(_, ty)| {
                 if sig.variadic.as_ref().is_some_and(|name| name == &sig.params[index].0) {
                     crate::types::signatures::variadic_source_element_type_expr(sig)
-                        .and_then(crate::semantics::conversions::scalar_hint)
+                        .and_then(crate::semantics::conversions::context_free_hint)
                         .unwrap_or_else(|| match ty {
                             PhpType::Array(element) => *element.clone(), _ => ty.clone(),
                         })
