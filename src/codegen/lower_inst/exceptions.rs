@@ -433,39 +433,37 @@ fn emit_static_throwable_owner(
     let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+            throwable_storage::emit_allocate(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", class_id_symbol, 0);
             ctx.emitter.instruction("str x9, [x0]");                            // store the built-in throwable class id
             abi::emit_symbol_address(ctx.emitter, "x9", &message_label);
-            ctx.emitter.instruction("str x9, [x0, #8]");                        // store the static exception message pointer
+            abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_int_immediate(ctx.emitter, "x9", message_len as i64);
-            ctx.emitter.instruction("str x9, [x0, #16]");                       // store the exception message length
-            ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
+            abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
+            throwable_storage::emit_default_code(ctx.emitter, "x0");
             super::objects::throwable_new::emit_throwable_creation_line_aarch64(
                 ctx,
                 "x0",
                 "x9",
                 creation_line,
             );
-            ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
+            throwable_storage::emit_empty_previous(ctx.emitter, "x0");
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+            throwable_storage::emit_allocate(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the built-in throwable class id
             abi::emit_symbol_address(ctx.emitter, "r10", &message_label);
-            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the static exception message pointer
+            abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_int_immediate(ctx.emitter, "r10", message_len as i64);
-            ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the exception message length
-            ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
+            abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
+            throwable_storage::emit_default_code(ctx.emitter, "rax");
             super::objects::throwable_new::emit_throwable_creation_line_x86_64(
                 ctx,
                 "rax",
                 creation_line,
             );
-            ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
+            throwable_storage::emit_empty_previous(ctx.emitter, "rax");
         }
     }
 }
@@ -632,28 +630,26 @@ fn emit_uncaught_exit(ctx: &mut FunctionContext<'_>) {
 fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+            throwable_storage::emit_allocate(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", class_id_symbol, 0);
             ctx.emitter.instruction("str x9, [x0]");                            // store the built-in throwable class id
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
-            ctx.emitter.instruction("str x9, [x0, #8]");                        // store the runtime exception message pointer
+            abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 8);
-            ctx.emitter.instruction("str x9, [x0, #16]");                       // store the runtime exception message length
+            abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
             throwable_storage::emit_default_fields(ctx.emitter, "x0");
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_call_label(ctx.emitter, "__rt_throw_current");
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+            throwable_storage::emit_allocate(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the built-in throwable class id
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
-            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the runtime exception message pointer
+            abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
-            ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store the runtime exception message length
+            abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
             throwable_storage::emit_default_fields(ctx.emitter, "rax");
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);

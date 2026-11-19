@@ -245,20 +245,18 @@ fn throw_type_error(emitter: &mut Emitter) {
     // -- construct a managed Throwable while preserving the diagnostic --
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #56");                                 // allocate the compact Throwable payload
-            elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+            throwable_storage::emit_allocate(emitter);
             abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_type_error_class_id", 0);
             emitter.instruction("str x9, [x0]");                                // identify the TypeError class
             abi::emit_pop_reg_pair(emitter, ptr, len);
-            emitter.instruction("str x1, [x0, #8]");                            // transfer the persisted diagnostic pointer
-            emitter.instruction("str x2, [x0, #16]");                           // store the diagnostic byte length
+            abi::emit_store_to_address(emitter, "x1", "x0", throwable_storage::MESSAGE_POINTER);
+            abi::emit_store_to_address(emitter, "x2", "x0", throwable_storage::MESSAGE_LENGTH);
             throwable_storage::emit_default_fields(emitter, "x0");
             abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
             emitter.instruction("b __rt_throw_current");                        // unwind argument owners before the PHP catch
         }
         Arch::X86_64 => {
-            emitter.instruction("mov eax, 56");                                 // allocate the compact Throwable payload
-            elephc_memoir::values::object_storage::emit_allocate_throwable_x86_64(emitter);
+            throwable_storage::emit_allocate_cold(emitter, "eax");
             abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_type_error_class_id", 0);
             emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the TypeError class
             let diagnostic_ptr = abi::symbol_scratch_reg(emitter);

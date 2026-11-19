@@ -432,14 +432,13 @@ fn emit_throw_value_error_from_string_result(ctx: &mut FunctionContext<'_>) {
 
 /// Emits the AArch64 `ValueError` allocation and unwinder handoff.
 fn emit_throw_value_error_from_string_result_aarch64(ctx: &mut FunctionContext<'_>) {
-    abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-    elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+    throwable_storage::emit_allocate(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_value_error_class_id", 0);
     ctx.emitter.instruction("str x9, [x0]");                                    // store ValueError class id at object header
     abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
-    ctx.emitter.instruction("str x9, [x0, #8]");                                // store dynamic exception message pointer
+    abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
     abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 8);
-    ctx.emitter.instruction("str x9, [x0, #16]");                               // store dynamic exception message length
+    abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
     throwable_storage::emit_default_fields(ctx.emitter, "x0");
     abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -448,14 +447,13 @@ fn emit_throw_value_error_from_string_result_aarch64(ctx: &mut FunctionContext<'
 
 /// Emits the x86_64 `ValueError` allocation and unwinder handoff.
 fn emit_throw_value_error_from_string_result_x86_64(ctx: &mut FunctionContext<'_>) {
-    abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-    elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+    throwable_storage::emit_allocate(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_value_error_class_id", 0);
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store ValueError class id at object header
     abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
-    ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");                    // store dynamic exception message pointer
+    abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
     abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
-    ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");                   // store dynamic exception message length
+    abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
     throwable_storage::emit_default_fields(ctx.emitter, "rax");
     abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -681,28 +679,26 @@ pub(super) fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+            throwable_storage::emit_allocate(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_type_error_class_id", 0);
             ctx.emitter.instruction("str x9, [x0]");                            // store TypeError class id at object header
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
-            ctx.emitter.instruction("str x9, [x0, #8]");                        // store dynamic exception message pointer
+            abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 8);
-            ctx.emitter.instruction("str x9, [x0, #16]");                       // store dynamic exception message length
+            abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
             throwable_storage::emit_default_fields(ctx.emitter, "x0");
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+            throwable_storage::emit_allocate(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0);
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store TypeError class id at object header
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
-            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store dynamic exception message pointer
+            abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
-            ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store dynamic exception message length
+            abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
             throwable_storage::emit_default_fields(ctx.emitter, "rax");
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
             abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -717,14 +713,13 @@ fn emit_throw_enum_from_type_error_aarch64(
     message_label: &str,
     message_len: usize,
 ) {
-    abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-    elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+    throwable_storage::emit_allocate(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_type_error_class_id", 0);
     ctx.emitter.instruction("str x9, [x0]");                                    // store TypeError class id at object header
     abi::emit_symbol_address(ctx.emitter, "x9", message_label);
-    ctx.emitter.instruction("str x9, [x0, #8]");                                // store static exception message pointer
+    abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
     abi::emit_load_int_immediate(ctx.emitter, "x9", message_len as i64);
-    ctx.emitter.instruction("str x9, [x0, #16]");                               // store static exception message length
+    abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
     throwable_storage::emit_default_fields(ctx.emitter, "x0");
     abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
@@ -736,14 +731,13 @@ fn emit_throw_enum_from_type_error_x86_64(
     message_label: &str,
     message_len: usize,
 ) {
-    abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-    elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+    throwable_storage::emit_allocate(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0);
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store TypeError class id at object header
     abi::emit_symbol_address(ctx.emitter, "r10", message_label);
-    ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");                    // store static exception message pointer
+    abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
     abi::emit_load_int_immediate(ctx.emitter, "r10", message_len as i64);
-    ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");                   // store static exception message length
+    abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
     throwable_storage::emit_default_fields(ctx.emitter, "rax");
     abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
     abi::emit_jump(ctx.emitter, "__rt_throw_current");

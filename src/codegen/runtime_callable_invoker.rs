@@ -3809,21 +3809,19 @@ fn emit_invoker_throwable(
     let (message_label, message_len) = data.add_string(message.as_bytes());
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #56");                                 // request the compact Throwable payload
-            elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+            throwable_storage::emit_allocate(emitter);
             abi::emit_load_symbol_to_reg(emitter, "x9", class_id_symbol, 0);
             emitter.instruction("str x9, [x0]");                                // identify the requested builtin throwable class
             abi::emit_symbol_address(emitter, "x9", &message_label);
-            emitter.instruction("str x9, [x0, #8]");                            // store the immutable diagnostic bytes
+            abi::emit_store_to_address(emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_int_immediate(emitter, "x9", message_len as i64);
-            emitter.instruction("str x9, [x0, #16]");                           // store the diagnostic byte length
+            abi::emit_store_to_address(emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
             throwable_storage::emit_default_fields(emitter, "x0");
             abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
             emitter.instruction("b __rt_throw_current");                        // release argument guards and enter PHP exception handling
         }
         Arch::X86_64 => {
-            emitter.instruction("mov eax, 56");                                 // request the compact Throwable payload
-            elephc_memoir::values::object_storage::emit_allocate_throwable_x86_64(emitter);
+            throwable_storage::emit_allocate_cold(emitter, "eax");
             abi::emit_load_symbol_to_reg(
                 emitter,
                 "r10",
@@ -3832,9 +3830,9 @@ fn emit_invoker_throwable(
             );
             emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the requested builtin throwable class
             abi::emit_symbol_address(emitter, "r10", &message_label);
-            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store the immutable diagnostic bytes
+            abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_int_immediate(emitter, "r10", message_len as i64);
-            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store the diagnostic byte length
+            abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
             throwable_storage::emit_default_fields(emitter, "rax");
             abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
             emitter.instruction("jmp __rt_throw_current");                      // release argument guards and enter PHP exception handling

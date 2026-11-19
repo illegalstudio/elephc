@@ -11,19 +11,38 @@
 use crate::{abi, Arch, Emitter, TargetAbi};
 
 /// Native storage size for a complete compact Throwable payload.
-pub const PAYLOAD_BYTES: u64 = 56;
+const PAYLOAD_BYTES: i64 = 56;
 /// Offset of the class id word preceding the message pair.
 const CLASS_ID: usize = 0;
 /// Offset of the message pointer.
-const MESSAGE_POINTER: usize = 8;
+pub const MESSAGE_POINTER: usize = 8;
 /// Offset of the message length.
-const MESSAGE_LENGTH: usize = 16;
+pub const MESSAGE_LENGTH: usize = 16;
 /// Offset of PHP's numeric exception code.
-const CODE: usize = 24;
+pub const CODE: usize = 24;
 /// Offset of the creation line stored alongside the code.
 pub const CREATION_LINE_OFFSET: u64 = 32;
 /// Offset of the owned previous Throwable pointer.
 pub const PREVIOUS: usize = 40;
+/// Offset of the auxiliary word used by cold error paths.
+const AUXILIARY: usize = 48;
+
+/// Allocates a compact Throwable with one owner and an assigned native handle.
+pub fn emit_allocate(emitter: &mut impl Emitter) {
+    emitter.emit_load_int_immediate(emitter.int_result_reg(), PAYLOAD_BYTES);
+    super::object_storage::emit_allocate_throwable(emitter);
+}
+
+/// Allocates a compact Throwable using the original x86-64 cold-path encoding.
+pub fn emit_allocate_cold(emitter: &mut impl Emitter, x86_size_register: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => emit_allocate(emitter),
+        Arch::X86_64 => {
+            emitter.emit_load_int_immediate(x86_size_register, PAYLOAD_BYTES);
+            super::object_storage::emit_allocate_throwable_x86_64(emitter);
+        }
+    }
+}
 
 /// Encoding of the x86-64 static message length store used by a cold path.
 #[derive(Clone, Copy)]
@@ -44,7 +63,11 @@ pub fn emit_class_id(emitter: &mut impl TargetAbi, symbol: &str) {
 
 /// Stores an already prepared message pair at the physical Throwable offsets.
 pub fn emit_message_pair(emitter: &mut impl TargetAbi, pointer: &str, length: &str) {
-    let payload = emitter.int_result_reg();
+    emit_store_message_pair(emitter, emitter.int_result_reg(), pointer, length);
+}
+
+/// Stores a prepared message pair into a compact Throwable at an arbitrary base register.
+pub fn emit_store_message_pair(emitter: &mut impl TargetAbi, payload: &str, pointer: &str, length: &str) {
     emitter.emit_store_to_address(pointer, payload, MESSAGE_POINTER);
     emitter.emit_store_to_address(length, payload, MESSAGE_LENGTH);
 }
@@ -91,7 +114,7 @@ pub fn emit_error_with_auxiliary_zero(
 ) {
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, result, PAYLOAD_BYTES as i64);
+    abi::emit_load_int_immediate(emitter, result, PAYLOAD_BYTES);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     let kind = match emitter.arch() {
         Arch::AArch64 => crate::layout::THROWABLE_HEAP_KIND as i64,
@@ -104,13 +127,13 @@ pub fn emit_error_with_auxiliary_zero(
     }
     abi::emit_call_label(emitter, "__rt_object_handle_acquire");
     abi::emit_load_symbol_to_reg(emitter, scratch, class_symbol, 0);
-    abi::emit_store_to_address(emitter, scratch, result, 0);
+    abi::emit_store_to_address(emitter, scratch, result, CLASS_ID);
     abi::emit_symbol_address(emitter, scratch, message);
-    abi::emit_store_to_address(emitter, scratch, result, 8);
+    abi::emit_store_to_address(emitter, scratch, result, MESSAGE_POINTER);
     abi::emit_load_int_immediate(emitter, scratch, length);
-    abi::emit_store_to_address(emitter, scratch, result, 16);
+    abi::emit_store_to_address(emitter, scratch, result, MESSAGE_LENGTH);
     abi::emit_load_int_immediate(emitter, scratch, 0);
-    for offset in [24, 40, 48] {
+    for offset in [CODE, PREVIOUS, AUXILIARY] {
         abi::emit_store_to_address(emitter, scratch, result, offset);
     }
     emit_throwable_creation_line_unknown(emitter, result);

@@ -8,6 +8,7 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 //! - Nullable previous-exception results acquire their object owner exactly once during boxing.
 
+use elephc_memoir::values::throwable_storage;
 use super::*;
 use crate::codegen_support::emit::Emitter;
 
@@ -181,8 +182,8 @@ fn emit_box_throwable_method_result(emitter: &mut Emitter, method_key: &str, ret
 /// Loads `Throwable::getMessage()` from payload offsets 8/16 and returns a caller-owned string copy.
 pub(super) fn lower_throwable_get_message(ctx: &mut FunctionContext<'_>, object_reg: &str) -> Result<PhpType> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_load_from_address(ctx.emitter, ptr_reg, object_reg, 8);
-    abi::emit_load_from_address(ctx.emitter, len_reg, object_reg, 16);
+    abi::emit_load_from_address(ctx.emitter, ptr_reg, object_reg, throwable_storage::MESSAGE_POINTER);
+    abi::emit_load_from_address(ctx.emitter, len_reg, object_reg, throwable_storage::MESSAGE_LENGTH);
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     Ok(PhpType::Str)
 }
@@ -190,7 +191,7 @@ pub(super) fn lower_throwable_get_message(ctx: &mut FunctionContext<'_>, object_
 /// Loads `Throwable::getCode()` from payload offset 24 into the integer result register.
 pub(super) fn lower_throwable_get_code(ctx: &mut FunctionContext<'_>, object_reg: &str) -> Result<PhpType> {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, 24);
+    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, throwable_storage::CODE);
     Ok(PhpType::Int)
 }
 

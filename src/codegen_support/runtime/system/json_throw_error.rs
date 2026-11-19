@@ -10,6 +10,7 @@
 //! - Line and column are materialized from the candidate pointer only when an error
 //!   is recorded, and the source pointer is cleared before any throw.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
@@ -64,8 +65,7 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_throw_error_return");                   // bail out when throwing is not requested
 
     // Allocate a 56-byte JsonException payload (class_id + message, code, and previous slots).
-    emitter.instruction("mov x0, #56");                                         // size = class_id + message + code + previous slots
-    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_allocate(emitter);
 
     // Stamp the per-program JsonException class id into [obj+0].
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_json_exception_class_id");
@@ -76,12 +76,12 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
     // Look up and optionally suffix the message for this error code.
     emitter.instruction("bl __rt_json_error_message");                          // format the JSON error message, including decode location when present
     emitter.instruction("ldr x0, [sp, #8]");                                    // restore the exception object after message formatting
-    emitter.instruction("str x1, [x0, #8]");                                    // obj.message_ptr (Exception's `message` property is the first slot)
-    emitter.instruction("str x2, [x0, #16]");                                   // obj.message_len
+    abi::emit_store_to_address(emitter, "x1", "x0", throwable_storage::MESSAGE_POINTER);
+    abi::emit_store_to_address(emitter, "x2", "x0", throwable_storage::MESSAGE_LENGTH);
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the saved error code for $code field
-    emitter.instruction("str x10, [x0, #24]");                                  // obj.code (matches Exception's `code` property layout)
+    abi::emit_store_to_address(emitter, "x10", "x0", throwable_storage::CODE);
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
+    throwable_storage::emit_empty_previous(emitter, "x0");
 
     // Publish the new exception object via _exc_value and longjmp to the
     // active catch handler through the standard throw helper.
@@ -219,8 +219,7 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rdx, 0x400000");                                  // JSON_THROW_ON_ERROR = 0x400000
     emitter.instruction("je __rt_json_throw_error_return_x");                   // bail out when throwing is not requested
 
-    emitter.instruction("mov rax, 56");                                         // size = class_id + message + code + previous slots
-    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_allocate(emitter);
 
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_exception_class_id", 0); // load JsonException's runtime class id (-1 when absent)
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at the object header slot
@@ -230,12 +229,12 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, rax");                                        // r10 = formatted message pointer
     emitter.instruction("mov r11, rdx");                                        // r11 = formatted message length
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // restore the exception object after message formatting
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // obj.message_ptr
-    emitter.instruction("mov QWORD PTR [rax + 16], r11");                       // obj.message_len
+    abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
+    abi::emit_store_to_address(emitter, "r11", "rax", throwable_storage::MESSAGE_LENGTH);
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the saved error code for $code field
-    emitter.instruction("mov QWORD PTR [rax + 24], rcx");                       // obj.code (matches Exception's `code` property layout)
+    abi::emit_store_to_address(emitter, "rcx", "rax", throwable_storage::CODE);
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
+    throwable_storage::emit_empty_previous(emitter, "rax");
 
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // _exc_value = JsonException pointer
     emitter.instruction("mov rsp, rbp");                                        // unwind the helper scratch frame before tail-call

@@ -161,16 +161,14 @@ fn emit_reference_error_allocator(
     emitter.blank();
     emitter.label_global(entry);
     abi::emit_frame_prologue(emitter, 32);
-    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 56);
+    throwable_storage::emit_allocate_cold(emitter, abi::int_result_reg(emitter));
     match emitter.target.arch {
         Arch::AArch64 => {
-            elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
             throwable_storage::emit_class_id(emitter, class_id);
             throwable_storage::emit_static_message(emitter, message, length, throwable_storage::LengthStore::Register);
             throwable_storage::emit_default_fields(emitter, "x0");
         }
         Arch::X86_64 => {
-            elephc_memoir::values::object_storage::emit_allocate_throwable_x86_64(emitter);
             throwable_storage::emit_class_id(emitter, class_id);
             throwable_storage::emit_static_message(emitter, message, length, throwable_storage::LengthStore::Immediate);
             throwable_storage::emit_default_fields(emitter, "rax");

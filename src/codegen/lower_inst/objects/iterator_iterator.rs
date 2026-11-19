@@ -264,18 +264,17 @@ pub(super) fn emit_validate_iterator_iterator_aggregate_downcast(ctx: &mut Funct
 pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #56");                             // request Throwable payload storage (message/code/previous)
-            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+            throwable_storage::emit_allocate(ctx.emitter);
             abi::emit_symbol_address(ctx.emitter, "x9", "_spl_logic_exception_class_id");
             ctx.emitter.instruction("ldr x9, [x9]");                            // load LogicException's runtime class id
             ctx.emitter.instruction("str x9, [x0]");                            // store the class id at object header
             abi::emit_symbol_address(ctx.emitter, "x9", "_iterator_iterator_downcast_msg");
-            ctx.emitter.instruction("str x9, [x0, #8]");                        // store static exception message pointer
+            abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
             ctx.emitter.instruction(&format!(                                   // materialize the exception message length
                 "mov x9, #{}",
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
             ));                                                                 // load static exception message length
-            ctx.emitter.instruction("str x9, [x0, #16]");                       // store static exception message length
+            abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
             throwable_storage::emit_default_fields(ctx.emitter, "x0");
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
             ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
@@ -285,14 +284,13 @@ pub(super) fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut Fu
             ctx.emitter.instruction("push rbp");                                // preserve caller frame pointer for exception allocation
             ctx.emitter.instruction("mov rbp, rsp");                            // establish an aligned helper frame
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call aligned
-            ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
-            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+            throwable_storage::emit_allocate(ctx.emitter);
             ctx.emitter
                 .instruction("mov r10, QWORD PTR [rip + _spl_logic_exception_class_id]"); // load LogicException's runtime class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object header
             ctx.emitter
                 .instruction("lea r10, [rip + _iterator_iterator_downcast_msg]"); // materialize static exception message pointer
-            ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store static exception message pointer
+            abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
             ctx.emitter.instruction(&format!(                                   // store the exception message length
                 "mov QWORD PTR [rax + 16], {}",
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()

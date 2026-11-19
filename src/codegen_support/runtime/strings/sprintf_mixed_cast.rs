@@ -767,12 +767,11 @@ fn emit_sprintf_string_error_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_concat");                                      // append PHP's conversion failure suffix
     emitter.instruction("bl __rt_str_persist");                                 // give the Error stable message ownership
     emitter.instruction("stp x1, x2, [sp, #16]");                               // preserve the message pair across allocation
-    emitter.instruction("mov x0, #56");                                         // canonical Throwable payload size
-    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_allocate(emitter);
     abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_error_class_id", 0);
     emitter.instruction("str x9, [x0]");                                        // stamp the per-program Error class id
     emitter.instruction("ldp x10, x11, [sp, #16]");                             // recover the persisted message pair
-    emitter.instruction("stp x10, x11, [x0, #8]");                              // store Error message pointer and length
+    emitter.instruction(&format!("stp x10, x11, [x0, #{}]", throwable_storage::MESSAGE_POINTER)); // store Error message pointer and length
     throwable_storage::emit_default_fields(emitter, "x0");
     abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame linkage before unwinding
@@ -827,14 +826,13 @@ fn emit_sprintf_string_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // give the Error stable message ownership
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve persisted message pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // preserve persisted message length
-    emitter.instruction("mov rax, 56");                                         // canonical Throwable payload size
-    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_allocate(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_error_class_id", 0);
     emitter.instruction("mov QWORD PTR [rax], r10");                            // stamp the per-program Error class id
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // recover persisted message pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store Error message pointer
+    abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // recover persisted message byte length
-    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // store Error message byte length
+    abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
     throwable_storage::emit_default_fields(emitter, "rax");
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
     emitter.instruction("leave");                                               // restore the caller frame before unwinding

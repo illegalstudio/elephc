@@ -9,6 +9,7 @@
 //! - Each new Throwable consumes the preceding chain; no PHP unwinding crosses Rust.
 //! - Both native architectures publish only after every exception is constructed.
 
+use elephc_memoir::values::throwable_storage;
 use super::*;
 use elephc_builtin_contract::mbstring_abi::coercion::PREPARED_ARGUMENT_COUNT_ERROR;
 
@@ -54,16 +55,15 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x1, x2, [sp, #32]");                               // borrow the complete binary exception message
     emitter.instruction("bl __rt_str_persist");                                 // copy message bytes into native runtime ownership
     emitter.instruction("stp x1, x2, [sp, #56]");                               // retain the owned string while allocating its Throwable
-    emitter.instruction("mov x0, #56");                                         // request the canonical compact Throwable payload
-    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_allocate(emitter);
     emitter.instruction("ldr x9, [sp, #48]");                                   // restore the selected exception class
     emitter.instruction("str x9, [x0]");                                        // initialize its class identity before exposing the object
     emitter.instruction("ldp x9, x10, [sp, #56]");                              // recover the native-owned binary message
-    emitter.instruction("stp x9, x10, [x0, #8]");                               // transfer message pointer and length into the Throwable
-    emitter.instruction("str xzr, [x0, #24]");                                  // initialize the exception code to zero
+    emitter.instruction(&format!("stp x9, x10, [x0, #{}]", throwable_storage::MESSAGE_POINTER)); // transfer message pointer and length into the Throwable
+    throwable_storage::emit_default_code(emitter, "x0");
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
     emitter.instruction("ldr x9, [sp, #16]");                                   // consume the previously completed chain
-    emitter.instruction("str x9, [x0, #40]");                                   // make the earlier error the new Throwable's previous owner
+    abi::emit_store_to_address(emitter, "x9", "x0", throwable_storage::PREVIOUS);
     emitter.instruction("str x0, [sp, #16]");                                   // retain the new complete chain until validated publication
     emitter.instruction("ldr x9, [sp, #8]");                                    // recover the completed record index
     emitter.instruction("add x9, x9, #1");                                      // advance after ownership has transferred successfully
@@ -120,18 +120,17 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_str_persist");                               // copy bytes into native runtime ownership
     emitter.instruction("mov QWORD PTR [rsp + 56], rax");                       // retain the native-owned message across object allocation
     emitter.instruction("mov QWORD PTR [rsp + 64], rdx");                       // retain its complete byte length
-    emitter.instruction("mov rax, 56");                                         // request the canonical compact Throwable payload
-    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+    throwable_storage::emit_allocate(emitter);
     emitter.instruction("mov r10, QWORD PTR [rsp + 48]");                       // restore the chosen per-program exception class
     emitter.instruction("mov QWORD PTR [rax], r10");                            // initialize class identity before publishing the object
     emitter.instruction("mov r10, QWORD PTR [rsp + 56]");                       // recover the native-owned binary message
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // transfer its pointer into the Throwable
+    abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
     emitter.instruction("mov r10, QWORD PTR [rsp + 64]");                       // recover the exact message byte length
-    emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // transfer complete binary message metadata
-    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // initialize the exception code to zero
+    abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
+    throwable_storage::emit_default_code(emitter, "rax");
     crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
     emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                       // consume the earlier completed chain's sole owner
-    emitter.instruction("mov QWORD PTR [rax + 40], r10");                       // retain every earlier exception as previous
+    abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::PREVIOUS);
     emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // retain this complete chain until final publication
     emitter.instruction("add QWORD PTR [rsp + 8], 1");                          // advance only after message and previous ownership transfer
     emitter.instruction("jmp __rt_mbstring_exception_next");                    // construct each later error in observable order

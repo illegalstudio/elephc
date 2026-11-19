@@ -725,15 +725,14 @@ fn emit_throw_value_error_aarch64(
     message_symbol: &str,
     message_len: usize,
 ) {
-    ctx.emitter.instruction("mov x0, #56");                                     // request Throwable payload storage for the clamp ValueError
-    elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+    throwable_storage::emit_allocate(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, "x9", "_spl_value_error_class_id");
     ctx.emitter.instruction("ldr x9, [x9]");                                    // load ValueError's runtime class id for this program
     ctx.emitter.instruction("str x9, [x0]");                                    // store the ValueError class id in the Throwable header
     abi::emit_symbol_address(ctx.emitter, "x9", message_symbol);
-    ctx.emitter.instruction("str x9, [x0, #8]");                                // store the static ValueError message pointer
+    abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
     ctx.emitter.instruction(&format!("mov x9, #{}", message_len));              // materialize the static ValueError message length
-    ctx.emitter.instruction("str x9, [x0, #16]");                               // store the exception message length
+    abi::emit_store_to_address(ctx.emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
     throwable_storage::emit_default_fields(ctx.emitter, "x0");
     abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
     ctx.emitter.instruction("str x0, [x9]");                                    // publish the active ValueError object
@@ -749,14 +748,13 @@ fn emit_throw_value_error_x86_64(
     ctx.emitter.instruction("push rbp");                                        // preserve caller frame pointer for exception allocation
     ctx.emitter.instruction("mov rbp, rsp");                                    // establish an aligned helper frame for heap allocation
     ctx.emitter.instruction("sub rsp, 16");                                     // keep the nested heap allocation call 16-byte aligned
-    ctx.emitter.instruction("mov rax, 56");                                     // request Throwable payload storage for the clamp ValueError
-    elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
+    throwable_storage::emit_allocate(ctx.emitter);
     ctx.emitter.instruction(
         "mov r10, QWORD PTR [rip + _spl_value_error_class_id]"
     );                                                                          // load ValueError's runtime class id for this program
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store the ValueError class id in the Throwable header
     ctx.emitter.instruction(&format!("lea r10, [rip + {}]", message_symbol));   // materialize the static ValueError message pointer
-    ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");                    // store the static ValueError message pointer
+    abi::emit_store_to_address(ctx.emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
     ctx.emitter.instruction(
         &format!("mov QWORD PTR [rax + 16], {}", message_len)
     );                                                                          // store the exception message length
