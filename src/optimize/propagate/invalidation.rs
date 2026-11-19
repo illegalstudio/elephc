@@ -351,6 +351,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
                 .union(expr_invalidation(callable))
                 .union(callee_inv)
                 .union(top_level_globals_guard(expr_call_effect(callable)))
+                .union(top_level_globals_guard(callable_value_binding_effect(callable, piped)))
         }
         ExprKind::NewObject { args, .. }
         | ExprKind::NewGeneric { args, .. }

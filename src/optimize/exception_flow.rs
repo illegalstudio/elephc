@@ -1131,7 +1131,12 @@ impl ExceptionFlowAnalysis {
                 .combined(operand(callable))
                 .combined(self.temporary_destruction_throws(value, class_context))
                 .combined(self.callable_value_retirement_throws(callable, class_context))
-                .combined(self.callable_expr_throws(callable, bindings, class_context)),
+                .combined(self.callable_expr_throws(callable, bindings, class_context))
+                // Binding the piped value runs the scalar-parameter check: a `TypeError`, or
+                // whatever an error handler or `__toString()` it reaches throws.
+                .combined(if callable_value_binding_effect(callable, std::slice::from_ref(value.as_ref())).may_throw {
+                    ThrownTypes::unknown()
+                } else { ThrownTypes::default() }),
             ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => ThrownTypes::default(),
             ExprKind::ArrayLiteral(items) => operands(items),
             ExprKind::ArrayLiteralAssoc(items) => items.iter().fold(

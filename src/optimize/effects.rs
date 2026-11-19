@@ -406,7 +406,8 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::NullCoalesce { value, default } => expr_effect(value).combine(expr_effect(default)),
         ExprKind::Pipe { value, callable } => expr_effect(value)
             .combine(expr_effect(callable))
-            .combine(expr_call_effect(callable)),
+            .combine(expr_call_effect(callable))
+            .combine(callable_value_binding_effect(callable, std::slice::from_ref(value.as_ref()))),
         ExprKind::Assignment {
             target,
             value,

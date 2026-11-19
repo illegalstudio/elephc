@@ -429,6 +429,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// call, so its scalar-parameter checks decide from the value types. Consumed by the next
     /// argument lowering, so nested calls inside the arguments keep their own records.
     pub(crate) scalar_guards_unrecorded: bool,
+    /// The span of the synthetic argument a pipe passes to a first-class callable target
+    /// (`$v |> f(...)`): the checker records no site for it, so its scalar check always runs.
+    pub(crate) pipe_guard_arg_span: Option<Span>,
     /// Staging published by the enclosing reference assignment, if one is being lowered.
     ///
     /// `finish_reference_return_call` adopts the transferred lease into that staging immediately
@@ -906,6 +909,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             call_site_span: None,
             scalar_guard_deferral: None,
             scalar_guards_unrecorded: false,
+            pipe_guard_arg_span: None,
             source_path,
             closure_display_names: HashMap::new(),
         }

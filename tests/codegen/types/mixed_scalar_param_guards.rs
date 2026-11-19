@@ -1281,3 +1281,42 @@ try { f(...[box("ok")]); } catch (Throwable $e) { show($e); }
     assert_eq!(output.stdout, "TypeError: f(): Argument #1 ($s) must be of type string, null given\nTypeError: g(): Argument #2 ($s) must be of type string, null given\nTypeError: h(): Argument #2 ($m) must be of type int, string given\nTypeError: f(): Argument #1 ($s) must be of type string, array given\nTypeError: g(): Argument #2 ($s) must be of type string, array given\nTypeError: h(): Argument #2 ($m) must be of type int, string given\nDivisionByZeroError: Modulo by zero\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A pipe binds its value through the callee's scalar-parameter check. `$v |> f(...)` lowered to
+/// a direct call whose synthetic argument had no checker record, so `null` bound to `string`
+/// without a `TypeError`; a piped closure was treated as pure and removed; and a global the
+/// precision deprecation's handler wrote was read back stale after the pipe.
+#[test]
+fn test_pipe_checks_the_piped_value_against_scalar_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function ti(int $n): int { return $n; }
+function ts(string $s): string { return "[$s]"; }
+class K {
+    public function m(string $s): string { return $s; }
+    public static function st(string $s): string { return $s; }
+}
+function obj(): K { echo "obj\n"; return new K(); }
+function show(Throwable $e): void { echo get_class($e), ": ", str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+$v = box(null);
+try { $v |> (static fn(string $s) => 1); echo "no throw\n"; } catch (TypeError $e) { echo "caught closure\n"; }
+try { $v |> ts(...); echo "no throw\n"; } catch (TypeError $e) { show($e); }
+try { $v |> K::st(...); echo "no throw\n"; } catch (TypeError $e) { show($e); }
+try { $v |> (new K())->m(...); echo "no throw\n"; } catch (TypeError $e) { show($e); }
+try { $v |> obj()->m(...); echo "no throw\n"; } catch (TypeError $e) { show($e); }
+$g = ts(...);
+try { $v |> $g; echo "no throw\n"; } catch (TypeError $e) { echo "caught var\n"; }
+echo box("ok") |> ts(...), "\n";
+echo box(5) |> ts(...), "\n";
+set_error_handler('handler');
+$w = box(1.5);
+$x = 1; $w |> (static fn(int $n) => 1); echo "closure ", $x, "\n";
+$x = 1; $w |> ti(...); echo "fcc ", $x, "\n";
+$k = ti(...); $x = 1; $w |> $k; echo "varfcc ", $x, "\n";
+$x = 1; $y = 5 |> ti(...); echo "literal ", $x, "\n";
+function handler(int $no, string $msg): bool { global $x; $x = 2; return true; }
+"#,
+    );
+    assert_eq!(out, "caught closure\nTypeError: ts(): Argument #1 ($s) must be of type string, null given, called in F on line 13\nTypeError: K::st(): Argument #1 ($s) must be of type string, null given, called in F on line 14\nTypeError: K::m(): Argument #1 ($s) must be of type string, null given, called in F on line 15\nobj\nTypeError: K::m(): Argument #1 ($s) must be of type string, null given, called in F on line 16\ncaught var\n[ok]\n[5]\nclosure 2\nfcc 2\nvarfcc 2\nliteral 1\n");
+}
