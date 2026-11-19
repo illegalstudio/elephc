@@ -231,11 +231,8 @@ fn strict_nullability_eval_builtin_original_contracts_and_owners() {
 fn strict_nullability_eval_property_aliases_and_owners() {
     let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
     // Eval's supported reference syntax binds a property to an existing variable cell.
-    let source = include_str!("../../../../../tests/fixtures/strict/nullable_aliases.php")
-        .strip_prefix("<?php\ndeclare(strict_types=0);").unwrap()
-        .replace("$alias =& $slot->value;", "$alias = 'kept'; $slot->value =& $alias;")
-        .replace("$staticAlias =& NullableAliasSlot::$shared;",
-            "$staticAlias = 'saved'; NullableAliasSlot::$shared =& $staticAlias;");
+    let source = include_str!("../../../../../tests/fixtures/strict/nullable_eval_aliases.php")
+        .strip_prefix("<?php\ndeclare(strict_types=0);").unwrap();
     for fallback in [false, true] {
         let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
         let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
@@ -309,5 +306,35 @@ fn strict_nullability_eval_non_scalar_variadics_and_owners() {
         assert!(result.is_ok(), "{:?}; {}", result.as_ref().err(), values.output);
         assert_eq!(values.output, "AIC|1:1:1:NULL:NULL");
         finish(&mut context, &mut scope, &mut values, "non-scalar variadics");
+    }
+}
+
+/// Failed nominal bindings are catchable before bodies run, with original owners preserved.
+#[test]
+fn strict_eval_nominal_parameter_errors_preserve_owners() {
+    let source = "$gap=[];class NominalExpected{}class NominalWrong{} \
+        function nominalReceive(NominalExpected $value):void{echo 'good';} \
+        function nominalVariadic(NominalExpected ...$values):void{echo 'bad';} \
+        class NominalConsumer{function receive(NominalExpected $value):void{echo 'bad';} \
+            static function staticReceive(NominalExpected $value):void{echo 'bad';}} \
+        $wrong=new NominalWrong();$consumer=new NominalConsumer(); \
+        try{nominalReceive($wrong);}catch(TypeError $error){echo 'F';} \
+        try{$consumer->receive($wrong);}catch(TypeError $error){echo 'M';} \
+        try{NominalConsumer::staticReceive($wrong);}catch(TypeError $error){echo 'S';} \
+        $callback=function(NominalExpected $value):void{echo 'bad';}; \
+        try{$callback($wrong);}catch(TypeError $error){echo 'C';} \
+        try{nominalVariadic($wrong);}catch(TypeError $error){echo 'V';} \
+        try{nominalReceive(7);}catch(TypeError $error){echo 'K';} \
+        echo '|';nominalReceive(new NominalExpected());";
+    for profile in [SemanticProfile::PERMISSIVE,
+        SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true)] {
+        for fallback in [false, true] {
+            let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+            let result = execute(source, fallback, &mut context, &mut scope, &mut values);
+            assert!(result.is_ok(), "{profile:?}, fallback={fallback}: {:?}; {}", result.as_ref().err(), values.output);
+            assert_eq!(values.output, "FMSCVK|good");
+            finish(&mut context, &mut scope, &mut values, source);
+        }
     }
 }

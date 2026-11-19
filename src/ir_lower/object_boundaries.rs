@@ -91,14 +91,15 @@ pub(super) fn guard_parameters(
                 let element = resolve_context_type(ctx, ctx.type_expr_to_php_type_for_value(hint));
                 let object_reference_guard = signature.ref_params.get(index).copied().unwrap_or(false)
                     && matches!(element.codegen_repr(), PhpType::Object(_));
-                if object_reference_guard
+                let existing_guard = object_reference_guard
                     || crate::types::builtin_classes::native_object_sink_needs_null_guard(
-                        &element,
-                        ctx.classes,
-                        ctx.interfaces,
-                    )
-                {
-                    guard_variadic(ctx, name, index + 1, &element, &callable);
+                        &element, ctx.classes, ctx.interfaces);
+                let null_contract = ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability)
+                    && (!ctx.builder.function().flags.is_internal
+                        || ctx.builder.function().flags.is_eager_parameter_validator)
+                    && crate::semantics::nullability::non_null_contract(&element);
+                if existing_guard || null_contract {
+                    guard_variadic(ctx, name, index + 1, &element, &callable, !existing_guard);
                 }
             }
             continue;
@@ -246,7 +247,8 @@ fn resolve_context_type(ctx: &LoweringContext<'_, '_>, ty: PhpType) -> PhpType {
 }
 
 /// Checks collector values through ordinary foreach lowering, including named and reference tails.
-fn guard_variadic(ctx: &mut LoweringContext<'_, '_>, name: &str, first: usize, ty: &PhpType, callable: &str) {
+fn guard_variadic(ctx: &mut LoweringContext<'_, '_>, name: &str, first: usize,
+    ty: &PhpType, callable: &str, null_only: bool) {
     let span = Span::dummy();
     let key = ctx.declare_hidden_temp(PhpType::Mixed);
     let value = ctx.declare_hidden_temp(PhpType::Mixed);
@@ -259,10 +261,17 @@ fn guard_variadic(ctx: &mut LoweringContext<'_, '_>, name: &str, first: usize, t
     let call = |function: &str, variable: &str| Expr::new(ExprKind::FunctionCall {
         name: crate::names::Name::unqualified(function), args: vec![Expr::var(variable)],
     }, span);
+    let formatted_number = Expr::new(ExprKind::Cast {
+        target: crate::parser::ast::CastType::StringFormat, expr: Box::new(Expr::var(&number)),
+    }, span);
     let prefix = Expr::binop(Expr::binop(Expr::string_lit(format!("{callable}(): Argument #")),
-        BinOp::Concat, Expr::var(&number)), BinOp::Concat,
+        BinOp::Concat, formatted_number), BinOp::Concat,
         Expr::string_lit(format!(" must be of type {expected}, ")));
-    let (condition, given) = if let PhpType::Object(class) = ty.codegen_repr() {
+    // Nullability checks the source null without reimplementing generic class variance.
+    let object = if null_only { None } else { match ty.codegen_repr() {
+        PhpType::Object(class) => Some(class), _ => None,
+    }};
+    let (condition, given) = if let Some(class) = object {
         let accepted = if class.is_empty() || class.eq_ignore_ascii_case("object") {
             call("is_object", &value)
         } else {
@@ -299,6 +308,7 @@ fn guard_variadic(ctx: &mut LoweringContext<'_, '_>, name: &str, first: usize, t
 
 /// Selects generators that need an eager validator before constructing their lazy coroutine.
 pub(super) fn needs_parameter_guards(
+    nullability: bool,
     signature: &crate::types::FunctionSig,
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
     interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
@@ -312,7 +322,9 @@ pub(super) fn needs_parameter_guards(
         } else { ty.clone() };
         let object_reference_guard = signature.ref_params.get(index).copied().unwrap_or(false)
             && matches!(declared.codegen_repr(), PhpType::Object(_));
-        object_reference_guard
+        (nullability && signature.variadic.as_ref() == Some(name)
+            && crate::semantics::nullability::non_null_contract(&declared))
+            || object_reference_guard
             || crate::types::builtin_classes::native_object_sink_needs_null_guard(&declared, classes, interfaces)
             || (has_relative_class(&declared)
                 && classes.keys().any(|class| crate::types::builtin_classes::has_native_dimensions(class, classes)))

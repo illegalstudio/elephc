@@ -95,3 +95,12 @@ fn test_repl_strict_indexing_public_profile_and_recovery() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "IquietNULL:7");
 }
+
+/// A cached native host retains null checks and explicit probes across later submissions.
+#[test]
+fn test_repl_strict_nullability_public_profile_and_recovery() {
+    let fixture = Fixture::new();
+    let output = fixture.run("function requiredReplValue(mixed $value):string{return $value;}\ntry{requiredReplValue(null);}catch(TypeError $error){echo 'N';}\necho null[0]??'quiet';\n", &["--strict-nullability"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Nquiet");
+}

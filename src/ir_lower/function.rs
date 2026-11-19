@@ -1858,7 +1858,10 @@ fn lower_body_into_function(
     // Reuse full lowering so reference/collector validation and exception cleanup stay shared.
     let mut eager_validators = Vec::new();
     if function.flags.is_generator && function.signature.as_ref().is_some_and(|signature|
-        super::object_boundaries::needs_parameter_guards(signature, classes, interfaces)) {
+        super::object_boundaries::needs_parameter_guards(
+            semantic_profile.contains(elephc_semantics::StrictFeature::Nullability)
+                && !function.flags.is_internal,
+            signature, classes, interfaces)) {
         let mut validator = Function::new(crate::names::generator_parameter_guard_name(&function.name),
             IrType::Void, PhpType::Void);
         validator.params = function.params.clone();

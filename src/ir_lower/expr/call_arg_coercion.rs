@@ -1008,7 +1008,14 @@ pub(super) fn coerce_operands_to_params(
         let value = operands[index];
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
         let param_ty = param_ty.codegen_repr();
-        if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
+        if matches!(param_ty, PhpType::Object(_))
+            && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
+            && crate::ir_lower::conversion_boundaries::parameter_active(ctx, &param_ty) {
+            let original = lowered_value_from_id(ctx, value);
+            let checked = crate::ir_lower::conversion_boundaries::object_parameter(
+                ctx, original, &param_ty, Span::dummy());
+            operands[index] = root_evaluated_call_argument(ctx, checked, Span::dummy()).value;
+        } else if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
             let lowered = LoweredValue {
                 value,
                 ir_type: IrType::I64,

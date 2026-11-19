@@ -29,7 +29,7 @@ fn test_strict_indexing_public_cli_values_and_owners() {
     assert!(errors.contains("Undefined array key"), "{errors}");
     assert!(errors.contains("HEAP DEBUG: leak summary: clean"), "{errors}");
     let output = StrictFixture::new("<?php $a=[1];echo $a[0];").run(&["--strict",
-        "--no-strict-nullability", "--no-strict-mixed", "--no-strict-array-types"]);
+        "--no-strict-mixed", "--no-strict-array-types"]);
     assert_eq!(output, "1");
 }
 

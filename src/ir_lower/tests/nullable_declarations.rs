@@ -87,3 +87,64 @@ fn nullable_non_scalar_variadics_emit_on_every_target() {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Nominal parameter adaptation happens after later effects and keeps its class and relative contracts.
+#[test]
+fn nullable_object_arguments_and_nominal_variadics_emit_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/nullable_object_arguments.php");
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::semantic_sources::lower_capturing_arguments(source, Target::parse(name).unwrap(), profile, false, SourceMode::Php);
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Public opaque fixtures remain valid eval grammar before the native bridge runs them.
+#[test]
+fn nullable_public_eval_fragments_preserve_parser_contracts() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    let mut combined = String::new();
+    for (name, source) in [
+        ("receivers", include_str!("../../../tests/fixtures/strict/nullable_receivers.php")),
+        ("builtins", include_str!("../../../tests/fixtures/strict/nullable_builtins.php")),
+        ("aliases", include_str!("../../../tests/fixtures/strict/nullable_eval_aliases.php")),
+        ("descriptors", include_str!("../../../tests/fixtures/strict/nullable_descriptors.php")),
+        ("variadics", include_str!("../../../tests/fixtures/strict/nullable_variadic_contracts.php")),
+        ("objects", include_str!("../../../tests/fixtures/strict/nullable_object_arguments.php")),
+    ] {
+        let fragment = source.strip_prefix("<?php").unwrap().replace("declare(strict_types=0);", "");
+        let parsed = elephc_magician::parser::parse_fragment_with_semantics(fragment.as_bytes(), profile);
+        assert!(parsed.is_ok(), "{name}: {:?}", parsed.err());
+        combined.push_str(&fragment); combined.push(';');
+        let parsed = elephc_magician::parser::parse_fragment_with_semantics(combined.as_bytes(), profile);
+        assert!(parsed.is_ok(), "combined through {name}: {:?}", parsed.err());
+    }
+}
+
+/// Generator entry checks are eager, null-only and compatible with string formatting policy.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn nullable_nominal_variadic_generators_validate_before_suspension() {
+    let source = "<?php class NominalGeneratorValue{} \
+        function nominalGenerator(NominalGeneratorValue ...$values):iterable{echo 'body';yield 1;} \
+        function nominalGeneratorDispatch(callable $callback,array $values):mixed{return $callback(...$values);} \
+        try{nominalGeneratorDispatch(nominalGenerator(...),[null]);}catch(TypeError $error){echo 'N';} \
+        $valid=nominalGeneratorDispatch(nominalGenerator(...),[new NominalGeneratorValue()]);echo 'V';";
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true)
+        .with(StrictFeature::Strings, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::semantic_sources::lower_capturing_arguments(source, Target::parse(name).unwrap(), profile, false, SourceMode::Php);
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+    for optimize in [false, true] {
+        let module = super::semantic_sources::lower_capturing_arguments(source, Target::detect_host(), profile, optimize, SourceMode::Php);
+        let output = super::native_module::run(&module);
+        let stdout = String::from_utf8_lossy(&output.stdout); let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}; {stderr}");
+        assert_eq!(stdout, "NV", "{stderr}");
+        assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+    }
+}

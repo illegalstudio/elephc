@@ -5,7 +5,7 @@
 //! - Focused staged strict-nullability compiler tests.
 //!
 //! Key details:
-//! - Public admission stays gated while remaining null consumers are integrated.
+//! - Staged helpers isolate receiver obligations from independently selected guarantees.
 
 use crate::{codegen_support::platform::Target, ir::Op, source::SourceMode};
 use elephc_semantics::{SemanticProfile, StrictFeature};

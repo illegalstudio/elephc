@@ -371,14 +371,14 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step229 (this commit). Remaining feature integration is active. Issue:
+Verified through step230 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
 commit for every verified step and no partial delivery. Do not expose unfinished
 flags as successful no-ops. The public integrated mask contains Locals, Bools, DynamicCode, Opcache,
 Arithmetic, Overflow, Strings, Coercions, Casts, Comparisons, ArrayKeys,
-Initialization and Indexing. Nullability, Mixed and ArrayTypes remain gated, as does
+Initialization, Indexing and Nullability. Mixed and ArrayTypes remain gated, as does
 the complete umbrella, until their whole contracts are enforced. The verified
 steps below retain the source, reference, eval, ownership and target evidence.
 
@@ -2856,3 +2856,11 @@ Nine exact compiler/EIR regressions pass, including all-five target emission, bo
 Indexed/append stores, whole-array replacements, direct instance/static property writers and array_push/unshift/splice now check normalized keys and original element types before widening storage. A shared recursive adapter preserves explicit mixed/union elements, first informative empty-array writes and integer-key layout changes. Valid union writes keep their original union instead of erasing it to Mixed. Builtin mutations check the logical candidate before projecting boxed transport.
 
 Seven exact checker/EIR regressions pass, including all-five emission and native optimized/unoptimized clean-heap execution. The complete shared builtin exporter/docs workflow, default build, diff/assembly hygiene and unchanged Rust source digest pass. ArrayTypes remains gated while original producers, nested/alias/reference publication, interpreted and host paths are completed. The tagless LFC example is adapted with an opening tag only for the internal parser test helper. No full feature admission or complete umbrella is claimed.
+
+### Verified230: public Nullability and reflected builtin dispatch
+
+Nullability is now a public compiler and eval guarantee, independent of exact Coercions. Original nulls are checked at declared/builtin/callable boundaries and ordinary receivers while nullable/mixed values, explicit probes, nullsafe skipping and weak non-null conversions retain their contracts. Nominal variadic collectors resolve source hints at callee entry; null-only checks preserve generic variance and generator validation happens before suspension.
+
+Real opaque eval exposed two additional boundaries. Registered borrowed builtins must retain interpreter Reflection dispatch, independently of their argument ownership strategy. Ordinary non-coercible parameter mismatches now use the existing catchable TypeError path instead of RuntimeFatal; exact acceptance and permitted weak conversions still run first. Source tests retain eval's existing property-reference syntax, without extending its grammar.
+
+The composed31-gate evidence includes all-five library/emitter paths, public native and real opaque eval bundles, REPL/LFC/example/cache/source controls, default/generic declarations, Reflection under permissive/NN/ArrayKeys, weak/object parameter controls and balanced nominal argument owners. New and retained gates have explicit run provenance; default builds, diff/assembly hygiene and unchanged-source checks pass. Nullability becomes the fourteenth integrated guarantee. Mixed and ArrayTypes and the full umbrella remain gated until their remaining runtime, producer and reference contracts are complete.

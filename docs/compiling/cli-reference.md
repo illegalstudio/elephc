@@ -607,11 +607,32 @@ order. Repeating an explicit feature option uses the last value.
 Integration is in progress. This build accepts the existing strict-locals and
 strict-opcache rules plus strict-dynamic-code, strict-bools, strict-arithmetic,
 strict-overflow, strict-strings, strict-coercions, strict-casts, strict-comparisons,
-strict-array-keys, strict-initialization and strict-indexing.
-The remaining strict-nullability, strict-mixed and strict-array-types guarantees,
+strict-array-keys, strict-initialization, strict-indexing and strict-nullability.
+The remaining strict-mixed and strict-array-types guarantees,
 including the complete umbrella, fail explicitly until their enforcement is
 complete. Eval embedding entry points reject execution with those profiles too. The [implementation plan](https://github.com/illegalstudio/elephc/issues/2347)
 tracks the remaining work.
+
+### Non-null values
+
+`--strict-nullability` checks ordinary dimension and member receivers and values
+bound to non-null declarations, parameters, returns and builtin inputs before
+PHP conversions can erase null. A statically known invalid null is a compile
+error; a dynamic null throws a catchable `TypeError`. Property aliases preserve
+their declaration checks, and a rejected write keeps the previous value.
+
+Explicit nullable and mixed contracts, null tests, nullsafe short-circuiting,
+`isset`, `empty` and `??` retain their intentional null behavior. Keys and member
+names evaluated inside a probe are ordinary expressions. An ordinary access after
+a successful nullsafe hop still checks a real null. Other non-null conversions
+retain their own policies, independently of `declare(strict_types=0)`.
+
+The rule applies to included PHP/LFC source, runtime eval and REPL submissions.
+Existing static-subset diagnostics still apply, including opaque mixed values
+passed to unsupported container parameter layouts. Native Reflection invocation
+requires a statically known target; runtime-selected or lost targets throw an
+explicit unsupported-target `Error`. Runtime eval retains its Reflection dispatch.
+See `examples/strict-nullability/main.php` for a runnable example.
 
 ### Initialized reads
 

@@ -606,11 +606,8 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
             return Ok(coerced);
         }
     }
-    if param_type.variants().iter().any(|ty| matches!(ty, EvalParameterTypeVariant::Generic(_)))
-        || context.current_function().is_some_and(|name| name.contains('<')) {
-        return eval_throw_type_error(&format!("Value does not satisfy {}", crate::eval_ir::php_type_label(param_type)), context, values);
-    }
-    Err(EvalStatus::RuntimeFatal)
+    eval_throw_type_error(&format!("Value does not satisfy {}",
+        crate::eval_ir::php_type_label(param_type)), context, values)
 }
 
 /// Returns whether a value satisfies one eval parameter type without scalar coercion.

@@ -36,6 +36,7 @@ mod php_only;
 mod strict_semantics;
 mod strict_initialization;
 mod strict_indexing;
+mod strict_nullability;
 mod strict_numeric_locals;
 mod strict_copy_origins;
 mod strict_structural_locals;
