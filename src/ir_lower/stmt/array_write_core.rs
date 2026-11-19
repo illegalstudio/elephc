@@ -769,7 +769,9 @@ pub(super) fn lower_boxed_array_set(
     // Rooting only covers OWNED temporaries: a borrowed operand (the local itself, or one of its
     // elements) has no root, and the detach below would free the box it reads from. A lifetime
     // pin keeps each borrowed operand alive across the detach and the write.
-    let mut pins = Vec::new();
+    // The pin is rooted like the owned operands: a throw out of the write (a ValueError from an
+    // element view's offset handler) would otherwise unwind past it and leak the borrowed
+    // string's persisted copy.
     for operand in [index, value] {
         if ctx.value_is_owning_temporary(operand) {
             continue;
@@ -778,7 +780,8 @@ pub(super) fn lower_boxed_array_set(
             ctx, operand, Some(span),
         );
         if pin.value != operand.value {
-            pins.push(pin);
+            let (_, root) = crate::ir_lower::expr::root_owned_call_operand(ctx, pin, span);
+            if let Some(root) = root { roots.push(root); }
         }
     }
     let array = load_array_local_for_write(ctx, array, span);
@@ -789,9 +792,6 @@ pub(super) fn lower_boxed_array_set(
     string_offset_writes::lower_boxed_set(
         ctx, array, index, value, span, key_already_diagnosed,
     );
-    for pin in pins.into_iter().rev() {
-        crate::ir_lower::ownership::release_if_owned(ctx, pin, Some(span));
-    }
     for root in roots.into_iter().rev() {
         crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
     }

@@ -50,6 +50,21 @@ foreach ($xml->item as $item) { echo (string)$item, ','; }
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// A throwing dimension write through a boxed element view releases the RHS string's lifetime pin.
+#[test]
+fn test_simplexml_throwing_view_dimension_write_releases_rhs_pin() {
+    if skip_without_xml_native("test_simplexml_throwing_view_dimension_write_releases_rhs_pin") { return; }
+    let out = compile_and_run_with_heap_debug(r###"<?php
+$xml = new SimpleXMLElement('<r><item>keep</item></r>');
+$node = $xml->item[0];
+try { $node[null] = 'wrong'; } catch (ValueError $e) { echo 'null'; }
+unset($node, $e);
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "null");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Keys and RHS precede target fetches, including rebinds and compounds in AOT and runtime eval.
 #[test]
 fn test_simplexml_dimension_write_timing_bundle() {
