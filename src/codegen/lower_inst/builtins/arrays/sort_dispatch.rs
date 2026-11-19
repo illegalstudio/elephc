@@ -109,12 +109,16 @@ pub(super) fn lower_hash_reindexing_sort(
         )));
     };
     let value_ty = value.codegen_repr();
+    // A Mixed-valued hash is where reference cells hide. Sorting the extracted values would
+    // dereference and detach them, so relink the hash chain by value and renumber its keys
+    // instead: `__rt_hash_asort` already dereferences tag-11 entries for comparison and moves
+    // no payload, and the dense rebuild preserves each entry's runtime tag.
+    if value_ty == PhpType::Mixed {
+        return lower_hash_link_reindex_sort(ctx, inst, name);
+    }
     let helper = match value_ty {
         PhpType::Str => Some(str_helper),
         PhpType::Int => Some(int_helper),
-        // A Mixed-valued hash has no typed comparator; `emit_mixed_slot_sort` orders the extracted
-        // list with `__rt_php_compare_slots` after a runtime scalar guard, exactly as a boxed sort.
-        PhpType::Mixed => None,
         ref other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for hash values of PHP type {:?}",
@@ -190,6 +194,39 @@ pub(super) fn lower_hash_reindexing_sort(
         abi::int_result_reg(ctx.emitter),
         1,
     );
+    store_if_result(ctx, inst)
+}
+
+/// Sorts a Mixed-valued hash by relinking its chain and then renumbers the keys from zero.
+///
+/// `__rt_hash_asort`/`__rt_hash_arsort` order the insertion-order links in place: the entry
+/// payloads, including tag-11 managed reference cells, never move and are never dereferenced
+/// into the result. `__rt_hash_reindex_dense` then builds the dense `0..n-1` hash PHP returns
+/// from `sort()`/`rsort()` by moving each entry under its new integer key; the emptied source
+/// shell is released through the receiver's ordinary store-back, so ownership stays balanced.
+fn lower_hash_link_reindex_sort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    let helper = match name {
+        "sort" => "__rt_hash_asort",
+        "rsort" => "__rt_hash_arsort",
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{other} reindexing sort over a hash"
+            )))
+        }
+    };
+    super::lower_hash_link_sort_with_flags(ctx, inst, helper, super::HashSortFlags::None)?;
+    let array = expect_operand(inst, 0)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_reindex_dense");
+    ctx.store_result_value(array)?;
+    let receiver_ty = ctx.value_php_type(array)?;
+    receiver.store_back(ctx, array, &receiver_ty)?;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     store_if_result(ctx, inst)
 }
 

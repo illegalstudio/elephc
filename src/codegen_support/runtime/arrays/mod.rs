@@ -178,6 +178,7 @@ mod hash_entry_reference;
 mod hash_flip;
 mod hash_slice;
 mod hash_insert_owned;
+mod hash_reindex_dense;
 mod hash_map;
 mod hash_iter;
 mod hash_new;
@@ -525,6 +526,7 @@ pub use hash_new::emit_hash_new;
 pub use hash_set::emit_hash_set;
 /// Emit hash set helper.
 pub use hash_sort::emit_hash_sort;
+pub use hash_reindex_dense::emit_hash_reindex_dense;
 /// Emit the hash key/value insertion-order sort helpers.
 pub use hash_spread::emit_hash_spread;
 /// Emit hash spread (array-literal flatten) helper.

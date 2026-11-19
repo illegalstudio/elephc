@@ -408,19 +408,18 @@ storage you need.
 
 Reference elements also constrain later array operations:
 
-- `array_shift()`, `array_unshift()`, `array_reverse()` and `array_merge()`
-  preserve reference-cell identity. The ordering/removal builtins `sort()`,
-  `rsort()`, `usort()`, `shuffle()` and `array_splice()` still detach reference
+- `array_shift()`, `array_unshift()`, `array_reverse()`, `array_merge()`,
+  `sort()` and `rsort()` preserve reference-cell identity. The ordering/removal
+  builtins `usort()`, `shuffle()` and `array_splice()` still detach reference
   cells (the values stay correct, but later writes through the alias no longer
   reach the array); some reference-promoted storage shapes are rejected at
   compile time by those builtins instead of being miscompiled. `array_values()`
   and the slicing helpers also return detached snapshots rather than PHP's
   references. Perform the reorder before creating references, or rebuild into a
   fresh array.
-- `call_user_func_array()` over an argument array that contains reference
-  elements still forwards those cells to the callback. Ordinary values and
-  scalar reference variables are passed by value with PHP's warning; dereference
-  the argument array first when write-through must be avoided.
+- `call_user_func_array()` applies the callback parameter's own passing mode to
+  each argument: a by-value parameter receives a copy of the current value, and a
+  by-reference parameter writes through to the referenced variable, matching PHP.
 - A nested bind (`$a[0][1] = &$value`) requires the parent element to already
   hold an array; auto-vivifying an unknown parent is not supported. The bind may
   also make `var_dump()` show the intermediate container with a `&` marker where
@@ -563,8 +562,8 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `prev()` | `prev(&$arr): mixed` | Rewind the internal pointer one position and return the new element, or `false` |
 | `reset()` | `reset(&$arr): mixed` | Move the internal pointer to the first element and return it, or `false` for an empty array |
 | `end()` | `end(&$arr): mixed` | Move the internal pointer to the last element and return it, or `false` for an empty array |
-| `sort()` | `sort($arr): bool` | Sort ascending (in-place). Elements may be `int`, `string`, `float`, or heterogeneous (`mixed`); a hash-backed array whose values are `float` is still refused |
-| `rsort()` | `rsort($arr): bool` | Sort descending. Same element types as `sort()` |
+| `sort()` | `sort($arr): bool` | Sort ascending (in-place). Elements may be `int`, `string`, `float`, or heterogeneous (`mixed`); a hash-backed array whose values are `float` is still refused. Reference cells survive the reorder and the keys are renumbered from zero |
+| `rsort()` | `rsort($arr): bool` | Sort descending. Same element types and reference-cell behavior as `sort()` |
 | `asort()` | `asort($arr): bool` | Sort by value, maintain keys |
 | `arsort()` | `arsort($arr): bool` | Sort by value desc, maintain keys |
 | `ksort()` | `ksort($arr, $flags = SORT_REGULAR): bool` | Sort by key ascending, comparing keys under `$flags`. On an indexed array this is a no-op, because its keys are already the ascending slot positions `0..n-1` |

@@ -202,3 +202,112 @@ var_dump($b);
     );
     assert_eq!(out, "array(1) {\n  [0]=>\n  int(1)\n}\n");
 }
+
+/// `sort()`/`rsort()` relink a reference-shaped hash and renumber its keys without detaching
+/// the managed cells: later writes through either alias must reach the reordered array.
+#[test]
+fn test_sort_and_rsort_preserve_reference_cells() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1; $y = 2;
+$a = [&$y, &$x];
+sort($a);
+$x = 9;
+var_dump($a);
+
+$p = 1; $q = 2;
+$b = [&$q, &$p];
+rsort($b);
+$p = 9;
+var_dump($b);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  &int(9)\n  [1]=>\n  &int(2)\n}\n\
+array(2) {\n  [0]=>\n  &int(2)\n  [1]=>\n  &int(9)\n}\n"
+    );
+}
+
+/// A hash copy taken before the sort keeps its own order and its reference cells.
+#[test]
+fn test_sort_reference_cells_leave_a_copy_unsorted() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1; $y = 2;
+$a = [&$y, &$x];
+$copy = $a;
+sort($a);
+$x = 9;
+var_dump($a);
+var_dump($copy);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  &int(9)\n  [1]=>\n  &int(2)\n}\n\
+array(2) {\n  [0]=>\n  &int(2)\n  [1]=>\n  &int(9)\n}\n"
+    );
+}
+
+/// A declared `array` by-reference parameter boxes its payload, so the sort must promote the
+/// hash in place instead of extracting and detaching its values.
+#[test]
+fn test_sort_reference_cells_through_by_ref_array_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function sortRefs(array &$a): void { sort($a); }
+$x = 1; $y = 2;
+$a = [&$y, &$x];
+sortRefs($a);
+$x = 9;
+var_dump($a);
+"#,
+    );
+    assert_eq!(out, "array(2) {\n  [0]=>\n  &int(9)\n  [1]=>\n  &int(2)\n}\n");
+}
+
+/// The same applies to a declared array property, which is also a boxed receiver.
+#[test]
+fn test_sort_reference_cells_through_declared_array_property() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class RefSortBox { public array $items = []; }
+$x = 1; $y = 2;
+$b = new RefSortBox();
+$b->items = [&$y, &$x];
+sort($b->items);
+$x = 9;
+var_dump($b->items);
+unset($b);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "array(2) {\n  [0]=>\n  &int(9)\n  [1]=>\n  &int(2)\n}\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Mixed-valued hashes without references keep PHP's ordering and dense renumbering through
+/// the new relink-and-reindex path.
+#[test]
+fn test_sort_mixed_valued_hash_without_references() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x" => "b", "y" => "a", "z" => 2];
+sort($a);
+var_dump($a);
+$b = [5 => "b", 9 => "a", 2 => "c"];
+rsort($b);
+var_dump($b);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  int(2)\n  [1]=>\n  string(1) \"a\"\n  [2]=>\n  string(1) \"b\"\n}\n\
+array(3) {\n  [0]=>\n  string(1) \"c\"\n  [1]=>\n  string(1) \"b\"\n  [2]=>\n  string(1) \"a\"\n}\n"
+    );
+}
