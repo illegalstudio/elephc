@@ -7,10 +7,10 @@
 //! Key details:
 //! - `parse_str` is a shared `PreludeProvided` contract; the injected PHP declaration is its
 //!   implementation and preserves the untyped by-reference result parameter.
-//! - Parsing reuses the native `mb_parse_str` query engine. With a configured
-//!   `filter.default`, the parsed tree is filtered through the filter prelude's recursive
-//!   default helper, which also converts rejected scalar values to the empty string PHP's
-//!   input filter produces.
+//! - Parsing reuses the native query engine through the internal byte-preserving builtin.
+//!   With a configured `filter.default`, the parsed tree is filtered through the filter
+//!   prelude's recursive default helper, which also converts rejected scalar values to
+//!   the empty string PHP's input filter produces.
 //! - The filter helper is referenced only when `filter.default` names a real filter, so a
 //!   program using plain `parse_str` does not link the filter bridge.
 
@@ -27,7 +27,7 @@ pub(crate) fn parse_str_declarations(config: &FilterDefault) -> Program {
     let mut body = vec![
         s_assign("parsed", e_array(vec![])),
         s_expr(e_call(
-            "mb_parse_str",
+            "__elephc_parse_str",
             vec![e_var("string"), e_var("parsed")],
         )),
     ];

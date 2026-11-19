@@ -681,6 +681,8 @@ pub enum RuntimeFnId {
     MbEreg,
     /// Parses multibyte query input into a live output reference using Core INI settings.
     MbParseStr,
+    /// Internal byte-preserving parser behind `parse_str()`.
+    ParseStr,
     /// Converts live variables, arrays, and object properties through shared mbstring policy.
     MbConvertVariables,
     /// Encodes and sends a message using shared mbstring language settings.
@@ -2229,6 +2231,7 @@ impl RuntimeFnId {
             | RuntimeFnId::MbGetInfo
             | RuntimeFnId::SharedIni
             | RuntimeFnId::MbParseStr
+            | RuntimeFnId::ParseStr
             | RuntimeFnId::MbHttpInput
             | RuntimeFnId::MbRegexEncoding
             | RuntimeFnId::MbRegexSetOptions
@@ -2491,6 +2494,7 @@ impl RuntimeFnId {
             Self::MbGetInfo => Some(RuntimeBuiltinId::MbGetInfo),
             Self::SharedIni => Some(RuntimeBuiltinId::SharedIni),
             Self::MbParseStr => Some(RuntimeBuiltinId::MbParseStr),
+            Self::ParseStr => Some(RuntimeBuiltinId::ParseStr),
             Self::MbSendMail => Some(RuntimeBuiltinId::MbSendMail),
             Self::MbHttpInput => Some(RuntimeBuiltinId::MbHttpInput),
             Self::MbRegexEncoding => Some(RuntimeBuiltinId::MbRegexEncoding),
@@ -2518,7 +2522,7 @@ impl RuntimeFnId {
     /// `Getmypid` qualifies because its wrapper has no parameters to adapt and returns a plain
     /// integer: `$name = "getmypid"; $name()` and `call_user_func($name)` must reach it like PHP.
     pub const fn runtime_callable_supported(self) -> bool {
-        if matches!(self, Self::MbEreg | Self::MbEregi | Self::MbParseStr) { return false; }
+        if matches!(self, Self::MbEreg | Self::MbEregi | Self::MbParseStr | Self::ParseStr) { return false; }
         if self.uses_mbstring_runtime() { return true; }
         matches!(
             self,
@@ -2772,7 +2776,7 @@ impl RuntimeFnId {
         }
         if self.uses_mbstring_runtime() {
             return if matches!(self, Self::MbStrlen | Self::MbStrwidth | Self::MbSubstrCount | Self::MbCheckEncoding
-                | Self::MbEregMatch | Self::MbEreg | Self::MbEregi | Self::MbParseStr | Self::MbSendMail | Self::MbEregSearchInit | Self::MbEregSearch | Self::MbEregSearchGetpos | Self::MbEregSearchSetpos) {
+                | Self::MbEregMatch | Self::MbEreg | Self::MbEregi | Self::MbParseStr | Self::ParseStr | Self::MbSendMail | Self::MbEregSearchInit | Self::MbEregSearch | Self::MbEregSearchGetpos | Self::MbEregSearchSetpos) {
                 BuiltinResultOwnership::NonHeap
             } else { BuiltinResultOwnership::Fresh };
         }
@@ -3899,6 +3903,7 @@ impl RuntimeFnId {
             RuntimeFnId::SharedIni => "__elephc_shared_ini",
             RuntimeFnId::TokenizerErrorLocation => "__elephc_tokenizer_error_location",
             RuntimeFnId::MbParseStr => "mb_parse_str",
+            RuntimeFnId::ParseStr => "__elephc_parse_str",
             RuntimeFnId::MbSendMail => "mb_send_mail",
             RuntimeFnId::MbHttpInput => "mb_http_input",
             RuntimeFnId::MbHttpInputLen => "mb_http_input_len",

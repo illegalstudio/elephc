@@ -207,6 +207,8 @@ pub enum RuntimeBuiltinId {
     Serialize = 94,
     /// PHP `unserialize` with its default options.
     Unserialize = 95,
+    /// Internal byte-preserving query parser behind `parse_str()`.
+    ParseStr = 96,
 }
 
 /// Status returned by `__elephc_runtime_builtin_call_v1`.
@@ -238,7 +240,7 @@ impl RuntimeBuiltinStatus {
 
 impl RuntimeBuiltinId {
     /// Every version-one runtime builtin in stable ABI order.
-    pub const ALL: [Self; 95] = [
+    pub const ALL: [Self; 96] = [
         Self::Boolval,
         Self::Floatval,
         Self::Intval,
@@ -321,6 +323,7 @@ impl RuntimeBuiltinId {
         Self::MbEreg,
         Self::MbEregi,
         Self::MbParseStr,
+        Self::ParseStr,
         Self::SharedIni,
         Self::MbOutputHandler,
         Self::MbEregReplaceCallback,
@@ -337,7 +340,7 @@ impl RuntimeBuiltinId {
     ];
 
     /// Every operation currently implemented by the optional mbstring engine.
-    pub const MBSTRING: [Self; 66] = [
+    pub const MBSTRING: [Self; 67] = [
         Self::MbStrlen,
         Self::MbStrwidth,
         Self::MbStrtoupper,
@@ -399,6 +402,7 @@ impl RuntimeBuiltinId {
         Self::MbEreg,
         Self::MbEregi,
         Self::MbParseStr,
+        Self::ParseStr,
         Self::SharedIni,
         Self::MbOutputHandler,
         Self::MbEregReplaceCallback,
@@ -411,7 +415,7 @@ impl RuntimeBuiltinId {
         if matches!(self, Self::SharedIni | Self::MbOutputHandler | Self::MbSendMail) { return true; }
         if self.is_mbregex() { return true; }
         matches!(self, Self::MbRegexEncoding | Self::MbRegexSetOptions | Self::MbStrlen | Self::MbStrwidth | Self::MbStrtoupper | Self::MbStrtolower | Self::MbConvertCase | Self::MbUcfirst | Self::MbLcfirst | Self::MbStrimwidth
-            | Self::MbSubstr | Self::MbStrcut | Self::MbScrub | Self::MbTrim | Self::MbLtrim | Self::MbRtrim | Self::MbStrPad | Self::MbConvertKana | Self::MbSubstrCount | Self::MbOrd | Self::MbChr | Self::MbStrpos | Self::MbStripos | Self::MbStrrpos | Self::MbStrripos | Self::MbStrstr | Self::MbStristr | Self::MbStrrchr | Self::MbStrrichr | Self::MbLanguage | Self::MbInternalEncoding | Self::MbHttpOutput | Self::MbEncodingAliases | Self::MbStrSplit | Self::MbPreferredMimeName | Self::MbCheckEncoding | Self::MbSubstituteCharacter | Self::MbListEncodings | Self::MbDetectOrder | Self::MbDetectEncoding | Self::MbConvertEncoding | Self::MbConvertVariables | Self::MbEncodeNumericentity | Self::MbDecodeNumericentity | Self::MbDecodeMimeheader | Self::MbEncodeMimeheader | Self::MbGetInfo | Self::MbHttpInput | Self::MbParseStr)
+            | Self::MbSubstr | Self::MbStrcut | Self::MbScrub | Self::MbTrim | Self::MbLtrim | Self::MbRtrim | Self::MbStrPad | Self::MbConvertKana | Self::MbSubstrCount | Self::MbOrd | Self::MbChr | Self::MbStrpos | Self::MbStripos | Self::MbStrrpos | Self::MbStrripos | Self::MbStrstr | Self::MbStristr | Self::MbStrrchr | Self::MbStrrichr | Self::MbLanguage | Self::MbInternalEncoding | Self::MbHttpOutput | Self::MbEncodingAliases | Self::MbStrSplit | Self::MbPreferredMimeName | Self::MbCheckEncoding | Self::MbSubstituteCharacter | Self::MbListEncodings | Self::MbDetectOrder | Self::MbDetectEncoding | Self::MbConvertEncoding | Self::MbConvertVariables | Self::MbEncodeNumericentity | Self::MbDecodeNumericentity | Self::MbDecodeMimeheader | Self::MbEncodeMimeheader | Self::MbGetInfo | Self::MbHttpInput | Self::MbParseStr | Self::ParseStr)
     }
 
     /// Identifies shared operations that require the managed Oniguruma provider.
@@ -505,6 +509,7 @@ impl RuntimeBuiltinId {
             Self::MbEreg => "mb_ereg",
             Self::MbEregi => "mb_eregi",
             Self::MbParseStr => "mb_parse_str",
+            Self::ParseStr => "__elephc_parse_str",
             Self::SharedIni => "__elephc_shared_ini",
             Self::TokenizerErrorLocation => "__elephc_tokenizer_error_location",
             Self::MemoryGetAllocations => "memory_get_allocations",
@@ -627,6 +632,7 @@ impl RuntimeBuiltinId {
             93 => Some(Self::MemoryResetPeakUsage),
             94 => Some(Self::Serialize),
             95 => Some(Self::Unserialize),
+            96 => Some(Self::ParseStr),
 
             _ => None,
         }
@@ -676,7 +682,7 @@ impl RuntimeBuiltinId {
             Self::MbInternalEncoding => arg_count <= 1,
             Self::MbHttpOutput | Self::MbGetInfo | Self::MbHttpInput => arg_count <= 1,
             Self::MbRegexEncoding | Self::MbRegexSetOptions => arg_count <= 1,
-            Self::MbParseStr => arg_count == 2,
+            Self::MbParseStr | Self::ParseStr => arg_count == 2,
             Self::SharedIni => arg_count == 4,
             Self::TokenizerErrorLocation => arg_count == 2,
             Self::MbOutputHandler => arg_count == 2,
@@ -768,7 +774,7 @@ mod tests {
                 RuntimeBuiltinId::MbLanguage => 0,
                 RuntimeBuiltinId::MbInternalEncoding => 0,
                 RuntimeBuiltinId::MbRegexEncoding | RuntimeBuiltinId::MbRegexSetOptions => 0,
-                RuntimeBuiltinId::MbParseStr => 2,
+                RuntimeBuiltinId::MbParseStr | RuntimeBuiltinId::ParseStr => 2,
                 RuntimeBuiltinId::SharedIni => 4,
                 RuntimeBuiltinId::MbOutputHandler => 2,
                 RuntimeBuiltinId::MbEregMatch | RuntimeBuiltinId::MbEreg | RuntimeBuiltinId::MbEregi | RuntimeBuiltinId::MbSplit => 2,

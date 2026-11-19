@@ -13,10 +13,10 @@ use super::*;
 use crate::input::{Query, registration};
 
 /// Applies the neutral signature before touching host pointers or caller reference storage.
-pub(super) unsafe fn invoke(args: *const *const c_void, count: u64, strict: u32,
-    host: *const MbInvokeHostV1, session: &mut Session) -> Result<Outcome, Status> {
+pub(super) unsafe fn invoke(operation: RuntimeBuiltinId, args: *const *const c_void, count: u64, strict: u32,
+    host: *const MbInvokeHostV1, session: &mut Session, raw: bool) -> Result<Outcome, Status> {
     if strict > 1 { return Err(Status::Fatal); }
-    let contract = elephc_builtin_contract::lookup_id(RuntimeBuiltinId::MbParseStr.builtin_id()).ok_or(Status::Fatal)?;
+    let contract = elephc_builtin_contract::lookup_id(operation.builtin_id()).ok_or(Status::Fatal)?;
     let count = usize::try_from(count).map_err(|_| Status::Fatal)?;
     if let Some(bytes) = crate::coercion::arity_error_contract(contract, count) {
         return Ok(Outcome { bytes, ..Outcome::empty(PREPARED_ARGUMENT_COUNT_ERROR) });
@@ -31,21 +31,21 @@ pub(super) unsafe fn invoke(args: *const *const c_void, count: u64, strict: u32,
         Err(bytes) => return Ok(Outcome { bytes, ..Outcome::empty(RESULT_TYPE_ERROR) }),
         _ => return Err(Status::Fatal),
     };
-    unsafe { execute(&source, session) }
+    unsafe { execute(&source, session, raw) }
 }
 
 /// Preserves live host mutations and emits diagnostics only while no PHP exception is pending.
-unsafe fn execute(source: &[u8], host: &mut Session) -> Result<Outcome, Status> {
+unsafe fn execute(source: &[u8], host: &mut Session, raw: bool) -> Result<Outcome, Status> {
     let (ready, mut pending) = unsafe { host.initialize_capture(1) };
     if !ready { return Err(pending.unwrap_or(Status::Fatal)); }
-    match unsafe { parse(source, host, &mut pending) } {
+    match unsafe { parse(source, host, &mut pending, raw) } {
         Ok(result) => finish(result, pending),
         Err(status) => Err(pending.map_or(status, |pending| pending.merge(status))),
     }
 }
 
 /// Runs query body stages after successful output initialization, preserving accumulated throws.
-unsafe fn parse(source: &[u8], host: &mut Session, pending: &mut Option<Status>) -> Result<bool, Status> {
+unsafe fn parse(source: &[u8], host: &mut Session, pending: &mut Option<Status>, raw: bool) -> Result<bool, Status> {
     let (to, candidates, strict) = REQUEST.with(|state| {
         let state = state.borrow();
         (state.internal_encoding(), state.http_input_encodings().to_vec(), state.strict_detection())
@@ -62,9 +62,15 @@ unsafe fn parse(source: &[u8], host: &mut Session, pending: &mut Option<Status>)
     };
     let identified = query.identify(&candidates, strict);
     if identified.warning { unsafe { diagnostic(host, pending, b"Unable to detect encoding")?; } }
-    if let Some(from) = identified.encoding {
+    // `parse_str()` is byte-preserving: it never decodes the query through `mbstring.http_input`.
+    // `mb_parse_str()` keeps its documented conversion behavior in the same engine.
+    if raw || identified.encoding.is_some() {
+        let from = if raw { None } else { identified.encoding };
         for pair in query.into_pairs() {
-            let pair = REQUEST.with(|state| pair.convert(from, to, &mut state.borrow_mut()));
+            let pair = match from {
+                Some(from) => REQUEST.with(|state| pair.convert(from, to, &mut state.borrow_mut())),
+                None => pair,
+            };
             let (value, status) = unsafe { host.query_filter(&pair.name, pair.value)? };
             *pending = pending.or(status);
             let Some(value) = value else { continue; };
@@ -85,7 +91,7 @@ unsafe fn parse(source: &[u8], host: &mut Session, pending: &mut Option<Status>)
         }
     }
     REQUEST.with(|state| state.borrow_mut().set_http_input_identification(identified.encoding));
-    Ok(identified.encoding.is_some())
+    Ok(raw || identified.encoding.is_some())
 }
 
 /// Attaches the PHP function name and retains a thrown warning while allowing later query writes.

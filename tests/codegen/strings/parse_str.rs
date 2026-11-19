@@ -35,6 +35,23 @@ echo $out["a"], "|", $out["b"];
     assert_eq!(out, "1|2");
 }
 
+/// `parse_str()` preserves raw query bytes independently of the mbstring input charset.
+#[test]
+fn test_parse_str_preserves_raw_query_bytes() {
+    let output = compile_and_run_capture_with_ini(
+        r#"<?php
+parse_str("a=%E9&b=caf%E9", $out);
+echo bin2hex($out["a"]), "|", bin2hex($out["b"]);
+"#,
+        &[
+            ("mbstring.http_input".to_string(), "ISO-8859-1".to_string()),
+            ("mbstring.internal_encoding".to_string(), "UTF-8".to_string()),
+            ("mbstring.encoding_translation".to_string(), "0".to_string()),
+        ],
+    );
+    assert_eq!(output.stdout, "e9|636166e9");
+}
+
 /// `filter.default=int` rejects `b=notint` into the empty string, matching PHP's input filter.
 #[test]
 fn test_parse_str_applies_filter_default_and_rejects_invalid_values() {

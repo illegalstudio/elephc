@@ -187,7 +187,8 @@ mod tests {
         // +3: the internal libc setlocale and nl_langinfo helpers it calls.
         // +3: `preg_grep`, `preg_last_error`, and `preg_last_error_msg`.
         // +7: the filter_* prelude contracts.
-        assert_eq!(contracts().len(), 1327 + curl_surface);
+        // +1: the internal byte-preserving `parse_str()` query parser.
+        assert_eq!(contracts().len(), 1328 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }
