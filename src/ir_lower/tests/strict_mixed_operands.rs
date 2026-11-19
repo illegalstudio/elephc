@@ -238,3 +238,46 @@ fn strict_mixed_writes_require_supported_receivers_and_keys() {
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));
     }
 }
+
+/// Method selectors require strings, while a nullsafe skipped selector needs no proof.
+#[test]
+fn strict_mixed_nullsafe_method_selectors_require_string_proofs() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Mixed, true);
+    for source in ["<?php class C{function ping():int{return 7;}}function f(?C $object,mixed $name):mixed{return $object?->{$name}();}",
+        "<?php class C{function ping():int{return 7;}}function f(?C $object,int|string $name):mixed{return $object?->{$name}();}"] {
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        let error = crate::types::checker::check_staged_semantics(&program, Target::detect_host(), profile).unwrap_err();
+        assert!(error.message.contains("strict-mixed"), "{source}: {error:?}");
+    }
+    for source in ["<?php class C{function ping():int{return 7;}}function f(?C $object,mixed $name):mixed{if(is_string($name)){return $object?->{$name}();}return null;}",
+        "<?php function f(mixed $name):mixed{return null?->{$name}();}"] {
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        crate::types::checker::check_staged_semantics(&program, Target::detect_host(), profile)
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+}
+
+/// Proven dynamic selector views retain nullsafe execution and owners on every backend.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn strict_mixed_nullsafe_method_selector_controls_emit_on_every_target() {
+    let source = "<?php class DynamicSelectorReceiver{function answer():int{return 7;}} \
+        function dynamicSelectorCall(?DynamicSelectorReceiver $object,mixed $name):mixed{ \
+            if(is_string($name)){return $object?->{$name}();}return null;} \
+        echo dynamicSelectorCall(new DynamicSelectorReceiver(),'answer'),':', \
+            gettype(dynamicSelectorCall(null,'answer')),':',gettype(dynamicSelectorCall(new DynamicSelectorReceiver(),0));";
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Mixed, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::semantic_sources::lower_capturing_arguments(source, Target::parse(name).unwrap(), profile, false, SourceMode::Php);
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+    for optimize in [false, true] {
+        let module = super::semantic_sources::lower_capturing_arguments(source, Target::detect_host(), profile, optimize, SourceMode::Php);
+        let output = super::native_module::run(&module); let errors = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{errors}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "7:NULL:NULL", "{errors}");
+        assert!(errors.contains("HEAP DEBUG: leak summary: clean"), "{errors}");
+    }
+}

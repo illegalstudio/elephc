@@ -291,7 +291,9 @@ impl Checker {
         // A runtime method name resolves no signature, so the arguments are conservatively
         // reference-aliased — see `Checker::record_unresolved_callee_argument_aliases`.
         self.record_unresolved_callee_argument_aliases(args, env);
-        self.infer_type(method, env)?;
+        let method_ty = self.infer_type(method, env)?;
+        crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+            &method_ty, method.span, "dynamic method names", |member| *member == PhpType::Str)?;
         for arg in args {
             self.infer_type(arg, env)?;
         }

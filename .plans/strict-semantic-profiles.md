@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step231 (this commit). Remaining feature integration is active. Issue:
+Verified through step232 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2870,3 +2870,9 @@ The composed31-gate evidence includes all-five library/emitter paths, public nat
 Writable dimension receivers and PHP keys now require supported logical alternatives through one shared checker helper. Direct/indexed/append, newly created arrays and nested paths consume their existing inferred views; property writes, appends and indexed stores share member receiver proof. Quiet null or slot creation permissions do not turn an unknown mixed source into a writable array proof.
 
 Nested array stores also check normalized keys and original values against the selected array contract before widening, retaining the existing single RHS inference and promoted update handling. Five exact new/control regressions pass, including valid guard/open-array cases, independent profiles and builtin/property controls. Default build, diff/assembly hygiene and source stability pass. These source proofs do not admit unfinished Mixed/ArrayTypes runtime guarantees; both feature bits and the complete umbrella remain gated.
+
+### Verified232: dynamic method selector proofs
+
+Nullsafe dynamic method calls now retain their inferred selector type and require string alternatives under Mixed. Property names keep their broader PHP conversion domain; the two operations do not share an incorrect coercive predicate. A statically skipped nullsafe selector requires no proof.
+
+Three focused regressions pass: invalid mixed/partial-union selectors, guarded and skipped controls, all-five EIR validation/emission and native optimized/unoptimized clean-heap execution, plus the prior successful-nullsafe-view regression. Default build, diff/assembly hygiene and unchanged-source verification pass. Mixed remains gated while remaining source, builtin, reference and runtime proof contracts are completed.
