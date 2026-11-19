@@ -218,10 +218,10 @@ pub(super) fn lower_method_call(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
-    let receiver_class = match ctx.builder.value_php_type(object.value).codegen_repr() {
-        PhpType::Object(class_name) => Some(class_name.trim_start_matches('\\').to_string()),
-        _ => None,
-    };
+    // A nullable receiver (`?C`, as `C::parse()` returns) still names `C` in the scalar
+    // parameter guard's `TypeError`, as PHP does.
+    let receiver_class =
+        crate::types::checker::single_object_class_name(&ctx.builder.value_php_type(object.value));
     // A concrete local load may later unbox physical Mixed storage after eval widens
     // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
     let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);

@@ -21,7 +21,8 @@
 //!   bound to `string`, resources); `strict_types=1` additionally requires the exact scalar,
 //!   with PHP's single `int`-to-`float` widening.
 //! - User calls only (a `call_description` is set): builtins carry `declared_params: false`
-//!   and extern calls clear `call_description`, so neither is ever guarded.
+//!   and extern calls clear `call_description`, so neither is ever guarded. Methods of the
+//!   internal `ext/uri` prelude classes are skipped too: PHP coerces `null` for them.
 //! - `?T`, unions, `mixed` and a `T $p = null` default stay accepting `null`.
 //! - The checker records each such argument (`CheckResult::scalar_guard_arg_sites`) so the AST
 //!   optimizer keeps the call `may_throw`; both sides share `types::param_binding`'s predicates.
@@ -214,7 +215,16 @@ pub(super) fn guarded_scalar_param(
     value: crate::ir::ValueId,
     source: GuardSource,
 ) -> Option<PhpType> {
-    ctx.call_description.as_ref()?;
+    let description = ctx.call_description.as_deref()?;
+    // The `ext/uri` classes are internal in PHP, so a `null` argument is coerced with a
+    // deprecation rather than refused, and a refusal carries no "called in" suffix. Their
+    // prelude methods keep the binding they had before this guard existed.
+    if description
+        .rsplit_once("::")
+        .is_some_and(|(class, _)| crate::uri_prelude::is_internal_uri_class(class))
+    {
+        return None;
+    }
     let declared = crate::types::param_binding::runtime_scalar_guard_param(sig, index)?;
     if !matches!(
         ctx.builder.value_type(value),
