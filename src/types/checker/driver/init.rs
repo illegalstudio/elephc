@@ -201,6 +201,7 @@ impl Checker {
             loop_storage_types: HashMap::default(),
             loop_storage_scope_spans: HashMap::default(),
             string_incdec_locals: HashSet::default(),
+            pointer_word_locals: HashSet::default(),
             by_ref_local_storage_types: HashMap::default(),
             ref_param_escaping_callees: HashSet::default(),
             property_bound_ref_params: HashSet::default(),

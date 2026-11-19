@@ -164,6 +164,7 @@ fn dummy_check_result() -> CheckResult {
         first_class_builtin_call_types: HashMap::default(),
         loop_storage_types: HashMap::default(),
         string_incdec_locals: Default::default(),
+        pointer_word_locals: Default::default(),
         by_ref_local_storage_types: HashMap::default(),
         ref_param_escaping_callees: Default::default(),
         property_bound_promotion_sites: Default::default(),

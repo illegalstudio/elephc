@@ -251,6 +251,10 @@ pub struct CheckResult {
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
     /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// `(scope, local)` pairs for locals that hold a pointer or packed record address, or are
+    /// bound to a `?ptr<T>` by-reference parameter. A `null` store into one keeps the pointer
+    /// word (address 0) instead of widening the slot to boxed `Mixed`.
+    pub pointer_word_locals: HashSet<(String, String)>,
     /// Boxed caller-local storage contracts selected for source-declared by-reference calls.
     pub by_ref_local_storage_types: HashMap<(String, String), PhpType>,
     /// Lowercase bare names of callees whose by-reference parameter cell may outlive the call.

@@ -119,6 +119,7 @@ fn lower_interface_adapter(
         &Default::default(), // synthesized calls have no written generic arguments
         &Default::default(), // loop storage types
         &Default::default(), // string increment/decrement locals
+        &Default::default(), // pointer-word locals
         &Default::default(), // by-reference local storage types
         &Default::default(), // dynamic reference local types
         &Default::default(), // killed binding sites

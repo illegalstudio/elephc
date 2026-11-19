@@ -1644,6 +1644,29 @@ impl Checker {
         }
     }
 
+    /// Marks each local passed to a `?ptr<T>` by-reference parameter as a pointer-word local, so
+    /// an earlier `$p = null` keeps address 0 in a pointer slot instead of boxed `Mixed`.
+    fn record_pointer_word_ref_locals(&mut self, signature: &crate::types::FunctionSig, args: &[Expr]) {
+        for (index, arg) in args.iter().enumerate() {
+            let (param_index, place) = match &arg.kind {
+                ExprKind::Spread(_) => return,
+                ExprKind::NamedArg { name, value } => {
+                    match signature.params.iter().position(|(param, _)| param == name) {
+                        Some(position) => (position, value.as_ref()),
+                        None => continue,
+                    }
+                }
+                _ => (index, arg),
+            };
+            let ExprKind::Variable(local) = &place.kind else { continue };
+            if signature.ref_params.get(param_index).copied().unwrap_or(false)
+                && signature.params.get(param_index).is_some_and(|(_, ty)| matches!(ty.codegen_repr(), PhpType::Pointer(_)))
+            {
+                self.pointer_word_locals.insert((self.current_loop_storage_scope.clone(), local.clone()));
+            }
+        }
+    }
+
     fn prepare_by_ref_variable_storage(
         &mut self,
         signature: &crate::types::FunctionSig,
@@ -1664,6 +1687,7 @@ impl Checker {
             self.promote_by_ref_property_args(signature, args, env);
             self.record_property_bound_promotion_sites(signature, args, callee_scope);
         }
+        self.record_pointer_word_ref_locals(signature, args);
         let normalized = if internal_callable {
             self.plan_builtin_call_args(signature, args, span, "call", env)?
                 .normalized_args()

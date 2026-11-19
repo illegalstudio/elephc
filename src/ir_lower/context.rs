@@ -732,6 +732,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// target. Those locals get boxed `Mixed` frame storage from their first store, so
     /// every read of the slot is already a boxed load instead of an owned string detach.
     pub string_incdec_locals: &'m HashSet<(String, String)>,
+    pub pointer_word_locals: &'m HashSet<(String, String)>,
     /// Checker-selected boxed storage contracts for caller locals whose by-reference
     /// parameter may replace their value with any member of a Mixed-represented type.
     pub by_ref_local_storage_types: &'m HashMap<(String, String), PhpType>,
@@ -1005,6 +1006,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         generic_call_sites: &'m HashMap<(String, Span), String>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
+        pointer_word_locals: &'m HashSet<(String, String)>,
         by_ref_local_storage_types: &'m HashMap<(String, String), PhpType>,
         dynamic_ref_local_types: &'m HashMap<(String, String), PhpType>,
         bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
@@ -1089,6 +1091,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             generic_call_sites,
             loop_storage_types,
             string_incdec_locals,
+            pointer_word_locals,
             by_ref_local_storage_types,
             dynamic_ref_local_types,
             bind_kill_sites,
@@ -1855,6 +1858,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         locals.iter().take(limit).filter(|local| local.name.as_deref().is_some_and(|stored| {
             stored == name || stored.strip_suffix("#cow") == Some(name)
         })).count()
+    }
+
+    /// Returns whether the checker saw `name` hold a pointer or packed record address, or bind to
+    /// a `?ptr<T>` by-reference parameter: a `null` stored into it is address 0 in its pointer-word
+    /// slot (`pointer_word_storage` in `crate::ir::builder`), not a boxed `Mixed` null.
+    fn is_pointer_word_local(&self, name: &str) -> bool {
+        self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal) == LocalKind::PhpLocal
+            && self.pointer_word_locals.contains(&(self.loop_storage_scope.clone(), name.to_string()))
     }
 
     /// Applies a replay constraint only to its original binding, including before the first store.
@@ -3974,6 +3985,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             php_type
         };
         let mut local_type_after_store = if !preserve_storage_type
+            && !self.is_pointer_word_local(name)
             && matches!(php_type.codegen_repr(), PhpType::Void)
         {
             // Preserve the runtime distinction between a concrete value and an ordinary null
@@ -4022,7 +4034,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         };
         let widen_type = if is_ref_bound || preserve_storage_type {
             previous_type.clone()
-        } else if matches!(php_type.codegen_repr(), PhpType::Void) {
+        } else if matches!(php_type.codegen_repr(), PhpType::Void) && !self.is_pointer_word_local(name) {
             // A normal `$value = null` is observable on paths where the same slot holds a
             // concrete value. Unlike `unset`, it therefore needs a runtime tag rather than the
             // concrete representation's null-like payload sentinel.

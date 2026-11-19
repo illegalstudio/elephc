@@ -769,6 +769,10 @@ pub(crate) struct Checker {
     /// already visits every expression with a typed environment, so no second AST walk is
     /// needed. See `crate::ir_lower::context::LoweringContext::required_local_storage_type`.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// `(scope, local)` pairs for locals that hold a pointer or packed record address, or are
+    /// bound to a `?ptr<T>` by-reference parameter. A `null` store into one keeps the pointer
+    /// word (address 0) instead of widening the slot to boxed `Mixed`.
+    pub pointer_word_locals: HashSet<(String, String)>,
     /// Checker-selected boxed storage contracts for caller locals passed through
     /// source-declared by-reference parameters whose writable type is represented as `Mixed`.
     pub by_ref_local_storage_types: HashMap<(String, String), PhpType>,
@@ -2312,6 +2316,7 @@ fn check_types_on_compiler_stack(
         first_class_builtin_call_types: checker.first_class_builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
+        pointer_word_locals: checker.pointer_word_locals,
         by_ref_local_storage_types: checker.by_ref_local_storage_types,
         ref_param_escaping_callees: checker.ref_param_escaping_callees,
         property_bound_promotion_sites: checker.property_bound_promotion_sites,

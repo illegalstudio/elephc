@@ -165,6 +165,7 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
         // independent site tables to forward, and a builtin wrapper has neither.
         &Default::default(),
         &Default::default(),
+        &Default::default(), // pointer-word locals
         &Default::default(), // retype sites
         &Default::default(), // mixed-storage store sites
         &Default::default(), // sparse key write sites

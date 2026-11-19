@@ -158,6 +158,9 @@ pub(super) fn check_assign(
     // promotable itself: its element ops dispatch on the heap kind the value may already have.
     let promotes = checker.prepare_promotable_assignment(name, value, env);
     check_assign_value_type(checker, name, value, span, env, stmt_form)?;
+    if env.get(name).is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Packed(_))) {
+        checker.pointer_word_locals.insert((checker.current_loop_storage_scope.clone(), name.to_string()));
+    }
     // Judged once the value is checked: a call is known to return a promotable value only now.
     if promotes
         && checker.is_promotable_value_expr(value, env)
