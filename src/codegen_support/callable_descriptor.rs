@@ -304,61 +304,43 @@ pub(crate) fn emit_release_current_descriptor(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_callable_descriptor_release");
 }
 
-/// Stores the current result registers into a runtime descriptor capture slot.
+/// Selects which ABI result registers are stored for the caller's typed capture.
+fn capture_result_registers(emitter: &Emitter, capture_ty: &PhpType) -> Option<(&'static str, Option<&'static str>)> {
+    match capture_ty.codegen_repr() {
+        PhpType::TaggedScalar => Some((abi::int_result_reg(emitter), Some(
+            crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter),
+        ))),
+        PhpType::Float => Some((abi::float_result_reg(emitter), None)),
+        PhpType::Str => {
+            let (pointer, length) = abi::string_result_regs(emitter);
+            Some((pointer, Some(length)))
+        }
+        PhpType::Void | PhpType::Never => None,
+        _ => Some((abi::int_result_reg(emitter), None)),
+    }
+}
+
+/// Stores the selected result registers into one initialized native capture slot.
 pub(crate) fn emit_store_current_result_to_runtime_capture(
     emitter: &mut Emitter,
     descriptor_reg: &str,
     capture_index: usize,
     capture_ty: &PhpType,
 ) {
-    let offset = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + capture_index * 16;
-    match capture_ty.codegen_repr() {
-        PhpType::TaggedScalar => {
-            abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
-            abi::emit_store_to_address(emitter,
-                crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter), descriptor_reg, offset + 8);
-        }
-        PhpType::Float => {
-            abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), descriptor_reg, offset);
-        }
-        PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-            abi::emit_store_to_address(emitter, ptr_reg, descriptor_reg, offset);
-            abi::emit_store_to_address(emitter, len_reg, descriptor_reg, offset + 8);
-        }
-        PhpType::Void | PhpType::Never => {}
-        _ => {
-            abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
-        }
+    if let Some((low, high)) = capture_result_registers(emitter, capture_ty) {
+        elephc_memoir::callables::storage::emit_store_capture(emitter, descriptor_reg, capture_index, low, high);
     }
 }
 
-/// Loads a runtime descriptor capture slot into the ABI result registers.
+/// Loads a runtime descriptor capture into the result registers chosen by the caller's type.
 pub(crate) fn emit_load_runtime_capture_to_result(
     emitter: &mut Emitter,
     descriptor_reg: &str,
     capture_index: usize,
     capture_ty: &PhpType,
 ) {
-    let offset = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + capture_index * 16;
-    match capture_ty.codegen_repr() {
-        PhpType::TaggedScalar => {
-            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
-            abi::emit_load_from_address(emitter,
-                crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter), descriptor_reg, offset + 8);
-        }
-        PhpType::Float => {
-            abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), descriptor_reg, offset);
-        }
-        PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-            abi::emit_load_from_address(emitter, ptr_reg, descriptor_reg, offset);
-            abi::emit_load_from_address(emitter, len_reg, descriptor_reg, offset + 8);
-        }
-        PhpType::Void | PhpType::Never => {}
-        _ => {
-            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
-        }
+    if let Some((low, high)) = capture_result_registers(emitter, capture_ty) {
+        elephc_memoir::callables::storage::emit_load_capture(emitter, descriptor_reg, capture_index, low, high);
     }
 }
 
