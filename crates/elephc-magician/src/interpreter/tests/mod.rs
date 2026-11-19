@@ -68,6 +68,7 @@ mod classes;
 mod closures;
 mod control_flow;
 mod strict_semantics;
+mod strict_initialization;
 mod strict_local_origins;
 mod strict_binding_alternatives;
 mod strict_structural_locals;

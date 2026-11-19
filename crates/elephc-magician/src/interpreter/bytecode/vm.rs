@@ -360,7 +360,7 @@ fn set_ip(vm: &mut Vm, target: u32) -> Result<(), EvalStatus> {
     Ok(())
 }
 
-/// Copies a visible local, or warns and pushes null when the name is undefined.
+/// Copies a visible binding or applies the selected ordinary missing-read policy.
 fn load_local(
     vm: &mut Vm,
     name: &str,
@@ -373,8 +373,7 @@ fn load_local(
     if let Some(value) = visible_scope_cell(context, scope, name) {
         copy_scope_value(value, context, values)
     } else {
-        values.warning(&format!("Warning: Undefined variable ${name}\n"))?;
-        values.null()
+        crate::interpreter::initialization::missing_variable(name, context, values)
     }
 }
 

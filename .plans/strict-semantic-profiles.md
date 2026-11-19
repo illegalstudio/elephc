@@ -2390,3 +2390,15 @@ Simple-variable isset, empty and coalescing test presence before payload. Coales
 Eight acceptance gates cover the refreshed compiler/archive, all five target emitters, PHP and LFC native runs under both optimizer settings, clean heaps, known-missing diagnostics, uncaught Error metadata, existing conditional-parameter and raw-reference ABI controls, and diff hygiene. The earlier expanded regression failed on detached parameter/capture reads before the presence retirement fix; the corrected runs pass. No runtime layout or new opcode was introduced.
 
 Initialization remains staged and publicly rejected while interpreter, eval/global scopes, nested quiet roots and property read integration continue. No additional family is admitted. Nullability, Mixed, ArrayTypes, Indexing and complete umbrella acceptance remain active.
+
+### Verified204: shared interpreter missing-read policy
+
+Walker LoadVar and bytecode load_local share one missing-variable helper after visible binding lookup. Initialization throws the same catchable Error as native frame guards; permissive execution retains PHP warnings and null. Initialized null and false remain visible bindings. Quiet simple-variable isset/empty/coalescing continue through their presence-aware language paths.
+
+Focused tests cover direct walker and VM reads under both profiles, exact messages and Error class, the complete native frame fixture through walker and internal dispatch, balanced scope/persistent owners, PHP/LFC native optimizer parity, the existing VM local-read arithmetic regression and public rejection of every catalogued pending guarantee. The latter test previously pinned Casts, which is already integrated; it now derives pending features from the shared catalog. Seven acceptance gates pass. An additional failed-operand release-injection control reproduces its assertion with unchanged HEAD walker/VM code, so it is tracked separately rather than counted as a passing gate.
+
+The fixture's fallback counter now uses a declared by-reference helper with a statement increment: the eval parser supports local updates as statements but refuses local prefix increments in expression position. This preserves the fallback-once oracle. A public dispatch call in the staged test initially encountered the intended pending-profile gate, so the test now enters internal dispatch/fallback explicitly. Real opaque eval remains deferred until complete Initialization admission; no host gate was weakened and no partial family was advertised.
+
+Initialization global/eval scopes, nested quiet roots and property read boundaries remain active, followed by Nullability, Mixed, ArrayTypes, Indexing and complete umbrella acceptance.
+
+All seven gates passed in job9f14a7b9. Baseline jobcf191dbc confirms the separate release-injection assertion, tracked as taskb1954cd6.

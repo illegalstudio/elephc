@@ -26,10 +26,11 @@ function probeInitializedLoop(): void {
     }
 }
 probeInitializedLoop();
+function countInitializedFallback(int &$calls): int { $calls++; return $calls; }
 function initializedFallback(bool $assign): void {
     $calls = 0;
     if ($assign) { $value = 0; }
-    echo $value ?? ++$calls, ':', $calls, '|';
+    echo $value ?? countInitializedFallback($calls), ':', $calls, '|';
 }
 initializedFallback(true); initializedFallback(false);
 function readDetachedParameter(int &$value, bool $detach): void {

@@ -237,8 +237,7 @@ fn eval_expr_with_result_ownership(
             if let Some(value) = visible_scope_cell(context, scope, name) {
                 if own_result { copy_scope_value(value, context, values) } else { Ok(value) }
             } else {
-                values.warning(&format!("Warning: Undefined variable ${name}\n"))?;
-                values.null()
+                initialization::missing_variable(name, context, values)
             }
         }
         EvalExpr::Assign { name, value } => {

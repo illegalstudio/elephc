@@ -29,14 +29,18 @@ fn strict_profile_dynamic_code_blocks_nested_eval_and_include() {
 /// An external host cannot execute with a profile whose guarantees are still unimplemented.
 #[test]
 fn strict_profile_pending_guarantees_cannot_execute_through_interpreter_api() {
-    let program = crate::parser::parse_fragment_with_semantics(b"echo 'must not execute';", SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
-    let mut context = ElephcEvalContext::new();
-    context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
-    let mut scope = ElephcEvalScope::new();
-    let mut values = FakeOps::default();
-    assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values),
-        Err(EvalStatus::UnsupportedConstruct));
-    assert!(values.output.is_empty());
+    for feature in elephc_semantics::FEATURES.iter().filter(|spec|
+        spec.feature.bit() & elephc_semantics::INTEGRATED_FEATURE_BITS == 0) {
+        let profile = SemanticProfile::PERMISSIVE.with(feature.feature, true);
+        let program = crate::parser::parse_fragment_with_semantics(b"echo 'must not execute';", profile).unwrap();
+        let mut context = ElephcEvalContext::new();
+        context.install_semantic_profile(profile).unwrap();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values),
+            Err(EvalStatus::UnsupportedConstruct), "{}", feature.flag);
+        assert!(values.output.is_empty());
+    }
 }
 
 /// Runs the same boolean rules through both execution engines with explicit cleanup.
