@@ -12,7 +12,7 @@
 //!   Boxed PHP arrays expose a writable Mixed value slot and a Mixed key slot. Returns `Void`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::errors::CompileError;
+use crate::errors::{CompileError, CompileWarning};
 use crate::types::PhpType;
 
 builtin! {
@@ -30,6 +30,15 @@ builtin! {
 /// Arity (exactly 2) is pre-validated by the registry. Returns `Ok(PhpType::Bool)`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if crate::codegen_support::compile_php_version()
+        >= crate::php_version::PhpVersion::Php86
+        && matches!(arr_ty.codegen_repr(), PhpType::Object(_))
+    {
+        cx.checker.warnings.push(CompileWarning::new(
+            cx.args[0].span,
+            "Passing an object for argument #1 $array to array_walk() is deprecated, call get_object_vars() first instead",
+        ));
+    }
     crate::types::checker::builtins::check_array_walk_callback_builtin_call(
         cx.checker,
         &cx.args[1],

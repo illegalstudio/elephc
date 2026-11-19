@@ -524,3 +524,43 @@ fn test_spl_file_object_csv_methods_are_deprecated_php86() {
     );
     elephc::codegen::set_compile_profile(PhpVersion::default(), false);
 }
+
+/// PHP 8.6 deprecates passing an object to array_walk()/array_walk_recursive().
+#[test]
+fn test_array_walk_object_deprecation_php86() {
+    use elephc::php_version::PhpVersion;
+
+    let source = "<?php class C { public int $a = 1; } $c = new C(); array_walk($c, function ($v, $k): void {});";
+    elephc::codegen::set_compile_profile(PhpVersion::Php86, false);
+    let result = check_source_full(source).expect("must type-check");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("Passing an object for argument #1 $array to array_walk() is deprecated, call get_object_vars() first instead")),
+        "{:?}",
+        result.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>()
+    );
+
+    let recursive = "<?php class C { public int $a = 1; } $c = new C(); array_walk_recursive($c, function ($v, $k): void {});";
+    let result = check_source_full(recursive).expect("must type-check");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("Passing an object for argument #1 $array to array_walk_recursive() is deprecated")),
+        "{:?}",
+        result.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>()
+    );
+
+    elephc::codegen::set_compile_profile(PhpVersion::Php85, false);
+    let older = check_source_full(source).expect("must type-check");
+    assert!(
+        !older
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("array_walk() is deprecated")),
+        "PHP 8.5 must not deprecate the object argument"
+    );
+    elephc::codegen::set_compile_profile(PhpVersion::default(), false);
+}
