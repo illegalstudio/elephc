@@ -189,7 +189,8 @@ mod tests {
         // +1: PHP 8.6 `stream_context_set_options`.
         // +1: PHP 8.6 `url_percent_encode`.
         // +3: `preg_grep`, `preg_last_error`, and `preg_last_error_msg`.
-        assert_eq!(contracts().len(), 1324 + curl_surface);
+        // +1: PHP 8.6 `stream_socket_get_crypto_status`.
+        assert_eq!(contracts().len(), 1325 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

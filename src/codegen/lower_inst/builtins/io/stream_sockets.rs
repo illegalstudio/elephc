@@ -131,6 +131,68 @@ pub(crate) fn lower_stream_socket_pair(
     store_if_result(ctx, inst)
 }
 
+/// Warning php-src emits when the stream has no SSL layer to query.
+const STREAM_CRYPTO_UNSUPPORTED_WARNING: &str =
+    "Warning: stream_socket_get_crypto_status(): This stream does not support SSL/crypto\n";
+
+/// Lowers `stream_socket_get_crypto_status(stream)`.
+///
+/// PHP 8.6 reports the pending TLS handshake/read operation without blocking. elephc completes
+/// every handshake synchronously, so a stream with an attached session has no pending operation
+/// and reports `STREAM_CRYPTO_STATUS_NONE`. A stream without an SSL layer has no crypto operation
+/// either; php-src emits its "does not support SSL/crypto" warning before returning NONE, which
+/// the no-session branch reproduces. Synthetic userspace-wrapper and phar descriptors live above
+/// the bounded `_tls_sessions` table, so they take the same warning path instead of indexing it.
+pub(crate) fn lower_stream_socket_get_crypto_status(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "stream_socket_get_crypto_status", 1)?;
+    let stream = expect_operand(inst, 0)?;
+    load_stream_fd_to_result(ctx, stream, "stream_socket_get_crypto_status")?;
+    let no_session_label = ctx.next_label("ssgcs_no_session");
+    let done_label = ctx.next_label("ssgcs_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let limit = format!("cmp x0, #{}", crate::codegen_support::runtime::FD_TABLE_SLOTS);
+            ctx.emitter.instruction(&limit);                                    // synthetic descriptors sit above the bounded session table
+            ctx.emitter.instruction(&format!("b.ge {no_session_label}"));       // a userspace wrapper has no native SSL layer
+            abi::emit_symbol_address(ctx.emitter, "x9", "_tls_sessions");
+            ctx.emitter.instruction("ldr x10, [x9, x0, lsl #3]");               // this descriptor's TLS session handle (0 = no SSL layer)
+            ctx.emitter.instruction(&format!("cbz x10, {no_session_label}"));   // no attached session: report the unsupported-stream warning
+            ctx.emitter.instruction("mov x0, #0");                             // a blocking handshake leaves STREAM_CRYPTO_STATUS_NONE
+            ctx.emitter.instruction(&format!("b {done_label}"));                // skip the unsupported-stream warning
+            ctx.emitter.label(&no_session_label);
+            ctx.emitter.adrp("x1", "_diag_stream_crypto_unsupported_msg");
+            ctx.emitter.add_lo12("x1", "x1", "_diag_stream_crypto_unsupported_msg");
+            let length = format!("mov x2, #{}", STREAM_CRYPTO_UNSUPPORTED_WARNING.len());
+            ctx.emitter.instruction(&length);                                   // pass the warning byte length
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            ctx.emitter.instruction("mov x0, #0");                             // php-src returns STREAM_CRYPTO_STATUS_NONE after the warning
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            let limit = format!("cmp rax, {}", crate::codegen_support::runtime::FD_TABLE_SLOTS);
+            ctx.emitter.instruction(&limit);                                    // synthetic descriptors sit above the bounded session table
+            ctx.emitter.instruction(&format!("jge {no_session_label}"));        // a userspace wrapper has no native SSL layer
+            abi::emit_symbol_address(ctx.emitter, "r9", "_tls_sessions");
+            ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rax * 8]");       // this descriptor's TLS session handle (0 = no SSL layer)
+            ctx.emitter.instruction("test r10, r10");                           // is a session attached?
+            ctx.emitter.instruction(&format!("jz {no_session_label}"));         // no attached session: report the unsupported-stream warning
+            ctx.emitter.instruction("xor eax, eax");                           // a blocking handshake leaves STREAM_CRYPTO_STATUS_NONE
+            ctx.emitter.instruction(&format!("jmp {done_label}"));              // skip the unsupported-stream warning
+            ctx.emitter.label(&no_session_label);
+            ctx.emitter.instruction("lea rdi, [rip + _diag_stream_crypto_unsupported_msg]");
+            let length = format!("mov esi, {}", STREAM_CRYPTO_UNSUPPORTED_WARNING.len());
+            ctx.emitter.instruction(&length);                                   // pass the warning byte length
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            ctx.emitter.instruction("xor eax, eax");                           // php-src returns STREAM_CRYPTO_STATUS_NONE after the warning
+            ctx.emitter.label(&done_label);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `stream_socket_get_name(socket, remote)` and boxes `string|false`.
 pub(crate) fn lower_stream_socket_get_name(
     ctx: &mut FunctionContext<'_>,

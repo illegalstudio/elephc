@@ -350,6 +350,7 @@ pub enum RuntimeFnId {
     StreamSocketAccept,
     StreamSocketClient,
     StreamSocketEnableCrypto,
+    StreamSocketGetCryptoStatus,
     StreamSocketGetName,
     StreamSocketPair,
     StreamSocketRecvfrom,
@@ -2256,6 +2257,7 @@ impl RuntimeFnId {
             | RuntimeFnId::Md5
             | RuntimeFnId::Sha1
             | RuntimeFnId::StreamSocketEnableCrypto => MonitoringPolicy::GenericTiming,
+            RuntimeFnId::StreamSocketGetCryptoStatus => MonitoringPolicy::GenericTiming,
             _ => MonitoringPolicy::Unspecified,
         }
     }
@@ -3555,6 +3557,7 @@ impl RuntimeFnId {
             RuntimeFnId::StreamSocketAccept => "stream_socket_accept",
             RuntimeFnId::StreamSocketClient => "stream_socket_client",
             RuntimeFnId::StreamSocketEnableCrypto => "stream_socket_enable_crypto",
+            RuntimeFnId::StreamSocketGetCryptoStatus => "stream_socket_get_crypto_status",
             RuntimeFnId::StreamSocketGetName => "stream_socket_get_name",
             RuntimeFnId::StreamSocketPair => "stream_socket_pair",
             RuntimeFnId::StreamSocketRecvfrom => "stream_socket_recvfrom",

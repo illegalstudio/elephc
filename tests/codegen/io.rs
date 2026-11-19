@@ -40,6 +40,8 @@ mod streams_ext;
 mod stream_errors_php86;
 #[path = "io/stream_close_failure_php86.rs"]
 mod stream_close_failure_php86;
+#[path = "io/stream_crypto_status_php86.rs"]
+mod stream_crypto_status_php86;
 #[path = "io/stream_errors_corpus_php86.rs"]
 mod stream_errors_corpus_php86;
 #[path = "io/io_poll_php86.rs"]

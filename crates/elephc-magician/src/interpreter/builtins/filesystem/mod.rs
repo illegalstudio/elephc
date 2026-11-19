@@ -121,6 +121,7 @@ mod stream_set_write_buffer;
 mod stream_socket_accept;
 mod stream_socket_client;
 mod stream_socket_enable_crypto;
+mod stream_socket_get_crypto_status;
 mod stream_socket_get_name;
 mod stream_socket_pair;
 mod stream_socket_recvfrom;

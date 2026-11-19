@@ -129,6 +129,7 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call(
         "stream_socket_accept" => super::stream_socket_accept::eval_stream_socket_accept_declared_call(args, context, scope, values),
         "stream_socket_client" => super::stream_socket_client::eval_stream_socket_client_declared_call(args, context, scope, values),
         "stream_socket_enable_crypto" => super::stream_socket_enable_crypto::eval_stream_socket_enable_crypto_declared_call(args, context, scope, values),
+        "stream_socket_get_crypto_status" => super::stream_socket_get_crypto_status::eval_stream_socket_get_crypto_status_declared_call(args, context, scope, values),
         "stream_socket_get_name" => super::stream_socket_get_name::eval_stream_socket_get_name_declared_call(args, context, scope, values),
         "stream_socket_pair" => super::stream_socket_pair::eval_stream_socket_pair_declared_call(args, context, scope, values),
         "stream_socket_recvfrom" => super::stream_socket_recvfrom::eval_stream_socket_recvfrom_declared_call(args, context, scope, values),

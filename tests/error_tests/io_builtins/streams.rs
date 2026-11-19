@@ -872,6 +872,24 @@ fn test_error_stream_socket_get_name_requires_resource() {
     );
 }
 
+/// Verifies the 8.6 crypto-status builtin rejects a missing argument.
+#[test]
+fn test_error_stream_socket_get_crypto_status_wrong_args() {
+    expect_error(
+        "<?php stream_socket_get_crypto_status();",
+        "stream_socket_get_crypto_status() takes exactly 1 argument",
+    );
+}
+
+/// Verifies the 8.6 crypto-status builtin requires a stream resource.
+#[test]
+fn test_error_stream_socket_get_crypto_status_requires_resource() {
+    expect_error(
+        "<?php stream_socket_get_crypto_status(1);",
+        "stream_socket_get_crypto_status() expects resource, got int",
+    );
+}
+
 /// Verifies the invalid-call diagnostic for error stream socket pair wrong args.
 #[test]
 fn test_error_stream_socket_pair_wrong_args() {

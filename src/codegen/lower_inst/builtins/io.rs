@@ -122,7 +122,7 @@ pub(crate) use stream_options::{
 };
 pub(crate) use stream_sockets::{
     lower_stream_socket_server, lower_stream_socket_client, lower_stream_socket_accept, lower_stream_socket_pair,
-    lower_stream_socket_get_name, lower_stream_socket_shutdown, lower_stream_socket_enable_crypto, lower_stream_socket_recvfrom,
+    lower_stream_socket_get_crypto_status, lower_stream_socket_get_name, lower_stream_socket_shutdown, lower_stream_socket_enable_crypto, lower_stream_socket_recvfrom,
     lower_stream_socket_sendto,
 };
 pub(crate) use stream_file_ops::{

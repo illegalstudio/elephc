@@ -185,6 +185,7 @@ pub mod stream_set_write_buffer;
 pub mod stream_socket_accept;
 pub mod stream_socket_client;
 pub mod stream_socket_enable_crypto;
+pub mod stream_socket_get_crypto_status;
 pub mod stream_socket_get_name;
 pub mod stream_socket_pair;
 pub mod stream_socket_recvfrom;

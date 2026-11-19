@@ -1046,6 +1046,7 @@ pub(crate) fn emit_runtime_data_fixed(
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
     out.push_str(".globl _diag_define_already_defined_msg\n_diag_define_already_defined_msg:\n    .ascii \"Warning: define(): Constant already defined\\n\"\n");
+    out.push_str(".globl _diag_stream_crypto_unsupported_msg\n_diag_stream_crypto_unsupported_msg:\n    .ascii \"Warning: stream_socket_get_crypto_status(): This stream does not support SSL/crypto\\n\"\n");
     out.push_str(".globl _diag_undefined_global_prefix\n_diag_undefined_global_prefix:\n    .ascii \"Warning: Undefined global variable $\"\n");
     out.push_str(".globl _diag_undefined_array_key_prefix\n_diag_undefined_array_key_prefix:\n    .ascii \"Warning: Undefined array key \"\n");
     out.push_str(".globl _diag_undefined_array_key_quote\n_diag_undefined_array_key_quote:\n    .ascii \"\\\"\"\n");

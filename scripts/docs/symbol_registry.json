@@ -26741,6 +26741,60 @@
       "extension": false,
       "internal": false,
       "module": "standard",
+      "name": "STREAM_CRYPTO_STATUS_NONE",
+      "route": "predefined",
+      "since": "8.6",
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_STATUS_WANT_READ",
+      "route": "predefined",
+      "since": "8.6",
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
+      "name": "STREAM_CRYPTO_STATUS_WANT_WRITE",
+      "route": "predefined",
+      "since": "8.6",
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "standard",
       "name": "STREAM_FILTER_ALL",
       "route": "predefined",
       "since": null,
