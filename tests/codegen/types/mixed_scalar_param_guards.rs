@@ -1351,3 +1351,66 @@ echo "next\n";
     assert_eq!(output.stdout, "destruct a\ncaught LogicException(a) <- TypeError(p(): Argument #1 ($s) must be of type string, D given) <- none\ndestruct b\ncaught LogicException(b) <- TypeError(q(): Argument #1 ($i) must be of type int, null given) <- none\ndestruct c\ncaught LogicException(c) <- TypeError(r(): Argument #2 ($s) must be of type string, null given) <- none\nnext\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A deferred check's operands are published before the checks, so converting a `Stringable`
+/// reads a borrowed box: the conversion used to release the owned box itself, and a destructor
+/// that threw from that release leaked the converted string (and left a stale owner pointing at
+/// the freed box). Expected output: php 8.5 with `zend.exception_ignore_args=1`.
+#[test]
+fn test_stringable_argument_conversion_with_throwing_destructor_does_not_leak() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class S {
+    public function __toString(): string { echo "toString\n"; return str_repeat("s", 40); }
+    public function __destruct() { throw new LogicException("d"); }
+}
+class T {
+    public function __toString(): string { echo "toString T\n"; return str_repeat("t", 40); }
+    public function __destruct() { }
+}
+function mk(): mixed { return new S(); }
+function mt(): mixed { return new T(); }
+function p(string $s): void { echo "body ", strlen($s), "\n"; }
+function q(string $s, int $n): void { echo "body ", strlen($s), "\n"; }
+function box(mixed $v): mixed { return $v; }
+function desc(?Throwable $e): string { return $e ? get_class($e) . "(" . explode(', called', $e->getMessage())[0] . ") <- " . desc($e->getPrevious()) : "none"; }
+for ($i = 0; $i < 2; $i++) {
+    try { p(mk()); echo "after\n"; } catch (Throwable $e) { echo "caught ", desc($e), "\n"; }
+    try { q(mt(), box(null)); echo "after\n"; } catch (Throwable $e) { echo "caught ", desc($e), "\n"; }
+    try { q(mt(), box(3)); echo "after\n"; } catch (Throwable $e) { echo "caught ", desc($e), "\n"; }
+}
+echo "next\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "toString\nbody 40\ncaught LogicException(d) <- none\ntoString T\ncaught TypeError(q(): Argument #2 ($n) must be of type int, null given) <- none\ntoString T\nbody 40\nafter\ntoString\nbody 40\ncaught LogicException(d) <- none\ntoString T\ncaught TypeError(q(): Argument #2 ($n) must be of type int, null given) <- none\ntoString T\nbody 40\nafter\nnext\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
+
+/// Several checked operands of one call (spread elements, a numeric conversion followed by a
+/// refusal) are each released once: an accepted `int`/`float` check reads a published box
+/// instead of releasing an owned one a later refusal would release again.
+#[test]
+fn test_checked_operands_are_released_once_when_a_later_check_refuses() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function f(int $a, string $b): void { echo "body\n"; }
+function g(float $a, int $b, string $c): void { echo "body\n"; }
+function desc(?Throwable $e): string { return $e ? get_class($e) . "(" . explode(', called', $e->getMessage())[0] . ") <- " . desc($e->getPrevious()) : "none"; }
+for ($i = 0; $i < 3; $i++) {
+    $rows = [[box("7"), box(null)], [box(str_repeat("8", 1)), box([str_repeat("x", 30)])]];
+    foreach ($rows as $row) {
+        try { f(...$row); echo "after\n"; } catch (Throwable $e) { echo "caught ", desc($e), "\n"; }
+    }
+    $row3 = [box("1.5"), box("2"), box(null)];
+    try { g(...$row3); echo "after\n"; } catch (Throwable $e) { echo "caught ", desc($e), "\n"; }
+    try { f(box("7"), box(null)); echo "after\n"; } catch (Throwable $e) { echo "caught ", desc($e), "\n"; }
+}
+echo "next\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "caught TypeError(f(): Argument #2 ($b) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, array given) <- none\ncaught TypeError(g(): Argument #3 ($c) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, array given) <- none\ncaught TypeError(g(): Argument #3 ($c) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, array given) <- none\ncaught TypeError(g(): Argument #3 ($c) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, null given) <- none\nnext\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
