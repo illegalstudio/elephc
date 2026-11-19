@@ -20,6 +20,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use elephc_memoir::interop::zval::array_storage::{
+    emit_array_backing,
     ArrayStorage, emit_adopt_child_words, emit_array_header, emit_retire_child_envelope,
 };
 use crate::codegen_support::platform::Arch;
@@ -53,27 +54,7 @@ pub fn emit_zval_pack_array_packed(emitter: &mut Emitter) {
     emitter.instruction("add x1, x0, #24");                                     // elements start right after the 24-byte header
     emitter.instruction("str x1, [sp, #56]");                                   // save the elements base
 
-    // -- nTableSize = next power of two, minimum 8 --
-    emitter.instruction("mov x9, #8");                                          // start at the minimum packed table size
-    emitter.label("__rt_zval_pack_array_packed_pow2");
-    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the length
-    emitter.instruction("cmp x9, x1");                                          // is the candidate size already >= length?
-    emitter.instruction("b.ge __rt_zval_pack_array_packed_pow2_done");          // stop doubling once the table covers the length
-    emitter.instruction("lsl x9, x9, #1");                                      // double the candidate size
-    emitter.instruction("b __rt_zval_pack_array_packed_pow2");                  // retry the power-of-two search
-    emitter.label("__rt_zval_pack_array_packed_pow2_done");
-    emitter.instruction("str x9, [sp, #40]");                                   // save nTableSize
-
-    // -- allocate the data block (8 sentinel bytes + nTableSize * 32-byte buckets) --
-    emitter.instruction("lsl x0, x9, #5");                                      // nTableSize * 32 bytes of bucket storage
-    emitter.instruction("add x0, x0, #8");                                      // add the two 4-byte sentinel slots
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = data block base
-    emitter.instruction("str x0, [sp, #32]");                                   // save the data block pointer
-    emitter.instruction("mov x9, #-1");                                         // HT_INVALID_IDX = 0xFFFFFFFF
-    emitter.instruction("str w9, [x0]");                                        // stamp the first packed sentinel
-    emitter.instruction("str w9, [x0, #4]");                                    // stamp the second packed sentinel
-    emitter.instruction("add x9, x0, #8");                                      // arData = data block base + 8
-    emitter.instruction("str x9, [sp, #64]");                                   // save arData
+    emit_array_backing(emitter, ArrayStorage::Packed);
     emitter.instruction("str xzr, [sp, #48]");                                  // initialize the loop index i = 0
 
     // -- element loop: convert each elephc element into a bucket zval --
@@ -217,27 +198,7 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rcx, [rax + 24]");                                 // elements start right after the 24-byte header
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save the elements base
 
-    // -- nTableSize = next power of two, minimum 8 --
-    emitter.instruction("mov r9, 8");                                           // start at the minimum packed table size
-    emitter.label("__rt_zval_pack_array_packed_pow2");
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the length
-    emitter.instruction("cmp r9, rcx");                                         // is the candidate size already >= length?
-    emitter.instruction("jge __rt_zval_pack_array_packed_pow2_done");           // stop doubling once the table covers the length
-    emitter.instruction("shl r9, 1");                                           // double the candidate size
-    emitter.instruction("jmp __rt_zval_pack_array_packed_pow2");                // retry the power-of-two search
-    emitter.label("__rt_zval_pack_array_packed_pow2_done");
-    emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save nTableSize
-
-    // -- allocate the data block (8 sentinel bytes + nTableSize * 32-byte buckets) --
-    emitter.instruction("mov rax, r9");                                         // copy nTableSize for the size computation
-    emitter.instruction("shl rax, 5");                                          // nTableSize * 32 bytes of bucket storage
-    emitter.instruction("add rax, 8");                                          // add the two 4-byte sentinel slots
-    emitter.instruction("call __rt_heap_alloc");                                // rax = data block base
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the data block pointer
-    emitter.instruction("mov DWORD PTR [rax], -1");                             // stamp the first packed sentinel (HT_INVALID_IDX)
-    emitter.instruction("mov DWORD PTR [rax + 4], -1");                         // stamp the second packed sentinel
-    emitter.instruction("lea rcx, [rax + 8]");                                  // arData = data block base + 8
-    emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // save arData
+    emit_array_backing(emitter, ArrayStorage::Packed);
     emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // initialize the loop index i = 0
 
     // -- element loop: convert each elephc element into a bucket zval --
