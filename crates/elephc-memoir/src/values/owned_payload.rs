@@ -190,3 +190,56 @@ fn emit_aarch64_tag(emitter: &mut impl AssemblyEmitter, scratch: &str, tag: Valu
     emitter.instruction(&format!("mov {scratch}, #{tag}"));                     // materialize the selected storage tag
     emitter.instruction(&format!("str {scratch}, [x0]"));                       // publish the tag in the fresh cell
 }
+
+/// Native words an assembly template hands over to a boxed result.
+pub enum StagedBox {
+    /// The adjacent owned pointer and length words of a string.
+    StringPair(usize),
+    /// A single owned pointer and its explicit runtime tag.
+    Pointer {
+        /// Spill offset of the owner being transferred.
+        slot: usize,
+        /// Runtime tag identifying the pointer payload.
+        tag: ValueTag,
+    },
+}
+
+/// Formats an already owned payload's adoption for inclusion in a native assembly template.
+pub fn render_staged_box(arch: Arch, payload: StagedBox) -> String {
+    let (pointer, tag, has_length) = match payload {
+        StagedBox::StringPair(slot) => (slot, STRING_TAG, true),
+        StagedBox::Pointer { slot, tag } => (slot, tag, false),
+    };
+    match arch {
+        Arch::AArch64 => {
+            let mut assembly = format!(
+                "    mov x0, #{MIXED_CELL_SIZE}\n    bl __rt_heap_alloc\n    mov x9, #{MIXED_HEAP_KIND}\n    str x9, [x0, #-8]\n    mov x9, #{tag}\n    str x9, [x0]\n"
+            );
+            if has_length {
+                assembly.push_str(&format!(
+                    "    ldp x10, x11, [sp, #{pointer}]\n    stp x10, x11, [x0, #8]"
+                ));
+            } else {
+                assembly.push_str(&format!(
+                    "    ldr x9, [sp, #{pointer}]\n    str x9, [x0, #8]\n    str xzr, [x0, #16]"
+                ));
+            }
+            assembly
+        }
+        Arch::X86_64 => {
+            let kind = crate::layout::x86_64_heap_kind_word(MIXED_HEAP_KIND);
+            let mut assembly = format!(
+                "    mov rax, {MIXED_CELL_SIZE}\n    call __rt_heap_alloc\n    mov r10, 0x{kind:x}\n    mov QWORD PTR [rax - 8], r10\n    mov QWORD PTR [rax], {tag}\n    mov r10, QWORD PTR [rbp - {pointer}]\n    mov QWORD PTR [rax + 8], r10\n"
+            );
+            if has_length {
+                let length = pointer + 8;
+                assembly.push_str(&format!(
+                    "    mov r10, QWORD PTR [rbp - {length}]\n    mov QWORD PTR [rax + 16], r10"
+                ));
+            } else {
+                assembly.push_str("    mov QWORD PTR [rax + 16], 0");
+            }
+            assembly
+        }
+    }
+}
