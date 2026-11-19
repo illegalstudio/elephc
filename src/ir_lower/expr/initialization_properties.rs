@@ -31,16 +31,13 @@ fn select(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &st
 ) -> Option<LoweredValue> {
     if !crate::ir_lower::initialization::enabled(ctx) { return None; }
     let ty = ctx.builder.value_php_type(object.value);
+    if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return select_boxed(ctx, object, property, probe, expr);
+    }
     let (class, nullable) = singular_object_class(&ty)?;
     if nullable { return None; }
-    if class_declares_hook_accessor(ctx, object.value, &property_hook_get_method(property))
-        || !matches!(crate::types::resolve_property_name(ctx.classes, class, property, ctx.current_class.as_deref()),
-            crate::types::PropertyNameResolution::Visible | crate::types::PropertyNameResolution::ScopePrivate { .. }) {
-        return None;
-    }
+    if !selectable_slot(ctx, class, property) { return None; }
     let info = ctx.classes.get(class)?;
-    if info.declared_properties.contains(property) || !info.methods.contains_key("__get")
-        || !info.properties.iter().any(|(name, _)| name == property) { return None; }
     let has_isset = info.methods.contains_key("__isset");
     let (object, owner) = root_value_for_later_use(ctx, object, expr.span);
     let receiver = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
@@ -115,4 +112,77 @@ fn missing_probe(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, proper
     join.leave_arm(ctx);
     join.finish(ctx, merge, expr.span);
     take_owned_temp(ctx, &result, expr.span)
+}
+
+/// Selects a concrete initialized-slot protocol while preserving the caller's boxed owner.
+fn select_boxed(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    probe: Option<PropertyFetchMode>, expr: &Expr,
+) -> Option<LoweredValue> {
+    let mut classes = ctx.classes.keys().filter(|class| selectable_slot(ctx, class, property))
+        .cloned().collect::<Vec<_>>();
+    if classes.is_empty() { return None; }
+    classes.sort_by_key(|class| std::cmp::Reverse(ctx.classes[class].class_id));
+    let (object, owner) = root_value_for_later_use(ctx, object, expr.span);
+    let ty = ctx.builder.value_php_type(object.value);
+    let receiver = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
+        Op::Borrow.default_effects(), Some(expr.span));
+    ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
+    let result = boxed_arm(ctx, receiver, property, probe, &classes, expr);
+    if let Some(owner) = owner {
+        super::call_operand_owners::retire_owned_call_operand_preserving_result(ctx, owner, result, expr.span);
+    }
+    Some(result)
+}
+
+/// Dispatches boxed classes through named slot selection before reaching the physical fallback.
+fn boxed_arm(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    probe: Option<PropertyFetchMode>, classes: &[String], expr: &Expr,
+) -> LoweredValue {
+    let Some((class, rest)) = classes.split_first() else {
+        return match probe {
+            None => super::property_access::lower_direct_property_read(ctx, object, property, Op::PropGet, expr),
+            Some(mode) => {
+                let data = ctx.intern_string(property);
+                let name = ctx.emit_value(Op::ConstStr, Vec::new(), Some(Immediate::Data(data)),
+                    PhpType::Str, Op::ConstStr.default_effects(), Some(expr.span));
+                super::property_access::lower_dynamic_property_fetch_physical(ctx, object, name, PhpType::Mixed, mode, expr)
+            }
+        };
+    };
+    let data = ctx.intern_class_name(class);
+    let condition = ctx.emit_value(Op::InstanceOf, vec![object.value], Some(Immediate::Data(data)),
+        PhpType::Bool, Op::InstanceOf.default_effects(), Some(expr.span));
+    let yes = ctx.builder.create_named_block("property.boxed.initialization", Vec::new());
+    let no = ctx.builder.create_named_block("property.boxed.next", Vec::new());
+    let merge = ctx.builder.create_named_block("property.boxed.merge", Vec::new());
+    let temp = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    ctx.builder.terminate(Terminator::CondBr { cond: condition.value, then_target: yes,
+        then_args: Vec::new(), else_target: no, else_args: Vec::new() });
+    let mut join = crate::ir_lower::stmt::ExprBranchJoin::at_split(ctx);
+    ctx.builder.position_at_end(yes);
+    join.enter_arm(ctx);
+    let ty = PhpType::Object(class.clone());
+    let receiver = ctx.emit_value(Op::MixedUnbox, vec![object.value], None,
+        ty.clone(), Op::mixed_unbox_effects(&ty), Some(expr.span));
+    ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
+    let value = select(ctx, receiver, property, probe, expr).expect("selected accessible untyped magic slot");
+    store_value_into_temp(ctx, &temp, PhpType::Mixed, value, expr.span);
+    join.leave_arm(ctx);
+    ctx.builder.position_at_end(no);
+    join.enter_arm(ctx);
+    let value = boxed_arm(ctx, object, property, probe, rest, expr);
+    store_value_into_temp(ctx, &temp, PhpType::Mixed, value, expr.span);
+    join.leave_arm(ctx);
+    join.finish(ctx, merge, expr.span);
+    take_owned_temp(ctx, &temp, expr.span)
+}
+
+/// Shares the concrete slot eligibility used by named, boxed and runtime-name selection.
+pub(super) fn selectable_slot(ctx: &LoweringContext<'_, '_>, class: &str, property: &str) -> bool {
+    let Some(info) = ctx.classes.get(class) else { return false; };
+    info.methods.contains_key("__get") && !info.declared_properties.contains(property)
+        && !info.methods.contains_key(&php_symbol_key(&property_hook_get_method(property)))
+        && info.properties.iter().any(|(name, _)| name == property)
+        && matches!(crate::types::resolve_property_name(ctx.classes, class, property, ctx.current_class.as_deref()),
+            crate::types::PropertyNameResolution::Visible | crate::types::PropertyNameResolution::ScopePrivate { .. })
 }

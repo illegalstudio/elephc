@@ -2476,3 +2476,32 @@ The combined Locals/interpreter fixture exposed a FakeOps class-relation bug: ty
 Fourteen final gates passed in jobac872c02: refreshed compiler/archive, all-five emission, twelve native PHP/LFC optimizer/profile runs, shared-helper policy regression, four internal interpreter/profile combinations, preceding direct-object and scope native/interpreter controls, malformed profile validation, staged diff/assembly hygiene and builtin EIR boundary audit. Development job6cebba7f passed all five direct gates. The permissive stdout control also matches PHP with diagnostics directed to stderr per invocation; no PHP configuration was changed.
 
 No new strict family is admitted. Runtime-name magic property dispatch remains the next measured Initialization gap, followed by complete source/host/cache/opaque/public/docs/example acceptance, the other four pending families and the full umbrella.
+
+### Verified212: initialized magic property protocols
+
+Runtime-name and boxed named reads now select removed untyped slots through the
+same EIR initialized-slot/getter/probe protocol as concrete named reads. Shared
+slot eligibility checks actual getter accessors and source visibility, rather
+than mere presence in the property-hook metadata map. Initialized null remains
+a physical read; typed fields retain their existing initialization checks.
+Runtime class selection preserves inherited getters, and unknown names retain
+the existing boxed magic/hash fallback. Receivers, names and results remain
+rooted across getter effects and exceptions, with borrowed unboxing effects
+provided by the authoritative EIR helper.
+
+Nullsafe coalesce selects a magic accessor before a physical missing-slot guard
+can divert it to null. Quiet container fetches select `__get` directly and never
+interrogate `__isset`. The existing unsupported runtime-dependent magic array
+property unset shape remains diagnosed on all five targets in both profiles.
+
+Fifteen focused gates passed in jobceaed51e: compiler/eval archive build,
+all-five emission, eight native PHP/LFC optimizer/Locals combinations with clean
+heaps, four interpreter dispatch/Locals combinations, quiet-fetch selection and
+existing shape diagnostics, preceding boxed/object/scope native and interpreter
+regressions, source-profile validation, staged diff hygiene and the builtin EIR
+boundary audit. The shared fixture's output matches PHP with diagnostics sent
+to stderr per invocation. Temporary EIR/metadata diagnostics were removed.
+
+No new family is admitted. Initialization source/public host/cache/opaque eval,
+documentation and example acceptance remains next, followed by the four other
+pending families and the complete umbrella.

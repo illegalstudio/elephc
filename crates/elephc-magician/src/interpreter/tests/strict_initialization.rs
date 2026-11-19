@@ -199,3 +199,10 @@ fn strict_initialization_eval_boxed_fixture_and_owners() {
     assert_initialized_fixture(include_str!("../../../../../tests/fixtures/strict/initialized_boxed_reads.php"),
         "NULL:NULL|I|I|AE:missing|AE:missing|I|I|I|NULL|I|AE:missing|I|I|", "boxed reads");
 }
+
+/// Known and boxed runtime-name accessors preserve initialized-slot and quiet-probe semantics.
+#[test]
+fn strict_initialization_eval_magic_fixture_and_owners() {
+    assert_initialized_fixture(include_str!("../../../../../tests/fixtures/strict/initialized_magic_reads.php"),
+        "ready:1|PF:ready:3|ready:1|PF:ready|3|NULL\n0|ready:4|T|null:null|ready:ready|6|G7|AE:G7|child:1|", "magic reads");
+}

@@ -35,6 +35,7 @@ use std::collections::HashSet;
 mod constants;
 mod initialization_probes;
 mod initialization_properties;
+mod initialization_dynamic_properties;
 mod producer_values;
 mod checked_cast;
 mod array_merge_values;

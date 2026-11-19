@@ -1229,6 +1229,17 @@ fn lower_dynamic_property_fetch_without_runtime_hooks(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
     result_type: PhpType, mode: PropertyFetchMode, expr: &Expr,
 ) -> LoweredValue {
+    if let Some(value) = super::initialization_dynamic_properties::lower(ctx, object, property, mode, expr) {
+        return value;
+    }
+    lower_dynamic_property_fetch_physical(ctx, object, property, result_type, mode, expr)
+}
+
+/// Emits a physical property fetch without recursively selecting initialized magic slots.
+pub(super) fn lower_dynamic_property_fetch_physical(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
+    result_type: PhpType, mode: PropertyFetchMode, expr: &Expr,
+) -> LoweredValue {
     if !mode.is_read() && scalar_property_probe_receiver(ctx, object.value) {
         crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
         release_owning_receiver_temporary(ctx, object, expr.span);
