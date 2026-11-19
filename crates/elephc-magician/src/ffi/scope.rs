@@ -162,6 +162,9 @@ pub unsafe extern "C" fn __elephc_eval_scope_set(
 ) -> i32 {
     if throwable.is_null() { return EvalStatus::RuntimeFatal.code(); }
     *throwable = std::ptr::null_mut();
+    if cell.is_null() {
+        return __elephc_eval_scope_unset(scope, name_ptr, name_len, throwable);
+    }
     let Some(scope) = scope.as_mut() else {
         return EvalStatus::RuntimeFatal.code();
     };
@@ -250,16 +253,17 @@ pub unsafe extern "C" fn __elephc_eval_scope_unset(
     let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return EvalStatus::RuntimeFatal.code();
     };
+    let replaced = scope.unset(name.clone());
     #[cfg(not(test))]
-    if let Some(thrown) = crate::runtime_hooks::scope_assignment::release_origins(scope, Some(&name)) {
+    let thrown = {
+        let pending = crate::runtime_hooks::scope_assignment::release_origins(scope, Some(&name));
+        crate::runtime_hooks::release::release_native_cells(replaced, pending)
+    };
+    #[cfg(test)]
+    let thrown = replaced.and_then(release_scope_cell);
+    if let Some(thrown) = thrown {
         *throwable = thrown.as_ptr();
         return EvalStatus::UncaughtThrowable.code();
-    }
-    if let Some(replaced) = scope.unset(name) {
-        if let Some(thrown) = release_scope_cell(replaced) {
-            *throwable = thrown.as_ptr();
-            return EvalStatus::UncaughtThrowable.code();
-        }
     }
     EvalStatus::Ok.code()
 }

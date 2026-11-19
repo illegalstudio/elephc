@@ -16,6 +16,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
 mod reference_assignment;
+mod absent_store;
 mod end_binding;
 mod origin_bindings;
 mod owner_visitor;
@@ -154,6 +155,7 @@ fn emit_aarch64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x25, [x25]");                                      // advance to the next entry
     emitter.instruction("b __elephc_eval_scope_set_probe");                     // continue scanning the entry list
     emitter.label("__elephc_eval_scope_set_update");
+    absent_store::emit_clear_existing(emitter);
     emitter.instruction("ldr x0, [x25, #24]");                                  // preserve the existing scope reference for checked assignment
     emitter.instruction("mov x1, x22");                                         // pass the incoming value owner to the shared publisher
     emitter.instruction("mov x2, x23");                                         // retain snapshot versus assignment input flags
@@ -181,6 +183,7 @@ fn emit_aarch64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x0, #{}", EVAL_STATUS_OK));               // report successful scope write
     emitter.instruction("b __elephc_eval_scope_set_done");                      // restore the frame and return
     emitter.label("__elephc_eval_scope_set_insert");
+    absent_store::emit_skip_absent_insert(emitter);
     emitter.instruction("mov x0, #40");                                         // entry records store next, name, length, cell, and flags
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate a new entry record
     emitter.instruction("mov x26, x0");                                         // keep the new entry pointer while initializing fields
@@ -382,6 +385,7 @@ fn emit_x86_64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // save the next candidate as current
     emitter.instruction("jmp __elephc_eval_scope_set_probe");                   // continue scanning the entry list
     emitter.label("__elephc_eval_scope_set_update");
+    absent_store::emit_clear_existing(emitter);
     emitter.instruction("mov rdi, QWORD PTR [r9 + 24]");                        // preserve the existing scope reference for checked assignment
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // pass the incoming value owner to the shared publisher
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // retain snapshot versus assignment input flags
@@ -413,6 +417,7 @@ fn emit_x86_64_eval_scope_set(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_OK));               // report successful scope write
     emitter.instruction("jmp __elephc_eval_scope_set_done");                    // restore the frame and return
     emitter.label("__elephc_eval_scope_set_insert");
+    absent_store::emit_skip_absent_insert(emitter);
     emitter.instruction("mov rax, 40");                                         // entry records store next, name, length, cell, and flags
     emitter.instruction("call __rt_heap_alloc");                                // allocate a new entry record
     emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload old successor, normally null
