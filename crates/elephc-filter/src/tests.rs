@@ -176,6 +176,17 @@ fn mac_matches_php() {
     assert!(!mac(b"00:11:22:33:44:gg", false, b""));
 }
 
+/// A long run of bare ampersands is encoded in one linear pass.
+#[test]
+fn full_special_chars_encodes_long_ampersand_runs() {
+    let input = "&".repeat(50_000);
+    let expected = "&amp;".repeat(50_000);
+    assert_eq!(
+        sanitize::full_special_chars(0, input.as_bytes(), "UTF-8"),
+        Outcome::Str(expected.into_bytes())
+    );
+}
+
 /// Verifies the sanitizer's tag stripping and entity encoding.
 #[test]
 fn sanitize_string_matches_php() {

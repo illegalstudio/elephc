@@ -277,9 +277,14 @@ fn encode_single_byte_entities(value: &[u8], no_quotes: bool, charset: HtmlChars
     out
 }
 
+/// Longest `&...;` spelling HTML can name or encode numerically. Bounding the `;` search
+/// keeps a run of bare ampersands linear instead of rescanning the whole suffix per `&`.
+const MAX_ENTITY_BYTES: usize = 64;
+
 /// Returns the byte length of a valid HTML entity at the start of `rest`.
 fn entity_length(rest: &str) -> Option<usize> {
-    let end = rest.find(';')?;
+    let limit = rest.len().min(MAX_ENTITY_BYTES);
+    let end = rest.as_bytes()[..limit].iter().position(|byte| *byte == b';')?;
     let entity = &rest[..=end];
     let name = entity.strip_prefix('&')?.strip_suffix(';')?;
     (entities::is_named_entity(name) || entities::is_numeric_entity(entity)).then_some(end + 1)
@@ -287,7 +292,8 @@ fn entity_length(rest: &str) -> Option<usize> {
 
 /// Returns the byte length of a valid ASCII HTML entity at the start of `rest`.
 fn byte_entity_length(rest: &[u8]) -> Option<usize> {
-    let end = rest.iter().position(|byte| *byte == b';')?;
+    let limit = rest.len().min(MAX_ENTITY_BYTES);
+    let end = rest[..limit].iter().position(|byte| *byte == b';')?;
     let entity = std::str::from_utf8(&rest[..=end]).ok()?;
     let name = entity.strip_prefix('&')?.strip_suffix(';')?;
     (entities::is_named_entity(name) || entities::is_numeric_entity(entity)).then_some(end + 1)
