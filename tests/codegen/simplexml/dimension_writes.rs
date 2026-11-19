@@ -196,3 +196,30 @@ echo (string)$xml['id'], ':', (string)$xml->a['x'], "\n";
 "###);
     assert_eq!(out, "3:2\n");
 }
+
+/// A dimension write on a typed object local before a computed `eval()` borrows the boxed local.
+/// The eval widens frame slots to boxed storage; the write's receiver load must not keep a retain
+/// that nothing releases (the root element and its projection cache leaked).
+#[test]
+fn test_simplexml_dimension_write_before_computed_eval_is_leak_free() {
+    if skip_without_xml_native("test_simplexml_dimension_write_before_computed_eval_is_leak_free") { return; }
+    let out = compile_and_run_with_heap_debug(r###"<?php
+class Slot implements ArrayAccess {
+    public $n = 0;
+    function offsetGet($o): mixed { return 1; }
+    function offsetSet($o, $v): void { $this->n++; }
+    function offsetExists($o): bool { return true; }
+    function offsetUnset($o): void {}
+}
+$xml = new SimpleXMLElement('<r id="old"><item>keep</item></r>');
+$xml['a'] = 'b';
+$slot = new Slot;
+$slot['k'] = 'v';
+$s = $argc > 0 ? 'echo 1;' : '';
+eval($s);
+echo $xml['a'], $slot->n;
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1b1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
