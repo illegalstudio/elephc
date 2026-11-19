@@ -181,6 +181,24 @@ pub(super) fn lower_boxed_spread_args(
             }
         }
     }
+    if string_slots.iter().any(Option::is_some) {
+        // A converted `Stringable` is no longer an operand, so releasing it (or the spread
+        // source holding its last reference) can run a destructor that throws. Release them
+        // here, while every slot is still published: the release clears each slot first, so the
+        // unwinder still owns the converted strings and the bound values, and the retirements
+        // below release nothing that can throw before the operands are published.
+        for (index, string_slot) in string_slots.iter().enumerate() {
+            if string_slot.is_some() {
+                release_slot_keeping_owner(ctx, &state.slots[index], span);
+            }
+        }
+        for arg in staged.iter().rev() {
+            let (StagedSpreadArgument::Spread(source)
+            | StagedSpreadArgument::Named(_, source)
+            | StagedSpreadArgument::Positional(source)) = arg;
+            release_slot_keeping_owner(ctx, source, span);
+        }
+    }
     let mut operands = Vec::with_capacity(state.slots.len());
     for (index, slot) in state.slots.iter().enumerate() {
         if let Some(value) = converted[index] {
@@ -317,6 +335,17 @@ fn initialize_slot(ctx: &mut LoweringContext<'_, '_>, ty: PhpType, expr: &Expr) 
 /// Retires one published temporary after all consumers have acquired their own references.
 fn retire_slot(ctx: &mut LoweringContext<'_, '_>, slot: &str, span: Span) {
     retire_owned_call_operand(ctx, ctx.local_slots[slot], span);
+}
+
+/// Releases a published temporary early, leaving its (now empty) owner record for `retire_slot`.
+fn release_slot_keeping_owner(ctx: &mut LoweringContext<'_, '_>, slot: &str, span: Span) {
+    ctx.emit_void(
+        Op::ReleaseLocalSlot,
+        Vec::new(),
+        Some(Immediate::LocalSlot(ctx.local_slots[slot])),
+        Op::ReleaseLocalSlot.default_effects(),
+        Some(span),
+    );
 }
 
 /// Iterates a boxed source with the normal runtime iterator, preserving sparse and named keys.

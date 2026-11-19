@@ -538,6 +538,36 @@ try { echo f(box(new Bad()), box(null)), "\n"; } catch (Throwable $e) { show($e)
     assert_eq!(out, "toString\nTypeError: f(): Argument #2 ($n) must be of type int, null given, called in F on line 8\nRuntimeException: from toString\ntoString\nf:name3\ntoString\nArgumentCountError: Too few arguments to function g(), 2 passed in F on line 11 and exactly 3 expected\nRuntimeException: from toString\n");
 }
 
+/// The string a runtime unpack converts a `Stringable` to must still be owned when the object
+/// itself is released: the object (and the spread source holding its last reference) used to be
+/// released after the operands were acquired, so a throwing destructor leaked the converted
+/// string on every caught call (review of the in-order unpack conversion).
+#[test]
+fn test_runtime_unpack_throwing_destructor_releases_the_converted_string() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class S {
+    public function __toString(): string { return str_repeat("s", 40); }
+    public function __destruct() { throw new RuntimeException("dtor"); }
+}
+class N { public function __toString(): string { return str_repeat("n", 30); } }
+function box(mixed $v): mixed { return $v; }
+function mk(): mixed { return [new S(), 1]; }
+function f(string $s, int $n): string { return strlen($s) . ":" . $n; }
+function g(int $a, string $s, string $t): string { return $a . strlen($s) . strlen($t); }
+for ($i = 0; $i < 3; $i++) {
+    try { echo f(...mk()), "\n"; } catch (RuntimeException $e) { echo "caught: ", $e->getMessage(), "\n"; }
+    try { echo g(7, ...box([new S(), "tt"])), "\n"; } catch (RuntimeException $e) { echo "caught: ", $e->getMessage(), "\n"; }
+    try { echo f(...box(['n' => 5, 's' => new S()])), "\n"; } catch (RuntimeException $e) { echo "caught: ", $e->getMessage(), "\n"; }
+    echo f(...box([new N(), 3])), "\n";
+}
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "caught: dtor\ncaught: dtor\ncaught: dtor\n30:3\n".repeat(3));
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
+
 /// Calls through a callable value bind their arguments in the shared runtime invoker, which
 /// never checked declared scalar parameters: `call_user_func_array()`, array callables in
 /// `call_user_func()`, and callbacks invoked by builtins (`array_map()`, `usort()`,
