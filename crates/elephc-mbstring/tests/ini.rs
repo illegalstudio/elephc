@@ -74,7 +74,7 @@ fn compare(actual: &Value, expected: &Value, path: &str, case: &str) {
             // the live order that mbstring_info() reports. Both are asserted separately by
             // the dedicated 8.6 tests, so they are removed from both sides here.
             let actual = actual.iter().filter(|item| !is_php86_snapshot_entry(item)).collect::<Vec<_>>();
-            let expected = expected.iter().filter(|item| !is_entry(item, "6465746563745f6f72646572")).collect::<Vec<_>>();
+            let expected = expected.iter().filter(|item| !is_php86_fixture_entry(item)).collect::<Vec<_>>();
             assert_eq!(actual.len(), expected.len(), "{case}, array length at {path}");
             for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
                 compare(actual, expected, &format!("{path}[{index}]"), case);
@@ -95,7 +95,13 @@ fn is_entry(item: &Value, hex: &str) -> bool {
 /// Returns whether a snapshot entry only exists in the PHP 8.6 shape.
 fn is_php86_snapshot_entry(item: &Value) -> bool {
     is_entry(item, "6275696c74696e5f64656661756c745f76616c7565")
-        || is_entry(item, "6465746563745f6f72646572")
+        || is_php86_fixture_entry(item)
+}
+
+/// Returns whether an entry is a PHP 8.6-only row or field absent from the 8.5 fixture.
+fn is_php86_fixture_entry(item: &Value) -> bool {
+    is_entry(item, "6465746563745f6f72646572")
+        || is_entry(item, "6572726f725f696e636c7564655f61726773")
 }
 
 /// Replays PHP writes and repeated restores for binary keys, encodings, flags, substitutions, and quantities.

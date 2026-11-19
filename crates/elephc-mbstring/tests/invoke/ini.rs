@@ -117,3 +117,23 @@ fn mbstring_invoke_ini_details_include_builtin_default() {
     );
     unsafe { elephc_mbstring_release_v1(&mut output); }
 }
+
+/// PHP 8.6 adds the error_include_args Core directive, off by default and runtime-settable.
+#[test]
+fn error_include_args_is_a_runtime_core_directive() {
+    elephc_mbstring_reset_v1();
+    let (status, mut output) = invoke(INI_GET, b"error_include_args", b"", false, &mut Host::new("observe"));
+    assert_eq!(status, 0);
+    assert_eq!(output.kind, RESULT_INI_STRING);
+    assert_eq!(bytes(&output), b"0");
+    unsafe { elephc_mbstring_release_v1(&mut output); }
+
+    let (status, mut output) = invoke(INI_SET, b"error_include_args", b"1", false, &mut Host::new("observe"));
+    assert_eq!(status, 0);
+    unsafe { elephc_mbstring_release_v1(&mut output); }
+
+    let (status, mut output) = invoke(INI_GET, b"error_include_args", b"", false, &mut Host::new("observe"));
+    assert_eq!(status, 0);
+    assert_eq!(bytes(&output), b"1");
+    unsafe { elephc_mbstring_release_v1(&mut output); }
+}
