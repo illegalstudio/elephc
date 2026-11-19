@@ -112,12 +112,7 @@ pub fn put_entry_bytes(
     let mut archive = if path.exists() {
         parse_archive_path(path)?
     } else {
-        Archive {
-            entries: Vec::new(),
-            format: format_for_new_archive_path(path),
-            metadata: Vec::new(),
-            stub: Vec::new(),
-        }
+        empty_archive_for_path(path)
     };
     upsert_entry(&mut archive.entries, entry_name, payload);
     let out = build_archive_value(&archive)?;
@@ -245,11 +240,22 @@ pub(super) fn read_or_new_archive(path: &std::path::Path) -> Option<Archive> {
     if path.exists() {
         parse_archive_path(path)
     } else {
-        Some(Archive {
-            entries: Vec::new(),
-            format: format_for_new_archive_path(path),
-            metadata: Vec::new(),
-            stub: Vec::new(),
-        })
+        Some(empty_archive_for_path(path))
+    }
+}
+
+/// Builds the empty archive a missing path would create.
+///
+/// New native phars keep their historical SHA1 signature; tar and zip start
+/// unsigned, matching the family defaults used by `put_entry_bytes`.
+pub(super) fn empty_archive_for_path(path: &std::path::Path) -> Archive {
+    let format = format_for_new_archive_path(path);
+    Archive {
+        entries: Vec::new(),
+        format,
+        metadata: Vec::new(),
+        stub: Vec::new(),
+        signature_flag: matches!(format, ArchiveFormat::NativePhar)
+            .then_some(PHAR_SHA1_SIGNATURE_TYPE),
     }
 }

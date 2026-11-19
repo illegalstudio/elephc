@@ -147,6 +147,8 @@ pub(super) fn parse_zip_archive_with_public_key(
         format: ArchiveFormat::Zip,
         metadata,
         stub,
+        signature_flag: read_zip_signature(data)
+            .and_then(|payload| parse_signature_bin(&payload).map(|(flag, _)| flag)),
     })
 }
 

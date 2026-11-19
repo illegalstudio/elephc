@@ -68,6 +68,7 @@ pub(super) fn copy_archive_public_key(
 }
 
 /// Appends PHP's raw-SHA1 PHAR signature trailer to `archive`.
+#[cfg(test)]
 pub(super) fn append_sha1_signature(archive: &mut Vec<u8>) {
     use sha1::{Digest, Sha1};
 
@@ -251,7 +252,9 @@ pub(super) fn sign_archive_openssl(path: &[u8], key_pem: &[u8]) -> Option<()> {
         ArchiveFormat::Zip => {
             let archive = parse_zip_archive_with_public_key(&data, Some(verification_key), false)?;
             let signed = sign_zip_archive(
-                &archive,
+                &archive.entries,
+                &archive.metadata,
+                &archive.stub,
                 PHAR_OPENSSL_SIGNATURE_TYPE,
                 Some(key_pem),
             )?;
@@ -260,7 +263,9 @@ pub(super) fn sign_archive_openssl(path: &[u8], key_pem: &[u8]) -> Option<()> {
         ArchiveFormat::Tar => {
             let archive = parse_tar_archive_with_public_key(&data, Some(verification_key), false)?;
             let signed = sign_tar_archive(
-                &archive,
+                &archive.entries,
+                &archive.metadata,
+                &archive.stub,
                 PHAR_OPENSSL_SIGNATURE_TYPE,
                 Some(key_pem),
             )?;
@@ -291,11 +296,23 @@ pub(super) fn sign_archive_hash(path: &[u8], algo: u32) -> Option<()> {
     let (data, archive) = read_verified_archive(fs_path)?;
     match signing_format(&data)? {
         ArchiveFormat::Zip => {
-            let signed = sign_zip_archive(&archive, algo, None)?;
+            let signed = sign_zip_archive(
+                &archive.entries,
+                &archive.metadata,
+                &archive.stub,
+                algo,
+                None,
+            )?;
             write_path(path, &signed)
         }
         ArchiveFormat::Tar => {
-            let signed = sign_tar_archive(&archive, algo, None)?;
+            let signed = sign_tar_archive(
+                &archive.entries,
+                &archive.metadata,
+                &archive.stub,
+                algo,
+                None,
+            )?;
             write_path(path, &signed)
         }
         ArchiveFormat::NativePhar => {

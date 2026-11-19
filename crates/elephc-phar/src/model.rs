@@ -109,6 +109,11 @@ pub(super) struct Archive {
     pub(super) format: ArchiveFormat,
     pub(super) metadata: Vec<u8>,
     pub(super) stub: Vec<u8>,
+    /// Signature flag declared by the source archive (native trailer or
+    /// `.phar/signature.bin`), or `None` when unsigned. An implicit rebuild
+    /// preserves it instead of downgrading SHA-256/512 to SHA-1 or stripping
+    /// a tar/zip signature.
+    pub(super) signature_flag: Option<u32>,
 }
 
 /// Returns true for the reserved `.phar/*` control entries that phars hide from

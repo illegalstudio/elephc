@@ -576,3 +576,86 @@ pub(super) fn implicit_edits_of_openssl_signed_archives_are_rejected() {
         remove_signed_fixture(&path);
     }
 }
+
+/// Editing a hash-signed archive must preserve its declared digest algorithm.
+/// Before this, native rebuilds always wrote SHA1 and tar/zip rebuilds wrote no
+/// signature at all, silently weakening SHA-256/512 archives.
+#[test]
+pub(super) fn implicit_edits_preserve_a_hash_signature() {
+    for extension in ["phar", "tar", "zip"] {
+        let path = std::env::temp_dir().join(format!(
+            "elephc-phar-preserve-signature-{}-{extension}.{extension}",
+            std::process::id()
+        ));
+        let path_bytes = path.to_string_lossy();
+        assert_eq!(
+            put_entry_bytes(path_bytes.as_bytes(), b"a.txt", b"alpha"),
+            Some(5)
+        );
+        assert_eq!(sign_archive_hash(path_bytes.as_bytes(), 3), Some(()));
+
+        // Add an entry: the implicit rebuild must re-sign with SHA-256.
+        assert_eq!(
+            put_entry_bytes(path_bytes.as_bytes(), b"b.txt", b"beta"),
+            Some(4)
+        );
+        let (flag, digest) =
+            read_signature_info(path_bytes.as_bytes()).expect("signature survives the edit");
+        assert_eq!(flag, 3, "{extension}: SHA-256 must not be downgraded");
+        assert_eq!(digest.len(), 32);
+        assert_eq!(
+            signature_type_name(path_bytes.as_bytes()).as_deref(),
+            Some(&b"SHA-256"[..])
+        );
+        assert!(
+            parse_archive_path(&path).is_some(),
+            "{extension}: edited archive must still authenticate"
+        );
+
+        // Delete an entry: still SHA-256.
+        assert_eq!(delete_entry_bytes(path_bytes.as_bytes(), b"a.txt"), Some(()));
+        let (flag, _) =
+            read_signature_info(path_bytes.as_bytes()).expect("signature survives deletion");
+        assert_eq!(flag, 3, "{extension}: deletion must not downgrade SHA-256");
+        remove_signed_fixture(&path);
+    }
+}
+
+/// Editing an unsigned archive must leave it unsigned; an implicit rebuild may
+/// not invent a SHA1 signature that the source never had.
+#[test]
+pub(super) fn implicit_edits_keep_unsigned_archives_unsigned() {
+    for extension in ["phar", "tar", "zip"] {
+        let path = std::env::temp_dir().join(format!(
+            "elephc-phar-keep-unsigned-{}-{extension}.{extension}",
+            std::process::id()
+        ));
+        let path_bytes = path.to_string_lossy();
+        assert_eq!(
+            put_entry_bytes(path_bytes.as_bytes(), b"a.txt", b"alpha"),
+            Some(5)
+        );
+        if extension == "phar" {
+            // New native phars start SHA1-signed; strip it to exercise the unsigned path.
+            let signed = std::fs::read(&path).unwrap();
+            std::fs::write(&path, strip_native_signature(&signed)).unwrap();
+        }
+        assert!(
+            read_signature_info(path_bytes.as_bytes()).is_none(),
+            "{extension}: fixture must start unsigned"
+        );
+        assert_eq!(
+            put_entry_bytes(path_bytes.as_bytes(), b"b.txt", b"beta"),
+            Some(4)
+        );
+        assert!(
+            read_signature_info(path_bytes.as_bytes()).is_none(),
+            "{extension}: an implicit edit must not add a signature"
+        );
+        assert!(
+            parse_archive_path(&path).is_some(),
+            "{extension}: unsigned archive stays readable"
+        );
+        remove_signed_fixture(&path);
+    }
+}

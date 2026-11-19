@@ -98,6 +98,11 @@ pub(super) fn parse_native_phar_archive_with_public_key(
         format: ArchiveFormat::NativePhar,
         metadata,
         stub,
+        signature_flag: if global_flags & PHAR_HDR_SIGNATURE != 0 {
+            Some(le32(data, data.len().checked_sub(8)?)?)
+        } else {
+            None
+        },
     })
 }
 
@@ -286,12 +291,18 @@ pub(super) fn build_native_phar_archive(
     entries: &[ArchiveEntry],
     metadata: &[u8],
     stub: &[u8],
+    signature_flag: Option<u32>,
 ) -> Option<Vec<u8>> {
     let mut manifest = Vec::new();
     let mut stored_entries = Vec::with_capacity(entries.len());
     manifest.extend_from_slice(&u32::try_from(entries.len()).ok()?.to_le_bytes());
     manifest.extend_from_slice(&[0x11, 0x00]);
-    manifest.extend_from_slice(&PHAR_HDR_SIGNATURE.to_le_bytes());
+    let global_flags = if signature_flag.is_some() {
+        PHAR_HDR_SIGNATURE
+    } else {
+        0
+    };
+    manifest.extend_from_slice(&global_flags.to_le_bytes());
     manifest.extend_from_slice(&0u32.to_le_bytes());
     // Global metadata field: length-prefixed serialized blob (empty when unset).
     manifest.extend_from_slice(&u32::try_from(metadata.len()).ok()?.to_le_bytes());
@@ -327,7 +338,12 @@ pub(super) fn build_native_phar_archive(
     for stored in stored_entries {
         out.extend_from_slice(&stored);
     }
-    append_sha1_signature(&mut out);
+    if let Some(flag) = signature_flag {
+        let digest = compute_signature(flag, None, &out)?;
+        out.extend_from_slice(&digest);
+        out.extend_from_slice(&flag.to_le_bytes());
+        out.extend_from_slice(b"GBMB");
+    }
     Some(out)
 }
 
