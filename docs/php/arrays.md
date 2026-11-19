@@ -426,9 +426,10 @@ Reference elements also constrain later array operations:
   PHP shows an ordinary array. The aliasing itself is correct.
 - `unset($a[0][1])` after a nested reference bind is not supported; unset the
   alias or rebuild the array.
-- `unset()` of a variable followed by a reference write (`unset($a);
-  $a['k'] = &$value;`) is not supported; initialize the destination as an array
-  first.
+- `unset()` (or a `null` assignment) of a variable followed by a reference
+  write (`unset($a); $a['k'] = &$value;`) re-creates the container like PHP and
+  keeps the alias live; the killed slot is replaced instead of widening its
+  unset null into boxed storage.
 
 ## Multi-dimensional arrays
 ```php

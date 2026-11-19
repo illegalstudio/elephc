@@ -3611,6 +3611,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         true
     }
 
+    /// Releases and abandons a killed binding before the next write re-creates its container.
+    ///
+    /// `unset($a)` leaves the name typed `Void`; a later array write auto-vivifies a fresh
+    /// container. Reusing the killed slot would widen it from the unset null to boxed `mixed`
+    /// storage, so a reference-element write would hand an integer cell to a hash helper. The
+    /// kill path mints a fresh slot at the container's own type instead. Kinds whose storage is
+    /// not frame-owned (program globals, ref cells, externs) keep their existing shape.
+    pub(crate) fn abandon_killed_local_binding(&mut self, name: &str, span: Span) {
+        if self.is_ref_bound_local(name) || !self.local_binding_slot_is_abandonable(name) {
+            return;
+        }
+        self.release_and_abandon_local_binding(name, Some(span));
+    }
+
     /// Drops the name-to-slot binding after `unset` released and nulled the slot.
     ///
     /// The slot itself stays in the frame (it is still cleaned up, and any SSA value already

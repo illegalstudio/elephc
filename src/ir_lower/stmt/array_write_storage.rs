@@ -45,6 +45,15 @@ pub(super) fn auto_vivified_array_type(
     if ctx.is_ref_bound_local(name) {
         return None;
     }
+    // `unset($a)` (or `$a = null`) leaves a Void binding. PHP re-creates the variable on the
+    // next array write; the fresh container is hash-backed because a reference element needs
+    // tag-11 storage regardless of the key shape.
+    if ctx.local_type(name).codegen_repr() == PhpType::Void {
+        return Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        });
+    }
     if let Some(slot) = ctx.local_slots.get(name).copied() {
         if ctx.slot_is_initialized(slot) {
             return None;
@@ -64,6 +73,19 @@ pub(super) fn empty_auto_vivified_container(
     ty: &PhpType,
     span: Span,
 ) -> LoweredValue {
+    // A binding killed by `unset()` still holds a boxed null in its old slot, which the
+    // runtime auto-vivifier would treat as an existing container. Start a fresh owned
+    // container instead; the later publish repoints the name at a slot of its own shape.
+    if ctx.local_type(name).codegen_repr() == PhpType::Void {
+        return ctx.emit_value(
+            Op::HashNew,
+            Vec::new(),
+            Some(Immediate::Capacity(0)),
+            ty.clone(),
+            Op::HashNew.default_effects(),
+            Some(span),
+        );
+    }
     // The raw load is zero while the variable is still unbound; the runtime helper allocates
     // only in that case, so a loop body does not reset a container created by an earlier
     // iteration.

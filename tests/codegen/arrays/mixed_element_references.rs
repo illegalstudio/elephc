@@ -311,3 +311,86 @@ var_dump($b);
 array(3) {\n  [0]=>\n  string(1) \"c\"\n  [1]=>\n  string(1) \"b\"\n  [2]=>\n  string(1) \"a\"\n}\n"
     );
 }
+
+/// A reference element written after `unset($a)` re-creates the variable instead of widening
+/// the killed slot's null storage into a boxed cell.
+#[test]
+fn test_reference_element_after_unset_recreates_the_container() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 7;
+$a = [1, 2];
+unset($a);
+$a["k"] = &$x;
+$x = 9;
+var_dump($a);
+
+function recreate(): void {
+    $y = 1;
+    $b = ["old" => 2];
+    unset($b);
+    $b[0] = &$y;
+    $y = 5;
+    var_dump($b);
+}
+recreate();
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(1) {\n  [\"k\"]=>\n  &int(9)\n}\narray(1) {\n  [0]=>\n  &int(5)\n}\n"
+    );
+}
+
+/// A null binding auto-vivifies the same way, and appends after unset keep their keys.
+#[test]
+fn test_reference_element_after_null_and_append_after_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 3;
+$a = null;
+$a["k"] = &$x;
+$x = 4;
+var_dump($a);
+
+$b = [1, 2];
+unset($b);
+$b[] = 7;
+$b[] = 8;
+var_dump($b);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(1) {\n  [\"k\"]=>\n  &int(4)\n}\narray(2) {\n  [0]=>\n  int(7)\n  [1]=>\n  int(8)\n}\n"
+    );
+}
+
+/// Replacing the killed slot must release the unset null box and the new hash exactly once.
+#[test]
+fn test_reference_element_after_unset_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function recreate(int $round): int {
+    $x = $round;
+    $a = ["old" => $round];
+    unset($a);
+    $a["k"] = &$x;
+    $x = $x + 1;
+    return $a["k"];
+}
+$total = 0;
+for ($i = 0; $i < 4; $i++) {
+    $total += recreate($i);
+}
+echo $total, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "10\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
