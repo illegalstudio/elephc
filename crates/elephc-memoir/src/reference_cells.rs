@@ -291,3 +291,12 @@ pub mod validated_commit;
 pub mod eval_writeback;
 
 pub mod staged_pin;
+
+/// Allocates temporary two-word reference-argument storage for an already staged value.
+pub fn emit_allocate_argument_pair(emitter: &mut impl crate::Emitter, destination: &str) {
+    let result = emitter.int_result_reg();
+    emitter.emit_load_int_immediate(result, crate::layout::REFERENCE_CELL_SIZE as i64);
+    emitter.emit_call_label("__rt_heap_alloc");
+    emitter.emit_push_reg(result);
+    emitter.emit_pop_reg(destination);
+}

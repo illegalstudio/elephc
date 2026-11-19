@@ -8,7 +8,7 @@
 //! - C strings receive a trailing NUL; native strings retain a pointer/length result.
 //! - A null C input produces the existing empty-string result without acquiring an owner.
 
-use crate::{Arch, Emitter};
+use crate::{abi, Arch, Emitter};
 
 /// __rt_str_to_cstr: copy an elephc string into a freshly allocated C string.
 /// Input:  x1 = pointer to string bytes, x2 = length
@@ -373,5 +373,75 @@ pub fn emit_release_owned_c_string_pair(emitter: &mut impl Emitter) {
             emitter.instruction("mov rax, QWORD PTR [rbp - 136]");              // release the staging block
             emitter.instruction("call __rt_heap_free");                         // return the block to the runtime heap
         }
+    }
+}
+
+/// Copies a staged environment assignment into storage with the lifetime required by libc putenv.
+pub fn emit_environment_assignment(emitter: &mut impl Emitter, copy_loop: &str, copy_done: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("add x0, x2, #1");                              // allocate space for the environment string plus trailing null
+            emitter.instruction("stp x1, x2, [sp, #-16]!");                     // preserve the source string pointer and length across heap allocation
+            abi::emit_call_label(emitter, "__rt_heap_alloc");
+            emitter.instruction("ldp x1, x2, [sp], #16");                       // restore the source string pointer and length after heap allocation
+            emitter.instruction("mov x3, x0");                                  // keep the persistent destination buffer for copying and putenv()
+            emitter.instruction("mov x4, #0");                                  // start copying at byte offset zero
+            emitter.label(copy_loop);
+            emitter.instruction("cmp x4, x2");                                  // compare the copied byte count with the source length
+            emitter.instruction(&format!("b.ge {}", copy_done));                // finish once every source byte has been persisted
+            emitter.instruction("ldrb w5, [x1, x4]");                           // load one byte from the source environment assignment
+            emitter.instruction("strb w5, [x3, x4]");                           // copy the byte into the persistent putenv buffer
+            emitter.instruction("add x4, x4, #1");                              // advance to the next source byte
+            emitter.instruction(&format!("b {}", copy_loop));                   // continue copying the environment assignment
+            emitter.label(copy_done);
+            emitter.instruction("strb wzr, [x3, x4]");                          // append the C null terminator required by putenv()
+            emitter.instruction("mov x0, x3");                                  // pass the persistent environment buffer to putenv()
+        }
+        Arch::X86_64 => {
+            emitter.instruction("sub rsp, 16");                                 // reserve aligned spill space for the source string across heap allocation
+            emitter.instruction("mov QWORD PTR [rsp], rax");                    // save the source environment string pointer
+            emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                // save the source environment string length
+            emitter.instruction("mov rax, rdx");                                // seed the heap allocation size from the source length
+            emitter.instruction("add rax, 1");                                  // allocate space for the environment string plus trailing null
+            abi::emit_call_label(emitter, "__rt_heap_alloc");
+            emitter.instruction("mov rcx, QWORD PTR [rsp]");                    // restore the source environment string pointer
+            emitter.instruction("mov r8, QWORD PTR [rsp + 8]");                 // restore the source environment string length
+            emitter.instruction("add rsp, 16");                                 // release the temporary source string spill space
+            emitter.instruction("mov r9, rax");                                 // keep the persistent destination buffer for copying and putenv()
+            emitter.instruction("mov r10, 0");                                  // start copying at byte offset zero
+            emitter.label(copy_loop);
+            emitter.instruction("cmp r10, r8");                                 // compare the copied byte count with the source length
+            emitter.instruction(&format!("jae {}", copy_done));                 // finish once every source byte has been persisted
+            emitter.instruction("mov r11b, BYTE PTR [rcx + r10]");              // load one byte from the source environment assignment
+            emitter.instruction("mov BYTE PTR [r9 + r10], r11b");               // copy the byte into the persistent putenv buffer
+            emitter.instruction("add r10, 1");                                  // advance to the next source byte
+            emitter.instruction(&format!("jmp {}", copy_loop));                 // continue copying the environment assignment
+            emitter.label(copy_done);
+            emitter.instruction("mov BYTE PTR [r9 + r10], 0");                  // append the C null terminator required by putenv()
+            emitter.instruction("mov rdi, r9");                                 // pass the persistent environment buffer to putenv()
+        }
+    }
+}
+
+/// Copies a frame-backed byte slice to raw heap scratch, reserving a byte for a terminator.
+pub fn emit_stage_length_bounded_input(emitter: &mut impl Emitter, source: usize, length: usize, buffer: usize) {
+    let result = emitter.int_result_reg();
+    let (arg0, arg1, arg2) = (emitter.int_arg_reg_name(0), emitter.int_arg_reg_name(1), emitter.int_arg_reg_name(2));
+    abi::emit_reg_move(emitter, result, arg1);
+    emitter.instruction(match emitter.arch() { Arch::AArch64 => "add x0, x0, #1", Arch::X86_64 => "add rax, 1" }); // reserve space for the native terminator
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    abi::store_at_offset(emitter, result, buffer);
+    abi::emit_reg_move(emitter, arg0, result);
+    abi::load_at_offset(emitter, arg1, source);
+    abi::load_at_offset(emitter, arg2, length);
+    emitter.bl_c("memcpy");                                                     // copy exactly the PHP byte range into privately owned scratch
+}
+
+/// Reserves the fixed native path buffer, preserving each target's result ownership ABI.
+pub fn emit_allocate_path_buffer(emitter: &mut impl Emitter) {
+    emitter.emit_load_int_immediate(emitter.int_result_reg(), 1024);
+    match emitter.arch() {
+        Arch::AArch64 => emitter.emit_call_label("__rt_heap_alloc"),
+        Arch::X86_64 => crate::strings::str_new_owned::emit_allocate_owned_string(emitter),
     }
 }

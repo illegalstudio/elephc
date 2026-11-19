@@ -11,9 +11,7 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::sentinels::{
-    emit_branch_if_null_container, x86_64_heap_kind_word, CONCAT_TEMP_HEAP_KIND,
-};
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 const PROBE_FRAME: usize = 64;
 const WRITE_FRAME: usize = 96;
