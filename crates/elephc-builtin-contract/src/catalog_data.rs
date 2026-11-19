@@ -21541,7 +21541,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         examples: &[
         ],
         php_manual: Some("function.is-double"),
-        deprecation: None,
+        deprecation: Some(crate::BuiltinDeprecation::since(PhpVersion::Php86, "use is_float() instead")),
         extension: false,
         internal: false,
         requirements: &[],
@@ -21758,7 +21758,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         examples: &[
         ],
         php_manual: Some("function.is-integer"),
-        deprecation: None,
+        deprecation: Some(crate::BuiltinDeprecation::since(PhpVersion::Php86, "use is_int() instead")),
         extension: false,
         internal: false,
         requirements: &[],
@@ -21851,7 +21851,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         examples: &[
         ],
         php_manual: Some("function.is-long"),
-        deprecation: None,
+        deprecation: Some(crate::BuiltinDeprecation::since(PhpVersion::Php86, "use is_int() instead")),
         extension: false,
         internal: false,
         requirements: &[],
@@ -32507,7 +32507,7 @@ echo memory_get_peak_usage();
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.spl-classes.php"),
-        deprecation: None,
+        deprecation: Some(crate::BuiltinDeprecation::since(PhpVersion::Php86, "use ReflectionExtension::getClassNames() instead")),
         extension: false,
         internal: false,
         requirements: &[],
@@ -32538,7 +32538,7 @@ echo memory_get_peak_usage();
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.spl-object-hash.php"),
-        deprecation: None,
+        deprecation: Some(crate::BuiltinDeprecation::since(PhpVersion::Php86, "use spl_object_id() instead")),
         extension: false,
         internal: false,
         requirements: &[],

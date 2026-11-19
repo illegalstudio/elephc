@@ -97,6 +97,16 @@ fn test_pfa_rejects_variadic_not_last_php86() {
     );
 }
 
+/// A variadic placeholder followed by another argument is rejected by the desugar pass, not
+/// the parser, so a dynamic callable goes through the same diagnostic.
+#[test]
+fn test_pfa_rejects_dynamic_variadic_not_last_php86() {
+    expect_pfa_error(
+        "<?php $f = function (...$args) {}; ($f)(..., 1);",
+        "The variadic placeholder must be the last argument",
+    );
+}
+
 /// A method whose signature is invisible cannot be partially applied safely.
 #[test]
 fn test_pfa_rejects_undeclared_method_php86() {

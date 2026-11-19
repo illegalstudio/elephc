@@ -100,10 +100,16 @@ pub(crate) fn parse_args(
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
             let spread_span = tokens[*pos].1.span;
             *pos += 1;
-            // A trailing comma after `...` is rejected on every profile: php-src only accepts
-            // the ellipsis as the final item (`f(...,)` and `f(1, ...,)` are syntax errors), and
-            // the first-class-callable form is `f(...)` with nothing between `...` and `)`.
-            if tokens.get(*pos).is_some_and(|(token, _)| *token == Token::Comma) {
+            // A trailing comma directly after `...` is rejected on every profile: php-src only
+            // accepts the ellipsis as the final item (`f(...,)` is a syntax error), and the
+            // first-class-callable form is `f(...)` with nothing between `...` and `)`.
+            // `f(..., 1)` is different: it parses, and the partial-application pass reports the
+            // more specific "variadic placeholder must be the last argument" diagnostic.
+            let trailing_comma = tokens.get(*pos).is_some_and(|(token, _)| *token == Token::Comma)
+                && tokens
+                    .get(*pos + 1)
+                    .is_some_and(|(token, _)| *token == Token::RParen);
+            if trailing_comma {
                 return Err(CompileError::new(
                     tokens[*pos].1.span,
                     "A `...` placeholder must be the last argument and cannot be followed by a comma",

@@ -1177,7 +1177,10 @@ fn test_issue_828_dynamic_first_class_callable_parser() {
 /// because a comma may not follow the ellipsis.
 #[test]
 fn test_issue_828_dynamic_first_class_callable_invalid_syntax() {
-    for source in ["$f(...,)", "($f)(..., 1)", "$a[0](...,)"] {
+    // `($f)(..., 1)` is no longer a parse error: the argument list parses and the partial
+    // application pass rejects the variadic placeholder not being last (see
+    // tests/error_tests/partial_application.rs).
+    for source in ["$f(...,)", "$a[0](...,)"] {
         assert!(parse_fails(&format!("<?php {source};")), "{source}");
     }
     let stmts = parse_source("<?php $f(1, ...);");

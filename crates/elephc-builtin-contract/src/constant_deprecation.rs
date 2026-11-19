@@ -103,6 +103,7 @@ static GLOBAL_CONSTANT_DEPRECATIONS: &[(&str, ConstantDeprecation)] = &[
     global("SUNFUNCS_RET_DOUBLE", "Constant SUNFUNCS_RET_DOUBLE is deprecated since 8.4, as date_sunrise() and date_sunset() were deprecated in 8.1", PhpVersion::Php84),
     global("SUNFUNCS_RET_STRING", "Constant SUNFUNCS_RET_STRING is deprecated since 8.4, as date_sunrise() and date_sunset() were deprecated in 8.1", PhpVersion::Php84),
     global("SUNFUNCS_RET_TIMESTAMP", "Constant SUNFUNCS_RET_TIMESTAMP is deprecated since 8.4, as date_sunrise() and date_sunset() were deprecated in 8.1", PhpVersion::Php84),
+    global("SORT_LOCALE_STRING", "Constant SORT_LOCALE_STRING is deprecated since 8.6, use Collator::sort() or Collator::asort() instead", PhpVersion::Php86),
 ];
 
 /// Deprecated constants of builtin classes elephc provides, with php-src 8.5's messages

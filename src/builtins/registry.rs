@@ -281,7 +281,7 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 /// | `ref_params`           | `BuiltinDef.ref_params` (from spec)           |
 /// | `declared_params`      | `vec![false; N]` for registry-derived params  |
 /// | `variadic`             | `BuiltinDef.variadic` (from spec)             |
-/// | `deprecation`          | `spec.deprecation` mapped to `Option<String>` |
+/// | `deprecation`          | active `spec.deprecation` (profile-gated) mapped to `Option<String>` |
 ///
 /// Returns `None` if the builtin is not registered.
 pub fn function_sig(name: &str) -> Option<FunctionSig> {
@@ -316,7 +316,15 @@ pub fn function_sig(name: &str) -> Option<FunctionSig> {
         ref_params: def.ref_params.clone(),
         declared_params: vec![false; def.params.len()],
         variadic: def.variadic.clone(),
-        deprecation: def.spec.deprecation.map(|deprecation| deprecation.message.to_string()),
+        // A deprecation carries the first profile that reports it; an older profile must keep
+        // the plain call. `spec.deprecation` alone would warn on every profile.
+        deprecation: def
+            .spec
+            .deprecation
+            .filter(|deprecation| {
+                deprecation.is_active_for(crate::codegen_support::compile_php_version())
+            })
+            .map(|deprecation| deprecation.message.to_string()),
         is_generator: false,
     })
 }
