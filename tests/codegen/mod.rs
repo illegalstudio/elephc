@@ -129,6 +129,7 @@ mod time_duration_serialization;
 mod gmp_eval;
 mod gmp_class;
 mod gmp_math;
+mod gmp_php86;
 mod random;
 mod misc;
 mod pointers;

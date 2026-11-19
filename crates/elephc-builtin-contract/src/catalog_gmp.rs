@@ -58,6 +58,8 @@ pub const FUNCTIONS: &[&str] = &[
     "gmp_popcount",
     "gmp_pow",
     "gmp_powm",
+    "gmp_powm_sec",
+    "gmp_prevprime",
     "gmp_prob_prime",
     "gmp_random_bits",
     "gmp_random_range",
@@ -88,6 +90,13 @@ macro_rules! param {
     };
     ($name:literal, $ty:expr, $default:expr) => {
         ParamSpec { name: $name, ty: $ty, default: Some($default), by_ref: false }
+    };
+}
+
+/// One write-only by-reference output parameter with a default.
+macro_rules! ref_param {
+    ($name:literal, $ty:expr, $default:expr) => {
+        ParamSpec { name: $name, ty: $ty, default: Some($default), by_ref: true }
     };
 }
 
@@ -165,6 +174,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     gmp_contract!("gmp_popcount", [param!("num", OPERAND)], TypeSpec::Int, "Population count of a GMP number."),
     gmp_contract!("gmp_pow", [param!("num", OPERAND), param!("exponent", TypeSpec::Int)], GMP_RESULT, "Raises a GMP number to an integer power."),
     gmp_contract!("gmp_powm", [param!("num", OPERAND), param!("exponent", OPERAND), param!("modulus", OPERAND)], GMP_RESULT, "Modular exponentiation."),
+    gmp_contract!("gmp_powm_sec", [param!("num", OPERAND), param!("exponent", OPERAND), param!("modulus", OPERAND)], GMP_RESULT, "Side-channel quiet modular exponentiation."),
+    gmp_contract!("gmp_prevprime", [param!("num", OPERAND), ref_param!("definitely_prime", TypeSpec::Bool, DefaultSpec::Null)], GMP_RESULT, "Returns the largest prime smaller than a GMP number."),
     gmp_contract!("gmp_prob_prime", [param!("num", OPERAND), param!("repetitions", TypeSpec::Int, DefaultSpec::Int(10))], TypeSpec::Int, "Probable-prime test."),
     gmp_contract!("gmp_random_bits", [param!("bits", TypeSpec::Int)], GMP_RESULT, "Generates a random GMP number with the given bit count."),
     gmp_contract!("gmp_random_range", [param!("min", OPERAND), param!("max", OPERAND)], GMP_RESULT, "Generates a random GMP number in a range."),
@@ -191,7 +202,7 @@ mod tests {
     #[test]
     fn gmp_contracts_are_sorted_and_cover_every_function() {
         assert_eq!(CONTRACTS.len(), FUNCTIONS.len());
-        assert_eq!(CONTRACTS.len(), 51);
+        assert_eq!(CONTRACTS.len(), 53);
         let mut previous = "";
         for (contract, expected) in CONTRACTS.iter().zip(FUNCTIONS.iter()) {
             assert_eq!(contract.name, *expected);

@@ -387,7 +387,7 @@ fn power() -> MethodBuilder {
                 bin(v("exponent"), BinOp::Lt, i(0)),
                 vec![throw_new(
                     "ValueError",
-                    s("Exponent must be greater than or equal to 0"),
+                    s("Exponent must be between 0 and 18446744073709551615"),
                 )],
                 Vec::new(),
                 None,
@@ -416,7 +416,7 @@ fn shift(name: &str, operation: i64, symbol: &str, label: &str) -> MethodBuilder
                 bin(v("shift"), BinOp::Lt, i(0)),
                 vec![throw_new(
                     "ValueError",
-                    s(&format!("{label} must be greater than or equal to 0")),
+                    s(&format!("{label} must be between 0 and 18446744073709551615")),
                 )],
                 Vec::new(),
                 None,

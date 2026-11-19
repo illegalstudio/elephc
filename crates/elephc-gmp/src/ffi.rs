@@ -116,6 +116,8 @@ extern "C" {
     pub fn __gmpz_pow_ui(rop: *mut MpzRaw, base: *const MpzRaw, exp: c_ulong);
     /// Computes an integer power modulo the supplied modulus.
     pub fn __gmpz_powm(rop: *mut MpzRaw, base: *const MpzRaw, exp: *const MpzRaw, modulus: *const MpzRaw);
+    /// Computes an integer power modulo the supplied modulus with a side-channel quiet algorithm.
+    pub fn __gmpz_powm_sec(rop: *mut MpzRaw, base: *const MpzRaw, exp: *const MpzRaw, modulus: *const MpzRaw);
     /// Computes the integer square root of a nonnegative operand.
     pub fn __gmpz_sqrt(rop: *mut MpzRaw, op: *const MpzRaw);
     /// Computes the integer square root and its remainder.
@@ -132,6 +134,11 @@ extern "C" {
     pub fn __gmpz_probab_prime_p(n: *const MpzRaw, reps: c_int) -> c_int;
     /// Finds the next prime candidate after the operand.
     pub fn __gmpz_nextprime(rop: *mut MpzRaw, op: *const MpzRaw);
+    /// Finds the largest prime smaller than the operand; 2 = definitely prime, 1 = probably
+    /// prime, 0 = no such prime.
+    pub fn __gmpz_prevprime(rop: *mut MpzRaw, op: *const MpzRaw) -> c_int;
+    /// Reports whether the operand fits into an unsigned machine word.
+    pub fn __gmpz_fits_ulong_p(op: *const MpzRaw) -> c_int;
 
     /// Computes the greatest common divisor of two integers.
     pub fn __gmpz_gcd(rop: *mut MpzRaw, op1: *const MpzRaw, op2: *const MpzRaw);

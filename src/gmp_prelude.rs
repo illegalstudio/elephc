@@ -56,7 +56,7 @@ fn declarations() -> Vec<Stmt> {
     program
 }
 
-/// The fifteen raw bridge entry points.
+/// The sixteen raw bridge entry points.
 fn extern_declarations() -> Vec<Stmt> {
     vec![
         extern_fn("elephc_gmp_binary", "elephc_gmp")
@@ -104,6 +104,10 @@ fn extern_declarations() -> Vec<Stmt> {
             .returns(CType::Float)
             .build(),
         extern_fn("elephc_gmp_fits_slong", "elephc_gmp")
+            .param("value", CType::Str)
+            .returns(CType::Int)
+            .build(),
+        extern_fn("elephc_gmp_fits_ulong", "elephc_gmp")
             .param("value", CType::Str)
             .returns(CType::Int)
             .build(),

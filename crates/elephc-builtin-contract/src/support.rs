@@ -381,9 +381,9 @@ mod tests {
         // The seven additional ctype contracts join the eval registry, the locale
         // prelude exposes setlocale/nl_langinfo through forwarding eval homes, and
         // `preg_grep`, `preg_last_error`, and `preg_last_error_msg` have eval homes. So do
-        // the PHP 8.6 pack/unpack endianness surface, `url_percent_encode`, and
-        // `stream_socket_get_crypto_status`.
-        assert_eq!(eval_registry, 798 + curl_surface);
+        // the PHP 8.6 pack/unpack endianness surface, `url_percent_encode`,
+        // `stream_socket_get_crypto_status`, and the two GMP 8.6 functions.
+        assert_eq!(eval_registry, 800 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -427,8 +427,8 @@ mod tests {
         // and `preg_last_error` and `preg_last_error_msg` add two more. So do
         // `get_debug_type` and the PHP 8.6
         // pack/stream_context_set_options/url_percent_encode/stream_socket_get_crypto_status
-        // contracts.
-        assert_eq!(aot_registry, 845);
+        // contracts, plus the two GMP 8.6 functions.
+        assert_eq!(aot_registry, 847);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
         // The two PHP-visible locale functions are prelude-provided.
@@ -486,8 +486,8 @@ mod tests {
         // interpreter adapters, plus the GMP, SimpleXML, tidy, ctype, and locale
         // forwarding homes, the PHP 8.6 pack and url_percent_encode adapters, plus the
         // `preg_grep` / `preg_last_error*` eval homes, plus
-        // `stream_socket_get_crypto_status`.
-        assert_eq!(interpreter_adapter, 703 + curl_surface);
+        // `stream_socket_get_crypto_status` and the two GMP 8.6 functions.
+        assert_eq!(interpreter_adapter, 705 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,

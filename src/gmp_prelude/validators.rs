@@ -224,22 +224,14 @@ fn operand() -> Stmt {
             if_(
                 call("is_string", vec![v("value")]),
                 vec![
-                    assign("packet", call("elephc_gmp_parse", vec![v("value"), i(0)])),
-                    if_(
-                        bin(index(v("packet"), i(0)), BinOp::StrictEq, s("O")),
-                        vec![ret(call("__elephc_string_copy", vec![call("substr", vec![v("packet"), i(1)])]))],
-                        Vec::new(),
-                        None,
-                    ),
-                    throw_new(
-                        "ValueError",
+                    // PHP 8.6 rejects NUL bytes instead of truncating the integer string;
+                    // the bridge receives C strings, so the check must happen here.
+                    assign(
+                        "message",
                         concat(
                             concat(
                                 concat(
-                                    concat(
-                                        v("function"),
-                                        s("(): Argument #"),
-                                    ),
+                                    concat(v("function"), s("(): Argument #")),
                                     v("position"),
                                 ),
                                 s(" ($"),
@@ -247,6 +239,24 @@ fn operand() -> Stmt {
                             concat(v("name"), s(") is not an integer string")),
                         ),
                     ),
+                    if_(
+                        bin(
+                            call("strpos", vec![v("value"), s("\0")]),
+                            BinOp::StrictNotEq,
+                            b(false),
+                        ),
+                        vec![throw_new("ValueError", v("message"))],
+                        Vec::new(),
+                        None,
+                    ),
+                    assign("packet", call("elephc_gmp_parse", vec![v("value"), i(0)])),
+                    if_(
+                        bin(index(v("packet"), i(0)), BinOp::StrictEq, s("O")),
+                        vec![ret(call("__elephc_string_copy", vec![call("substr", vec![v("packet"), i(1)])]))],
+                        Vec::new(),
+                        None,
+                    ),
+                    throw_new("ValueError", v("message")),
                 ],
                 Vec::new(),
                 None,
@@ -368,17 +378,7 @@ fn init_operand() -> Stmt {
                 call("is_string", vec![v("value")]),
                 vec![
                     assign(
-                        "packet",
-                        call("elephc_gmp_parse", vec![v("value"), v("base")]),
-                    ),
-                    if_(
-                        bin(index(v("packet"), i(0)), BinOp::StrictEq, s("O")),
-                        vec![ret(call("__elephc_string_copy", vec![call("substr", vec![v("packet"), i(1)])]))],
-                        Vec::new(),
-                        None,
-                    ),
-                    throw_new(
-                        "ValueError",
+                        "message",
                         concat(
                             concat(
                                 concat(
@@ -390,6 +390,27 @@ fn init_operand() -> Stmt {
                             concat(v("name"), s(") is not an integer string")),
                         ),
                     ),
+                    if_(
+                        bin(
+                            call("strpos", vec![v("value"), s("\0")]),
+                            BinOp::StrictNotEq,
+                            b(false),
+                        ),
+                        vec![throw_new("ValueError", v("message"))],
+                        Vec::new(),
+                        None,
+                    ),
+                    assign(
+                        "packet",
+                        call("elephc_gmp_parse", vec![v("value"), v("base")]),
+                    ),
+                    if_(
+                        bin(index(v("packet"), i(0)), BinOp::StrictEq, s("O")),
+                        vec![ret(call("__elephc_string_copy", vec![call("substr", vec![v("packet"), i(1)])]))],
+                        Vec::new(),
+                        None,
+                    ),
+                    throw_new("ValueError", v("message")),
                 ],
                 Vec::new(),
                 None,
@@ -527,6 +548,16 @@ fn operator_value() -> Stmt {
             if_(
                 call("is_string", vec![v("value")]),
                 vec![
+                    if_(
+                        bin(
+                            call("strpos", vec![v("value"), s("\0")]),
+                            BinOp::StrictNotEq,
+                            b(false),
+                        ),
+                        vec![throw_new("ValueError", s("Number is not an integer string"))],
+                        Vec::new(),
+                        None,
+                    ),
                     assign("packet", call("elephc_gmp_parse", vec![v("value"), i(0)])),
                     if_(
                         bin(index(v("packet"), i(0)), BinOp::StrictEq, s("O")),

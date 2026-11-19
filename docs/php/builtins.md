@@ -659,6 +659,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`gmp_popcount()`](./builtins/math/gmp_popcount.md) | `(object|string|int $num): int` | `int` | ✓ | ✓ |
 | [`gmp_pow()`](./builtins/math/gmp_pow.md) | `(object|string|int $num, int $exponent): object` | `object` | ✓ | ✓ |
 | [`gmp_powm()`](./builtins/math/gmp_powm.md) | `(object|string|int $num, object|string|int $exponent, object|string|int $modulus): object` | `object` | ✓ | ✓ |
+| [`gmp_powm_sec()`](./builtins/math/gmp_powm_sec.md) | `(object|string|int $num, object|string|int $exponent, object|string|int $modulus): object` | `object` | ✓ | ✓ |
+| [`gmp_prevprime()`](./builtins/math/gmp_prevprime.md) | `(object|string|int $num, bool $definitely_prime = null): object` | `object` | ✓ | ✓ |
 | [`gmp_prob_prime()`](./builtins/math/gmp_prob_prime.md) | `(object|string|int $num, int $repetitions = 10): int` | `int` | ✓ | ✓ |
 | [`gmp_random_bits()`](./builtins/math/gmp_random_bits.md) | `(int $bits): object` | `object` | ✓ | ✓ |
 | [`gmp_random_range()`](./builtins/math/gmp_random_range.md) | `(object|string|int $min, object|string|int $max): object` | `object` | ✓ | ✓ |

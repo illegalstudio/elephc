@@ -148,8 +148,22 @@ pub unsafe extern "C" fn elephc_gmp_ternary(
     let third = text(third).to_string();
     contained(move || match op {
         ops::TER_POWM => ops::powm(&first, &second, &third),
+        ops::TER_POWM_SEC => ops::powm_sec(&first, &second, &third),
         _ => internal_error(format!("unknown GMP ternary operation {op}")),
     })
+}
+
+/// Reports whether a canonical decimal operand fits into an unsigned machine word.
+///
+/// # Safety
+/// `value` must be a NUL-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_gmp_fits_ulong(value: *const c_char) -> c_int {
+    let value = text(value);
+    match Mpz::from_decimal(value) {
+        Ok(number) => number.fits_ulong() as c_int,
+        Err(_) => 0,
+    }
 }
 
 /// Sets or clears one bit.
