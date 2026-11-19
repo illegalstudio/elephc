@@ -208,11 +208,12 @@ fn body_plan(
     counter: ValueId,
 ) -> Option<BodyPlan> {
     let block = function.block(body)?;
-    let mut checked_add = None;
+    let mut checked_add: Option<InstId> = None;
     let mut sqrt_call = None;
     let mut release = None;
     let mut float_add = None;
-    let mut counter_add = None;
+    let mut iadds: Vec<InstId> = Vec::new();
+    let mut cast = None;
     for &id in &block.instructions {
         let inst = function.instruction(id)?;
         match inst.op {
@@ -247,17 +248,48 @@ fn body_plan(
                 }
             }
             Op::IAdd => {
-                if counter_add.replace(id).is_some() || inst.result.is_none() {
+                if iadds.len() == 2 || inst.result.is_none() {
+                    return None;
+                }
+                iadds.push(id);
+            }
+            // The gradual argument boundary converts the boxed sum to the float parameter.
+            Op::Cast => {
+                if inst.immediate != Some(Immediate::CastTarget(IrType::F64))
+                    || cast.replace(id).is_some()
+                    || inst.result.is_none()
+                {
                     return None;
                 }
             }
             _ => return None,
         }
     }
-    let checked_add = checked_add?;
     let sqrt_call = sqrt_call?;
     let float_add = float_add?;
-    let counter_add = counter_add?;
+    // The counter latch is the unit add whose result the back edge carries. Integer-range
+    // proofs may already have narrowed the checked addend to a plain add as well.
+    let latch_value = {
+        let Some(Terminator::Br { args, .. }) = block.terminator.as_ref() else {
+            return None;
+        };
+        let position = function.block(loop_ref.header)?.params.iter().position(|&param| param == counter)?;
+        *args.get(position)?
+    };
+    let counter_add = *iadds.iter().find(|&&id| {
+        function.instruction(id).and_then(|inst| inst.result) == Some(latch_value)
+    })?;
+    let checked_add = match checked_add {
+        Some(id) if iadds.len() == 1 => id,
+        None if iadds.len() == 2 => {
+            let narrowed = *iadds.iter().find(|&&id| id != counter_add)?;
+            if !matches!(function.instruction(narrowed)?.origin, Some(PassOrigin::IntegerRange)) {
+                return None;
+            }
+            narrowed
+        }
+        _ => return None,
+    };
     let add = function.instruction(checked_add)?;
     if add.operands.len() != 2 || add.result.is_none() {
         return None;
@@ -274,7 +306,17 @@ fn body_plan(
     }
     let checked_result = add.result?;
     let sqrt = function.instruction(sqrt_call)?;
-    if sqrt.operands.as_slice() != [checked_result] {
+    let cast_result = match cast {
+        Some(id) => {
+            let cast = function.instruction(id)?;
+            if cast.operands.as_slice() != [checked_result] {
+                return None;
+            }
+            cast.result?
+        }
+        None => checked_result,
+    };
+    if sqrt.operands.as_slice() != [cast_result] {
         return None;
     }
     let sqrt_result = sqrt.result?;
@@ -342,7 +384,7 @@ fn body_plan(
     if accumulator_latch != float_add_result || counter_latch != counter_add_result {
         return None;
     }
-    if !checked_result_uses_are_scaffold(function, checked_result, sqrt_call, release) {
+    if !checked_result_uses_are_scaffold(function, checked_result, cast.unwrap_or(sqrt_call), release) {
         return None;
     }
     if !single_use(function, sqrt_result, float_add)
