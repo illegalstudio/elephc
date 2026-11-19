@@ -442,6 +442,19 @@ pub(super) fn resolve_function_reference(
         let local = format!("{}\\{}", current_namespace.unwrap(), name.as_canonical());
         return resolved_name(local).with_function_fallback();
     }
+    // A global function seeded from the rest of the program cannot settle the call yet: a class
+    // file loaded in the same autoload round may still declare the namespaced one, which PHP
+    // prefers. Keep the local candidate for the post-autoload fallback pass.
+    if name.is_unqualified()
+        && current_namespace.is_some_and(|namespace| !namespace.is_empty())
+        && !imports.functions.contains_key(&php_symbol_key(name.as_str()))
+        && symbols.program_functions.contains(&php_symbol_key(&canonical))
+    {
+        let local = format!("{}\\{}", current_namespace.unwrap(), name.as_canonical());
+        if !symbols.declares_function(&local) {
+            return resolved_name(local).with_function_fallback();
+        }
+    }
     let conditional = symbols.conditional_functions.contains(&php_symbol_key(&canonical));
     let resolved = resolved_name(canonical);
     if name.function_fallback().is_some() {

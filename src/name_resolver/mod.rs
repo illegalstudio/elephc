@@ -40,6 +40,8 @@ struct Imports {
 struct Symbols {
     functions: HashMap<String, String>,
     conditional_functions: HashSet<String>,
+    /// Keys of functions seeded from the rest of the program rather than declared by this file.
+    program_functions: HashSet<String>,
     classes: HashMap<String, String>,
     interfaces: HashMap<String, String>,
     traits: HashMap<String, String>,
@@ -101,7 +103,11 @@ fn resolve_on_compiler_stack(
     let mut symbols = Symbols::default();
     symbols::collect_symbols(&program, None, &mut symbols);
     for function in declared_functions {
-        symbols.functions.entry(php_symbol_key(function)).or_insert_with(|| function.clone());
+        let key = php_symbol_key(function);
+        if !symbols.functions.contains_key(&key) {
+            symbols.functions.insert(key.clone(), function.clone());
+            symbols.program_functions.insert(key);
+        }
     }
     for function in global_functions {
         if !symbols.declares_function(function) {
