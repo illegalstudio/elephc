@@ -17,8 +17,7 @@ use crate::parser::ast::{Program, Stmt};
 /// program has no Core INI state; that capacity is the fallback `memory_limit`.
 pub(crate) fn tokenizer_declarations(heap_size: usize, ini_source: IniMemorySource) -> Program {
     let body = match ini_source {
-        IniMemorySource::Get => INI_MEMORY_LIMIT_GET_BODY,
-        IniMemorySource::Set => INI_MEMORY_LIMIT_BODY,
+        IniMemorySource::Core => INI_MEMORY_LIMIT_BODY,
         IniMemorySource::None => "    return __ELEPHC_TOKENIZER_HEAP_LIMIT__;",
     };
     let source = TOKENIZER_PRELUDE_SRC
@@ -31,7 +30,7 @@ pub(crate) fn tokenizer_declarations(heap_size: usize, ini_source: IniMemorySour
     crate::parser::parse_internal(&tokens).expect("tokenizer prelude must parse")
 }
 
-/// Injects tokenizer and accounts for the web prelude's unconditional global `ini_set`.
+/// Injects tokenizer and accounts for the web prelude's Core INI state.
 pub fn inject_if_used_with_web(
     program: Program,
     force: bool,
@@ -213,69 +212,34 @@ class PhpToken implements \Stringable {
 }
 "#;
 
-/// The `memory_limit` body used when the opcache prelude declared `ini_get`.
-///
-/// Reading the directive directly keeps a runtime `ini_set('memory_limit', ...)` visible. The
-/// opcache prelude injects `__elephc_ini_quantity` with `ini_get`, so every Zend quantity form
-/// is honored here too.
-const INI_MEMORY_LIMIT_GET_BODY: &str = r#"    $heapLimit = __ELEPHC_TOKENIZER_HEAP_LIMIT__;
-    $limit = ini_get('memory_limit');
-    if ($limit === false) { return $heapLimit; }
-    if ($limit === '' || $limit === '-1') { return -1; }
-    return __elephc_ini_quantity($limit);"#;
-
-/// The `memory_limit` body used when the opcache prelude declared `ini_set`.
-///
-/// A direct call keeps the prelude free of a runtime string callable; a tokenizer-only
-/// program without that wrapper returns the compiled heap capacity instead.
-///
-/// The stored string is read through `__elephc_ini_quantity`, the opcache prelude's mirror of
-/// Zend's `zend_ini_parse_quantity`, which is injected with `ini_set`. Re-implementing the read
-/// with `(int)` and the last character misread every other Core INI form: `'0x1000000'` became
-/// zero (an immediate out-of-memory fatal) and `'16M '` lost its multiplier.
-const INI_MEMORY_LIMIT_BODY: &str = r#"    $heapLimit = __ELEPHC_TOKENIZER_HEAP_LIMIT__;
-    $limit = ini_set('memory_limit', '-1');
-    if ($limit === false) { return $heapLimit; }
-    ini_set('memory_limit', $limit);
+/// Reads the shared allocator-backed INI value and parses its quantity.
+const INI_MEMORY_LIMIT_BODY: &str = r#"    $limit = __elephc_memory_limit_raw();
     if ($limit === '' || $limit === '-1') { return -1; }
     return __elephc_ini_quantity($limit);"#;
 
 /// How the tokenizer prelude can read PHP's active `memory_limit`.
 pub(crate) enum IniMemorySource {
-    /// `ini_get()` is declared, so the directive can be read directly.
-    Get,
-    /// Only `ini_set()` is declared; the guard reads the previous value through a round trip.
-    Set,
+    /// The shared Core INI prelude provides the allocator-backed value.
+    Core,
     /// No Core INI surface, so the compiled heap capacity is the only limit.
     None,
 }
 
-/// Picks how the memory guard reads the active Core INI limit.
-///
-/// `ini_get()` is preferred because a program may use it (or be built with `--ini`) without
-/// declaring `ini_set()`; falling back to the heap capacity there ignored the configured limit.
+/// Uses the internal Core INI store when the CLI or web prelude provides it.
 fn ini_memory_source(program: &[Stmt], web: bool) -> IniMemorySource {
-    if web {
-        // `--web` bakes the session-aware wrappers with the same helper block.
-        return IniMemorySource::Set;
-    }
-    let declares = |name: &str| {
-        program.iter().any(|stmt| {
+    if web
+        || program.iter().any(|stmt| {
             stmt.source_mode == crate::source::SourceMode::Internal
                 && matches!(
                     &stmt.kind,
-                    crate::parser::ast::StmtKind::FunctionDecl { name: declared, .. }
-                        if declared.eq_ignore_ascii_case(name)
+                    crate::parser::ast::StmtKind::FunctionDecl { name, .. }
+                        if name == "__elephc_memory_limit_raw"
                 )
         })
-    };
-    if declares("ini_get") {
-        IniMemorySource::Get
-    } else if declares("ini_set") {
-        IniMemorySource::Set
-    } else {
-        IniMemorySource::None
+    {
+        return IniMemorySource::Core;
     }
+    IniMemorySource::None
 }
 
 /// Detects tokenizer references in entry files and the probed autoload closure.
@@ -298,29 +262,23 @@ mod tests {
         crate::parser::parse_internal(&tokens).expect("parse")
     }
 
-    /// The memory guard reads Core INI whenever that runtime is present, not only for ini_set.
+    /// The memory guard chooses the shared limit for CLI and web INI state.
     #[test]
     fn memory_guard_reads_core_ini_for_every_injected_ini_surface() {
-        let get = internal_program(
-            "<?php function ini_get(string $name): string|false { return false; } token_get_all('<?php ');",
+        let core = internal_program(
+            "<?php function __elephc_memory_limit_raw(): string { return '4M'; } token_get_all('<?php ');",
         );
-        assert!(matches!(ini_memory_source(&get, false), IniMemorySource::Get));
-        assert!(INI_MEMORY_LIMIT_GET_BODY.contains("ini_get('memory_limit')"));
-
-        let set = internal_program(
-            "<?php function ini_set(string $name, string|false $value): string|false { return false; } token_get_all('<?php ');",
-        );
-        assert!(matches!(ini_memory_source(&set, false), IniMemorySource::Set));
+        assert!(matches!(ini_memory_source(&core, false), IniMemorySource::Core));
 
         let none = internal_program("<?php echo 1;");
         assert!(matches!(ini_memory_source(&none, false), IniMemorySource::None));
-        assert!(matches!(ini_memory_source(&none, true), IniMemorySource::Set));
+        assert!(matches!(ini_memory_source(&none, true), IniMemorySource::Core));
 
         // A computed tokenizer call still reaches the injected prelude at runtime, so the
         // guard must keep reading the declared Core INI surface.
         let dynamic = internal_program(
-            "<?php function ini_get(string $name): string|false { return false; } eval($code);",
+            "<?php function __elephc_memory_limit_raw(): string { return '4M'; } eval($code);",
         );
-        assert!(matches!(ini_memory_source(&dynamic, false), IniMemorySource::Get));
+        assert!(matches!(ini_memory_source(&dynamic, false), IniMemorySource::Core));
     }
 }

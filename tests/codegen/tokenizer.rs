@@ -474,10 +474,10 @@ foreach (['0x1000000', '16M ', '1024K'] as $limit) {
 #[test]
 fn test_tokenizer_memory_limit_reports_call_site() {
     let out = compile_cli_file_expect_runtime_failure(r#"<?php
-ini_set('memory_limit', '1');
-token_get_all('<?php echo 1;');
+ini_set('memory_limit', '4M');
+token_get_all('<?php ' . str_repeat('$a = 1; ', 30000));
 "#);
-    assert!(out.contains("Allowed memory size"), "{out}");
+    assert!(out.contains("Allowed memory size of 4194304 bytes exhausted"), "{out}");
     assert!(out.contains("on line 3"), "{out}");
     assert!(!out.contains("tokenizer.php"), "{out}");
 }

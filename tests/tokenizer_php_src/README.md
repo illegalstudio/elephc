@@ -11,5 +11,10 @@ the php-src `ext/tokenizer/tests/*.phpt` suite into Rust data:
 `tests/tokenizer_php_src.rs` compiles and runs every inline case. The test process
 never reads a `.phpt` file, and no PHP installation or network access is needed.
 
+The `TOKEN_PARSE` out-of-memory case uses Zend's tracked allocator in php-src.
+The native runner uses a `4M` limit and a longer token stream beginning with
+`X::continue;` to exercise Elephc's tokenizer memory guard. It checks the
+transcribed fatal diagnostic.
+
 Do not edit the transcribed expectations to make a failing case pass. Transcribe the
 upstream case deliberately and update the commit above when refreshing the corpus.
