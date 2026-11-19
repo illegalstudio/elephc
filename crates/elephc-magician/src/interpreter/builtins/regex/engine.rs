@@ -11,12 +11,18 @@
 //! - Subject and pattern bytes are passed through the registered provider as C strings.
 //! - Match offsets are byte offsets into the original subject, matching PHP capture arrays.
 //! - A global iterator keeps its C-string allocation alive across native continuation calls.
+//! - The eval `preg_last_error()` code lives in the compiled program's `_preg_last_error`
+//!   once the regex provider registered it, so eval and compiled code share PHP's single
+//!   state; before that (and in unit tests) it lives in a thread-local slot. The pattern
+//!   entry points in `pattern` (the first step of every eval `preg_*` call) clear it, and
+//!   a match status other than "no match" records PHP's code for it.
 
+use std::cell::Cell;
 use std::ffi::{c_int, c_void, CStr, CString};
 use std::marker::PhantomData;
 
 use super::super::super::EvalStatus;
-use crate::regex_provider::{regex_provider, RegexProvider};
+use crate::regex_provider::{regex_provider, shared_preg_last_error_slot, RegexProvider};
 
 const REG_ICASE: c_int = 0x0001;
 const REG_NEWLINE: c_int = 0x0002;
@@ -28,7 +34,45 @@ const REG_UNGREEDY: c_int = 0x0200;
 const ELEPHC_PCRE2_EXTENDED: c_int = 0x2000;
 const REG_UCP: c_int = 0x0400;
 const REG_UTF: c_int = 0x0040;
-const REG_NOMATCH: c_int = 17;
+const REG_NOMATCH: c_int = elephc_builtin_contract::pcre_errors::PCRE2_SHIM_NOMATCH;
+/// `PREG_INTERNAL_ERROR`, recorded for an invalid pattern or an unexpected match status.
+pub(in crate::interpreter) const EVAL_PREG_INTERNAL_ERROR: i64 =
+    elephc_builtin_contract::pcre_errors::PREG_INTERNAL_ERROR;
+
+thread_local! {
+    /// The eval `preg_last_error()` code of the last eval regex call on this thread.
+    static EVAL_PREG_LAST_ERROR: Cell<i64> = const { Cell::new(0) };
+}
+
+/// Returns the `PREG_*_ERROR` code of the last regex call, compiled or eval.
+pub(in crate::interpreter) fn eval_preg_last_error_code() -> i64 {
+    match shared_preg_last_error_slot() {
+        // SAFETY: the slot is the compiled program's 8-byte `_preg_last_error` global,
+        // which lives for the whole process.
+        Some(slot) => unsafe { slot.read_volatile() },
+        None => EVAL_PREG_LAST_ERROR.with(Cell::get),
+    }
+}
+
+/// Records the `PREG_*_ERROR` code for the current eval regex call.
+pub(in crate::interpreter) fn eval_preg_set_last_error(code: i64) {
+    match shared_preg_last_error_slot() {
+        // SAFETY: see `eval_preg_last_error_code`.
+        Some(slot) => unsafe { slot.write_volatile(code) },
+        None => EVAL_PREG_LAST_ERROR.with(|slot| slot.set(code)),
+    }
+}
+
+/// Returns true when the current eval regex call hit a match error.
+pub(in crate::interpreter) fn eval_preg_failed() -> bool {
+    eval_preg_last_error_code() != 0
+}
+
+/// Maps a failing shim match status to PHP's error code, like the AOT `__rt_preg_exec`.
+fn eval_preg_record_exec_status(status: c_int) {
+    let code = elephc_builtin_contract::pcre_errors::preg_error_for_exec_status(status);
+    eval_preg_set_last_error(code);
+}
 
 /// Supported PHP regex modifiers after delimiter stripping.
 #[derive(Default)]
@@ -101,24 +145,19 @@ impl Regex {
     }
 
     /// Returns every non-overlapping capture set for this regex and subject.
-    pub(in crate::interpreter) fn captures_iter<'a>(
-        &self,
+    ///
+    /// Matching is lazy: each `next()` runs one match, so a caller that stops early (a
+    /// `preg_split()` `$limit`) never runs, nor records the errors of, matches PHP skips.
+    pub(in crate::interpreter) fn captures_iter<'r, 'a>(
+        &'r self,
         subject: &'a [u8],
-    ) -> std::vec::IntoIter<Captures<'a>> {
-        let mut captures = Vec::new();
-        let Ok(subject_c) = CString::new(subject) else { return captures.into_iter(); };
-        let mut continuation = false;
-        loop {
-            let Some(next) = self.exec_subject(subject, &subject_c, 0, continuation) else {
-                break;
-            };
-            if next.get(0).is_none() {
-                break;
-            }
-            captures.push(next);
-            continuation = true;
+    ) -> CapturesIter<'r, 'a> {
+        CapturesIter {
+            regex: self,
+            subject,
+            subject_c: CString::new(subject).ok(),
+            continuation: false,
         }
-        captures.into_iter()
     }
 
     /// Executes this regex from a byte offset, returning capture offsets on match.
@@ -143,7 +182,10 @@ impl Regex {
                 REG_STARTEND as u32 | if continuation { ELEPHC_PCRE2_GLOBAL_NEXT } else { 0 },
             )
         };
-        if status == REG_NOMATCH || status != 0 {
+        if status != 0 {
+            if status != REG_NOMATCH {
+                eval_preg_record_exec_status(status);
+            }
             return None;
         }
         Some(Captures {
@@ -186,6 +228,33 @@ impl EvalPregModifiers {
             flags |= ELEPHC_PCRE2_EXTENDED;
         }
         flags
+    }
+}
+
+/// Lazy iterator over the non-overlapping matches of one regex in one subject.
+pub(in crate::interpreter) struct CapturesIter<'r, 'a> {
+    regex: &'r Regex,
+    subject: &'a [u8],
+    /// The C-string copy of the subject; `None` once matching has ended.
+    subject_c: Option<CString>,
+    continuation: bool,
+}
+
+impl<'a> Iterator for CapturesIter<'_, 'a> {
+    type Item = Captures<'a>;
+
+    /// Runs the next match, ending the iteration at no match or a match error.
+    fn next(&mut self) -> Option<Captures<'a>> {
+        let subject_c = self.subject_c.as_deref()?;
+        let next = self
+            .regex
+            .exec_subject(self.subject, subject_c, 0, self.continuation)
+            .filter(|captures| captures.get(0).is_some());
+        if next.is_none() {
+            self.subject_c = None;
+        }
+        self.continuation = true;
+        next
     }
 }
 

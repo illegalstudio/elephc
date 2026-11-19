@@ -590,6 +590,8 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
         "version",
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
+    # `preg_grep` (`PhpModule::Pcre`), keyed by module ahead of its `system` area.
+    "pcre": ("pcre_prelude.rs", "PCRE", "crates/elephc-builtin-contract/src/catalog_data.rs"),
     "random": (
         "random_prelude.rs",
         "random",

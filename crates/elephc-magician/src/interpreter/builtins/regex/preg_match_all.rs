@@ -37,7 +37,11 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+    // Releasing the previous `$matches` (at the write, or when the argument owners drop after
+    // the call) can run a destructor whose nested `preg_*` call resets the error state. php-src
+    // empties `$matches` before matching, so the call's own outcome is restored last.
+    let mut outcome = None;
+    let result = with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
         let (bound, _) = bind_evaluated_ref_builtin_args(
             &["pattern", "subject", "matches", "flags"],
             &evaluated_args,
@@ -57,9 +61,14 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all_call(
         let flags = eval_preg_match_all_require_supported_flags(flags, context, values)?;
         let (result, matches_array) =
             eval_preg_match_all_capture_result(pattern.value, subject.value, flags, values)?;
+        outcome = Some(eval_preg_last_error_code());
         eval_write_preg_matches_target(&target, matches_array, context, values)?;
         Ok(result)
-    })
+    });
+    if let (Some(code), Ok(_)) = (outcome, &result) {
+        eval_preg_set_last_error(code);
+    }
+    result
 }
 
 /// Counts all non-overlapping regex matches in one subject string.
@@ -71,6 +80,9 @@ pub(in crate::interpreter) fn eval_preg_match_all_result(
     let regex = eval_preg_regex(pattern, values)?;
     let subject = values.string_bytes(subject)?;
     let count = regex.captures_iter(&subject).count();
+    if eval_preg_failed() {
+        return values.bool_value(false);
+    }
     values.int(i64::try_from(count).map_err(|_| EvalStatus::RuntimeFatal)?)
 }
 
@@ -85,7 +97,11 @@ pub(in crate::interpreter) fn eval_preg_match_all_capture_result(
     let capture_count = regex.captures_len();
     let subject = values.string_bytes(subject)?;
     let captures: Vec<Captures<'_>> = regex.captures_iter(&subject).collect();
-    let count = values.int(i64::try_from(captures.len()).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+    let count = if eval_preg_failed() {
+        values.bool_value(false)?
+    } else {
+        values.int(i64::try_from(captures.len()).map_err(|_| EvalStatus::RuntimeFatal)?)?
+    };
     let matches = if flags & EVAL_PREG_SET_ORDER != 0 {
         eval_preg_match_all_set_order_array(&subject, &captures, capture_count, flags, values)?
     } else {

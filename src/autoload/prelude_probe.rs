@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Each prelude (PDO, mysqli, tz, image, hash, tokenizer, curl, xml, fileinfo, var_export,
-//!   web environment, web request, random, bcmath, gmp, listIdentifiers, and core's
+//!   web environment, web request, random, bcmath, gmp, listIdentifiers, preg_grep, and core's
 //!   WeakMap/WeakReference) is injected only when the program uses its surface, and that
 //!   decision has to be taken before name resolution so a
 //!   namespaced caller resolves to the injected declarations. The Composer/SPL autoload pass runs
@@ -56,6 +56,7 @@ const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
     ("list_id", crate::list_id_prelude::program_uses_list_identifiers),
     ("weak_map", crate::core_prelude::program_uses_weak_map),
     ("weak_reference", crate::core_prelude::program_uses_weak_reference),
+    ("pcre", crate::pcre_prelude::program_uses_surface),
 ];
 
 /// Returns the prelude groups some file of the autoload closure uses.

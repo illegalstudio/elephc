@@ -10,10 +10,13 @@
 //!
 //! Key details:
 //! - Provider callbacks use the versioned managed PCRE2 shim ABI.
+//! - Registration also hands over the compiled program's `_preg_last_error` slot, so
+//!   eval and compiled code share one `preg_last_error()` state, as PHP has one.
 //! - Test builds install an equivalent host-PCRE2 provider without changing
 //!   production staticlib dependencies.
 
 use std::ffi::{c_char, c_void};
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::OnceLock;
 
 /// Compiles one null-terminated regex and returns an opaque provider handle.
@@ -36,7 +39,11 @@ pub(crate) struct RegexProvider {
 /// Process-wide provider selected before the first dynamic eval executes.
 static REGEX_PROVIDER: OnceLock<RegexProvider> = OnceLock::new();
 
-/// Registers the managed PCRE2 shim callbacks used by dynamic eval regex builtins.
+/// The compiled program's `_preg_last_error` slot, or null before registration.
+static PREG_LAST_ERROR_SLOT: AtomicPtr<i64> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Registers the managed PCRE2 shim callbacks used by dynamic eval regex builtins,
+/// plus the compiled program's `preg_last_error()` slot (null keeps eval's own slot).
 ///
 /// Registration is idempotent because generated code may initialize more than
 /// one eval call site. Returns `1` once a provider is available.
@@ -45,13 +52,23 @@ pub extern "C" fn __elephc_eval_register_regex_provider(
     compile: RegexCompileFn,
     exec: RegexExecFn,
     free: RegexFreeFn,
+    last_error: *mut i64,
 ) -> i32 {
     let _ = REGEX_PROVIDER.set(RegexProvider {
         compile,
         exec,
         free,
     });
+    if !last_error.is_null() {
+        PREG_LAST_ERROR_SLOT.store(last_error, Ordering::Release);
+    }
     i32::from(regex_provider().is_some())
+}
+
+/// Returns the compiled program's `_preg_last_error` slot once generated code registered it.
+pub(crate) fn shared_preg_last_error_slot() -> Option<*mut i64> {
+    let slot = PREG_LAST_ERROR_SLOT.load(Ordering::Acquire);
+    (!slot.is_null()).then_some(slot)
 }
 
 /// Returns whether dynamic eval may expose its regex builtin family.

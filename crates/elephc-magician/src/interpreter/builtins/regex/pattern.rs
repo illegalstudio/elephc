@@ -6,8 +6,9 @@
 //!
 //! Key details:
 //! - Only eval-supported modifiers are accepted. Other preg builtins report
-//!   malformed patterns as a runtime fatal. `preg_replace_callback()` separates
-//!   invalid patterns, which return null, from valid modifiers it does not map.
+//!   malformed patterns as a runtime fatal. `preg_replace_callback()` and `preg_grep()`
+//!   separate invalid patterns, which return null or false, from valid modifiers they do
+//!   not map.
 //!   Space, LF, and CR in the modifier suffix are ignored. `x` is extended mode.
 
 use super::super::super::*;
@@ -17,6 +18,9 @@ pub(in crate::interpreter) fn eval_preg_regex(
     pattern: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Regex, EvalStatus> {
+    // Every eval `preg_*` call starts from a clean `preg_last_error()`; a malformed or
+    // unsupported pattern is a runtime fatal here, so it records no error code.
+    eval_preg_set_last_error(0);
     let pattern = values.string_bytes(pattern)?;
     let (body, modifiers) = eval_preg_pattern_parts(&pattern)?;
     Regex::compile(&body, modifiers)
@@ -116,8 +120,15 @@ pub(in crate::interpreter) fn eval_preg_callback_pattern(
     pattern: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalPregCallbackPattern, EvalStatus> {
+    eval_preg_set_last_error(0);
     let pattern = values.string_bytes(pattern)?;
-    Ok(compile_preg_callback_pattern(&pattern))
+    let compiled = compile_preg_callback_pattern(&pattern);
+    // Only an invalid pattern is PHP's internal error; an unsupported modifier is the
+    // caller's explicit runtime error and records nothing.
+    if matches!(compiled, EvalPregCallbackPattern::Invalid) {
+        eval_preg_set_last_error(EVAL_PREG_INTERNAL_ERROR);
+    }
+    Ok(compiled)
 }
 
 /// Classifies one pattern's delimiters and modifiers, then compiles a fully supported pattern.
