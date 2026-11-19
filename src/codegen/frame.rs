@@ -17,6 +17,7 @@
 //!   wrappers and native hosts that keep state in it across PHP calls get it back intact.
 //! - Web handlers preserve every host callee-saved register before request reset can run.
 
+use elephc_memoir::{FrameOffset, strings::concat_cursor::SavedConcatCursor};
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::abi;
@@ -797,8 +798,8 @@ fn retain_owned_parameter_local(emitter: &mut Emitter, offset: usize, ty: &PhpTy
 /// Captures the caller-visible concat-buffer offset as this frame's reset base.
 fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
     let scratch = abi::temp_int_reg(ctx.emitter.target);
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_concat_off", 0);
-    abi::store_at_offset(ctx.emitter, scratch, ctx.concat_base_offset);
+    SavedConcatCursor::Frame(FrameOffset::new(ctx.concat_base_offset))
+        .emit_save(ctx.emitter, scratch);
 }
 
 /// Emits frame teardown and exits the process with status 0.

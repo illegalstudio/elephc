@@ -48,6 +48,7 @@ pub(in crate::codegen) use scalar_param_args::InvokerScalarGuards;
 pub(crate) use string_return::function_returns_owned_string;
 pub(super) use string_return::method_returns_owned_string;
 
+use elephc_memoir::{FrameOffset, strings::concat_cursor::SavedConcatCursor};
 use public_args::InvokerParamShape;
 
 use argument_owners::InvokerArgumentOwners;
@@ -3271,7 +3272,8 @@ fn call_target_with_pushed_args(
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(emitter.target, &abi_arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
-    save_concat_offset_before_nested_call(emitter);
+    let scratch = abi::temp_int_reg(emitter.target);
+    invoker_concat_slot(emitter.target.arch).emit_save(emitter, scratch);
     emit_restore_invoker_php_frame_head(emitter);
     abi::emit_call_reg(emitter, call_reg);
     emit_restore_invoker_php_frame_head(emitter);
@@ -3297,13 +3299,11 @@ fn emit_restore_invoker_php_frame_head(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 
-/// Saves the current concat offset before the nested callable target runs.
-fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
-    let scratch = abi::temp_int_reg(emitter.target);
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
-    match emitter.target.arch {
-        Arch::AArch64 => abi::emit_push_reg(emitter, scratch),
-        Arch::X86_64 => abi::store_at_offset(emitter, scratch, INVOKER_CONCAT_OFFSET),
+/// Selects the target-specific spill for the concat cursor across a callable invocation.
+fn invoker_concat_slot(arch: Arch) -> SavedConcatCursor {
+    match arch {
+        Arch::AArch64 => SavedConcatCursor::Pushed,
+        Arch::X86_64 => SavedConcatCursor::Frame(FrameOffset::new(INVOKER_CONCAT_OFFSET)),
     }
 }
 
@@ -3322,11 +3322,7 @@ fn restore_concat_offset_after_nested_call(
         }
     }
     let scratch = abi::temp_int_reg(emitter.target);
-    match emitter.target.arch {
-        Arch::AArch64 => abi::emit_pop_reg(emitter, scratch),
-        Arch::X86_64 => abi::load_at_offset(emitter, scratch, INVOKER_CONCAT_OFFSET),
-    }
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_concat_off", 0);
+    invoker_concat_slot(emitter.target.arch).emit_restore(emitter, scratch);
 }
 
 /// Returns whether this callee's variadic collector may receive a NAMED tail entry.

@@ -10,6 +10,7 @@
 pub mod str_persist;
 pub mod str_new_owned;
 pub mod concat_scratch;
+pub mod concat_cursor;
 pub mod strbuf;
 pub mod scoped_stream;
 pub mod str_append;

@@ -9,7 +9,8 @@
 //! - Entry and exit maintain the depth tracked by allocation failure handling.
 
 use crate::layout::BOUNDARY_ACTIVE;
-use crate::{Arch, Emitter, abi};
+use crate::{Arch, Emitter, FrameOffset, abi};
+use super::concat_cursor::SavedConcatCursor;
 
 /// Saves concat state, isolates nested scratch use, and increments boundary depth.
 pub fn emit_enter_boundary(emitter: &mut impl Emitter, concat_offset: usize, suffix: &str) {
@@ -24,8 +25,7 @@ pub fn emit_enter_boundary(emitter: &mut impl Emitter, concat_offset: usize, suf
             abi::emit_store_imm_to_symbol(emitter, "_concat_off", 0, 0);
             emitter.instruction(&format!("b {configured}"));                    // join nested and outer concat setup
             emitter.label(&nested);
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_concat_off", 0);
-            abi::store_at_offset(emitter, "x10", concat_offset);
+            SavedConcatCursor::Frame(FrameOffset::new(concat_offset)).emit_save(emitter, "x10");
             abi::emit_load_symbol_to_reg(emitter, "x10", "_concat_capacity", 0);
             abi::emit_store_reg_to_symbol(emitter, "x10", "_concat_off", 0);
             emitter.label(&configured);
@@ -42,8 +42,7 @@ pub fn emit_enter_boundary(emitter: &mut impl Emitter, concat_offset: usize, suf
             abi::emit_store_imm_to_symbol(emitter, "_concat_off", 0, 0);
             emitter.instruction(&format!("jmp {configured}"));                  // join nested and outer concat setup
             emitter.label(&nested);
-            abi::emit_load_symbol_to_reg(emitter, "r11", "_concat_off", 0);
-            abi::store_at_offset(emitter, "r11", concat_offset);
+            SavedConcatCursor::Frame(FrameOffset::new(concat_offset)).emit_save(emitter, "r11");
             abi::emit_load_symbol_to_reg(emitter, "r11", "_concat_capacity", 0);
             abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);
             emitter.label(&configured);
@@ -61,15 +60,13 @@ pub fn emit_leave_boundary(emitter: &mut impl Emitter, concat_offset: usize) {
             abi::emit_load_symbol_to_reg(emitter, "x9", BOUNDARY_ACTIVE, 0);
             emitter.instruction("sub x9, x9, #1");                              // leave exactly one nested host boundary
             abi::emit_store_reg_to_symbol(emitter, "x9", BOUNDARY_ACTIVE, 0);
-            abi::load_at_offset(emitter, "x10", concat_offset);
-            abi::emit_store_reg_to_symbol(emitter, "x10", "_concat_off", 0);
+            SavedConcatCursor::Frame(FrameOffset::new(concat_offset)).emit_restore(emitter, "x10");
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(emitter, "r10", BOUNDARY_ACTIVE, 0);
             emitter.instruction("sub r10, 1");                                  // leave exactly one nested host boundary
             abi::emit_store_reg_to_symbol(emitter, "r10", BOUNDARY_ACTIVE, 0);
-            abi::load_at_offset(emitter, "r11", concat_offset);
-            abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);
+            SavedConcatCursor::Frame(FrameOffset::new(concat_offset)).emit_restore(emitter, "r11");
         }
     }
 }
