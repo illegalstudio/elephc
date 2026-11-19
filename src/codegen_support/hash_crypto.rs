@@ -23,6 +23,7 @@
 //!   so the runtime emitter references them by symbol instead of through a
 //!   per-program `DataSection`.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::{abi, platform::Arch};
 
@@ -169,9 +170,7 @@ fn emit_throw_value_error_aarch64(
     emitter.instruction("str x9, [x0, #8]");                                    // store static ValueError message pointer
     emitter.instruction(&format!("mov x9, #{}", message_len));                  // load static ValueError message length
     emitter.instruction("str x9, [x0, #16]");                                   // store exception message length
-    emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
-    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
+    throwable_storage::emit_default_fields(emitter, "x0");
     abi::emit_symbol_address(emitter, "x9", "_exc_value");
     emitter.instruction("str x0, [x9]");                                        // publish the active exception object
     emitter.instruction("b __rt_throw_current");                                // enter the standard exception unwinder
@@ -194,9 +193,7 @@ fn emit_throw_value_error_x86_64(
     abi::emit_symbol_address(emitter, "r10", message_symbol); // materialize static ValueError message pointer
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store static ValueError message pointer
     emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static ValueError message length
-    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
-    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
+    throwable_storage::emit_default_fields(emitter, "rax");
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0); // publish the active exception object
     emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing

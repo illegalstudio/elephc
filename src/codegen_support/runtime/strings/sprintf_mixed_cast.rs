@@ -19,12 +19,12 @@
 //! - Array-to-string and object-to-number warnings flow through the standard warning helper,
 //!   preserving suppression and dynamic eval class names on every supported target.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen_support::runtime::data::{
     SPRINTF_ARRAY_TO_STRING_WARNING, SPRINTF_OBJECT_NUMERIC_WARNING_PREFIX,
     SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX, SPRINTF_OBJECT_TO_INT_WARNING_SUFFIX,
     UNSER_OBJECT_STRING_ERROR_PREFIX, UNSER_OBJECT_STRING_ERROR_SUFFIX,
 };
-use crate::codegen_support::sentinels::emit_throwable_creation_line_unknown;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the deferred non-scalar coercion helpers used by `__rt_sprintf`.
@@ -773,9 +773,7 @@ fn emit_sprintf_string_error_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x0]");                                        // stamp the per-program Error class id
     emitter.instruction("ldp x10, x11, [sp, #16]");                             // recover the persisted message pair
     emitter.instruction("stp x10, x11, [x0, #8]");                              // store Error message pointer and length
-    emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
-    emit_throwable_creation_line_unknown(emitter, "x0");
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous Throwable defaults to null
+    throwable_storage::emit_default_fields(emitter, "x0");
     abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame linkage before unwinding
     emitter.instruction("add sp, sp, #64");                                     // release Error-construction state
@@ -837,9 +835,7 @@ fn emit_sprintf_string_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store Error message pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // recover persisted message byte length
     emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // store Error message byte length
-    emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
-    emit_throwable_creation_line_unknown(emitter, "rax");
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous Throwable defaults to null
+    throwable_storage::emit_default_fields(emitter, "rax");
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
     emitter.instruction("leave");                                               // restore the caller frame before unwinding
     emitter.instruction("jmp __rt_throw_current");                              // enter the standard catchable exception path

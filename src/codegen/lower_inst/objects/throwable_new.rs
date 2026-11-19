@@ -8,6 +8,7 @@
 //! - Ordinary objects record creation lines after property defaults initialize the shared prefix.
 //! - Message storage and previous-object retention follow the receiver's native layout.
 
+use elephc_memoir::values::throwable_storage::PAYLOAD_BYTES as THROWABLE_COMPACT_PAYLOAD_SIZE;
 use super::*;
 
 /// Lowers builtin Throwable allocation using the compact runtime payload layout.
@@ -108,8 +109,6 @@ fn throwable_inherits_only_builtin_storage_and_constructor(class_info: &ClassInf
             .is_none_or(|owner| is_builtin_throwable_payload_class(owner))
 }
 
-/// Compact Throwable payload bytes: class_id + message(16) + code(16) + previous(16).
-const THROWABLE_COMPACT_PAYLOAD_SIZE: u64 = 56;
 
 /// Stamps ordinary Throwable metadata outside every PHP-visible property slot.
 pub(super) fn emit_regular_throwable_creation_line(

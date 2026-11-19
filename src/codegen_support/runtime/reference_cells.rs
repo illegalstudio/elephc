@@ -10,9 +10,10 @@
 //! - Singleton cells separate on clone, while cells with live aliases remain shared.
 //! - Exact active boxed-walk borrows are recognized separately from ordinary owner-zero cells.
 
+use elephc_memoir::values::throwable_storage;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::sentinels::{
-    emit_throwable_creation_line_unknown, x86_64_heap_kind_word,
+
     UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
 };
 use crate::types::PhpType;
@@ -164,34 +165,18 @@ fn emit_reference_error_allocator(
     emitter.label_global(entry);
     abi::emit_frame_prologue(emitter, 32);
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 56);
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
-            emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation before acquiring its object handle
-            abi::emit_call_label(emitter, "__rt_object_handle_acquire");
-            abi::emit_load_symbol_to_reg(emitter, "x9", class_id, 0);
-            emitter.instruction("str x9, [x0]");                                // store the selected per-program Throwable class id
-            abi::emit_symbol_address(emitter, "x9", message);
-            emitter.instruction("str x9, [x0, #8]");                            // borrow the fixed diagnostic message
-            abi::emit_load_int_immediate(emitter, "x9", length);
-            emitter.instruction("str x9, [x0, #16]");                           // publish the complete message pair
-            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
-            emit_throwable_creation_line_unknown(emitter, "x0");
-            emitter.instruction("str xzr, [x0, #40]");                          // previous defaults to null
+            elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
+            throwable_storage::emit_class_id(emitter, class_id);
+            throwable_storage::emit_static_message(emitter, message, length, throwable_storage::LengthStore::Register);
+            throwable_storage::emit_default_fields(emitter, "x0");
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(emitter, "r10", x86_64_heap_kind_word(6) as i64);
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the allocation before acquiring its object handle
-            abi::emit_call_label(emitter, "__rt_object_handle_acquire");
-            abi::emit_load_symbol_to_reg(emitter, "r10", class_id, 0);
-            emitter.instruction("mov QWORD PTR [rax], r10");                    // store the selected per-program Throwable class id
-            abi::emit_symbol_address(emitter, "r10", message);
-            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // borrow the fixed diagnostic message
-            emitter.instruction(&format!("mov QWORD PTR [rax + 16], {length}")); // publish the message byte length
-            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
-            emit_throwable_creation_line_unknown(emitter, "rax");
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous defaults to null
+            elephc_memoir::values::object_storage::emit_allocate_throwable_x86_64(emitter);
+            throwable_storage::emit_class_id(emitter, class_id);
+            throwable_storage::emit_static_message(emitter, message, length, throwable_storage::LengthStore::Immediate);
+            throwable_storage::emit_default_fields(emitter, "rax");
         }
     }
     abi::emit_frame_restore(emitter, 32);

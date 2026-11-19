@@ -9,7 +9,7 @@
 //! - The entry boundary consumes only that marker; real cleanup exceptions propagate.
 //! - A reserved coroutine word records force-close state without changing public layouts.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch, sentinels::x86_64_heap_kind_word};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::arrays::gc_candidates::{load, op, restore, save};
 
 /// Offset of a borrowed forced-unwind marker, zero outside a force-close operation.
@@ -33,10 +33,7 @@ fn close(e: &mut Emitter) {
     op(e, "cmp x9, #2", "cmp r10, 2", "force-close only a stable suspended coroutine");
     op(e, "b.ne __rt_coroutine_close_return", "jne __rt_coroutine_close_return", "leave empty or already completed coroutine bodies untouched");
     op(e, "mov x0, #8", "mov eax, 8", "allocate one internal object-shaped marker with no PHP properties");
-    abi::emit_call_label(e, "__rt_heap_alloc");
-    kind(e);
-    op(e, "mov x9, #-3", "mov QWORD PTR [rax], -3", "the internal class sentinel is outside every PHP catch hierarchy");
-    if e.target.arch == Arch::AArch64 { op(e, "str x9, [x0]", "", "stamp the uncatchable forced-unwind class identity"); }
+    elephc_memoir::coroutine_storage::emit_unwind_marker(e);
     save(e, 8);
     op(e, "ldr x9, [sp]", "mov r10, QWORD PTR [rsp]", "publish a borrowed marker as this coroutine's force-close guard");
     op(e, "str x0, [x9, #224]", "mov QWORD PTR [r10 + 224], rax", "prevent yield or suspend from abandoning the cancellation unwind");
@@ -112,20 +109,8 @@ fn error(e: &mut Emitter) {
     }
     e.label("__rt_coroutine_close_error_alloc");
     op(e, "mov x0, #24", "mov eax, 24", "allocate the compact native Error class and message layout");
-    abi::emit_call_label(e, "__rt_heap_alloc");
-    kind(e);
-    abi::emit_call_label(e, "__rt_object_handle_acquire");
-    for (source, destination) in [(0, 0), (8, 8), (16, 16)] {
-        op(e, &format!("ldr x9, [sp, #{source}]"), &format!("mov r10, QWORD PTR [rsp + {source}]"), "recover one owned compact-error field");
-        op(e, &format!("str x9, [x0, #{destination}]"), &format!("mov QWORD PTR [rax + {destination}], r10"), "publish the native class or immutable message metadata");
-    }
+    elephc_memoir::coroutine_storage::emit_compact_error(e);
     abi::emit_store_reg_to_symbol(e, abi::int_result_reg(e), "_exc_value", 0);
     abi::emit_frame_restore(e, 48);
     abi::emit_jump(e, "__rt_throw_current");
-}
-
-/// Stamps canonical native object storage without fabricating PHP ownership metadata.
-fn kind(e: &mut Emitter) {
-    op(e, "mov x9, #4", &format!("mov r10, 0x{:x}", x86_64_heap_kind_word(4)), "use the canonical target-aware physical object representation");
-    op(e, "str x9, [x0, #-8]", "mov QWORD PTR [rax - 8], r10", "publish managed object storage before exception handling observes it");
 }
