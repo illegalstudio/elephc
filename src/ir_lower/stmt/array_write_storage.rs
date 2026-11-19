@@ -47,7 +47,10 @@ pub(super) fn auto_vivified_array_type(
     }
     // `unset($a)` (or `$a = null`) leaves a Void binding. PHP re-creates the variable on the
     // next array write; the fresh container is hash-backed because a reference element needs
-    // tag-11 storage regardless of the key shape.
+    // tag-11 storage regardless of the key shape. Inside a loop the body is lowered once, so
+    // the write must keep reading the slot the previous iteration published; the established
+    // boxed path does that in place, while this first-binding branch would allocate a fresh
+    // hash on every iteration and drop the earlier entries.
     if ctx.local_type(name).codegen_repr() == PhpType::Void {
         return Some(PhpType::AssocArray {
             key: Box::new(PhpType::Mixed),
@@ -73,27 +76,35 @@ pub(super) fn empty_auto_vivified_container(
     ty: &PhpType,
     span: Span,
 ) -> LoweredValue {
-    // A binding killed by `unset()` still holds a boxed null in its old slot, which the
-    // runtime auto-vivifier would treat as an existing container. Start a fresh owned
-    // container instead; the later publish repoints the name at a slot of its own shape.
-    if ctx.local_type(name).codegen_repr() == PhpType::Void {
-        return ctx.emit_value(
-            Op::HashNew,
-            Vec::new(),
-            Some(Immediate::Capacity(0)),
-            ty.clone(),
-            Op::HashNew.default_effects(),
-            Some(span),
-        );
-    }
-    // The raw load is zero while the variable is still unbound; the runtime helper allocates
+    // The raw load is zero (or the in-band null sentinel after `unset()`) while the variable
+    // is unbound; the runtime helper allocates only in that case, so a loop body does not
+    // reset a container created by an earlier iteration.
     // only in that case, so a loop body does not reset a container created by an earlier
     // iteration.
-    let target = if matches!(ty.codegen_repr(), PhpType::AssocArray { .. }) {
+    let target = if ctx.local_type(name).codegen_repr() == PhpType::Void {
+        crate::ir::RuntimeCallTarget::AutoVivifyHash
+    } else if matches!(ty.codegen_repr(), PhpType::AssocArray { .. }) {
         crate::ir::RuntimeCallTarget::AutoVivifyHash
     } else {
         crate::ir::RuntimeCallTarget::AutoVivifyArray
     };
+    if ctx.local_type(name).codegen_repr() == PhpType::Void {
+        // A killed binding has no container slot yet (an abandoned `unset()` removes it).
+        // Create one at the container's own type so this load and the loop's back-edge read
+        // the word a previous iteration published, then read that word as the container.
+        if !ctx.local_slots.contains_key(name) {
+            ctx.declare_local(name, ty.clone());
+        }
+        let loaded = ctx.load_local_mutation_as(name, ty.clone(), Some(span));
+        return ctx.emit_value(
+            Op::RuntimeCall,
+            vec![loaded.value],
+            Some(Immediate::RuntimeCall(target)),
+            ty.clone(),
+            crate::ir_lower::effects_lookup::runtime_effects(),
+            Some(span),
+        );
+    }
     let loaded = ctx.load_local(name, Some(span));
     ctx.emit_value(
         Op::RuntimeCall,
@@ -113,6 +124,9 @@ pub(super) fn publish_auto_vivified_container(
     ty: PhpType,
     span: Span,
 ) -> LoweredValue {
+    // A loop iteration may publish the same hash pointer the slot already holds. The store's
+    // retain/release pair cancels for that case (and releases the previous container when a
+    // fresh one was allocated), so the writer below still owns one balanced reference.
     ctx.store_call_argument_local(name, value, ty, Some(span));
     ctx.load_local_for_mutation(name, Some(span))
 }

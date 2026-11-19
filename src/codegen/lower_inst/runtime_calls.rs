@@ -706,6 +706,29 @@ fn lower_auto_vivify_array(
     let existing = ctx.next_label("array_auto_vivify_existing");
     let done = ctx.next_label("array_auto_vivify_done");
     ctx.load_value_to_result(loaded)?;
+    // A binding left by `unset()` or `$a = null` may still carry the in-band null sentinel.
+    // It is not a container; treat it like the zero an unbound local loads.
+    match ctx.emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x9",
+                crate::codegen::sentinels::NULL_SENTINEL,
+            );
+            ctx.emitter.instruction("cmp x0, x9");                              // is the killed slot holding the unset null marker?
+            ctx.emitter.instruction("csel x0, xzr, x0, eq");                    // an unset binding starts from an empty container
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "r10",
+                crate::codegen::sentinels::NULL_SENTINEL,
+            );
+            ctx.emitter.instruction("xor r11d, r11d");                          // materialize the empty-container replacement
+            ctx.emitter.instruction("cmp rax, r10");                            // is the killed slot holding the unset null marker?
+            ctx.emitter.instruction("cmove rax, r11");                          // an unset binding starts from an empty container
+        }
+    }
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &existing);
     match ctx.emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {

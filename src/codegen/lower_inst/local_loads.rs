@@ -257,6 +257,10 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
             emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
             Ok(())
         }
+        // A void binding holds one raw container word: zero before the first write, then the
+        // container a loop iteration published. Reading it as a hash keeps that word for the
+        // auto-vivifier, which reuses the existing table instead of allocating a fresh one.
+        (PhpType::Void | PhpType::Never, PhpType::Array(_) | PhpType::AssocArray { .. }) => Ok(()),
         // Flow typing can prove null while the frame retains its earlier container or
         // pointer representation. Materialize PHP null instead of exposing its zero word.
         (PhpType::Mixed | PhpType::Pointer(_) | PhpType::Packed(_)

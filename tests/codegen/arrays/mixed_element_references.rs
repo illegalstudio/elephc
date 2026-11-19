@@ -445,3 +445,52 @@ array(3) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\n"
         out.stderr
     );
 }
+
+/// A loop body is lowered once, so an array write after `null`/`unset()` must keep reading the
+/// container the previous iteration published instead of allocating a fresh one each time.
+#[test]
+fn test_array_writes_after_null_accumulate_in_a_loop() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = null;
+$i = 0;
+while ($i < 3) { $a[] = $i; ++$i; }
+var_dump($a);
+
+$b = null;
+$i = 0;
+while ($i < 3) { $b["k$i"] = $i; ++$i; }
+var_dump($b);
+
+$c = null;
+$x = 9;
+$i = 0;
+while ($i < 3) { $c["k$i"] = &$x; ++$i; }
+$x = 7;
+var_dump($c);
+
+function unsetThenAppend(): void {
+    $d = [1, 2];
+    unset($d);
+    $i = 0;
+    while ($i < 2) { $d[] = $i; ++$i; }
+    var_dump($d);
+}
+unsetThenAppend();
+unset($a, $b, $c, $x);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "array(3) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(1)\n  [2]=>\n  int(2)\n}\n\
+array(3) {\n  [\"k0\"]=>\n  int(0)\n  [\"k1\"]=>\n  int(1)\n  [\"k2\"]=>\n  int(2)\n}\n\
+array(3) {\n  [\"k0\"]=>\n  &int(7)\n  [\"k1\"]=>\n  &int(7)\n  [\"k2\"]=>\n  &int(7)\n}\n\
+array(2) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(1)\n}\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
