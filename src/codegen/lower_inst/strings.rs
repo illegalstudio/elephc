@@ -289,7 +289,9 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.emitter.instruction(&format!("b {}", end));                     // skip the out-of-bounds empty-string result
             ctx.emitter.label(&oob);
             abi::emit_pop_reg_pair(ctx.emitter, "x0", "x1");
-            if warn_on_missing {
+            if inst.immediate == Some(Immediate::CheckedElementRead) {
+                super::exceptions::emit_out_of_bounds(ctx, elephc_semantics::indexing::MISSING_STRING_OFFSET);
+            } else if warn_on_missing {
                 abi::emit_push_reg(ctx.emitter, "x1");
                 abi::emit_call_label(ctx.emitter, "__rt_warn_string_offset");
                 abi::emit_pop_reg(ctx.emitter, "x1");
@@ -318,7 +320,9 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.emitter.instruction(&format!("jmp {}", end));                   // skip the out-of-bounds empty-string result
             ctx.emitter.label(&oob);
             abi::emit_pop_reg_pair(ctx.emitter, "rax", "r8");
-            if warn_on_missing {
+            if inst.immediate == Some(Immediate::CheckedElementRead) {
+                super::exceptions::emit_out_of_bounds(ctx, elephc_semantics::indexing::MISSING_STRING_OFFSET);
+            } else if warn_on_missing {
                 abi::emit_push_reg(ctx.emitter, "r8");
                 abi::emit_call_label(ctx.emitter, "__rt_warn_string_offset");
                 abi::emit_pop_reg(ctx.emitter, "rax");

@@ -80,3 +80,10 @@ pub(super) fn matches_any_kind(
     accepted.unwrap_or_else(|| ctx.emit_value(Op::ConstI64, Vec::new(), Some(Immediate::I64(0)),
         PhpType::Bool, Op::ConstI64.default_effects(), span))
 }
+
+/// Selects an independent semantic guarantee only for user-authored functions.
+pub(super) fn source_feature_enabled(ctx: &LoweringContext<'_, '_>, feature: elephc_semantics::StrictFeature) -> bool {
+    ctx.semantic_profile.contains(feature)
+        && ctx.source_mode != crate::source::SourceMode::Internal
+        && !ctx.builder.function().flags.is_internal
+}

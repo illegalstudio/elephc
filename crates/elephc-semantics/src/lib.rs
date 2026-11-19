@@ -11,6 +11,7 @@ mod catalog;
 mod profile;
 pub mod arithmetic_policy;
 pub mod array_keys;
+pub mod indexing;
 pub mod numeric;
 pub mod numeric_cast;
 pub mod gmp_integer_cast;

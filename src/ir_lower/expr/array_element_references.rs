@@ -151,14 +151,23 @@ pub(crate) fn lower_owned_ref_assign_array_elem(
         PhpType::AssocArray { value, .. } => normalize_value_php_type(*value),
         _ => PhpType::Mixed,
     };
+    let checked = crate::ir_lower::semantic_guards::source_feature_enabled(ctx,
+        elephc_semantics::StrictFeature::Indexing);
+    let checked_pins = if checked {
+        let mut pending = vec![array_value];
+        if operands.key_owner.is_none() { pending.push(operands.key); }
+        super::pending_owners::protect_additional_pending_operands(ctx, &pending, &operands.receiver_pins, span)
+    } else { Vec::new() };
+    let op = Op::LoadArrayElemRefCellExisting;
     let cell_ptr = ctx.emit_value(
-        Op::LoadArrayElemRefCellExisting,
+        op,
         vec![array_value.value, operands.key.value],
-        None,
+        checked.then_some(Immediate::CheckedElementRead),
         value_type.clone(),
-        Op::LoadArrayElemRefCellExisting.default_effects(),
+        if checked { op.checked_element_read_effects() } else { op.default_effects() },
         Some(span),
     );
+    unpin_in_flight_owners(ctx, checked_pins, span);
     ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
     operands.finish(ctx, span);
 }

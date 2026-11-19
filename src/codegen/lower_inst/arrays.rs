@@ -796,10 +796,12 @@ fn lower_current_hash_elem_ref_cell(
 ) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            lower_hash_elem_ref_cell_aarch64(ctx, hash, key, receiver, create_missing)?
+            lower_hash_elem_ref_cell_aarch64(ctx, hash, key, receiver, create_missing,
+                inst.immediate == Some(Immediate::CheckedElementRead))?
         }
         Arch::X86_64 => {
-            lower_hash_elem_ref_cell_x86_64(ctx, hash, key, receiver, create_missing)?
+            lower_hash_elem_ref_cell_x86_64(ctx, hash, key, receiver, create_missing,
+                inst.immediate == Some(Immediate::CheckedElementRead))?
         }
     }
     store_ref_cell_pointer_result(ctx, inst)
@@ -812,6 +814,7 @@ fn lower_hash_elem_ref_cell_aarch64(
     key: ValueId,
     receiver: &ReceiverPlace,
     create_missing: bool,
+    checked: bool,
 ) -> Result<()> {
     let found = ctx.next_label("hash_elem_ref_found");
     let done = ctx.next_label("hash_elem_ref_done");
@@ -842,6 +845,8 @@ fn lower_hash_elem_ref_cell_aarch64(
         super::hashes::materialize_hash_key_aarch64_after_first(ctx, key)?;
         ctx.load_value_to_reg(hash, "x0")?;
         abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    } else if checked {
+        super::exceptions::emit_out_of_bounds(ctx, elephc_semantics::indexing::MISSING_ARRAY_KEY);
     } else {
         super::hashes::emit_undefined_hash_key_warning_aarch64(ctx, key)?;
         abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
@@ -862,6 +867,7 @@ fn lower_hash_elem_ref_cell_x86_64(
     key: ValueId,
     receiver: &ReceiverPlace,
     create_missing: bool,
+    checked: bool,
 ) -> Result<()> {
     let found = ctx.next_label("hash_elem_ref_found");
     let done = ctx.next_label("hash_elem_ref_done");
@@ -893,6 +899,8 @@ fn lower_hash_elem_ref_cell_x86_64(
         super::hashes::materialize_hash_key_x86_64_after_first(ctx, key)?;
         ctx.load_value_to_reg(hash, "rdi")?;
         abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    } else if checked {
+        super::exceptions::emit_out_of_bounds(ctx, elephc_semantics::indexing::MISSING_ARRAY_KEY);
     } else {
         super::hashes::emit_undefined_hash_key_warning_x86_64(ctx, key)?;
         abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
@@ -1095,6 +1103,8 @@ fn lower_load_mixed_array_elem_ref_cell_aarch64(
         abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
         abi::emit_pop_reg(ctx.emitter, "x9");
         ctx.emitter.instruction(&format!("b {done_label}"));                    // return the new managed entry cell
+    } else if inst.immediate == Some(Immediate::CheckedElementRead) {
+        super::exceptions::emit_out_of_bounds(ctx, elephc_semantics::indexing::MISSING_ARRAY_KEY);
     } else {
         super::hashes::emit_undefined_hash_key_warning_aarch64(ctx, index)?;
         abi::emit_pop_reg(ctx.emitter, "x9");
@@ -1180,6 +1190,8 @@ fn lower_load_mixed_array_elem_ref_cell_x86_64(
         abi::emit_call_label(ctx.emitter, "__rt_hash_entry_make_reference");
         abi::emit_pop_reg(ctx.emitter, "r10");
         ctx.emitter.instruction(&format!("jmp {done_label}"));                  // return the new managed entry cell
+    } else if inst.immediate == Some(Immediate::CheckedElementRead) {
+        super::exceptions::emit_out_of_bounds(ctx, elephc_semantics::indexing::MISSING_ARRAY_KEY);
     } else {
         super::hashes::emit_undefined_hash_key_warning_x86_64(ctx, index)?;
         abi::emit_pop_reg(ctx.emitter, "r10");
@@ -1255,6 +1267,9 @@ fn lower_load_array_elem_ref_cell_aarch64(
         .instruction(&format!("add {}, {}, {}", idx_reg, array_reg, idx_reg));  // compute the element address within the array payload
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the null fallback after computing the element address
     ctx.emitter.label(&null_label);
+    if inst.immediate == Some(Immediate::CheckedElementRead) {
+        super::exceptions::emit_out_of_bounds(ctx, elephc_semantics::indexing::MISSING_ARRAY_KEY);
+    }
     abi::emit_load_int_immediate(ctx.emitter, idx_reg, 0);                      // materialize a null cell pointer for invalid indices
     ctx.emitter.label(&done_label);
     store_ref_cell_pointer_result(ctx, inst)
@@ -1310,6 +1325,9 @@ fn lower_load_array_elem_ref_cell_x86_64(
     ctx.emitter.instruction(&format!("add {}, {}", idx_reg, array_reg));        // compute the element address within the array payload
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the null fallback after computing the element address
     ctx.emitter.label(&null_label);
+    if inst.immediate == Some(Immediate::CheckedElementRead) {
+        super::exceptions::emit_out_of_bounds(ctx, elephc_semantics::indexing::MISSING_ARRAY_KEY);
+    }
     abi::emit_load_int_immediate(ctx.emitter, idx_reg, 0);                      // materialize a null cell pointer for invalid indices
     ctx.emitter.label(&done_label);
     store_ref_cell_pointer_result(ctx, inst)
@@ -1874,7 +1892,8 @@ pub(super) fn lower_array_get_runtime_mixed(
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
             ctx.load_value_to_reg(array, "x0")?;
             abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
-            let flags = i64::from(warn_on_missing) | (i64::from(for_write) << 1);
+            let flags = i64::from(warn_on_missing) | (i64::from(for_write) << 1)
+                | if inst.immediate == Some(Immediate::CheckedElementRead) { elephc_semantics::indexing::CHECKED } else { 0 };
             abi::emit_load_int_immediate(ctx.emitter, "x3", flags);
         }
         Arch::X86_64 => {
@@ -1882,7 +1901,8 @@ pub(super) fn lower_array_get_runtime_mixed(
             abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
             ctx.load_value_to_reg(array, "rdi")?;
             abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
-            let flags = i64::from(warn_on_missing) | (i64::from(for_write) << 1);
+            let flags = i64::from(warn_on_missing) | (i64::from(for_write) << 1)
+                | if inst.immediate == Some(Immediate::CheckedElementRead) { elephc_semantics::indexing::CHECKED } else { 0 };
             abi::emit_load_int_immediate(ctx.emitter, "rcx", flags);
         }
     }
@@ -3175,6 +3195,10 @@ fn emit_branch_if_invoker_ref_cell_tag(
 
 /// Emits PHP's undefined integer array-key warning for the key in the result register.
 fn emit_undefined_array_key_warning(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    if inst.immediate == Some(Immediate::CheckedElementRead) {
+        super::exceptions::emit_out_of_bounds(ctx, elephc_semantics::indexing::MISSING_ARRAY_KEY);
+        return;
+    }
     // The warning helper reads the offending key from the integer result register; publish
     // the source line without clobbering it.
     let key = abi::int_result_reg(ctx.emitter);

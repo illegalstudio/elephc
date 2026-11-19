@@ -22,6 +22,7 @@ use crate::codegen_support::platform::Arch;
 
 /// Emits the mixed-key indexed/hash array read helper for the current target.
 pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
+    emit_missing_key_throw(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_array_get_mixed_key_linux_x86_64(emitter);
         return;
@@ -178,6 +179,9 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_get_mixed_key_int_missing");
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the warn-on-missing flag
+    emitter.instruction("tbz x9, #2, __rt_array_get_mixed_key_int_missing_unchecked");// preserve legacy missing-key behavior when unchecked
+    emitter.instruction("bl __rt_throw_missing_array_key");                     // raise the catchable checked-read exception
+    emitter.label("__rt_array_get_mixed_key_int_missing_unchecked");
     emitter.instruction("cbz x9, __rt_array_get_mixed_key_null");               // silent reads skip undefined-key warnings
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the missing integer key for the PHP warning
     emitter.instruction("bl __rt_warn_undefined_array_key_int");                // emit or suppress the undefined-array-key warning
@@ -186,6 +190,9 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     // -- string key on indexed storage: PHP returns null and may warn --
     emitter.label("__rt_array_get_mixed_key_string_on_indexed");
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the warn-on-missing flag
+    emitter.instruction("tbz x9, #2, __rt_array_get_mixed_key_string_on_indexed_unchecked");// preserve legacy missing-key behavior when unchecked
+    emitter.instruction("bl __rt_throw_missing_array_key");                     // raise the catchable checked-read exception
+    emitter.label("__rt_array_get_mixed_key_string_on_indexed_unchecked");
     emitter.instruction("cbz x9, __rt_array_get_mixed_key_null");               // silent reads skip undefined-key warnings
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the missing string key pointer
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the missing string key length
@@ -213,6 +220,9 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_get_mixed_key_hash_missing");
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the warn-on-missing flag
+    emitter.instruction("tbz x9, #2, __rt_array_get_mixed_key_hash_missing_unchecked");// preserve legacy missing-key behavior when unchecked
+    emitter.instruction("bl __rt_throw_missing_array_key");                     // raise the catchable checked-read exception
+    emitter.label("__rt_array_get_mixed_key_hash_missing_unchecked");
     emitter.instruction("cbz x9, __rt_array_get_mixed_key_null");               // silent reads skip undefined-key warnings
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload key_hi to distinguish integer and string keys
     emitter.instruction("cmn x11, #1");                                         // check whether the missing hash key is integer-keyed
@@ -401,6 +411,10 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_get_mixed_key_int_missing");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the warn-on-missing flag
+    emitter.instruction("test r10, 4");                                         // inspect checked absence independently of write mode
+    emitter.instruction("jz __rt_array_get_mixed_key_int_missing_unchecked");   // preserve legacy missing-key behavior when unchecked
+    emitter.instruction("call __rt_throw_missing_array_key");                   // raise the catchable checked-read exception
+    emitter.label("__rt_array_get_mixed_key_int_missing_unchecked");
     emitter.instruction("test r10, r10");                                       // should this read emit undefined-key warnings?
     emitter.instruction("jz __rt_array_get_mixed_key_null");                    // silent reads skip undefined-key warnings
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the missing integer key for the PHP warning
@@ -410,6 +424,10 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     // -- string key on indexed storage: PHP returns null and may warn --
     emitter.label("__rt_array_get_mixed_key_string_on_indexed");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the warn-on-missing flag
+    emitter.instruction("test r10, 4");                                         // inspect checked absence independently of write mode
+    emitter.instruction("jz __rt_array_get_mixed_key_string_on_indexed_unchecked");// preserve legacy missing-key behavior when unchecked
+    emitter.instruction("call __rt_throw_missing_array_key");                   // raise the catchable checked-read exception
+    emitter.label("__rt_array_get_mixed_key_string_on_indexed_unchecked");
     emitter.instruction("test r10, r10");                                       // should this read emit undefined-key warnings?
     emitter.instruction("jz __rt_array_get_mixed_key_null");                    // silent reads skip undefined-key warnings
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the missing string key pointer
@@ -439,6 +457,10 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_get_mixed_key_hash_missing");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the warn-on-missing flag
+    emitter.instruction("test r10, 4");                                         // inspect checked absence independently of write mode
+    emitter.instruction("jz __rt_array_get_mixed_key_hash_missing_unchecked");  // preserve legacy missing-key behavior when unchecked
+    emitter.instruction("call __rt_throw_missing_array_key");                   // raise the catchable checked-read exception
+    emitter.label("__rt_array_get_mixed_key_hash_missing_unchecked");
     emitter.instruction("test r10, r10");                                       // should this read emit undefined-key warnings?
     emitter.instruction("jz __rt_array_get_mixed_key_null");                    // silent reads skip undefined-key warnings
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload key_hi to distinguish integer and string keys
@@ -470,4 +492,21 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
+}
+
+/// Emits shared throwing entries used after a single lookup has proved absence.
+fn emit_missing_key_throw(emitter: &mut Emitter) {
+    for (label, symbol, message) in [
+        ("__rt_throw_missing_array_key", "_strict_missing_array_key", elephc_semantics::indexing::MISSING_ARRAY_KEY),
+        ("__rt_throw_missing_string_offset", "_strict_missing_string_offset", elephc_semantics::indexing::MISSING_STRING_OFFSET),
+    ] {
+        emitter.blank();
+        emitter.label_global(label);
+        match emitter.target.arch {
+            Arch::AArch64 => super::value_error::emit_throw_static_message_aarch64(emitter,
+                "_spl_out_of_bounds_exception_class_id", symbol, message.len()),
+            Arch::X86_64 => super::value_error::emit_throw_static_message_x86_64(emitter,
+                "_spl_out_of_bounds_exception_class_id", symbol, message.len()),
+        }
+    }
 }

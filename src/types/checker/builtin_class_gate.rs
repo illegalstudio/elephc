@@ -136,12 +136,17 @@ pub(crate) fn throwables_to_register(
     program: &[Stmt],
     spl_surface_registered: bool,
     reflection_registered: bool,
+    profile: elephc_semantics::SemanticProfile,
 ) -> HashSet<String> {
     let usage = crate::prelude_prune::usage::collect(program);
     let mut wanted: HashSet<String> = ALWAYS_REGISTERED_THROWABLES
         .iter()
         .map(|name| (*name).to_string())
         .collect();
+
+    if profile.contains(elephc_semantics::StrictFeature::Indexing) {
+        insert_with_ancestors("OutOfBoundsException", &mut wanted);
+    }
 
     if usage.introspects || usage.constructs_dynamic_class || usage.references("unserialize") {
         wanted.extend(every_builtin_throwable().map(str::to_string));
@@ -264,7 +269,7 @@ mod tests {
 
     /// Computes required throwable names without enabling optional SPL or reflection surfaces.
     fn registered(source: &str) -> HashSet<String> {
-        throwables_to_register(&parse(source), false, false)
+        throwables_to_register(&parse(source), false, false, elephc_semantics::SemanticProfile::PERMISSIVE)
     }
 
     /// The case the gate exists for. Nine survive; the other sixteen were being registered for a
@@ -330,7 +335,7 @@ mod tests {
     /// compile with `unknown class BadMethodCallException` when this registered only the five.
     #[test]
     fn the_spl_surface_registers_every_spl_exception() {
-        let wanted = throwables_to_register(&parse("<?php echo 1;"), true, false);
+        let wanted = throwables_to_register(&parse("<?php echo 1;"), true, false, elephc_semantics::SemanticProfile::PERMISSIVE);
         for (name, _) in SPL_EXCEPTION_PARENTS {
             assert!(wanted.contains(*name), "{name} belongs to the SPL surface");
         }
@@ -344,7 +349,7 @@ mod tests {
     /// Reflection helpers raise ReflectionException without the program naming it.
     #[test]
     fn the_reflection_surface_registers_its_exception() {
-        let wanted = throwables_to_register(&parse("<?php echo 1;"), false, true);
+        let wanted = throwables_to_register(&parse("<?php echo 1;"), false, true, elephc_semantics::SemanticProfile::PERMISSIVE);
         assert!(wanted.contains("ReflectionException"));
     }
 
@@ -503,5 +508,20 @@ mod tests {
             crate::types::checker::builtin_spl_exceptions::hierarchy_for_gate(),
             "the two copies of the SPL exception hierarchy disagree"
         );
+    }
+}
+
+#[cfg(test)]
+/// Checked indexing registers its implicit failure and ancestors without enabling the SPL surface.
+#[test]
+fn checked_indexing_registers_implicit_throwable_ancestors() {
+    for strict in [false, true] {
+        let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+            .with(elephc_semantics::StrictFeature::Indexing, strict);
+        let wanted = throwables_to_register(&[], false, false, profile);
+        assert_eq!(wanted.contains("OutOfBoundsException"), strict);
+        assert_eq!(wanted.contains("RuntimeException"), strict);
+        assert!(!wanted.contains("OutOfRangeException"));
+        assert!(wanted.contains("Exception"));
     }
 }

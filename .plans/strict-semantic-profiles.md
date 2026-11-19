@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step213 (this commit). Remaining feature integration is active. Issue:
+Verified through step214 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2546,3 +2546,35 @@ boundary audit. Failed runner registrations were not counted: the unchanged
 runtime-cache identity test belongs to the CLI binary rather than the library,
 and exact leaf matching disambiguated an owner test from its no-IR-opt variant.
 README, CLI, eval and internal ownership/type-checker docs describe the new rule.
+
+### Verified214: checked native dimension reads
+
+Ordinary array, hash, boxed and string reads now carry typed CheckedElementRead
+metadata. A shared effect contract and validator require Indexing, a supported
+read operation and catchable allocation/unwind effects. The source feature
+selector excludes trusted internal code. Presence is decided inside the existing
+lookup, preserving initialized null and evaluating/normalizing each key once.
+Missing elements raise OutOfBoundsException; negative in-range byte offsets,
+isset, empty and coalescing probes retain their previous behavior.
+
+Existing-element reference selection for by-reference foreach uses the same
+policy, including its synthetic alias path. Slot-creating reference assignments
+remain distinct. Pending operand owners reuse provisional local guards and
+hidden temporary roots; final storage prunes borrowed boxed views while keeping
+fresh scalar-to-Mixed boxes protected. A proven bounds optimization discharges
+both the check and its metadata. Runtime mode bit two is separate from warning
+and fetch-for-write bits. Both architectures emit the shared Throwable ABI.
+
+Ten focused gates pass in job66a611da: all-five target emission/validation;
+four native PHP/LFC and optimizer combinations with clean heap, source/key
+order, finally, reference reads and one float-key diagnostic; metadata refusal;
+permissive/internal source policy; instruction size; checked bounds proof;
+boxed local guard pruning; existing temporary guard pruning; and implicit
+exception registration, emission, catch and uncaught controls. Native checked
+reads retain OutOfBoundsException and its ancestors through both class
+registration and runtime metadata filters, even when PHP names only Throwable. Public
+Indexing admission remains gated until interpreter and entry-point parity.
+
+The final compiler/Magician archive build, diff hygiene and assembly-comment
+checks pass in jobb1740f4a. No new compiler warnings were introduced; the
+existing Magician fetch_update deprecation remains.

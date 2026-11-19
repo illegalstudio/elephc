@@ -75,12 +75,14 @@ pub(crate) fn lower_by_ref_foreach_element_source(
         Op::HashGet
     };
     let result_type = array_access_result_type(ctx, array_value.value, read_op, expr);
+    let checked = crate::ir_lower::semantic_guards::source_feature_enabled(ctx,
+        elephc_semantics::StrictFeature::Indexing);
     let result = ctx.emit_value(
         op,
         vec![array_value.value, index_value.value],
-        None,
+        checked.then_some(Immediate::CheckedElementRead),
         result_type,
-        op.default_effects(),
+        if checked { op.checked_element_read_effects() } else { op.default_effects() },
         Some(expr.span),
     );
     // The separated element belongs to the parent's slot, not to this read — pin that explicitly
@@ -572,6 +574,8 @@ fn lower_array_access_from_values_with_receiver_pins(
         }
         _ => Op::RuntimeCall,
     };
+    let checked = warn_on_missing && matches!(op, Op::ArrayGet | Op::ArrayGetMixedKey | Op::HashGet | Op::StrCharAt | Op::RuntimeCall)
+        && crate::ir_lower::semantic_guards::source_feature_enabled(ctx, elephc_semantics::StrictFeature::Indexing);
     let mut result_type = array_access_result_type(ctx, array_value.value, op, expr);
     // Exact-key consumers can receive this value through copies, defaults or calls. Preserve
     // the missing null at its producer, before a scalar ABI erases its original PHP kind.
@@ -620,6 +624,13 @@ fn lower_array_access_from_values_with_receiver_pins(
         // A native getter can throw before the existing key cleanup, including on a null path.
         super::pin_in_flight_owners(ctx, &[index_value.value], index.span)
     } else { Vec::new() };
+    let checked_pins = if checked {
+        let mut operands = Vec::new();
+        if receiver_owner.is_none() { operands.push(array_value); }
+        if index_owner.is_none() { operands.push(index_value); }
+        super::pending_owners::protect_additional_pending_operands(ctx, &operands,
+            &receiver_pins.iter().chain(key_pins.iter()).cloned().collect::<Vec<_>>(), expr.span)
+    } else { Vec::new() };
     let result = if let Some(method) = native_method {
         lower_native_dimension_read(ctx, array_value, index_value, method, warn_on_missing,
             result_type, expr)
@@ -629,15 +640,18 @@ fn lower_array_access_from_values_with_receiver_pins(
             let warning = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
             operands.push(warning.value);
         }
-        ctx.emit_value(op, operands,
-            (op == Op::StrCharAt).then_some(Immediate::Bool(warn_on_missing)),
-            result_type, op.default_effects(), Some(expr.span))
+        let immediate = if checked { Some(Immediate::CheckedElementRead) }
+            else { (op == Op::StrCharAt).then_some(Immediate::Bool(warn_on_missing)) };
+        let effects = if checked { op.checked_element_read_effects() }
+            else { op.default_effects() };
+        ctx.emit_value(op, operands, immediate, result_type, effects, Some(expr.span))
     };
     if op == Op::StrCharAt {
         // The backend returns a view into the receiver. The common stabilization below
         // must copy that byte before an owning receiver can be retired (issue #1908).
         ctx.builder.set_value_ownership(result.value, Ownership::Borrowed);
     }
+    super::unpin_in_flight_owners(ctx, checked_pins, expr.span);
     super::unpin_in_flight_owners(ctx, key_pins, index.span);
     super::unpin_in_flight_owners(ctx, receiver_pins, expr.span);
     // An owning boxed index temporary (e.g. `$B[$i + 1]` on the mixed-key read

@@ -5553,7 +5553,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let mut guarded = Vec::new();
         self.begin_argument_guard_scope();
         for (index, value) in values.iter().enumerate() {
-            if self.value_is_owned_unboxed_local_load(value.value)
+            let boxed_local_view = self.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed
+                && matches!(self.builder.value_defining_op(value.value), Some(Op::LoadLocal | Op::LoadStaticLocal))
+                && self.value_needs_release_after_use(*value);
+            if (self.value_is_owned_unboxed_local_load(value.value) || boxed_local_view)
                 && !self.has_call_argument_guard(value.value)
             {
                 self.guard_call_argument(*value, index, span);

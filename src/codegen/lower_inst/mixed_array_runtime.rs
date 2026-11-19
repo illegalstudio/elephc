@@ -55,6 +55,9 @@ pub(super) fn lower_mixed_array_runtime_get(
                 abi::emit_load_int_immediate(ctx.emitter, "x3", i64::from(pending_append));
             } else {
                 ctx.load_value_to_reg(warn_on_missing, "x3")?;
+                if inst.immediate == Some(Immediate::CheckedElementRead) {
+                    ctx.emitter.instruction("orr x3, x3, #4");                  // require an existing element after receiver dispatch
+                }
             }
             ctx.load_value_to_reg(receiver, "x0")?;
         }
@@ -69,6 +72,9 @@ pub(super) fn lower_mixed_array_runtime_get(
                 abi::emit_load_int_immediate(ctx.emitter, "rcx", i64::from(pending_append));
             } else {
                 ctx.load_value_to_reg(warn_on_missing, "rcx")?;
+                if inst.immediate == Some(Immediate::CheckedElementRead) {
+                    ctx.emitter.instruction("or rcx, 4");                       // require an existing element after receiver dispatch
+                }
             }
             ctx.load_value_to_reg(receiver, "rdi")?;
         }

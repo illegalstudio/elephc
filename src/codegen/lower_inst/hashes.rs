@@ -700,7 +700,9 @@ fn lower_hash_get_aarch64(
     }
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the miss fallback after materializing the hash value
     ctx.emitter.label(&miss);
-    if warn_on_missing {
+    if inst.immediate == Some(Immediate::CheckedElementRead) {
+        super::exceptions::emit_out_of_bounds(ctx, elephc_semantics::indexing::MISSING_ARRAY_KEY);
+    } else if warn_on_missing {
         emit_undefined_hash_key_warning_aarch64(ctx, key)?;
     }
     abi::emit_jump(ctx.emitter, &fallback);
@@ -752,7 +754,9 @@ fn lower_hash_get_x86_64(
     }
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the miss fallback after materializing the hash value
     ctx.emitter.label(&miss);
-    if warn_on_missing {
+    if inst.immediate == Some(Immediate::CheckedElementRead) {
+        super::exceptions::emit_out_of_bounds(ctx, elephc_semantics::indexing::MISSING_ARRAY_KEY);
+    } else if warn_on_missing {
         emit_undefined_hash_key_warning_x86_64(ctx, key)?;
     }
     abi::emit_jump(ctx.emitter, &fallback);

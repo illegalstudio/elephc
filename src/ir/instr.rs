@@ -245,6 +245,8 @@ pub struct EvalScopeStoreImmediate {
 /// Literal or metadata operand attached to an opcode.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Immediate {
+    /// Throws on an absent ordinary dimension read without repeating key normalization.
+    CheckedElementRead,
     /// Calls an initialized-slot getter under a receiver/property recursion guard.
     InitializedGetter { method: DataId, property: DataId },
     I64(i64),
@@ -1467,6 +1469,11 @@ impl Op {
         // Numeric string warnings may enter arbitrary PHP callbacks before arithmetic completes.
         if matches!(self, Op::MixedNumericBinop | Op::StrIncDec) && policy.checked_overflow() { return Effects::php_callback(); }
         self.default_effects() | if policy.checked_overflow() { Op::ThrowArithmeticError.default_effects() } else { Effects::PURE }
+    }
+
+    /// Includes catchable absence failure in an ordinary dimension-read contract.
+    pub fn checked_element_read_effects(self) -> Effects {
+        self.default_effects() | Self::ThrowOutOfBounds.default_effects()
     }
 
     /// Returns the conservative default effect set for this opcode.

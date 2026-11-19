@@ -252,3 +252,20 @@ fn bounds_rejects_mixed_receiver_storage() {
     assert!(!ArrayGetBounds.run(&mut function, &mut data));
     assert_eq!(function.instruction(read).unwrap().op, Op::ArrayGet);
 }
+
+/// A bounds proof discharges checked absence together with its throwing metadata.
+#[test]
+fn bounds_rewrites_checked_read_after_proof() {
+    let Fixture { mut function, read, .. } = fixture(Break::None);
+    let inst = function.instruction_mut(read).unwrap();
+    inst.immediate = Some(crate::ir::Immediate::CheckedElementRead);
+    inst.effects = inst.op.checked_element_read_effects();
+    assert!(validate_function(&function).is_ok());
+    let mut data = DataPool::default();
+    CountHoist.run(&mut function, &mut data);
+    assert!(ArrayGetBounds.run(&mut function, &mut data));
+    let inst = function.instruction(read).unwrap();
+    assert_eq!(inst.op, Op::ArrayGetUnchecked);
+    assert_eq!(inst.immediate, None);
+    assert!(validate_function(&function).is_ok());
+}

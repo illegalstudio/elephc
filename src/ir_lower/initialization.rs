@@ -14,9 +14,7 @@ use elephc_semantics::StrictFeature;
 
 /// Selects initialized-read restrictions for user lowering, independently of PHP-only syntax.
 pub(super) fn enabled(ctx: &LoweringContext<'_, '_>) -> bool {
-    ctx.semantic_profile.contains(StrictFeature::Initialization)
-        && ctx.source_mode != crate::source::SourceMode::Internal
-        && !ctx.builder.function().flags.is_internal
+    super::semantic_guards::source_feature_enabled(ctx, StrictFeature::Initialization)
 }
 
 /// Finds canonical program presence or frame presence bits without consulting its incidental value representation.

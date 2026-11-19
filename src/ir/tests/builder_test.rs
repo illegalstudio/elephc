@@ -485,3 +485,33 @@ fn null_and_pointer_stores_share_pointer_word_storage() {
     assert_eq!(function.locals[4].php_type, PhpType::Mixed);
     assert_eq!(function.locals[5].php_type, PhpType::Mixed);
 }
+
+/// Provisional boxed local views keep a guard only when their final storage creates a box.
+#[test]
+fn deferred_boxed_local_guards_follow_final_storage() {
+    for storage in [PhpType::Int, PhpType::Str, PhpType::Mixed] {
+        let mut function = Function::new("boxed_guard".to_string(), IrType::Void, PhpType::Void);
+        let token;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let slot = builder.add_local(Some("key".to_string()), if storage == PhpType::Int { IrType::I64 } else if storage == PhpType::Str { IrType::Str } else { IrType::Heap(IrHeapKind::Mixed) },
+                storage.clone(), LocalKind::PhpLocal);
+            let value = builder.emit(Op::LoadLocal, Vec::new(), Some(Immediate::LocalSlot(slot)),
+                IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::MaybeOwned).unwrap();
+            let anchor = builder.emit_const_i64(0);
+            token = builder.emit(Op::RuntimeCall, vec![value, anchor],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionGuardOwned)),
+                IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            builder.emit(Op::RuntimeCall, vec![token],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionUnguardOwned)),
+                IrType::Void, PhpType::Void, Ownership::NonHeap);
+            builder.prune_borrowed_local_load_guard_ops();
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let ValueDef::Instruction { inst, .. } = function.value(token).unwrap().def else { panic!("guard instruction"); };
+        assert_eq!(function.instruction(inst).unwrap().op == Op::Nop, storage == PhpType::Mixed);
+    }
+}

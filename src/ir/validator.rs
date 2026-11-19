@@ -137,6 +137,9 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
                 }
             }
             let mut required = inst.arithmetic_policy().requirements().bits();
+            if inst.immediate == Some(Immediate::CheckedElementRead) {
+                required |= elephc_semantics::StrictFeature::Indexing.bit();
+            }
             if let Some(Immediate::InitializedGetter { method, property }) = inst.immediate {
                 required |= elephc_semantics::StrictFeature::Initialization.bit();
                 if module.data.strings.get(method.as_raw() as usize).map(String::as_str) != Some("__get")
@@ -472,6 +475,8 @@ fn validate_instruction_effects_with_operand(
         Effects::php_conversion()
     } else if matches!(inst.immediate, Some(Immediate::NumericOperation { .. } | Immediate::NumericUpdate { .. })) {
         inst.op.arithmetic_effects(inst.arithmetic_policy())
+    } else if inst.immediate == Some(Immediate::CheckedElementRead) {
+        inst.op.checked_element_read_effects()
     } else if inst.op == Op::MixedUnbox {
         Op::mixed_unbox_effects(&inst.result_php_type)
     } else if inst.op == Op::FToI
@@ -781,6 +786,16 @@ fn validate_instruction_immediate(
     if matches!(inst.immediate, Some(Imm::NumericOperation { .. }))
         && !matches!(inst.op, MixedNumericBinop | ICheckedPow)
     { return Err(ValidationError::UnexpectedImmediate(inst_id)); }
+    if inst.immediate == Some(Imm::CheckedElementRead) {
+        if !matches!(inst.op, ArrayGet | ArrayGetForWrite | ArrayGetMixedKey | HashGet | HashGetForWrite | StrCharAt | RuntimeCall | LoadArrayElemRefCellExisting) {
+            return Err(ValidationError::UnexpectedImmediate(inst_id));
+        }
+        let required = inst.op.checked_element_read_effects();
+        if !inst.effects.contains(required) {
+            return Err(ValidationError::EffectMismatch { inst: inst_id, expected: required, actual: inst.effects });
+        }
+        return Ok(());
+    }
     if matches!(inst.immediate, Some(Imm::InitializedGetter { .. })) {
         if inst.op != MethodCall { return Err(ValidationError::UnexpectedImmediate(inst_id)); }
         let required = Effects::MAY_THROW | Effects::READS_GLOBAL | Effects::WRITES_GLOBAL;
@@ -995,6 +1010,12 @@ fn validate_opcode_rules(
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
     use Op::*;
+    if inst.op == RuntimeCall && inst.immediate == Some(Immediate::CheckedElementRead) {
+        check_count(inst_id, inst, 3, "receiver, key and read mode")?;
+        check_operand_type(function, inst_id, inst, 2, IrType::I64, "boolean read mode")?;
+        if inst.result.is_none() { return Err(ValidationError::InstructionResultMissing(inst_id)); }
+        return Ok(());
+    }
     if matches!(inst.immediate, Some(Immediate::InitializedGetter { .. })) {
         check_count(inst_id, inst, 2, "receiver and property name for initialized getter")?;
         check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Object), "raw Object receiver")?;

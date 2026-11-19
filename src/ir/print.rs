@@ -189,6 +189,7 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::PromotableArray => {
             let _ = write!(out, " promotable_array");
         }
+        Immediate::CheckedElementRead => { let _ = write!(out, " checked_element_read"); }
         Immediate::InitializedGetter { method, property } => {
             let _ = write!(out, " initialized_getter[{},{}]", method.as_raw(), property.as_raw());
         }

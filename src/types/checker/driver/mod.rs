@@ -203,7 +203,7 @@ pub(super) fn check_types_impl(
     // computed here and reused at their own injection sites below.
     let register_spl = crate::types::checker::builtin_spl_classes::program_may_reference_spl(program);
     let register_reflection = program_may_reference_reflection(program);
-    let mut wanted_throwables = throwables_to_register(program, register_spl, register_reflection);
+    let mut wanted_throwables = throwables_to_register(program, register_spl, register_reflection, checker.semantic_profile);
     // Fiber and FiberError ride in the same set because `inject_builtin_throwables` owns their
     // declarations. Nothing raises a FiberError without a Fiber, so one answer covers both.
     if program_may_reference_fiber(program) {

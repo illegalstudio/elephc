@@ -167,6 +167,10 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return the owned Mixed string in x0
     emitter.label("__rt_mixed_array_get_string_missing");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect checked absence independently of warning mode
+    emitter.instruction("tbz x9, #2, __rt_mixed_array_get_string_missing_unchecked");// preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("bl __rt_throw_missing_string_offset");                 // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_string_missing_unchecked");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
     emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // quiet reads report an absent offset as null
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the original offset for PHP's warning
@@ -251,12 +255,20 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
     emitter.label("__rt_mixed_array_get_indexed_missing");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect checked absence independently of warning mode
+    emitter.instruction("tbz x9, #2, __rt_mixed_array_get_indexed_missing_unchecked");// preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("bl __rt_throw_missing_array_key");                     // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_indexed_missing_unchecked");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
     emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the missing integer key for the PHP warning
     emitter.instruction("bl __rt_warn_undefined_array_key_int");                // emit or suppress the undefined-array-key warning
     emitter.instruction("b __rt_mixed_array_get_null");                         // return boxed Mixed(null) after the warning
     emitter.label("__rt_mixed_array_get_indexed_missing_string");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect checked absence independently of warning mode
+    emitter.instruction("tbz x9, #2, __rt_mixed_array_get_indexed_missing_string_unchecked");// preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("bl __rt_throw_missing_array_key");                     // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_indexed_missing_string_unchecked");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
     emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the missing string key pointer
@@ -293,6 +305,10 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in x0
 
     emitter.label("__rt_mixed_array_get_assoc_missing");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect checked absence independently of warning mode
+    emitter.instruction("tbz x9, #2, __rt_mixed_array_get_assoc_missing_unchecked");// preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("bl __rt_throw_missing_array_key");                     // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_assoc_missing_unchecked");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
     emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the normalized key high word
@@ -542,6 +558,10 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the owned Mixed string in rax
     emitter.label("__rt_mixed_array_get_string_missing");
+    emitter.instruction("test QWORD PTR [rbp - 32], 4");                        // inspect checked absence independently of warning mode
+    emitter.instruction("jz __rt_mixed_array_get_string_missing_unchecked");    // preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("call __rt_throw_missing_string_offset");               // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_string_missing_unchecked");
     emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // quiet reads report an absent offset as null
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the original offset for PHP's warning
@@ -628,12 +648,20 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_indexed_missing");
+    emitter.instruction("test QWORD PTR [rbp - 32], 4");                        // inspect checked absence independently of warning mode
+    emitter.instruction("jz __rt_mixed_array_get_indexed_missing_unchecked");   // preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("call __rt_throw_missing_array_key");                   // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_indexed_missing_unchecked");
     emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the missing integer key for the PHP warning
     emitter.instruction("call __rt_warn_undefined_array_key_int");              // emit or suppress the undefined-array-key warning
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // return boxed Mixed(null) after the warning
     emitter.label("__rt_mixed_array_get_indexed_missing_string");
+    emitter.instruction("test QWORD PTR [rbp - 32], 4");                        // inspect checked absence independently of warning mode
+    emitter.instruction("jz __rt_mixed_array_get_indexed_missing_string_unchecked");// preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("call __rt_throw_missing_array_key");                   // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_indexed_missing_string_unchecked");
     emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the missing string key pointer
@@ -670,6 +698,10 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
     emitter.label("__rt_mixed_array_get_assoc_missing");
+    emitter.instruction("test QWORD PTR [rbp - 32], 4");                        // inspect checked absence independently of warning mode
+    emitter.instruction("jz __rt_mixed_array_get_assoc_missing_unchecked");     // preserve ordinary PHP behavior without the checked flag
+    emitter.instruction("call __rt_throw_missing_array_key");                   // raise the catchable checked-read exception
+    emitter.label("__rt_mixed_array_get_assoc_missing_unchecked");
     emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // does the missing key use the integer-key sentinel?
