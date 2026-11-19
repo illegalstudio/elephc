@@ -13,11 +13,14 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 pub(crate) use elephc_memoir::cleanup::Scope;
 
+// The native coroutine unwind marker never becomes a PHP previous exception.
+const FORCED_UNWIND_CLASS: i8 = -3;
+
 /// Emits the shared callback boundary and exception-state restoration used by all cleanup scopes.
 pub(super) fn emit(emitter: &mut Emitter) {
     super::emit_protected(emitter, "__rt_cleanup_call_protected", invoke_body);
     elephc_memoir::cleanup::emit_deep_cleanup_callback(emitter);
-    super::cleanup_previous::emit(emitter);
+    elephc_memoir::cleanup::previous::emit(emitter, FORCED_UNWIND_CLASS);
     elephc_memoir::values::throwable_previous::emit_append_previous(emitter);
 }
 

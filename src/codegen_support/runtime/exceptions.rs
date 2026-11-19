@@ -11,7 +11,6 @@
 mod boxed_owner;
 mod cleanup_frames;
 mod call_operand_owner;
-mod cleanup_previous;
 mod owned_values;
 mod protected;
 pub(crate) mod deep_cleanup;
