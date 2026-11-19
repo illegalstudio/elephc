@@ -1226,7 +1226,9 @@ impl Checker {
             // a constant name) is needed by every lowering of this callee: the direct call
             // refuses it in codegen and the callable wrapper drops or misreads it. Report it
             // here, with the diagnostic the direct call already gives.
-            Err(error) if error.kind == CompileErrorKind::AotLiteralRequired => {
+            // A semantic guarantee applies to the operation through every call spelling.
+            Err(error) if error.kind == CompileErrorKind::AotLiteralRequired
+                || matches!(error.kind, CompileErrorKind::SemanticViolation(_)) => {
                 return Err(error);
             }
             // Any other rejection is the direct call's own view of its arguments, which can be

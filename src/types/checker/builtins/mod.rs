@@ -375,6 +375,15 @@ impl Checker {
                 {
                     validate(&semantic_input)?;
                 }
+                if let crate::builtins::semantics::BuiltinValidation::MixedInputs(resolve) =
+                    def.spec.semantics.validation
+                {
+                    for (index, expected) in resolve(&semantic_input) {
+                        let (Some(actual), Some(argument)) = (arg_types.get(index), args.get(index)) else { continue; };
+                        let actual = if matches!(argument.kind, ExprKind::Spread(_)) { &PhpType::Mixed } else { actual };
+                        self.require_mixed_value_type(&expected, actual, source_mode, argument.span, name)?;
+                    }
+                }
                 if let crate::builtins::semantics::BuiltinValidation::ExplicitNumericCast(target) = def.spec.semantics.validation {
                     let cast = match target {
                         elephc_semantics::numeric_cast::NumericCastTarget::Int => crate::parser::ast::CastType::Int,

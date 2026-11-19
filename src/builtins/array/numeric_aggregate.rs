@@ -18,7 +18,18 @@ pub(super) const fn semantics(target: RuntimeFnId) -> BuiltinSemantics {
     let mut semantics = crate::builtins::semantics::runtime_fn_semantics(target);
     semantics.lowering = BuiltinLowering::Eir(lower);
     semantics.target_strategy = BuiltinTargetStrategy::EirGraph;
+    semantics.result_type = crate::builtins::semantics::BuiltinResultType::Shared(shared_result_type);
     semantics
+}
+
+/// Keeps numeric result alternatives independent from the aggregate's boxed storage representation.
+pub(super) fn result_type(profile: elephc_semantics::SemanticProfile, source: crate::source::SourceMode) -> PhpType {
+    crate::semantics::mixed::numeric_result(profile, source)
+}
+
+/// Shares direct, first-class and descriptor result metadata without specializing on current values.
+fn shared_result_type(input: &crate::builtins::semantics::BuiltinSemanticInput<'_>) -> PhpType {
+    result_type(input.semantic_profile, input.source_mode)
 }
 
 /// Selects a reviewed numeric aggregate target after ordinary shared argument planning.
@@ -31,7 +42,7 @@ fn lower(ctx: &mut dyn BuiltinLoweringContext, call: &NormalizedBuiltinCall<'_>)
     let policy = crate::semantics::numeric::operation_policy(call.semantic_profile, call.source_mode);
     let runtime = if !policy.is_permissive() { RuntimeCallTarget::NumericFunction { target, policy } }
         else { RuntimeCallTarget::Function(target) };
-    Ok(ctx.emit_runtime_call(runtime, call.operands.to_vec(), PhpType::Mixed, target.effects(), Some(call.span)))
+    Ok(ctx.emit_runtime_call(runtime, call.operands.to_vec(), call.result_type.clone(), target.effects(), Some(call.span)))
 }
 
 

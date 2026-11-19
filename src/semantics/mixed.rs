@@ -19,7 +19,7 @@ pub(crate) fn validate_use(profile: SemanticProfile, source: SourceMode, actual:
         || !dynamic_alternatives(actual) || every_alternative(actual, &mut supported) {
         return Ok(());
     }
-    Err(CompileError::new(span, &format!(
+    Err(CompileError::semantic_violation(span, StrictFeature::Mixed, &format!(
         "--strict-mixed: narrow {actual} before {context}; every alternative must support the operation")))
 }
 

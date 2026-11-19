@@ -56,6 +56,9 @@ pub struct BuiltinSemanticInput<'a> {
 /// Backend-neutral validator for argument semantics beyond signature and arity checks.
 pub type ValidateFn = for<'a> fn(&BuiltinSemanticInput<'a>) -> Result<(), CompileError>;
 
+/// Selects operation-specific argument domains while retaining the shared PHP signature.
+pub type MixedInputsFn = for<'a> fn(&BuiltinSemanticInput<'a>) -> Vec<(usize, PhpType)>;
+
 /// Backend-neutral resolver for argument- or value-dependent return types.
 pub type ResultTypeFn = for<'a> fn(&BuiltinSemanticInput<'a>) -> PhpType;
 
@@ -76,6 +79,8 @@ pub enum BuiltinValidation {
     SignatureOnly,
     /// Run one backend-neutral semantic validator after inferring arguments once.
     Shared(ValidateFn),
+    /// Requires logical source alternatives to support the selected overloaded argument roles.
+    MixedInputs(MixedInputsFn),
     /// Shares explicit cast identity with original-source evidence and full checker validation.
     ExplicitNumericCast(elephc_semantics::numeric_cast::NumericCastTarget),
     /// Preserves the original GMP integer source before native operand normalization.

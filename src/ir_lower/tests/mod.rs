@@ -900,4 +900,5 @@ mod nullable_descriptors;
 mod nullable_declarations;
 
 mod strict_mixed_operands;
+mod strict_mixed_builtins;
 mod strict_array_contracts;

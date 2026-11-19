@@ -19,6 +19,7 @@ pub mod registry;
 pub mod docs;
 mod convert;
 pub(crate) mod input_contracts;
+pub(crate) mod mixed_inputs;
 mod requirements;
 mod array;
 mod callables;

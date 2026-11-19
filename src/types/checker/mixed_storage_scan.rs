@@ -821,6 +821,7 @@ fn type_guard_subject(condition: &Expr) -> Option<(&str, PhpType)> {
                 "is_bool" => PhpType::Bool,
                 "is_null" => PhpType::Void,
                 "is_callable" => PhpType::Callable,
+                "is_resource" => PhpType::Resource(None),
                 // `is_array` narrows to the element-agnostic array FAMILY, which has no single
                 // `PhpType`. `Mixed` is what `GuardTarget::AnyArray::fallback_type` yields, and
                 // `narrow_to` reaches for that fallback whenever the guarded name is not ALREADY

@@ -521,6 +521,7 @@ fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> 
                 // ?int as int on the fall-through path).
                 "is_null" => GuardTarget::Exact(PhpType::Void),
                 "is_callable" => GuardTarget::Exact(PhpType::Callable),
+                "is_resource" => GuardTarget::Exact(PhpType::Resource(None)),
                 "is_array" => GuardTarget::AnyArray,
                 // `isset($x)` is the exact negation of `$x === null` for a keyable place: true
                 // exactly when the storage holds a non-null value. This is what makes

@@ -67,7 +67,9 @@ impl Checker {
         if *expected == PhpType::Mixed { return Ok(()); }
         crate::semantics::mixed::validate_use(self.semantic_profile, source, actual, span, context,
             |member| Self::types_compatible(expected, member) || self.type_accepts(expected, member)
-                || crate::types::param_binding::scalar_param_cast(expected, member).is_some())
+                || crate::types::param_binding::scalar_param_cast(expected, member).is_some()
+                || *expected == PhpType::Str && matches!(member, PhpType::Object(_))
+                    && self.valid_dynamic_property_name_type(member))
     }
 
     /// Requires a supported writable receiver and PHP key without rebuilding flow facts.

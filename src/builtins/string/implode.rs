@@ -52,5 +52,17 @@ pub(crate) const fn implode_semantics() -> crate::builtins::semantics::BuiltinSe
     let mut semantics =
         crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::Implode);
     semantics.effects = crate::builtins::semantics::BuiltinEffects::Shared(implode_effects);
+    semantics.validation = crate::builtins::semantics::BuiltinValidation::MixedInputs(mixed_input_roles);
     semantics
+}
+
+/// Uses the supplied arity to distinguish a sole array from a separator followed by an array.
+fn mixed_input_roles(input: &crate::builtins::semantics::BuiltinSemanticInput<'_>)
+    -> Vec<(usize, crate::types::PhpType)> {
+    use crate::types::PhpType;
+    match input.arg_types.len() {
+        0 => Vec::new(),
+        1 => vec![(0, PhpType::php_array())],
+        _ => vec![(0, PhpType::Str), (1, PhpType::php_array())],
+    }
 }

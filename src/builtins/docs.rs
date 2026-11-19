@@ -118,6 +118,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         }
         BuiltinValidation::SignatureOnly => json!({"kind": "signature"}),
         BuiltinValidation::Shared(_) => json!({"kind": "shared"}),
+        BuiltinValidation::MixedInputs(_) => json!({"kind": "mixed_inputs"}),
         BuiltinValidation::GmpIntegerCast => json!({"kind": "shared", "numeric_cast": "gmp_int"}),
         BuiltinValidation::ExplicitNumericCast(target) => json!({"kind": "shared", "numeric_cast": match target {
             elephc_semantics::numeric_cast::NumericCastTarget::Int => "int",

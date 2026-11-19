@@ -20899,7 +20899,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "shared",
       "runtime_functions": [
         "array_product"
       ],
@@ -22593,7 +22593,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "shared",
       "runtime_functions": [
         "array_sum"
       ],
@@ -55925,7 +55925,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "mixed_inputs"
       }
     },
     "sig": {
@@ -56046,7 +56046,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "mixed_inputs"
       }
     },
     "sig": {
@@ -80183,7 +80183,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "mixed_inputs"
       }
     },
     "sig": {
@@ -86540,7 +86540,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "mixed_inputs"
       }
     },
     "sig": {
@@ -151050,7 +151050,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "mixed_inputs"
       }
     },
     "sig": {
@@ -151207,7 +151207,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "mixed_inputs"
       }
     },
     "sig": {

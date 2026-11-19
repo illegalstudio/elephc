@@ -21,7 +21,7 @@ description: "Compiler internals for join(): lowering path, type checks, and run
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `signature`
+- **Validation**: `mixed_inputs`
 - **Result type source**: `declared`
 - **Result ownership**: `fresh`
 - **Effects**: `shared`

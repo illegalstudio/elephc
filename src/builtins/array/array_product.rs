@@ -27,7 +27,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if ty.is_php_array() || matches!(ty.codegen_repr(),
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
     ) {
-        Ok(PhpType::Mixed)
+        Ok(super::numeric_aggregate::result_type(cx.checker.semantic_profile, cx.source_mode))
     } else {
         Err(CompileError::new(cx.span, "array_product() argument must be array"))
     }

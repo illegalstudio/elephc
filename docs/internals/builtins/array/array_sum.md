@@ -21,7 +21,7 @@ description: "Compiler internals for array_sum(): lowering path, type checks, an
 
 - **Target strategy**: `eir_graph`
 - **Validation**: `checker_hook`
-- **Result type source**: `checked`
+- **Result type source**: `shared`
 - **Result ownership**: `fresh`
 - **Effects**: `static (18 declared effects)`
 - **Requirements**: `static (0 requirements)`
