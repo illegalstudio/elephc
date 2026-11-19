@@ -195,7 +195,7 @@
       "total": 3181
     },
     "functions": {
-      "have": 1114,
+      "have": 1121,
       "total": 2169
     }
   },
@@ -1265,8 +1265,8 @@
       "docs": "docs/php/pcntl.md#functions",
       "extension": "posix",
       "functions": {
-        "eval": 2,
-        "have": 2,
+        "eval": 9,
+        "have": 9,
         "total": 41
       },
       "name": "posix",

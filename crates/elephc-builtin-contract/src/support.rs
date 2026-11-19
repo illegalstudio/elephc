@@ -382,7 +382,7 @@ mod tests {
         // prelude exposes setlocale/nl_langinfo through forwarding eval homes, and
         // `preg_grep`, `preg_last_error`, and `preg_last_error_msg` have eval homes.
         // Seven ext/posix bindings run through the PCNTL interpreter adapter.
-        assert_eq!(eval_registry, 795 + curl_surface);
+        assert_eq!(eval_registry, 802 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -491,7 +491,7 @@ mod tests {
         // interpreter adapters, plus the GMP, SimpleXML, and tidy forwarding homes, and the
         // seven ext/posix bridge builtins served by the PCNTL adapter.
         // The seven ext/posix bridge builtins are served by the PCNTL adapter.
-        assert_eq!(interpreter_adapter, 700 + curl_surface);
+        assert_eq!(interpreter_adapter, 707 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
