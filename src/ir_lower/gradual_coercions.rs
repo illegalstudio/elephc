@@ -66,6 +66,17 @@ pub(super) fn coerce_gradual_value_to_boundary(
             boundary_cast_effects(),
             span,
         ),
+        // A pointer word crosses a boxed local as a plain integer (`null` is address 0), so a
+        // `$p = null` local whose slot was widened to a Mixed box reads back through the integer
+        // cast. Passing the box itself made the callee test the box address against null.
+        PhpType::Pointer(_) => ctx.emit_value(
+            Op::Cast,
+            vec![value.value],
+            Some(Immediate::CastTarget(IrType::I64)),
+            target.clone(),
+            boundary_cast_effects(),
+            span,
+        ),
         PhpType::Float => ctx.emit_value(
             Op::Cast,
             vec![value.value],

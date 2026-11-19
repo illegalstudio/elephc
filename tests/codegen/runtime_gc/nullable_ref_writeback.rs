@@ -835,6 +835,30 @@ run();
     assert_clean(out, "nnn1n1\n");
 }
 
+/// A null local reassigned in a loop-free body and passed BY VALUE to an INSTANCE method's
+/// `?ptr<T>` parameter reaches the callee as a null pointer: the local's slot is a boxed
+/// `null`, and the call boundary reads the pointer word out of the box (the box address was
+/// once compared against null, so the callee saw a non-null pointer).
+#[test]
+fn test_boxed_null_local_reaches_instance_method_pointer_parameter_as_null() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+packed class Vec2 { public int $x; }
+class Sink {
+    public function take(?ptr<Vec2> $p): string { return $p === null ? "n" : "p"; }
+}
+function run(): void {
+    $sink = new Sink();
+    $p = null;
+    echo $sink->take($p);
+    echo $sink->take(null), "\n";
+}
+run();
+"#,
+    );
+    assert_clean(out, "nn\n");
+}
+
 /// Named arguments and by-reference variadic tails bind null-only locals by their actual
 /// parameter: a by-value `?ptr<T>` parameter reached by name (in either order) or beside a
 /// `mixed &...$rest` tail keeps the local's null storage, while a by-reference `?array &$out`
