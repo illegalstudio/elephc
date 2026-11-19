@@ -8,7 +8,7 @@
 - [ ] Propagate the immutable profile through compiler phases and runtime contexts.
 - [x] Complete strict-dynamic-code source, execution, and REPL boundaries.
 - [x] Implement numeric rules, checked conversions, and catchable integer overflow.
-- [ ] Implement stable bindings, boolean conditions, comparisons, and string rules.
+- [x] Implement stable bindings, boolean conditions, comparisons, and string rules.
 - [ ] Implement nullability, mixed/union narrowing, and initialization checks.
 - [ ] Implement exact array keys, element contracts, and checked reads.
 - [ ] Complete builtin, callable, reference, eval, and host-boundary parity.
@@ -371,17 +371,16 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step178 (this commit). Remaining feature integration is active. Issue:
+Verified through step213 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
 commit for every verified step and no partial delivery. Do not expose unfinished
-flags as successful no-ops. The public integrated mask contains Locals, Bools, DynamicCode, Opcache, Arithmetic,
-Overflow, Strings, Coercions, Casts and Comparisons. Locals includes numeric, scalar, nominal, array-kind, callable/iterable binding,
-resource, native reference and eval origin extensions through134;
-its complete reference/global/eval and broader binding-flow contract remains outstanding. All
-other guarantees and the complete umbrella remain explicitly gated until their
-whole contract is enforced.
+flags as successful no-ops. The public integrated mask contains Locals, Bools, DynamicCode, Opcache,
+Arithmetic, Overflow, Strings, Coercions, Casts, Comparisons, ArrayKeys and
+Initialization. Nullability, Mixed, ArrayTypes and Indexing remain gated, as does
+the complete umbrella, until their whole contracts are enforced. The verified
+steps below retain the source, reference, eval, ownership and target evidence.
 
 This progress ledger condenses verified implementation through step133.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
@@ -2505,3 +2504,45 @@ to stderr per invocation. Temporary EIR/metadata diagnostics were removed.
 No new family is admitted. Initialization source/public host/cache/opaque eval,
 documentation and example acceptance remains next, followed by the four other
 pending families and the complete umbrella.
+
+### Verified213: public initialized reads and accessor guard retirement
+
+Initialization is now independently admitted through the public checker, CLI,
+interpreter API, native eval bridge and REPL. It preserves initialized null,
+ordinary missing-read errors and intentional probes across native frames,
+canonical globals, properties and literal/interpreted eval. Public checks cover
+`strict_types=0`, PHP-only source, tagless LFC includes, explicit option override,
+optimizer modes, immutable profiles and permissive/strict cache warmup. Four
+families and the complete umbrella remain gated.
+
+A removed untyped slot's getter now uses typed `InitializedGetter` method-call
+metadata while retaining the shared argument, reference and owner lowering.
+Validation checks its feature requirement, data identity, operand shape and
+throwing/global effects. The guard key is receiver identity plus exact property
+bytes; getter keys use a reserved alignment bit in the existing Fiber-local
+accessor chain. The four-word runtime node and callback ABI remain unchanged.
+Shared setter unwind/frame helpers were extracted rather than duplicated.
+Same-pair reentry throws the initialized-property Error, while another property
+or receiver can invoke its getter. Every normal and exceptional exit retires the
+node, and scalar/string/Mixed returns survive the nonallocating pop. Native eval
+uses the same chain; abstract providers retain distinct getter/setter identity
+namespaces. Existing legacy accessor selection remains unchanged elsewhere.
+
+The new example also exposed an existing conditional-copy leak in both modes:
+a concrete local read as Mixed created a box before assignment cloned it. The
+clone was retired, but the provisional source box was omitted. Assignment copies
+now use the existing deferred local-view cleanup predicate. Finalization still
+removes releases when final storage lends its own box. Twelve string/owned-string/
+integer copy cases pass with clean heaps in permissive and strict modes, with
+optimization on and off; the LFC case and runnable example are clean too.
+
+Thirty-four focused final gates pass across the retained successful cases from
+jobs804b85ab,7db7b54e,a7f1ccc1,d1d04565,e14f772f. They cover all-five public/guard
+emission, malformed metadata, instruction-size budget, native and interpreter
+getter protocols, cache/profile boundaries, CLI and eval global removal, real
+opaque getter interop, REPL recovery, LFC/example, deferred ownership, shared
+setter/Fiber controls, staged diff and assembly hygiene, and the builtin EIR
+boundary audit. Failed runner registrations were not counted: the unchanged
+runtime-cache identity test belongs to the CLI binary rather than the library,
+and exact leaf matching disambiguated an owner test from its no-IR-opt variant.
+README, CLI, eval and internal ownership/type-checker docs describe the new rule.

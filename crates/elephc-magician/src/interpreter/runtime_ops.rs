@@ -27,6 +27,9 @@ thread_local! {
     /// Fallback recursion chain for embedders without the generated Fiber-aware runtime hook.
     static FALLBACK_MAGIC_SET_GUARDS: std::cell::RefCell<Vec<(usize, u64, String)>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// Getter identities have a separate namespace for non-native embedders.
+    static FALLBACK_MAGIC_GET_GUARDS: std::cell::RefCell<Vec<(usize, u64, String)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// One PHP-visible parameter decoded from a native callable descriptor.
@@ -592,6 +595,37 @@ pub trait RuntimeValueOps {
         node: &mut [u64; 4],
     ) -> Result<(), EvalStatus> {
         FALLBACK_MAGIC_SET_GUARDS.with(|guards| {
+            let removed = guards.borrow_mut().pop();
+            debug_assert_eq!(removed.as_ref().map(|guard| guard.0), Some(node.as_ptr() as usize));
+        });
+        Ok(())
+    }
+
+    /// Mirrors an eval `__get` pair into the generated runtime's Fiber-local guard chain.
+    fn native_magic_get_guard_push(
+        &mut self,
+        object_identity: u64,
+        property: &str,
+        node: &mut [u64; 4],
+    ) -> Result<bool, EvalStatus> {
+        FALLBACK_MAGIC_GET_GUARDS.with(|guards| {
+            let mut guards = guards.borrow_mut();
+            if guards.iter().any(|(_, active_object, active_property)| {
+                *active_object == object_identity && active_property == property
+            }) {
+                return Ok(false);
+            }
+            guards.push((node.as_ptr() as usize, object_identity, property.to_string()));
+            Ok(true)
+        })
+    }
+
+    /// Removes a guard node previously accepted by `native_magic_get_guard_push`.
+    fn native_magic_get_guard_pop(
+        &mut self,
+        node: &mut [u64; 4],
+    ) -> Result<(), EvalStatus> {
+        FALLBACK_MAGIC_GET_GUARDS.with(|guards| {
             let removed = guards.borrow_mut().pop();
             debug_assert_eq!(removed.as_ref().map(|guard| guard.0), Some(node.as_ptr() as usize));
         });

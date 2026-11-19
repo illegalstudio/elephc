@@ -606,12 +606,36 @@ order. Repeating an explicit feature option uses the last value.
 
 Integration is in progress. This build accepts the existing strict-locals and
 strict-opcache rules plus strict-dynamic-code, strict-bools, strict-arithmetic,
-strict-overflow, strict-strings, strict-coercions, strict-casts, strict-comparisons
-and strict-array-keys.
+strict-overflow, strict-strings, strict-coercions, strict-casts, strict-comparisons,
+strict-array-keys and strict-initialization.
 Other registered guarantees,
 including the complete umbrella, fail explicitly until their enforcement is
 complete. Eval embedding entry points reject execution with those profiles too. The [implementation plan](https://github.com/illegalstudio/elephc/issues/2347)
 tracks the remaining work.
+
+### Initialized reads
+
+`--strict-initialization` requires every ordinary local or property read to
+observe initialized storage. A statically absent binding is a compile error;
+conditional initialization, `unset()` and runtime-selected storage are checked
+when read and throw a catchable `Error`. Initialized `null` remains a value.
+
+Intentional probes (`isset`, `empty`, `??`) and nullsafe receiver short-circuiting
+keep their absence behavior. Property reads retain getter and visibility protocols; reflection's
+physical property reads check the physical slot. The rule also applies in
+literal and runtime eval, included source and REPL sessions. It is independent
+of local type stability and `declare(strict_types=0)`.
+
+```php
+function displaySetting(bool $load): void {
+    if ($load) { $setting = 'ready'; }
+    echo $setting ?? 'not loaded';
+    try { echo $setting; }
+    catch (Error $error) { echo 'initialize the setting first'; }
+}
+```
+
+See `examples/strict-initialization/main.php` for a runnable example.
 
 ### Exact array keys
 

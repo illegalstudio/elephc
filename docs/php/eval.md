@@ -136,12 +136,20 @@ ABI. AOT literals without writes skip scope materialization when they need no
 caller values or can receive read-only values as direct EIR parameters. Known
 writes use the same core scope cells from an internal EIR function.
 
-Because a scope cell is always boxed `Mixed`, an untyped local read or written inside
-`eval()` may change type freely: `eval('$a = 1; $a = "ciao"; echo $a;')`
-compiles and runs the same in every mode. This is unrelated to
-[`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode), which
-only tightens the AOT checker's monomorphic-local rule for ordinary compiled
-locals outside `eval()`; it has no effect on eval'd code.
+Scope cells use boxed `Mixed` storage, while the effective semantic profile
+retains source binding contracts. With
+[`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode), a conflicting
+write is checked before replacing an existing contracted binding; explicit
+`mixed` bindings remain open, and `unset()` permits a new binding origin.
+
+[`--strict-initialization`](../compiling/cli-reference.md#initialized-reads)
+distinguishes an absent binding from an initialized boxed `null`. Ordinary reads
+of absent storage throw `Error`; `isset`, `empty` and `??` remain intentional
+probes. The same profile applies to literal AOT fragments, interpreted source,
+includes and REPL submissions. Literal fragments retain materialized scope cells
+when direct read parameters would lose binding presence. Native frame/global
+synchronization preserves an eval `unset()` as absence instead of initialized
+null, including when the next read occurs outside eval.
 
 Inside closures, `use ($x)` captures synchronize only the closure's captured
 copy. `use (&$x)` captures write through the shared source variable, so eval

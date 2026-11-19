@@ -245,6 +245,8 @@ pub struct EvalScopeStoreImmediate {
 /// Literal or metadata operand attached to an opcode.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Immediate {
+    /// Calls an initialized-slot getter under a receiver/property recursion guard.
+    InitializedGetter { method: DataId, property: DataId },
     I64(i64),
     F64(f64),
     Bool(bool),

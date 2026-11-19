@@ -368,7 +368,16 @@ switches do not update the operating-system thread's stack bounds. Parsing calls
 no PHP and returns its owned program before interpreter execution begins; PHP
 suspension and saved-frame ownership continue on the native coroutine stack.
 
-The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. The main context also saves its magic-setter guard and deep-release GC suppression. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, `own_call_frame`, `own_magic_set_guard`, and `own_gc_release_suppressed`), so `__rt_fiber_switch` restores the execution context belonging to the selected stack.
+The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. The main context also saves its magic-accessor guard and deep-release GC suppression. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, `own_call_frame`, `own_magic_set_guard`, and `own_gc_release_suppressed`), so `__rt_fiber_switch` restores the execution context belonging to the selected stack.
+
+The existing `_magic_set_guard_head` chain also carries initialized getter
+guards. Setter nodes store the aligned native receiver identity; getter nodes
+set its reserved low bit. The remaining key is the exact property byte sequence.
+The guard only compares identities, never dereferences the tagged key. Both
+kinds retain the same four-word stack-node ABI and Fiber switching state. A
+local exception boundary unlinks the exact node before its stack storage leaves
+scope, and getter results are saved while the nonallocating pop runs.
+
 
 Every compiled function prologue also consults `_stack_limit`. The main-thread
 floor, derived from `RLIMIT_STACK`, is retained in `_stack_limit_main`; Fiber and
@@ -1968,7 +1977,7 @@ read the same uniform heap header, including on the iOS targets.
 | Weak-reference identity index | `_obj_weak_reference_index` = `(heap_size / 16 + 2) * 8` bytes, or 64 MiB plus 16 bytes for the default 128 MiB heap | One non-owning wrapper pointer per heap granule; it neither keeps keys alive nor acts as a collector root |
 | Buffer descriptors | `_buffer_registry` = 196656 bytes (4097 descriptors × 48 bytes), `_buffer_registry_free` = 8 bytes, `_buffer_registry_next` = 8 bytes | Up to 4096 live buffers; freed descriptors are recycled with a new generation, while exhaustion aborts with `Fatal error: buffer registry exhausted` (an invalid requested size aborts earlier with `Fatal error: buffer_new() length is negative or exceeds the maximum buffer size`) |
 | Exception and user-handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, and every `_php_error_handler_*` / `_php_exception_handler_*` slot = 8 bytes each | Active exception state and current user handlers; nested handler registrations use heap-backed linked stacks |
-| Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`, `_fiber_main_saved_magic_set_guard` = 40 bytes total | Current-fiber and main-frame resume bookkeeping, including the magic-set recursion guard |
+| Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`, `_fiber_main_saved_magic_set_guard` = 40 bytes total | Current-fiber and main-frame resume bookkeeping, including the magic-accessor recursion guard |
 | Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_ptr`, `_rt_diag_pending_len`, `_php_diagnostic_file`, `_php_diagnostic_file_len`, `_php_diagnostic_line` = 8 bytes each | Warning suppression plus deferred diagnostic message and source-location state |
 | Resource inventory | `_resource_inventory_head`, `_resource_inventory_tail` = 16 bytes total | Heap-backed history used by `get_resources()`, including closed incarnations after descriptor reuse |
 | Unmanaged reference-borrow state | `_rt_unmanaged_ref_borrow_top` = 8 bytes | Active boxed array-walk borrow chain used to reject escaping unmanaged element references |

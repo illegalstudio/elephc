@@ -78,6 +78,9 @@ fn select(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &st
 fn accessor(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
     method: &str, expr: &Expr,
 ) -> LoweredValue {
+    if method == "__get" {
+        return super::nullable_method_calls::lower_initialized_getter(ctx, object, property, expr);
+    }
     let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
     lower_method_call_with_receiver(ctx, object, method, &[name], Op::MethodCall, expr)
 }

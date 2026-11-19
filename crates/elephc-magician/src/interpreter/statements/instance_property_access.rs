@@ -1085,17 +1085,39 @@ pub(super) fn eval_magic_property_get(
     if method.is_static() || method.is_abstract() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let property = values.string(property_name)?;
-    let result = eval_dynamic_method_with_values(
-        &declaring_class,
-        object_class_name,
-        &method,
-        object,
-        positional_args(vec![property.borrowed()]),
-        context,
-        values,
-    );
-    finish_magic_property_name(result, property, context, values).map(Some)
+    let identity = values.object_identity(object)?;
+    let guarded = context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization)
+        && eval_dynamic_property_for_access(object_class_name, property_name, context).is_some_and(|(owner, member)| {
+            member.property_type().is_none()
+                && validate_eval_member_access(&owner, member.visibility(), context).is_ok()
+                && !context.dynamic_property_is_initialized(identity, &eval_instance_property_storage_name(&owner, &member))
+        });
+    let mut node = std::pin::pin!([0_u64; 4]);
+    if guarded && !values.native_magic_get_guard_push(identity, property_name, node.as_mut().get_mut())? {
+        return initialization::missing_property(property_name, context, values);
+    }
+    let result = (|| {
+        let property = values.string(property_name)?;
+        let result = eval_dynamic_method_with_values(
+            &declaring_class,
+            object_class_name,
+            &method,
+            object,
+            positional_args(vec![property.borrowed()]),
+            context,
+            values,
+        );
+        finish_magic_property_name(result, property, context, values).map(Some)
+    })();
+    if guarded {
+        let popped = values.native_magic_get_guard_pop(node.as_mut().get_mut());
+        match (result, popped) {
+            (Err(status), _) => Err(status),
+            (Ok(Some(value)), Err(status)) => finish_eval_argument_values(Err(status), [value], context, values).map(Some),
+            (Ok(None), Err(status)) => Err(status),
+            (Ok(value), Ok(())) => Ok(value),
+        }
+    } else { result }
 }
 
 /// Dispatches an undefined or inaccessible eval property write through `__set()`.

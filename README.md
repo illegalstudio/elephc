@@ -341,6 +341,9 @@ elephc --php-only app.php
 # Make an incompatible local retype a compile error instead of a warning
 elephc --strict-locals app.php
 
+# Check ordinary variable and property reads for initialized storage
+elephc --strict-initialization app.php
+
 # Print per-phase compiler timings
 elephc --timings hello.php
 

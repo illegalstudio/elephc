@@ -99,6 +99,7 @@ mod instruction_helpers;
 mod local_loads;
 pub(in crate::codegen) mod local_stores;
 mod method_call_types;
+mod magic_property_guards;
 mod method_dispatch;
 mod method_dispatch_errors;
 mod method_intrinsics;

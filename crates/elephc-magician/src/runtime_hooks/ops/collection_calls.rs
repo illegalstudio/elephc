@@ -284,6 +284,19 @@ macro_rules! impl_collection_call_ops {
         Ok(())
     }
 
+    /// Tags an aligned native getter identity in the existing Fiber-local accessor chain.
+    fn native_magic_get_guard_push(&mut self, object_identity: u64, property: &str,
+        node: &mut [u64; 4],
+    ) -> Result<bool, EvalStatus> {
+        debug_assert_eq!(object_identity & 1, 0);
+        self.native_magic_set_guard_push(object_identity | 1, property, node)
+    }
+
+    /// Removes the exact getter node without changing the native guard ABI.
+    fn native_magic_get_guard_pop(&mut self, node: &mut [u64; 4]) -> Result<(), EvalStatus> {
+        self.native_magic_set_guard_pop(node)
+    }
+
     /// Uninitializes a native typed slot without assigning a coerced PHP null value.
     fn unset_native_typed_property(
         &mut self,

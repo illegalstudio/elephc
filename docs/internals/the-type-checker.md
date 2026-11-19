@@ -230,6 +230,23 @@ existing ambiguity and AST-duplication guards apply to these decisions too.
 
 `eval()` reads and writes locals through boxed `Mixed` scope cells rather than compiled typed frame slots (see [eval() scope behavior](../php/eval.md#scope-behavior)). With `--strict-locals`, source binding contracts remain independent from that physical representation: literal AOT fragments and the Magician walker/VM validate stores before publication, and a successful `unset` permits a fresh origin. Explicit `mixed` and imported values without source contracts remain open. The native body that calls `eval()` also keeps its slots addressable by name: because the scope cell is addressed by NAME, shapes 1 and 2 would hand the fragment a slot the rest of the body no longer uses, so `mixed_storage_scan` records a per-body "contains eval" flag (`Checker::body_contains_eval`) and `local_binding_is_killable` refuses both there; body-scoped rather than point-in-time, since `eval_barrier_active` only rises once the walk has PASSED an `eval` and the hazard includes an `eval` below the site. See [`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode) for the CLI flag.
 
+### Initialized reads
+
+The semantic profile controls `strict-initialization` independently of binding
+type stability. Known missing ordinary bindings are checker diagnostics. Reads
+whose presence depends on runtime flow lower to the shared frame, global or
+eval-scope presence predicates. Initialized null and absent storage stay distinct;
+intentional probes keep their quiet root handling while keys and other operands
+are evaluated ordinarily. Trusted internal source retains its existing policy.
+
+Untyped removed properties share named, boxed and computed-name accessor
+selection. A selected getter uses `Immediate::InitializedGetter`, retaining the
+ordinary method signature, argument evaluation, reference and owner machinery.
+EIR validation checks its source guarantee, method/property data, operand shapes
+and guard effects. Runtime pair-specific guards prevent reentry on the same
+removed slot and retire before normal return or rethrow. Typed-property checks
+retain their existing physical-slot behavior.
+
 ### Per-file `strict_types`
 
 `declare(strict_types=1)` is scoped to one physical file, while the checker sees the flat program produced by include/autoload merging. The parser records the directive in its per-file `SourceProfile` (`crate::source`). Statements retain `source_mode` and `strict_types`, and expressions retain the whole profile in `Expr::source_profile`. Expression clones and rewrites preserve that producer profile, including default values imported from traits or copied into signature metadata. `Expr::with_kind` rebuilds a node while retaining its span and profile. Statement-rewriting passes re-install the whole profile through `with_parse_mode`/`scoped_parse_mode`. Spans also retain packed source identity for diagnostics; they do not replace the expression policy.

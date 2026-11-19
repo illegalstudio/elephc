@@ -206,3 +206,36 @@ fn strict_initialization_eval_magic_fixture_and_owners() {
     assert_initialized_fixture(include_str!("../../../../../tests/fixtures/strict/initialized_magic_reads.php"),
         "ready:1|PF:ready:3|ready:1|PF:ready|3|NULL\n0|ready:4|T|null:null|ready:ready|6|G7|AE:G7|child:1|", "magic reads");
 }
+
+/// Public walker and VM entries enforce initialization after a permissive cache warmup.
+#[test]
+fn strict_initialization_public_entries_preserve_profiles_and_owners() {
+    for walker in [false, true] {
+        for strict in [false, true, false] {
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Initialization, strict);
+            let program = crate::parser::parse_fragment_with_semantics(b"return $publicAbsent;", profile).unwrap();
+            let mut context = ElephcEvalContext::new();
+            context.install_semantic_profile(profile).unwrap();
+            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+            let result = if walker {
+                execute_program_statements(&program, &mut context, &mut scope, &mut values)
+                    .and_then(|control| match control { EvalControl::Return(value) => Ok(value), _ => values.null() })
+            } else { execute_program_with_context(&mut context, &program, &mut scope, &mut values) };
+            if strict {
+                assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+                let error = context.take_pending_throw().expect("initialized read Error");
+                assert!(values.object_is_a(error, "Error", false).unwrap());
+                values.release(error).unwrap();
+            } else { values.release(result.unwrap()).unwrap(); }
+            assert_eq!(values.warnings.len(), usize::from(!strict));
+            assert_clean(&mut context, &mut scope, &mut values, "public profile/cache");
+        }
+    }
+}
+
+/// Both interpreter entries suppress same-pair getter reentry and retire its guard on errors.
+#[test]
+fn strict_initialization_recursive_getters_and_owners() {
+    assert_initialized_fixture(include_str!("../../../../../tests/fixtures/strict/initialized_recursive_getters.php"),
+        "E:1|ready:2|right:2|text:2.5|other:1:1|value|", "recursive getters");
+}

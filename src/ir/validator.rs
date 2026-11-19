@@ -137,6 +137,13 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
                 }
             }
             let mut required = inst.arithmetic_policy().requirements().bits();
+            if let Some(Immediate::InitializedGetter { method, property }) = inst.immediate {
+                required |= elephc_semantics::StrictFeature::Initialization.bit();
+                if module.data.strings.get(method.as_raw() as usize).map(String::as_str) != Some("__get")
+                    || module.data.strings.get(property.as_raw() as usize).is_none() {
+                    return Err(ValidationError::UnexpectedImmediate(InstId::from_raw(index as u32)));
+                }
+            }
             if matches!(inst.op, Op::BindLocalRefContract | Op::EvalScopeBindingType | Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding | Op::EvalScopeEndBinding | Op::EvalScopeCopyBindingType) || matches!(&inst.immediate,
                 Some(Immediate::EvalScopeStore(metadata)) if metadata.contract.is_some()) {
                 required |= elephc_semantics::StrictFeature::Locals.bit();
@@ -774,6 +781,14 @@ fn validate_instruction_immediate(
     if matches!(inst.immediate, Some(Imm::NumericOperation { .. }))
         && !matches!(inst.op, MixedNumericBinop | ICheckedPow)
     { return Err(ValidationError::UnexpectedImmediate(inst_id)); }
+    if matches!(inst.immediate, Some(Imm::InitializedGetter { .. })) {
+        if inst.op != MethodCall { return Err(ValidationError::UnexpectedImmediate(inst_id)); }
+        let required = Effects::MAY_THROW | Effects::READS_GLOBAL | Effects::WRITES_GLOBAL;
+        if !inst.effects.contains(required) {
+            return Err(ValidationError::EffectMismatch { inst: inst_id, expected: inst.effects | required, actual: inst.effects });
+        }
+        return Ok(());
+    }
     match inst.op {
         ICheckedPow => {
             if inst.immediate.is_none() || matches!(inst.immediate, Some(Imm::NumericOperation { op: crate::ir::MixedNumericOp::Pow, .. })) { Ok(()) }
@@ -980,6 +995,15 @@ fn validate_opcode_rules(
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
     use Op::*;
+    if matches!(inst.immediate, Some(Immediate::InitializedGetter { .. })) {
+        check_count(inst_id, inst, 2, "receiver and property name for initialized getter")?;
+        check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Object), "raw Object receiver")?;
+        let name = function.value(inst.operands[1]).ok_or(ValidationError::UnknownValue(inst.operands[1]))?.ir_type;
+        if !matches!(name, IrType::Str | IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)) {
+            check_operand_type(function, inst_id, inst, 1, IrType::Str, "string-compatible getter argument")?;
+        }
+        return Ok(());
+    }
     match inst.op {
         ConstI64 | ConstBool | ConstNull => check_count(inst_id, inst, 0, "0"),
         ConstF64 | ConstStr | ConstClassName | ConstEnumCase | LoadCalledClassId | DataAddr | ArrayNew | HashNew

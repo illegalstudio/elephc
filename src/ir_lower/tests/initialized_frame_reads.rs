@@ -5,7 +5,7 @@
 //! - Focused staged Initialization emission, execution and diagnostic tests.
 //!
 //! Key details:
-//! - The flag remains unadmitted while non-frame read boundaries are integrated.
+//! - Public admission is covered alongside the dedicated frame-presence fixtures.
 
 use crate::{codegen_support::platform::Target, source::SourceMode};
 use elephc_semantics::{SemanticProfile, StrictFeature};

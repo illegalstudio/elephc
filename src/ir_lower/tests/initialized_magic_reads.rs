@@ -70,7 +70,10 @@ echo 'Q|';
             if strict {
                 let methods = function.instructions.iter().filter_map(|inst| {
                     if inst.op != crate::ir::Op::MethodCall { return None; }
-                    let Some(crate::ir::Immediate::Data(data)) = inst.immediate else { return None; };
+                    let data = match inst.immediate {
+                        Some(crate::ir::Immediate::Data(data) | crate::ir::Immediate::InitializedGetter { method: data, .. }) => data,
+                        _ => return None,
+                    };
                     Some(module.data.strings[data.as_raw() as usize].as_str())
                 }).collect::<Vec<_>>();
                 assert!(methods.contains(&"__get"), "{name}: {methods:?}");

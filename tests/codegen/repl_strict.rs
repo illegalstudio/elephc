@@ -77,3 +77,12 @@ fn test_repl_strict_comparisons_public_profile_and_recovery() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("invalid"),
         "{}", String::from_utf8_lossy(&output.stderr));
 }
+
+/// Missing reads preserve the public profile and the cached host can execute later input.
+#[test]
+fn test_repl_strict_initialization_public_profile_and_recovery() {
+    let fixture = Fixture::new();
+    let output = fixture.run("try { echo $absent; } catch (Error $error) { echo 'I'; }\necho $absent ?? 'quiet';\n$value = null; echo gettype($value);\n", &["--strict-initialization"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "IquietNULL");
+}

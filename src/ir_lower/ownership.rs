@@ -29,6 +29,8 @@ pub(crate) fn borrow_value(
 
 /// Detaches a mutable Mixed value box for a by-value assignment and consumes an owned RHS.
 /// Array payloads retain COW sharing, while objects and resources preserve their PHP identity.
+/// Provisional local-load boxes use the existing deferred cleanup, which finalization removes
+/// if later storage decisions make the load borrow the frame's existing box.
 pub(crate) fn copy_assignment_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -40,7 +42,7 @@ pub(crate) fn copy_assignment_value(
     }
     let copied = ctx.emit_owned_value(Op::MixedClone, vec![value.value], None, php_type,
         Op::MixedClone.default_effects(), span);
-    if ctx.value_is_owning_temporary(value) { release_if_owned(ctx, value, span); }
+    if ctx.value_needs_release_after_use(value) { release_if_owned(ctx, value, span); }
     copied
 }
 
