@@ -7,6 +7,7 @@
 //! Key details:
 //! - Helpers preserve PHP error types and unwind the active unserialize context exactly once.
 
+use elephc_memoir::values::incomplete_object::CLASS_ID;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::data::{
@@ -100,7 +101,7 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.instruction("ldr x9, [sp, #8]");                            // rejected object payload
             emitter.instruction("cbz x9, __rt_unser_type_object_generic");      // null payload has no class metadata
             emitter.instruction("ldr x10, [x9]");                               // object class id
-            crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", -2);
+            crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", CLASS_ID);
             emitter.instruction("cmp x10, x11");                                // is this the undeclared-class synthetic id?
             emitter.instruction("b.eq __rt_unser_type_incomplete");             // PHP spells it __PHP_Incomplete_Class
             crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x11", "_class_name_count", 0);
@@ -240,7 +241,7 @@ pub(super) fn emit_unserialize_type_error_helper(emitter: &mut Emitter) {
             emitter.instruction("test r8, r8");                                 // null payload has no class metadata
             emitter.instruction("jz __rt_unser_type_object_generic_x");         // fall back to the generic object spelling
             emitter.instruction("mov r9, QWORD PTR [r8]");                      // object class id
-            emitter.instruction("cmp r9, -2");                                  // is this the undeclared-class synthetic id?
+            emitter.instruction(&format!("cmp r9, {CLASS_ID}"));                // is this the undeclared-class synthetic id?
             emitter.instruction("je __rt_unser_type_incomplete_x");             // PHP spells it __PHP_Incomplete_Class
             emitter.instruction("mov r10, QWORD PTR [rip + _class_name_count]"); // dense class-name table bound
             emitter.instruction("cmp r9, r10");                                 // class id within the dense name table?

@@ -7,6 +7,7 @@
 //! Key details:
 //! - The entry owns throw-safe cleanup; the decoder assumes the allocation-free preflight succeeded.
 
+use elephc_memoir::values::incomplete_object::{self, PROPERTY_HASH};
 use elephc_memoir::{FrameOffset, ValueTag, values::owned_payload};
 
 use crate::codegen_support::emit::Emitter;
@@ -398,25 +399,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // unknown classes suppress hooks and use opaque properties
     emitter.instruction("jmp __rt_unser_obj_incomplete_x");                     // match PHP's __PHP_Incomplete_Class fallback
     emitter.label("__rt_unser_obj_incomplete_x");
-    emitter.instruction("mov rax, 32");                                         // class id, original class name, and opaque property hash
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the incomplete-object payload
-    emitter.instruction(&format!(                                               // materialize the full-width object heap marker before storing it
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-    ));
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object header without an unencodable imm64 memory move
-    emitter.instruction("mov rdi, rax");                                        // object handle allocator input
-    emitter.instruction("call __rt_object_handle_acquire");                     // give the incomplete object a normal PHP handle
-    emitter.instruction("mov QWORD PTR [rax], -2");                             // reserved class id for __PHP_Incomplete_Class
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve incomplete object across string persistence
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // original serialized class-name bytes
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // original serialized class-name length
-    emitter.instruction("call __rt_str_persist");                               // own the class name independently of the source wire
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload incomplete object payload
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // persisted original class-name pointer
-    emitter.instruction("mov QWORD PTR [r10 + 16], rdx");                       // persisted original class-name length
-    emitter.instruction("mov QWORD PTR [r10 + 24], 0");                         // property hash is created after its count is parsed
-    emitter.instruction("mov rax, r10");                                        // restore object pointer for the shared allocated path
+    incomplete_object::emit_new(emitter, 32, 48, 56);
     emitter.label("__rt_unser_obj_allocated_x");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the new object pointer
     owned_payload::emit_owned_pointer_from_slot(emitter, ValueTag::new(6), "QWORD PTR [rbp - 32]");
@@ -503,7 +486,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, 7");                                          // values are boxed Mixed cells
     emitter.instruction("call __rt_hash_new");                                  // allocate property hash before parsing values
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // incomplete-object payload
-    emitter.instruction("mov QWORD PTR [r10 + 24], rax");                       // transfer hash ownership into incomplete object
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {PROPERTY_HASH}], rax")); // transfer hash ownership into incomplete object
     emitter.label("__rt_unser_obj_default_props_x");
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize the property index
     emitter.label("__rt_unser_at_obj_loop");
@@ -534,12 +517,12 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_unser_obj_skip_prop_store_x");                // transferred value now belongs to the hydrated object
     emitter.label("__rt_unser_obj_store_opaque_prop_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // incomplete-object payload
-    emitter.instruction("mov rdi, QWORD PTR [rdi + 24]");                       // opaque property hash
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rdi + {PROPERTY_HASH}]")); // opaque property hash
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // serialized property key pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // serialized property key length
     emitter.instruction("call __rt_unser_store_entry");                         // insert the property, reusing a duplicate key's box
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // incomplete-object payload after a possible hash grow
-    emitter.instruction("mov QWORD PTR [r10 + 24], rax");                       // retain updated property hash pointer
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {PROPERTY_HASH}], rax")); // retain updated property hash pointer
     emitter.label("__rt_unser_obj_skip_prop_store_x");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the property index
     emitter.instruction("add rcx, 1");                                          // advance the property index

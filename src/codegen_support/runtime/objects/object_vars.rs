@@ -17,6 +17,7 @@
 //! - Incomplete objects use class id `-2` and own their original class name at
 //!   offsets 8/16 plus an opaque boxed-Mixed property hash at offset 24.
 
+use elephc_memoir::values::incomplete_object::{CLASS_ID, NAME_LEN, NAME_PTR, PROPERTY_HASH};
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -83,7 +84,7 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #48]");                                   // save the lexical class id or global -1 sentinel
     emitter.instruction("cbz x0, __rt_object_to_hash_empty");                   // use `__rt_object_to_hash_empty` when the object or metadata is absent
     emitter.instruction("ldr x9, [x0]");                                        // load the current object/descriptor operand for `ldr x9, [x0]`
-    emitter.instruction("cmn x9, #2");                                          // evaluate `cmn x9, #2` before selecting the projection branch
+    emitter.instruction(&format!("cmn x9, #{}", -CLASS_ID));                    // evaluate `cmn x9, #2` before selecting the projection branch
     emitter.instruction("b.eq __rt_object_to_hash_incomplete");                 // route class id -2 through `__rt_object_to_hash_incomplete`
 
     abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");
@@ -329,7 +330,7 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_object_to_hash_done");                          // finish the projection through `__rt_object_to_hash_done`
 
     emitter.label("__rt_object_to_hash_incomplete");
-    emitter.instruction("ldr x12, [x0, #24]");                                  // load the current object/descriptor operand for `ldr x12, [x0, #24]`
+    emitter.instruction(&format!("ldr x12, [x0, #{PROPERTY_HASH}]"));           // load the current object/descriptor operand for `ldr x12, [x0, #24]`
     emitter.instruction("cbz x12, __rt_object_to_hash_empty");                  // use `__rt_object_to_hash_empty` when the object or metadata is absent
     emitter.instruction("ldr x9, [x12]");                                       // load the current object/descriptor operand for `ldr x9, [x12]`
     emitter.instruction("lsl x0, x9, #1");                                      // derive the current descriptor/property offset with `lsl x0, x9, #1`
@@ -339,8 +340,8 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // save the result-hash slot across nested runtime calls
     emitter.instruction("ldr x9, [sp, #0]");                                    // load the object pointer slot for `ldr x9, [sp, #0]`
     emitter.instruction("mov x0, #1");                                          // prepare the projection argument or result with `mov x0, #1`
-    emitter.instruction("ldr x1, [x9, #8]");                                    // load the synthetic class-name pointer
-    emitter.instruction("ldr x2, [x9, #16]");                                   // load the synthetic class-name length
+    emitter.instruction(&format!("ldr x1, [x9, #{NAME_PTR}]"));                 // load the synthetic class-name pointer
+    emitter.instruction(&format!("ldr x2, [x9, #{NAME_LEN}]"));                 // load the synthetic class-name length
     emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the synthetic name
     emitter.instruction("mov x3, x0");                                          // prepare the projection argument or result with `mov x3, x0`
     emitter.instruction("ldr x0, [sp, #16]");                                   // load the result-hash slot for `ldr x0, [sp, #16]`
@@ -351,7 +352,7 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_set");                                    // call `__rt_hash_set` with the prepared projection arguments
     emitter.instruction("str x0, [sp, #16]");                                   // save the result-hash slot across nested runtime calls
     emitter.instruction("ldr x1, [sp, #0]");                                    // load the object pointer slot for `ldr x1, [sp, #0]`
-    emitter.instruction("ldr x1, [x1, #24]");                                   // load the current object/descriptor operand for `ldr x1, [x1, #24]`
+    emitter.instruction(&format!("ldr x1, [x1, #{PROPERTY_HASH}]"));            // load the current object/descriptor operand for `ldr x1, [x1, #24]`
     emitter.instruction("bl __rt_hash_project_spread");                         // copy retained incomplete-object properties with PHP array keys
     emitter.instruction("str x0, [sp, #16]");                                   // save the result-hash slot across nested runtime calls
     emitter.instruction("b __rt_object_to_hash_done");                          // finish the projection through `__rt_object_to_hash_done`
@@ -386,7 +387,7 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // evaluate `test rax, rax` before selecting the projection branch
     emitter.instruction("jz __rt_object_to_hash_empty_x");                      // use `__rt_object_to_hash_empty_x` when the object or metadata is absent
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // load the current object/descriptor operand for `mov r9, QWORD PTR [rax]`
-    emitter.instruction("cmp r9, -2");                                          // evaluate `cmp r9, -2` before selecting the projection branch
+    emitter.instruction(&format!("cmp r9, {CLASS_ID}"));                        // evaluate `cmp r9, -2` before selecting the projection branch
     emitter.instruction("je __rt_object_to_hash_incomplete_x");                 // route class id -2 through `__rt_object_to_hash_incomplete_x`
     emitter.instruction("mov r10, QWORD PTR [rip + _class_gc_desc_count]");     // load the current object/descriptor operand for `mov r10, QWORD PTR [rip + _class_gc_desc_count]`
     emitter.instruction("cmp r9, r10");                                         // evaluate `cmp r9, r10` before selecting the projection branch
@@ -626,7 +627,7 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_object_to_hash_done_x");                      // finish the projection through `__rt_object_to_hash_done_x`
 
     emitter.label("__rt_object_to_hash_incomplete_x");
-    emitter.instruction("mov r10, QWORD PTR [rax + 24]");                       // load the current object/descriptor operand for `mov r10, QWORD PTR [rax + 24]`
+    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {PROPERTY_HASH}]")); // load the current object/descriptor operand for `mov r10, QWORD PTR [rax + 24]`
     emitter.instruction("test r10, r10");                                       // evaluate `test r10, r10` before selecting the projection branch
     emitter.instruction("jz __rt_object_to_hash_empty_x");                      // use `__rt_object_to_hash_empty_x` when the object or metadata is absent
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the current object/descriptor operand for `mov r11, QWORD PTR [r10]`
@@ -636,8 +637,8 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the result-hash slot across nested runtime calls
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // load the object pointer slot for `mov r10, QWORD PTR [rbp - 8]`
     emitter.instruction("mov rax, 1");                                          // prepare the projection argument or result with `mov rax, 1`
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // load the synthetic class-name pointer
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // load the synthetic class-name length
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r10 + {NAME_PTR}]"));     // load the synthetic class-name pointer
+    emitter.instruction(&format!("mov rsi, QWORD PTR [r10 + {NAME_LEN}]"));     // load the synthetic class-name length
     emitter.instruction("call __rt_mixed_from_value");                          // persist and box the synthetic name
     emitter.instruction("mov rcx, rax");                                        // prepare the projection argument or result with `mov rcx, rax`
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // load the result-hash slot for `mov rdi, QWORD PTR [rbp - 24]`
@@ -648,7 +649,7 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_set");                                  // call `__rt_hash_set` with the prepared projection arguments
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the result-hash slot across nested runtime calls
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // load the object pointer slot for `mov r10, QWORD PTR [rbp - 8]`
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 24]");                       // load the current object/descriptor operand for `mov rsi, QWORD PTR [r10 + 24]`
+    emitter.instruction(&format!("mov rsi, QWORD PTR [r10 + {PROPERTY_HASH}]")); // load the current object/descriptor operand for `mov rsi, QWORD PTR [r10 + 24]`
     emitter.instruction("mov rdi, rax");                                        // prepare the projection argument or result with `mov rdi, rax`
     emitter.instruction("call __rt_hash_project_spread");                       // copy retained incomplete-object properties with PHP array keys
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the result-hash slot across nested runtime calls

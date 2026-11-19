@@ -49,6 +49,9 @@ Mixed slots, and emits weak resource cell and hosted replacement owner storage.
 It builds packed slice destinations from normalized bounds, publishes initialized
 prefixes in preallocated Mixed arrays, and initializes resource inventory nodes
 before linking them in creation order.
+It constructs native callback adapters from staged capture pairs, owns the
+libc-backed diagnostic fragment buffer, shares the incomplete-object layout
+with the decoder, and allocates cleared state for native compression filters.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.

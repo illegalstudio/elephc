@@ -37,3 +37,5 @@ pub use resolve::{emit_buffer_resolve, emit_buffer_try_resolve};
 pub use use_after_free::emit_buffer_use_after_free;
 pub mod output;
 pub mod offset_pairs;
+pub mod diagnostic_buffer;
+pub mod stream_state;

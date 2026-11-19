@@ -10,6 +10,7 @@
 //! - Suspended activation owners use a separate typed visitor; saved registers are not scanned.
 //! - Pure counting includes only the slots visited by the corresponding owner walk.
 
+use crate::values::incomplete_object::{BYTES, CLASS_ID, PROPERTY_HASH};
 use super::gc_candidates::{load, op, proofs, restore, save};
 use crate::{abi, Emitter, Arch};
 
@@ -182,16 +183,16 @@ fn incomplete(e: &mut impl Emitter) {
     restore(e, 0);
     abi::emit_branch_if_int_result_zero(e, "__rt_gc_incomplete_done");
     op(e, "ldr x9, [x0]", "mov r10, QWORD PTR [rax]", "incomplete objects use a reserved class identity outside ordinary descriptors");
-    op(e, "cmn x9, #2", "cmp r10, -2", "recognize only the unserializer's incomplete-object layout");
+    op(e, &format!("cmn x9, #{}", -CLASS_ID), &format!("cmp r10, {CLASS_ID}"), "recognize only the unserializer's incomplete-object layout");
     op(e, "b.ne __rt_gc_incomplete_done", "jne __rt_gc_incomplete_done", "ordinary classes use their existing fixed or native owner visitors");
     op(e, "ldr w9, [x0, #-16]", "mov r10d, DWORD PTR [rax - 16]", "validate the allocation before accessing the owned property hash");
-    op(e, "cmp x9, #32", "cmp r10, 32", "require the complete incomplete-object payload");
+    op(e, &format!("cmp x9, #{BYTES}"), &format!("cmp r10, {BYTES}"), "require the complete incomplete-object payload");
     op(e, "b.lo __rt_gc_incomplete_done", "jb __rt_gc_incomplete_done", "reject undersized storage before reading native fields");
     op(e, "ldr x9, [sp, #16]", "mov r10, QWORD PTR [rsp + 16]", "select pure slot accounting without tracing the property values");
     op(e, "cmp x9, #3", "cmp r10, 3", "the persisted class name is a string and contributes no graph edge");
     op(e, "mov x0, #1", "mov eax, 1", "count exactly the one owned property-hash slot");
     op(e, "b.eq __rt_gc_incomplete_return", "je __rt_gc_incomplete_return", "return structural work without inspecting or retaining children");
-    child(e, "incomplete", 0, 24);
+    child(e, "incomplete", 0, PROPERTY_HASH as i32);
     e.label("__rt_gc_incomplete_done");
     restore(e, 24);
     e.label("__rt_gc_incomplete_return");

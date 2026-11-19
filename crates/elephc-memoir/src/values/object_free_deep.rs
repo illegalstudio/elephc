@@ -9,6 +9,7 @@
 //! - Deep free helpers recursively release owned child storage and must match the heap kind/tag layout exactly.
 //! - Destructor exceptions are deferred until sibling owners and the object storage have been released.
 
+use super::incomplete_object::{CLASS_ID, NAME_PTR, PROPERTY_HASH};
 use crate::Emitter;
 use crate::Arch;
 use crate::abi;
@@ -105,13 +106,13 @@ pub fn emit_object_free_deep(emitter: &mut impl Emitter, features: ValueFeatures
     // -- incomplete objects own a persisted original class name plus a semantic
     // property hash instead of declared class property slots; release both --
     emitter.instruction("ldr x10, [x0]");                                       // x10 = receiver class_id
-    emitter.instruction("mov x11, #-2");                                        // synthetic __PHP_Incomplete_Class id
+    emitter.instruction(&format!("mov x11, #{CLASS_ID}"));                      // synthetic __PHP_Incomplete_Class id
     emitter.instruction("cmp x10, x11");                                        // does this payload hold preserved serialized wire bytes?
     emitter.instruction("b.ne __rt_object_free_deep_not_incomplete");           // ordinary objects follow their class-specific cleanup
-    emitter.instruction("ldr x0, [x0, #8]");                                    // original class-name persisted string pointer
+    emitter.instruction(&format!("ldr x0, [x0, #{NAME_PTR}]"));                 // original class-name persisted string pointer
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload incomplete-object payload after name release
-    emitter.instruction("ldr x0, [x0, #24]");                                   // semantic property hash pointer
+    emitter.instruction(&format!("ldr x0, [x0, #{PROPERTY_HASH}]"));            // semantic property hash pointer
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
     emitter.instruction("b __rt_object_free_deep_no_dyn_props");                // synthetic class id must not index declared-class layout tables
     emitter.label("__rt_object_free_deep_not_incomplete");
@@ -412,12 +413,12 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut impl Emitter, features: Valu
     // -- incomplete objects own a persisted original class name plus a semantic
     // property hash instead of declared class property slots; release both --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // r10 = receiver class_id
-    emitter.instruction("cmp r10, -2");                                         // synthetic __PHP_Incomplete_Class id
+    emitter.instruction(&format!("cmp r10, {CLASS_ID}"));                       // synthetic __PHP_Incomplete_Class id
     emitter.instruction("jne __rt_object_free_deep_not_incomplete_x");          // ordinary objects follow their class-specific cleanup
-    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // original class-name persisted string pointer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {NAME_PTR}]"));     // original class-name persisted string pointer
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload incomplete-object payload after name release
-    emitter.instruction("mov rax, QWORD PTR [rax + 24]");                       // semantic property hash pointer
+    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {PROPERTY_HASH}]")); // semantic property hash pointer
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
     emitter.instruction("jmp __rt_object_free_deep_no_dyn_props");              // synthetic class id must not index declared-class layout tables
     emitter.label("__rt_object_free_deep_not_incomplete_x");

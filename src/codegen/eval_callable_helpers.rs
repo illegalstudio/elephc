@@ -15,6 +15,7 @@
 //! - Inline invoker emission restores the enclosing helper's ELF text section.
 //! - AOT callback descriptors emitted here bind raw public argument containers.
 
+use elephc_memoir::callables::storage::{self, CALLBACK_CAPTURE_OFFSET, CaptureSlot, FOREIGN_CONTEXT_CAPTURE_OFFSET};
 use crate::codegen::abi;
 use crate::codegen::callable_descriptor::{
     self, CallableDescriptorInvocation, CallableDescriptorShape,
@@ -51,9 +52,6 @@ const EVAL_DYNAMIC_CALLABLE_INVOKER_LABEL: &str = "__elephc_eval_dynamic_callabl
 const EVAL_DYNAMIC_CALLABLE_ENTRY_LABEL: &str = "__elephc_eval_dynamic_callable_entry";
 /// Global wrapper that turns `(context, boxed callback)` into an owned adapter descriptor.
 pub(crate) const EVAL_CALLBACK_WRAPPER_LABEL: &str = "__elephc_eval_wrap_callback";
-const EVAL_DYNAMIC_CONTEXT_CAPTURE: usize = 0;
-const EVAL_DYNAMIC_CALLBACK_CAPTURE: usize = 1;
-const EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES: usize = 32;
 const AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET: i64 = 16;
 
 /// Callable descriptors available to eval constructor and method bridges.
@@ -257,8 +255,6 @@ fn emit_eval_callback_wrapper(module: &Module, emitter: &mut Emitter, descriptor
     emitter.blank();
     emitter.comment("--- eval bridge: callback adapter wrapper ---");
     emitter.label_global(EVAL_CALLBACK_WRAPPER_LABEL);
-    let size = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET
-        + EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES;
     match module.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
             emitter.instruction("sub sp, sp, #32");                             // reserve the context, callback and frame slots
@@ -268,13 +264,7 @@ fn emit_eval_callback_wrapper(module: &Module, emitter: &mut Emitter, descriptor
             emitter.instruction("str x1, [sp, #8]");                            // save the boxed callback capture
             emitter.instruction("mov x0, x1");                                  // retain the callback owned by the descriptor capture
             emitter.instruction("bl __rt_incref");                              // the descriptor's release retires this owner
-            emitter.instruction(&format!("mov x0, #{size}"));                   // allocate the fixed descriptor plus two capture slots
-            emitter.instruction("bl __rt_heap_alloc");                          // create the runtime descriptor block
-            callable_descriptor::emit_copy_static_descriptor_to_runtime(emitter, "x0", descriptor_label);
-            emitter.instruction("ldr x9, [sp, #0]");                            // reload the eval context capture
-            abi::emit_store_to_address(emitter, "x9", "x0", dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE));
-            emitter.instruction("ldr x9, [sp, #8]");                            // reload the retained boxed callback capture
-            abi::emit_store_to_address(emitter, "x9", "x0", dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE));
+            storage::emit_callback_adapter(emitter, descriptor_label, "x9", CaptureSlot::Stack(0), CaptureSlot::Stack(8));
             emitter.instruction("ldp x29, x30, [sp, #16]");                     // restore the caller frame
             emitter.instruction("add sp, sp, #32");                             // release the wrapper slots
             emitter.instruction("ret");                                         // return the owned adapter descriptor
@@ -287,13 +277,7 @@ fn emit_eval_callback_wrapper(module: &Module, emitter: &mut Emitter, descriptor
             emitter.instruction("mov QWORD PTR [rbp - 16], rsi");               // save the boxed callback capture
             emitter.instruction("mov rax, rsi");                                // retain the callback owned by the descriptor capture
             emitter.instruction("call __rt_incref");                            // the descriptor's release retires this owner
-            emitter.instruction(&format!("mov rax, {size}"));                   // allocate the fixed descriptor plus two capture slots
-            emitter.instruction("call __rt_heap_alloc");                        // create the runtime descriptor block
-            callable_descriptor::emit_copy_static_descriptor_to_runtime(emitter, "rax", descriptor_label);
-            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload the eval context capture
-            abi::emit_store_to_address(emitter, "r10", "rax", dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE));
-            emitter.instruction("mov r10, QWORD PTR [rbp - 16]");               // reload the retained boxed callback capture
-            abi::emit_store_to_address(emitter, "r10", "rax", dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE));
+            storage::emit_callback_adapter(emitter, descriptor_label, "r10", CaptureSlot::Frame(8), CaptureSlot::Frame(16));
             emitter.instruction("mov rsp, rbp");                                // release the wrapper slots
             emitter.instruction("pop rbp");                                     // restore the caller frame pointer
             emitter.instruction("ret");                                         // return the owned adapter descriptor
@@ -345,11 +329,11 @@ fn emit_aarch64_eval_dynamic_callable_invoker(
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload descriptor before reading eval captures
     emitter.instruction(&format!(                                               // pass the captured eval context as FFI argument 1
         "ldr x0, [x9, #{}]",
-        dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE)
+        FOREIGN_CONTEXT_CAPTURE_OFFSET
     ));
     emitter.instruction(&format!(                                               // pass the captured eval callback as FFI argument 2
         "ldr x1, [x9, #{}]",
-        dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE)
+        CALLBACK_CAPTURE_OFFSET
     ));
     emitter.instruction("ldr x2, [sp, #8]");                                    // pass the boxed Mixed invoker argument array
     emitter.instruction("add x3, sp, #16");                                     // pass writable eval result storage
@@ -395,11 +379,11 @@ fn emit_x86_64_eval_dynamic_callable_invoker(
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload descriptor before reading eval captures
     emitter.instruction(&format!(                                               // pass the captured eval context as FFI argument 1
         "mov rdi, QWORD PTR [r9 + {}]",
-        dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE)
+        FOREIGN_CONTEXT_CAPTURE_OFFSET
     ));
     emitter.instruction(&format!(                                               // pass the captured eval callback as FFI argument 2
         "mov rsi, QWORD PTR [r9 + {}]",
-        dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE)
+        CALLBACK_CAPTURE_OFFSET
     ));
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // pass the boxed Mixed invoker argument array
     emitter.instruction("lea rcx, [rbp - 48]");                                 // pass writable eval result storage
@@ -425,15 +409,7 @@ fn emit_x86_64_eval_dynamic_callable_invoker(
 /// Returns the byte offsets of the eval context and the wrapped boxed callback in an eval
 /// callback adapter.
 pub(crate) fn eval_callback_adapter_capture_offsets() -> (usize, usize) {
-    (
-        dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE),
-        dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE),
-    )
-}
-
-/// Returns the byte offset for one dynamic eval callable descriptor capture.
-fn dynamic_capture_offset(index: usize) -> usize {
-    callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + index * 16
+    (FOREIGN_CONTEXT_CAPTURE_OFFSET, CALLBACK_CAPTURE_OFFSET)
 }
 
 /// Emits an ARM64 fatal diagnostic for failed eval callback dispatch.
@@ -1465,28 +1441,7 @@ fn emit_aarch64_eval_dynamic_callable_descriptor(
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed callback value to retain it
     emitter.instruction("bl __rt_incref");                                      // retain the callback for descriptor capture ownership
     abi::emit_push_reg(emitter, "x0");
-    abi::emit_load_int_immediate(
-        emitter,
-        "x0",
-        (callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET
-            + EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES) as i64,
-    );
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate runtime descriptor storage with eval captures
-    callable_descriptor::emit_copy_static_descriptor_to_runtime(emitter, "x0", descriptor_label);
-    abi::load_at_offset(emitter, "x10", shared_cast::CONTEXT_SLOT);
-    abi::emit_store_to_address(
-        emitter,
-        "x10",
-        "x0",
-        dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE),
-    );
-    abi::emit_load_temporary_stack_slot(emitter, "x10", 0);
-    abi::emit_store_to_address(
-        emitter,
-        "x10",
-        "x0",
-        dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE),
-    );
+    storage::emit_callback_adapter(emitter, descriptor_label, "x10", CaptureSlot::Frame(shared_cast::CONTEXT_SLOT), CaptureSlot::Top);
     abi::emit_release_temporary_stack(emitter, 16);
     if result_reg != "x0" {
         emitter.instruction(&format!("mov {}, x0", result_reg));                // return the dynamic eval callable descriptor
@@ -1520,31 +1475,7 @@ fn emit_x86_64_eval_dynamic_callable_descriptor(
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed callback value to retain it
     emitter.instruction("call __rt_incref");                                    // retain the callback for descriptor capture ownership
     abi::emit_push_reg(emitter, "rax");
-    abi::emit_load_int_immediate(
-        emitter,
-        "rax",
-        (callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET
-            + EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES) as i64,
-    );
-    emitter.instruction("call __rt_heap_alloc");                                // allocate runtime descriptor storage with eval captures
-    callable_descriptor::emit_copy_static_descriptor_to_runtime(emitter, "rax", descriptor_label);
-    emitter.instruction(&format!(                                               // reload the active eval context for descriptor capture 0
-        "mov r10, QWORD PTR [rbp - {}]",
-        context_frame_offset
-    ));
-    abi::emit_store_to_address(
-        emitter,
-        "r10",
-        "rax",
-        dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE),
-    );
-    abi::emit_load_temporary_stack_slot(emitter, "r10", 0);
-    abi::emit_store_to_address(
-        emitter,
-        "r10",
-        "rax",
-        dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE),
-    );
+    storage::emit_callback_adapter(emitter, descriptor_label, "r10", CaptureSlot::Frame(context_frame_offset), CaptureSlot::Top);
     abi::emit_release_temporary_stack(emitter, 16);
     if result_reg != "rax" {
         emitter.instruction(&format!("mov {}, rax", result_reg));               // return the dynamic eval callable descriptor

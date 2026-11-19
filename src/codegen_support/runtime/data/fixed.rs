@@ -445,7 +445,8 @@ pub(crate) fn emit_runtime_data_fixed(
     elephc_memoir::data::append_reference_roots(&mut out, &target);
 
     out.push_str(&comm_directive("_php_backtrace_next_line", 8, target));
-    for symbol in ["_rt_diag_pending_ptr", "_rt_diag_pending_len", "_rt_diag_warning_message_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
+    elephc_memoir::buffers::diagnostic_buffer::append_storage(&mut out, &target);
+    for symbol in ["_rt_diag_warning_message_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
         out.push_str(&comm_directive(symbol, 8, target));
     }
     for (symbol, value) in [("_rt_warning_prefix", "Warning: "), ("_rt_notice_prefix", "Notice: "), ("_rt_deprecated_prefix", "Deprecated: ")] {
