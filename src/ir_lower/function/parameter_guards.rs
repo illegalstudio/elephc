@@ -11,7 +11,7 @@
 use super::*;
 use elephc_semantics::conversions::ValueKind;
 
-/// Lowers the same exact value contract used by direct argument boundaries.
+/// Lowers exact membership or a null-only obligation using the same borrowed input ABI.
 pub(crate) fn lower_callable_parameter_guard(module: &mut Module, label: &str, expected: &PhpType) -> Function {
     let span = Span::dummy();
     let value = Expr::new(ExprKind::Variable("value".into()), span);
@@ -46,14 +46,22 @@ pub(crate) fn lower_callable_parameter_guard(module: &mut Module, label: &str, e
             name: Name::unqualified(name), args: vec![value.clone()],
         }, span));
     }
-    let accepted = alternatives.into_iter().reduce(|left, right| Expr::new(ExprKind::BinaryOp {
+    let null_only = !module.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+        && crate::semantics::nullability::contract_active(module.semantic_profile, expected);
+    let accepted = if null_only {
+        Expr::new(ExprKind::Not(Box::new(Expr::new(ExprKind::FunctionCall {
+            name: Name::unqualified("is_null"), args: vec![value.clone()],
+        }, span))), span)
+    } else { alternatives.into_iter().reduce(|left, right| Expr::new(ExprKind::BinaryOp {
         left: Box::new(left), op: BinOp::Or, right: Box::new(right),
-    }, span)).expect("a checked contract accepts at least one alternative");
+    }, span)).expect("a checked contract accepts at least one alternative") };
+    let message = if null_only { crate::semantics::nullability::NON_NULL_MESSAGE.to_string() }
+        else { format!("--strict-coercions requires {expected} without implicit conversion") };
     let guard = Stmt::new(StmtKind::If {
         condition: accepted, then_body: Vec::new(), elseif_clauses: Vec::new(),
         else_body: Some(vec![Stmt::new(StmtKind::Throw(Expr::new(ExprKind::NewObject {
             class_name: Name::unqualified("TypeError"), args: vec![Expr::new(ExprKind::StringLiteral(
-                format!("--strict-coercions requires {expected} without implicit conversion")), span)],
+                message), span)],
         }, span)), span)]),
     }, span);
     let signature = FunctionSig {

@@ -12,6 +12,14 @@
 use super::{abi, DataSection, Emitter, InvokerEmitContext, PhpType};
 use elephc_semantics::conversions::ConversionPlan;
 
+/// Selects declared contracts whose original values must survive variadic collection.
+pub(super) fn active(ctx: &InvokerEmitContext) -> bool {
+    ctx.parameter_contract.as_ref().is_some_and(|expected|
+        crate::semantics::conversions::implicit_contract(expected).is_some()
+            && (ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+                || crate::semantics::nullability::contract_active(ctx.semantic_profile, expected)))
+}
+
 /// Checks original kinds while preserving the source's complete result-register representation.
 pub(super) fn check(emitter: &mut Emitter, ctx: &mut InvokerEmitContext,
     data: &mut DataSection, source: &PhpType) {
@@ -20,7 +28,8 @@ pub(super) fn check(emitter: &mut Emitter, ctx: &mut InvokerEmitContext,
     if crate::semantics::conversions::implicit_contract(expected).is_none() { return; }
     let plan = crate::semantics::conversions::implicit(ctx.semantic_profile,
         crate::source::SourceMode::Php, expected, source);
-    if matches!(plan, ConversionPlan::ExistingBehavior | ConversionPlan::Identity) { return; }
+    if matches!(plan, ConversionPlan::ExistingBehavior | ConversionPlan::Identity)
+        && !crate::semantics::nullability::contract_active(ctx.semantic_profile, expected) { return; }
     let label = data.parameter_guard(expected);
     let boxed = source.codegen_repr() != PhpType::Mixed;
     if boxed {

@@ -197,7 +197,11 @@ impl InvokerEmitContext {
             .filter(|_| sig.declared_params.get(index).copied().unwrap_or(false))
             .map(|(_, ty)| {
                 if sig.variadic.as_ref().is_some_and(|name| name == &sig.params[index].0) {
-                    match ty { PhpType::Array(element) => *element.clone(), _ => ty.clone() }
+                    crate::types::signatures::variadic_source_element_type_expr(sig)
+                        .and_then(crate::semantics::conversions::scalar_hint)
+                        .unwrap_or_else(|| match ty {
+                            PhpType::Array(element) => *element.clone(), _ => ty.clone(),
+                        })
                 } else { ty.clone() }
             });
         self.literal_parameter = sig.params.get(index)
@@ -975,7 +979,6 @@ fn emit_loaded_assoc_array_callback_call(
             reference_args::push_owned_cell(emitter, ctx, shape.variadic_owner_index(), &variadic_ty);
             arg_types.push(PhpType::Int);
         } else {
-            ctx.argument_owners.record_pushed(shape.variadic_owner_index(), &variadic_ty, emitter);
             arg_types.push(variadic_ty);
         }
     }
@@ -3261,6 +3264,7 @@ fn emit_loaded_assoc_variadic_array_arg(
     );
     abi::emit_call_label(emitter, "__rt_hash_new");
     abi::emit_push_result_value(emitter, &variadic_ty);
+    ctx.argument_owners.record_pushed(shape.variadic_owner_index(), &variadic_ty, emitter);
     if shape.collector_needs_count {
         public_args::insert_assoc_count_prefix(emitter, count_reg, &variadic_elem_ty);
     }
@@ -3270,6 +3274,7 @@ fn emit_loaded_assoc_variadic_array_arg(
         shape.visible_regular,
         shape.visible_regular,
         shape.collector_prefix(),
+        shape.variadic_owner_index(),
         variadic_param_is_by_ref(sig),
         emitter,
         ctx,
@@ -3286,6 +3291,7 @@ fn emit_loaded_assoc_variadic_entries(
     skip_numeric_before: usize,
     skip_param_names_before: usize,
     first_numeric_key: usize,
+    owner_index: usize,
     preserve_references: bool,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
@@ -3392,9 +3398,7 @@ fn emit_loaded_assoc_variadic_entries(
 
     // -- insert the surviving entry into the variadic hash --
     emitter.label(&insert_label);
-    if ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
-        && ctx.parameter_contract.as_ref().is_some_and(|ty| crate::semantics::conversions::implicit_contract(ty).is_some())
-    {
+    if parameter_guards::active(ctx) {
         let (low, high, tag) = raw_hash_value_regs(emitter);
         abi::emit_load_temporary_stack_slot(emitter, low, VALUE_LO_OFF);
         abi::emit_load_temporary_stack_slot(emitter, high, VALUE_HI_OFF);
@@ -3414,6 +3418,7 @@ fn emit_loaded_assoc_variadic_entries(
         VALUE_LO_OFF,
         VALUE_HI_OFF,
         VALUE_TAG_OFF,
+        owner_index,
         &loop_label,
         emitter,
         ctx,
@@ -3513,6 +3518,7 @@ fn emit_insert_assoc_variadic_entry(
     value_lo_off: usize,
     value_hi_off: usize,
     value_tag_off: usize,
+    owner_index: usize,
     loop_label: &str,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
@@ -3564,6 +3570,7 @@ fn emit_insert_assoc_variadic_entry(
             abi::emit_load_temporary_stack_slot(emitter, "x2", key_len_off);
             abi::emit_call_label(emitter, "__rt_hash_set");
             abi::emit_store_to_address(emitter, "x0", "sp", hash_slot_off);
+            ctx.argument_owners.record_pushed_reference_at_offset(owner_index, hash_slot_off, emitter);
             emitter.instruction(&format!("b {}", loop_label));                  // continue with the next source entry
         }
         Arch::X86_64 => {
@@ -3607,6 +3614,7 @@ fn emit_insert_assoc_variadic_entry(
             abi::emit_load_temporary_stack_slot(emitter, "rdx", key_len_off);
             abi::emit_call_label(emitter, "__rt_hash_set");
             abi::emit_store_to_address(emitter, "rax", "rsp", hash_slot_off);
+            ctx.argument_owners.record_pushed_reference_at_offset(owner_index, hash_slot_off, emitter);
             emitter.instruction(&format!("jmp {}", loop_label));                // continue with the next source entry
         }
     }

@@ -279,3 +279,19 @@ fn strict_nullability_eval_container_arguments_and_owners() {
         finish(&mut context, &mut scope, &mut values, "container arguments");
     }
 }
+
+/// Higher-order interpreted calls validate original regular and variadic values before binding.
+#[test]
+fn strict_nullability_eval_descriptor_parameters_and_owners() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    let source = include_str!("../../../../../tests/fixtures/strict/nullable_descriptors.php")
+        .strip_prefix("<?php\ndeclare(strict_types=0);").unwrap();
+    for fallback in [false, true] {
+        let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        let result = execute(source, fallback, &mut context, &mut scope, &mut values);
+        assert!(result.is_ok(), "{:?}; {}", result.as_ref().err(), values.output);
+        assert_eq!(values.output, "SFIBNVWGHLP|7:NULL:NULL:NULL");
+        finish(&mut context, &mut scope, &mut values, "descriptor parameters");
+    }
+}

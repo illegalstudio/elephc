@@ -19,6 +19,11 @@ pub(crate) fn non_null_contract(ty: &PhpType) -> bool {
         !allowed.allows(elephc_semantics::conversions::ValueKind::Null))
 }
 
+/// Selects original-null validation independently of exact-kind membership.
+pub(crate) fn contract_active(profile: SemanticProfile, ty: &PhpType) -> bool {
+    profile.contains(elephc_semantics::StrictFeature::Nullability) && non_null_contract(ty)
+}
+
 /// Projects logical alternatives without treating a storage representation as a null proof.
 pub(crate) fn null_state(ty: &PhpType) -> NullState {
     match ty {
