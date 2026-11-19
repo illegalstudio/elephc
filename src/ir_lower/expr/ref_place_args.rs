@@ -945,6 +945,8 @@ fn prepare_ref_place_args_for(
             && !mb_variables
             && sig.params.get(param_index).is_some_and(|(_, param_ty)| {
                 !matches!(param_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+                    && !(matches!(param_ty.codegen_repr(), PhpType::Object(_))
+                        && matches!(place_arg.kind, ExprKind::Variable(_)))
             })
             && matches!(
                 ctx.builder.value_php_type(read.value).codegen_repr(),
@@ -1287,6 +1289,11 @@ fn declared_local_ref_needs_adapter(
     };
     let storage = ctx.local_storage_type(name).codegen_repr();
     let expected = expected.codegen_repr();
+    // A by-reference object parameter checks its class at callee entry, after every argument ran
+    // (php's RECV order), so the caller hands it the boxed cell instead of a pre-checked copy.
+    if matches!(expected, PhpType::Object(_)) {
+        return false;
+    }
     (matches!(storage, PhpType::Mixed | PhpType::Union(_))
         || ctx.local_awaits_boxed_reference_promotion(name))
         && !matches!(expected, PhpType::Mixed | PhpType::Union(_))
