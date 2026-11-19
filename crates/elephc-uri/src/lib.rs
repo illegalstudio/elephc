@@ -511,9 +511,10 @@ pub extern "C" fn elephc_uri_to_string(
     clear_last();
     let exclude = exclude_fragment != 0;
     let value = with_handle(handle, |value| match value {
-        UriValue::Rfc(uri) => uri.to_string(mode != 0, exclude),
-        UriValue::WhatWg(uri) => uri.to_string(mode >= 2, exclude),
-    });
+        UriValue::Rfc(uri) => uri.try_to_string(mode != 0, exclude),
+        UriValue::WhatWg(uri) => uri.try_to_string(mode >= 2, exclude),
+    })
+    .flatten();
     match value {
         Some(text) => return_hex(text.as_bytes()),
         None => {
