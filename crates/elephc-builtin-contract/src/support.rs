@@ -426,6 +426,7 @@ mod tests {
         // `__elephc_set_memory_limit` setter.
         // compiled and eval `ReflectionClass` builder calls two more. The seven ext/posix
         // bridge builtins are ordinary PCNTL registry operations.
+        // and `preg_last_error` and `preg_last_error_msg` add two more.
         // The seven ext/posix bridge builtins are ordinary PCNTL registry operations.
         assert_eq!(aot_registry, 842);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
@@ -484,10 +485,6 @@ mod tests {
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters, plus the GMP, SimpleXML, tidy, ctype, and locale
         // forwarding homes, plus the `preg_grep` / `preg_last_error*` eval homes.
-        // interpreter adapters, plus the GMP and SimpleXML forwarding homes, and the seven
-        // ext/posix bridge builtins served by the PCNTL adapter.
-        // interpreter adapters, plus the GMP, SimpleXML, and tidy forwarding homes, and the
-        // seven ext/posix bridge builtins served by the PCNTL adapter.
         // The seven ext/posix bridge builtins are served by the PCNTL adapter.
         assert_eq!(interpreter_adapter, 707 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
