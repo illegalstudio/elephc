@@ -21,6 +21,7 @@
 //!   string keys and refcounted values are retained, string values are re-persisted, scalars are
 //!   copied inline. A renumbered integer key needs no ownership at all.
 
+use elephc_memoir::values::hash_payload::HashPayloadSlots;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -145,26 +146,16 @@ pub fn emit_hash_slice(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_slice_value_ref");                      // nested refcounted values need retains
     emitter.instruction("cmp x5, #10");                                         // is this entry's value a callable descriptor?
     emitter.instruction("b.eq __rt_hash_slice_value_ref");                      // runtime descriptors need retains; static descriptors are ignored by incref
-    emitter.instruction("ldr x3, [sp, #24]");                                   // x3 = scalar/float value_lo copied as-is
-    emitter.instruction("ldr x4, [sp, #32]");                                   // x4 = scalar/float value_hi copied as-is
-    emitter.instruction("ldr x5, [sp, #40]");                                   // x5 = scalar/float/null value_tag copied as-is
+    let payload = HashPayloadSlots { low: 24, reload_later: false };
+    payload.emit_reload(emitter);
     emitter.instruction("b __rt_hash_slice_insert");                            // scalars are ready to insert immediately
 
     emitter.label("__rt_hash_slice_value_str");
-    emitter.instruction("ldr x1, [sp, #24]");                                   // x1 = source string value pointer
-    emitter.instruction("ldr x2, [sp, #32]");                                   // x2 = source string value length
-    emitter.instruction("bl __rt_str_persist");                                 // duplicate the string value for the destination table
-    emitter.instruction("mov x3, x1");                                          // x3 = owned string value pointer
-    emitter.instruction("mov x4, x2");                                          // x4 = owned string value length
-    emitter.instruction("ldr x5, [sp, #40]");                                   // x5 = string value_tag copied as-is
+    payload.emit_persist_string(emitter);
     emitter.instruction("b __rt_hash_slice_insert");                            // insert the copied string value
 
     emitter.label("__rt_hash_slice_value_ref");
-    emitter.instruction("ldr x0, [sp, #24]");                                   // x0 = source refcounted child pointer
-    emitter.instruction("bl __rt_incref");                                      // retain the shared child pointer for the destination table
-    emitter.instruction("ldr x3, [sp, #24]");                                   // reload the retained child pointer after the helper call
-    emitter.instruction("mov x4, xzr");                                         // refcounted hash values store only value_lo
-    emitter.instruction("ldr x5, [sp, #40]");                                   // x5 = refcounted value_tag copied as-is
+    payload.emit_retain_pointer(emitter);
 
     // -- insert the fully owned entry into the destination table --
     emitter.label("__rt_hash_slice_insert");
@@ -297,28 +288,16 @@ fn emit_hash_slice_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_slice_value_ref");                        // nested refcounted values need retains
     emitter.instruction("cmp r10, 10");                                         // is this entry's value a callable descriptor?
     emitter.instruction("je __rt_hash_slice_value_ref");                        // runtime descriptors need retains; static descriptors are ignored by incref
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // rcx = scalar/float value_lo copied as-is
-    emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // r8 = scalar/float value_hi copied as-is
-    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // r9 = scalar/float/null value_tag copied as-is
+    let payload = HashPayloadSlots { low: 40, reload_later: false };
+    payload.emit_reload(emitter);
     emitter.instruction("jmp __rt_hash_slice_insert");                          // scalars are ready to insert immediately
 
     emitter.label("__rt_hash_slice_value_str");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // move the source string value pointer into the string helper's input register
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // move the source string value length into the paired helper register
-    emitter.instruction("call __rt_str_persist");                               // duplicate the string value so the destination owns independent storage
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the copied string pointer for the destination insert
-    emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the copied string length for the destination insert
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // rcx = owned string value pointer
-    emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // r8 = owned string value length
-    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // r9 = string value_tag copied as-is
+    payload.emit_persist_string(emitter);
     emitter.instruction("jmp __rt_hash_slice_insert");                          // insert the copied string value
 
     emitter.label("__rt_hash_slice_value_ref");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // load the shared refcounted child pointer into the incref helper's input register
-    emitter.instruction("call __rt_incref");                                    // retain the shared child pointer for the destination table
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // rcx = retained child pointer
-    emitter.instruction("xor r8d, r8d");                                        // refcounted hash values store only value_lo
-    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // r9 = refcounted value_tag copied as-is
+    payload.emit_retain_pointer(emitter);
 
     // -- insert the fully owned entry into the destination table --
     emitter.label("__rt_hash_slice_insert");
