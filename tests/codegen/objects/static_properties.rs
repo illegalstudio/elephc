@@ -1105,7 +1105,8 @@ echo json_encode(NestedPrefixCow::$missing), "|", $key;
 fn test_static_receiver_oct9_nullable_interface_write() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 interface Store { public function get(): int; }
-class C { public static ?Store $value = null; }
+class Item implements Store { public int $x = 0; public function get(): int { return $this->x; } }
+class C { public static ?Item $value = null; }
 try { C::$value->x = (print 'rhs'); echo 'bad'; }
 catch (Error $error) { echo ':', $error->getMessage(); }
 echo '|after';
@@ -1121,7 +1122,7 @@ fn test_static_receiver_oct9_interface_rhs_ownership() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 interface Store { public function get(): int; }
 class Item implements Store { public string $x = ''; public function get(): int { return strlen($this->x); } }
-class C { public static ?Store $value = null; }
+class C { public static ?Item $value = null; }
 for ($i = 0; $i < 8; $i++) {
     try { C::$value->x = str_repeat('x', 24); echo 'bad'; }
     catch (Error $error) { echo 'c'; }

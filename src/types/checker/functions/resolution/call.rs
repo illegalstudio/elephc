@@ -492,13 +492,39 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
+                    let lvalue = self.is_by_ref_argument_lvalue(arg, caller_env)?;
                     let property_place = match declared_ty.as_ref() {
                         Some(expected_ty) => {
-                            self.by_ref_property_place(arg, expected_ty, caller_env)?
+                            (matches!(
+                                arg.kind,
+                                ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }
+                            ) && self.property_ref_argument_supported(
+                                arg,
+                                expected_ty,
+                                caller_env,
+                            )?)
+                                || self.by_ref_property_place(arg, expected_ty, caller_env)?
                         }
-                        None => false,
+                        // An undeclared by-reference parameter is PHP `mixed`: a property place
+                        // must bind its live cell, which `property_ref_argument_supported`
+                        // records (and widens) for an untyped slot.
+                        None => {
+                            (matches!(
+                                arg.kind,
+                                ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }
+                            ) && self.property_ref_argument_supported(
+                                arg,
+                                &crate::types::PhpType::Mixed,
+                                caller_env,
+                            )?)
+                                || self.by_ref_property_place(
+                                    arg,
+                                    &crate::types::PhpType::Mixed,
+                                    caller_env,
+                                )?
+                        }
                     };
-                    if !property_place && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    if !property_place && !lvalue {
                         return Err(CompileError::new(
                             arg.span,
                             &format!(
@@ -563,6 +589,7 @@ impl Checker {
                             &format!("Function '{}' parameter ${}", name, param_name),
                             Some((name, decl.params[arg_idx].as_str())),
                             supplied_reference,
+                            arg_idx + 1,
                         )?;
                     }
                     // A written by-reference array type is a storage contract, not a hint.

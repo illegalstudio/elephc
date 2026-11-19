@@ -79,6 +79,14 @@ pub enum ThrowAccessKind {
         /// Class declaring the constructor (e.g. `C`).
         class_name: String,
     },
+    /// A call to a method PHP does not expose to user code even though the class declares
+    /// a compiler-owned implementation of it (the internal URI classes' destructor).
+    UndefinedMethod {
+        /// Class holding the method (e.g. `Uri\\Rfc3986\\Uri`).
+        class_name: String,
+        /// Method name without the trailing parentheses (e.g. `__destruct`).
+        method: String,
+    },
     /// A readonly write requiring a runtime initialization check.
     ReadonlyProperty {
         /// Class holding the property (e.g. `Box`).
@@ -92,6 +100,25 @@ pub enum ThrowAccessKind {
     ReflectionReadOnlyProperty {
         /// Property name without the leading `$`.
         property: String,
+    },
+    /// A property argument whose declared storage cannot satisfy a typed by-reference
+    /// parameter. PHP raises the call-site `TypeError` before the callee body runs; lowering
+    /// reports this exact message and skips the callee.
+    ReferenceArgumentType {
+        /// The complete diagnostic prefix through `must be of type T, `; lowering appends
+        /// the property's CURRENT runtime type and ` given`.
+        prefix: String,
+        /// The declared parameter type the property's current value must satisfy.
+        expected: PhpType,
+        /// Whether a current value could satisfy the parameter. A union/mixed property needs
+        /// the runtime guard; a concrete disjoint type throws unconditionally.
+        conditional: bool,
+        /// Whether the place is an UNTYPED property. PHP weakly coerces its current value to
+        /// a declared scalar by-reference parameter; a declared property (including `mixed`)
+        /// is checked without coercion.
+        coerces_weakly: bool,
+        /// The declared property type's PHP name, used by the unconditional path.
+        given: String,
     },
 }
 
@@ -168,8 +195,11 @@ pub struct CheckResult {
     pub required_libraries: Vec<String>,
     pub warnings: Vec<CompileWarning>,
     /// Statically-decided access violations lowered to runtime exception throws,
-    /// keyed by the source span of the offending call/assignment.
-    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
+    /// keyed by the owning body scope and the source span of the offending
+    /// call/assignment. The scope half is `current_loop_storage_scope`; a trait body is
+    /// checked once per using class, so its spans alone cannot identify which class's
+    /// property/method the site resolved against.
+    pub throw_access_sites: HashMap<(String, Span), ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls, keyed by call span.
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Closure literals whose checked source bodies contain yield, keyed by source identity.

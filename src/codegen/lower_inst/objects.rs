@@ -292,6 +292,7 @@ pub(super) use property_resolution::{
 };
 pub(super) use runtime_property_writes::{
     lower_dynamic_prop_set, lower_dynamic_prop_unset_runtime, lower_prop_set, lower_prop_unset,
+    lower_reference_argument_type_error,
 };
 pub(super) use clone_and_spl::lower_object_clone_shallow;
 

@@ -145,14 +145,22 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         let (receiver, receiver_temp) = evaluate_once(ctx, object, value);
         let rebuilt = Expr::new(
             if nullsafe {
-                ExprKind::NullsafePropertyAccess { object: Box::new(receiver), property: property.clone() }
+                ExprKind::NullsafePropertyAccess { object: Box::new(receiver.clone()), property: property.clone() }
             } else {
-                ExprKind::PropertyAccess { object: Box::new(receiver), property: property.clone() }
+                ExprKind::PropertyAccess { object: Box::new(receiver.clone()), property: property.clone() }
             },
             value.span,
         );
-        let result = match lazy_empty_magic_property_calls(ctx, &rebuilt) {
-            Some((exists, get)) => {
+        let result = match (&value.kind, lazy_empty_magic_property_calls(ctx, &rebuilt)) {
+            // A literal `??` probe reaches the hash-aware Empty action: a stored dynamic
+            // entry wins over `__isset()`, and only a miss consults the accessor pair.
+            (ExprKind::PropertyAccess { property, .. }, _) => {
+                let receiver = lower_member_receiver(ctx, &receiver, value);
+                super::property_access::lower_property_empty_probe_from_value(
+                    ctx, receiver, property, value,
+                )
+            }
+            (_, Some((exists, get))) => {
                 let probe = Expr::new(
                     ExprKind::Ternary {
                         condition: Box::new(exists),
@@ -164,7 +172,7 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
                 lower_expr(ctx, &probe)
             }
             // The held receiver no longer types as the magic class: probe it the ordinary way.
-            None => lower_null_coalesce_value(ctx, &rebuilt),
+            (_, None) => lower_null_coalesce_value(ctx, &rebuilt),
         };
         release_evaluated_once(ctx, receiver_temp, value.span);
         return result;
@@ -174,13 +182,14 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         // this scope may not reach answers the DEFAULT rather than raising, and a name that was
         // never created answers it without an `Undefined property` warning. A receiver whose
         // class is only known at run time needs the runtime-name form to carry that mode.
-        let needs_probe = property_probe_needs_runtime_name_form(ctx, object);
-        let object = match &object.kind {
+        let receiver_expr = object;
+        let needs_probe = property_probe_needs_runtime_name_form(ctx, receiver_expr);
+        let object = match &receiver_expr.kind {
             ExprKind::ArrayAccess { array, index } => {
                 let receiver = lower_array_access_with_missing_warning(ctx, array, index, object, false);
-                refine_member_receiver(ctx, receiver, object)
+                refine_member_receiver(ctx, receiver, receiver_expr)
             }
-            _ => lower_member_receiver(ctx, object, value),
+            _ => lower_member_receiver(ctx, receiver_expr, value),
         };
         if native_property_method_for_value(ctx, object.value, property,
             elephc_builtin_contract::ObjectProperty::Probe).is_some()
@@ -193,6 +202,21 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         }
         if needs_probe {
             return lower_property_probe_from_value(ctx, object, property, value);
+        }
+        // A class with neither a declared slot nor a dynamic hash can never hold the name:
+        // `??` answers its default without reading and without an Undefined-property warning.
+        if matches!(
+            super::native_isset::property_isset_action(ctx, receiver_expr, property, value),
+            Some(super::native_isset::IssetPropertyAction::AlwaysFalse)
+        ) && super::lazy_isset::property_existence_magic_class(
+            ctx,
+            receiver_expr,
+            property,
+            "__get",
+        )
+        .is_none()
+        {
+            return lower_boxed_null(ctx, value);
         }
         return lower_property_get_from_value(ctx, object, property, Op::PropGet, value);
     }
