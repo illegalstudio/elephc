@@ -38,7 +38,7 @@ pub(super) fn eval_closure_expr(
         // context registry would strand every captured value after its Closure is freed.
         bindings.push(EvalClosureCaptureBinding::new(
             binding.name(), binding.value().borrowed(), binding.by_ref_target().cloned(),
-        ).with_binding_type(origin).with_source_view(source));
+        ).with_binding_type(origin).with_source_view(source, context.source_view_epoch()));
     }
     let closure = EvalClosure::new(function.clone(), bindings, is_static);
     let name = context.define_closure(closure);

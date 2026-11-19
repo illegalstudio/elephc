@@ -453,7 +453,7 @@ fn eval_closure_with_optional_binding(
         mut frame,
     } = bound_call;
     let mut function_scope = ElephcEvalScope::new();
-    bind_closure_captures(&mut function_scope, closure.captures());
+    bind_closure_captures(&mut function_scope, closure.captures(), context);
     let backtrace_class = binding
         .as_ref()
         .map(|binding| binding.class_scope.clone());
@@ -562,6 +562,7 @@ pub(in crate::interpreter) fn eval_closure_bound_object_class_name(
 fn bind_closure_captures(
     function_scope: &mut ElephcEvalScope,
     captures: &[EvalClosureCaptureBinding],
+    context: &ElephcEvalContext,
 ) {
     for capture in captures {
         if let Some(origin) = capture.binding_type() {
@@ -582,8 +583,8 @@ fn bind_closure_captures(
                 ScopeCellOwnership::Borrowed,
             );
         }
-        if let Some(source) = capture.source_view() {
-            function_scope.record_local_source_view(capture.name().to_string(), source.clone());
+        if let Some(source) = capture.source_view(context) {
+            function_scope.record_local_source_view(capture.name().to_string(), source.clone(), context.source_view_epoch());
         }
     }
 }

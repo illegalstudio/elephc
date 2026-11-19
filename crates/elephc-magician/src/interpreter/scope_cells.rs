@@ -244,7 +244,7 @@ pub(in crate::interpreter) fn set_reference_alias(
     if target != source && (scope.is_static_binding(target) || scope.is_global_alias(target)) {
         if let Some(old) = unset_scope_cell(context, scope, target)? { eval_release_value(context, values, old)?; }
     }
-    let source_view = scope.local_source_view(source).cloned();
+    let source_view = scope.local_source_view(source, context).cloned();
     let mut types = generic_local_contracts(scope, source, context);
     if let Some(declared) = scope.local_type(target).filter(|ty| !types.contains(ty)) { types.push(declared.clone()); }
     if !types.is_empty() {
@@ -269,8 +269,8 @@ pub(in crate::interpreter) fn set_reference_alias(
     if values.is_reference(cell)? { context.bind_local_reference_types(cell, &types); }
     let replaced = scope.set_reference(target.to_string(), source.to_string(), cell, ownership);
     if let Some(view) = source_view {
-        scope.record_local_source_view(source.to_string(), view.clone());
-        scope.record_local_source_view(target.to_string(), view);
+        scope.record_local_source_view(source.to_string(), view.clone(), context.source_view_epoch());
+        scope.record_local_source_view(target.to_string(), view, context.source_view_epoch());
     }
     Ok(replaced)
 }

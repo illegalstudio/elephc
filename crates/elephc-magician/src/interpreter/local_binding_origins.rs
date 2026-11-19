@@ -19,7 +19,7 @@ mod source_views;
 
 pub(super) use source_views::{LocalAssignmentProducer, prepare_assignment, source_view, evaluate_assignment};
 
-pub(super) use arrays::{element_source_type, refresh_reference_sources, refresh_value_sources};
+pub(super) use arrays::{element_source_type, element_value_source_type, refresh_reference_sources, refresh_value_sources};
 pub(super) use arrays::{prepare_write as prepare_array_local_write, publish_write as publish_array_local_write};
 
 /// Captures a producer's declared alternatives without executing PHP or borrowing live maps.
@@ -32,12 +32,12 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
     match expr {
         EvalExpr::LoadVar(name) => {
             let kind = scope.local_type(name).or_else(|| scope.inferred_local_type(name))
-                .or_else(|| scope.native_binding_type(name)).cloned().unwrap_or_else(mixed);
+                .or_else(|| scope.native_binding_type(name)).cloned();
             let contents = if arrays { generic_local_contracts(scope, name, context).into_iter()
                 .filter(|ty| arrays::contains_contents(&generic_type(ty))).collect::<Vec<_>>() }
                 else { Vec::new() };
-            if contents.is_empty() { Some(kind) } else {
-                let mut members = vec![generic_type(&kind)];
+            if contents.is_empty() { kind } else {
+                let mut members = kind.as_ref().map(generic_type).into_iter().collect::<Vec<_>>();
                 members.extend(contents.iter().map(generic_type));
                 Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Generic(Type::Intersection(members))], false))
             }
@@ -209,7 +209,7 @@ pub(in crate::interpreter) fn store_local_with_origin(context: &mut ElephcEvalCo
         }
     } else { None };
     let replaced = set_owned_scope_cell(context, scope, name.clone(), value, values)?;
-    if let Some(source) = source { scope.record_local_source_view(name.clone(), source); }
+    if let Some(source) = source { scope.record_local_source_view(name.clone(), source, context.source_view_epoch()); }
     if let Some(origin) = array_origin {
         scope.infer_array_local_type(name.clone(), origin);
         refresh_reference_sources(scope, &name, context, values)?;

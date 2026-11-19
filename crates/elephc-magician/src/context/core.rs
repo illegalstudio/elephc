@@ -40,6 +40,9 @@ pub(super) struct EvalStaticLocal {
 pub struct ElephcEvalContext {
     /// Installed once by generated code; standalone embedders default to permissive.
     pub(super) semantic_profile: Option<elephc_semantics::SemanticProfile>,
+    pub(super) source_view_epoch: u64,
+    pub(super) source_view_writes: HashMap<usize, source_views::SourceWriteEpoch>,
+    pub(super) source_view_retirements: crate::ffi::array_references::ArrayReferenceRetirements,
     pub(super) abi_version: u32,
     pub(super) abi_owner_count: usize,
     pub(super) teardown_active: bool,
@@ -151,6 +154,9 @@ impl ElephcEvalContext {
         Self {
             abi_version: ABI_VERSION,
             semantic_profile: None,
+            source_view_epoch: 0,
+            source_view_writes: HashMap::new(),
+            source_view_retirements: Default::default(),
             abi_owner_count: 1,
             teardown_active: false,
             native_catalog_generation: 0,
@@ -256,6 +262,9 @@ impl ElephcEvalContext {
         Self {
             abi_version,
             semantic_profile: None,
+            source_view_epoch: 0,
+            source_view_writes: HashMap::new(),
+            source_view_retirements: Default::default(),
             abi_owner_count: 1,
             teardown_active: false,
             native_catalog_generation: 0,

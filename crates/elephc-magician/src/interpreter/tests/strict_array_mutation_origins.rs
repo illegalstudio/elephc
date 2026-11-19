@@ -297,3 +297,81 @@ fn strict_array_origins_mixed_reference_rebinding_refreshes_sources() {
         assert_eq!(output,"R");assert_eq!(returned, FakeValue::Int(3));
     }
 }
+
+/// A later scalar assignment replaces a former array producer without reopening inferred elements.
+#[test]
+fn strict_array_origins_scalar_reassignment_replaces_mixed_array_sources() {
+    let source = "function reassigned_mixed_array():mixed{return [1];} \
+        $value=reassigned_mixed_array();$value=2;$items=[$value]; \
+        try{$items[]='bad';}catch(TypeError $error){echo 'I';}return count($items);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "I"); assert_eq!(returned, FakeValue::Int(1));
+    }
+}
+
+/// A shared parameter's declared alternatives survive its initial element use independently of Locals.
+#[test]
+fn strict_array_origins_shared_union_parameters_preserve_alternatives() {
+    let source = "function union_element(int|string &$value){$items=[$value];$items[]='allowed'; \
+        try{$items[]=false;}catch(TypeError $error){echo 'U';}return count($items);} \
+        $number=1;return union_element($number);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "U"); assert_eq!(returned, FakeValue::Int(2));
+    }
+}
+
+/// Caller-side writes retire a shared parameter view before its next array element source is read.
+#[test]
+fn strict_array_origins_shared_source_effects_retire_old_alternatives() {
+    let source = "function source_replace(&$value){$value=false;} \
+        function source_union(int|string &$value){$first=[$value];$first[]='allowed'; \
+        source_replace($value);$second=[$value]; \
+        try{$second[]=1;}catch(TypeError $error){echo 'E';}return count($first)+count($second);} \
+        $value=1;return source_union($value);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "E"); assert_eq!(returned, FakeValue::Int(3));
+    }
+}
+
+/// A shared scalar replacement sheds conditional array metadata at literal and builtin element uses.
+#[test]
+fn strict_array_origins_external_scalar_replacement_drops_array_only_facts() {
+    let source = "function source_mixed_array():mixed{return [1];} \
+        function source_replace_int(&$value){$value=2;} \
+        $value=source_mixed_array();source_replace_int($value);$items=[$value]; \
+        try{$items[]='bad';}catch(TypeError $error){echo 'L';} \
+        $other=[];array_push($other,$value); \
+        try{$other[]=false;}catch(TypeError $error){echo 'B';}return count($items)+count($other);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "LB"); assert_eq!(returned, FakeValue::Int(2));
+    }
+}
+
+/// Reference captures obtain fresh sources at invocation instead of restoring their creation-time view.
+#[test]
+fn strict_array_origins_reference_captures_do_not_restore_displaced_scalar_views() {
+    let source = "$value=1;$read=function()use(&$value){$items=[$value];$items[]='allowed'; \
+        try{$items[]=1;}catch(TypeError $error){echo 'C';}return count($items);}; \
+        $value='changed';return $read();";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "C"); assert_eq!(returned, FakeValue::Int(2));
+    }
+}
+
+/// An unchanged reference capture keeps its original declared union instead of inferring its occupant.
+#[test]
+fn strict_array_origins_reference_captures_keep_current_declared_union_sources() {
+    let source = "function source_capture_union(int|string &$value){ \
+        $read=function()use(&$value){$items=[$value];$items[]='allowed'; \
+        try{$items[]=false;}catch(TypeError $error){echo 'U';}return count($items);};return $read();} \
+        $value=1;return source_capture_union($value);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "U"); assert_eq!(returned, FakeValue::Int(2));
+    }
+}

@@ -75,6 +75,7 @@ pub struct EvalClosureCaptureBinding {
     pub(super) by_ref_target: Option<EvalReferenceTarget>,
     binding_type: Option<EvalParameterType>,
     source_view: Option<EvalParameterType>,
+    source_view_epoch: u64,
 }
 
 impl EvalClosureCaptureBinding {
@@ -90,6 +91,7 @@ impl EvalClosureCaptureBinding {
             by_ref_target,
             binding_type: None,
             source_view: None,
+            source_view_epoch: 0,
         }
     }
 
@@ -100,13 +102,16 @@ impl EvalClosureCaptureBinding {
     }
 
     /// Copies a current source view separately from the captured binding's enforcing contract.
-    pub(crate) fn with_source_view(mut self, source_view: Option<EvalParameterType>) -> Self {
+    pub(crate) fn with_source_view(mut self, source_view: Option<EvalParameterType>, epoch: u64) -> Self {
         self.source_view = source_view;
+        self.source_view_epoch = epoch;
         self
     }
 
-    /// Borrows the source alternatives observed when this value was captured.
-    pub(crate) fn source_view(&self) -> Option<&EvalParameterType> {
+    /// Borrows captured source alternatives only while a shared capture has not received an intervening write.
+    pub(crate) fn source_view(&self, context: &ElephcEvalContext) -> Option<&EvalParameterType> {
+        if self.by_ref_target.is_some()
+            && !context.source_view_is_current(self.value, self.source_view_epoch) { return None; }
         self.source_view.as_ref()
     }
 

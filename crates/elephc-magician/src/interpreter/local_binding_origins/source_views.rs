@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Views belong to scope bindings and generations, never shared runtime cell identities.
-//! - Shared/reference/global bindings conservatively use existing authoritative contracts.
+//! - Shared views expire at canonical reference effects; enforcing contracts remain independent.
 
 use super::*;
 
@@ -24,14 +24,14 @@ pub(in crate::interpreter) fn prepare_assignment(expr: &EvalExpr,
         source: source_view(expr, context, scope) }
 }
 
-/// Uses a current unshared source view without turning it into a whole-binding restriction.
+/// Uses a current source view without turning it into a whole-binding restriction.
 pub(in crate::interpreter) fn source_view(expr: &EvalExpr,
     context: &ElephcEvalContext, scope: &ElephcEvalScope,
 ) -> Option<EvalParameterType> {
     if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) { return None; }
     match expr {
         EvalExpr::LoadVar(name) => {
-            let view = scope.local_type(name).or_else(|| scope.local_source_view(name)).cloned();
+            let view = scope.local_type(name).or_else(|| scope.local_source_view(name, context)).cloned();
             if view.as_ref().is_some_and(|ty| generic_type(ty) == Type::atom("array"))
                 && generic_local_contracts(scope, name, context).iter()
                     .any(|ty| arrays::contains_contents(&generic_type(ty))) {

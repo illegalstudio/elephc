@@ -9,7 +9,7 @@
 //! - Metadata borrows no runtime cells and never becomes a global handle proof map.
 
 use super::*;
-use crate::eval_ir::{generic_type, parameter_type, merge_array_element_sources};
+use crate::eval_ir::{parameter_type, merge_array_element_sources};
 use elephc_generics::Type;
 
 /// Source alternatives of the final entries, independent from their boxed storage kinds.
@@ -21,13 +21,10 @@ pub(in crate::interpreter) struct LiteralSource {
 impl LiteralSource {
     /// Records a successfully inserted element under the same normalized key as runtime storage.
     pub(super) fn record(&mut self, key: RuntimeCellHandle, source: Option<EvalParameterType>,
-        value: RuntimeCellHandle, context: &ElephcEvalContext, values: &mut impl RuntimeValueOps,
+        value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
     ) -> Result<(), EvalStatus> {
         let Some(key) = eval_array_reference_key(key, context.semantic_profile(), values)? else { return Ok(()); };
-        let ty = if let Some(source) = source { generic_type(&source) }
-            else { runtime_generic_type(value, context, values, 0)? };
-        let ty = local_binding_origins::element_source_type(ty,
-            matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC));
+        let ty = local_binding_origins::element_value_source_type(source.as_ref(), value, context, values)?;
         if let Some((_, previous)) = self.entries.iter_mut().find(|(previous, _)| previous == &key) {
             *previous = ty;
         } else { self.entries.push((key, ty)); }

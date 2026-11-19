@@ -33,6 +33,7 @@ mod reference_metadata;
 mod reflection_registry;
 mod runtime_state;
 mod semantic_profile;
+mod source_views;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};

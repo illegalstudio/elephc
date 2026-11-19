@@ -30,6 +30,7 @@ pub(in crate::interpreter) fn eval_replace_reference_value(
     reference: RuntimeCellHandle, value: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    context.invalidate_shared_source_views(reference);
     if values.coordinates_property_reference_candidates() {
         return values.reference_replace(reference, value);
     }
@@ -39,6 +40,7 @@ pub(in crate::interpreter) fn eval_replace_reference_value(
     for pointer in unsafe { crate::context::live_native_reference_contexts() } {
         if pointer == current { continue; }
         let Some(owner) = (unsafe { pointer.as_mut() }) else { continue; };
+        owner.invalidate_shared_source_views(reference);
         array_reference_contracts::validate(reference, value, owner, values)?;
         prepared.extend(prepare_property_reference_candidates(reference, value, owner, values)?);
     }
@@ -55,6 +57,7 @@ pub(crate) fn eval_validate_property_reference(
     reference: RuntimeCellHandle, value: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    context.invalidate_shared_source_views(reference);
     array_reference_contracts::validate(reference, value, context, values)?;
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
         let contracts = context.local_reference_types(reference);

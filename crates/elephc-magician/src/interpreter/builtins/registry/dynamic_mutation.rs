@@ -210,10 +210,8 @@ fn eval_dynamic_array_push_unshift_call(
     let inserted_values = inserted.iter().map(|arg| arg.value).collect::<Vec<_>>();
     let mut element = None;
     for argument in &inserted {
-        let ty = argument.source_type.as_ref().map(crate::eval_ir::generic_type)
-            .unwrap_or_else(|| elephc_generics::Type::atom("mixed"));
-        let ty = local_binding_origins::element_source_type(ty,
-            matches!(values.type_tag(argument.value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC));
+        let ty = local_binding_origins::element_value_source_type(argument.source_type.as_ref(),
+            argument.value, context, values)?;
         element = Some(match element { None => ty,
             Some(previous) => crate::eval_ir::merge_array_element_sources(previous, ty) });
     }

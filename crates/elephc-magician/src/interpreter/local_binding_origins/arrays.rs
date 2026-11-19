@@ -104,6 +104,35 @@ pub(in crate::interpreter) fn element_source_type(ty: Type, array: bool) -> Type
     if array && contains_contents(&ty) { source_schema(&ty).unwrap_or(ty) } else { ty }
 }
 
+/// Resolves a source for an evaluated element without letting conditional array facts reopen scalars.
+pub(in crate::interpreter) fn element_value_source_type(source: Option<&EvalParameterType>,
+    value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Type, EvalStatus> {
+    if let Some(source) = source {
+        let source = generic_type(source);
+        if matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            return Ok(element_source_type(source, true));
+        }
+        if let Some(source) = non_array_source(source) { return Ok(source); }
+    }
+    infer_schema(value, context, values, 0)
+}
+
+/// Drops conditional array obligations from scalar producers while retaining declared alternatives.
+fn non_array_source(ty: Type) -> Option<Type> {
+    if array_contents_schema(&ty).is_some() { return None; }
+    match ty {
+        Type::Intersection(members) => {
+            let mut retained = members.into_iter().filter_map(non_array_source).collect::<Vec<_>>();
+            match retained.len() { 0 => None, 1 => retained.pop(), _ => Some(Type::Intersection(retained)) }
+        }
+        Type::Union(members) => members.into_iter().map(non_array_source)
+            .collect::<Option<Vec<_>>>().map(Type::Union),
+        Type::Nullable(inner) => non_array_source(*inner).map(|ty| Type::Nullable(Box::new(ty))),
+        ty => Some(ty),
+    }
+}
+
 /// Recognizes internal content metadata inside a compound producer without using value tags.
 pub(in crate::interpreter) fn contains_contents(ty: &Type) -> bool {
     array_contents_schema(ty).is_some() || match ty {
@@ -129,13 +158,7 @@ pub(in crate::interpreter) fn prepare_write(scope: &ElephcEvalScope, name: &str,
         Some(EVAL_TAG_STRING | EVAL_TAG_NULL) => Type::atom("string"),
         _ => return Ok(None),
     };
-    let element = match producer {
-        Some(producer) => {
-            let ty = generic_type(producer);
-            element_source_type(ty, matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC))
-        }
-        None => infer_schema(value, context, values, 0)?,
-    };
+    let element = element_value_source_type(producer, value, context, values)?;
     if !generic_value_accepts(&element, value, context, values)? {
         return eval_throw_type_error("--strict-array-types: first array value violates its source contract", context, values);
     }

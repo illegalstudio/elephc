@@ -276,16 +276,17 @@ fn strict_array_origins_scalar_sources_are_independent_from_locals() {
 /// Generation changes retire cached source views instead of reusing the old scalar proof.
 #[test]
 fn strict_array_origins_source_views_follow_scope_generations() {
+    let context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
     let first = values.int(1).unwrap(); scope.set("source", first, ScopeCellOwnership::Owned);
     let integer = EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false);
-    scope.record_local_source_view("source".to_string(), integer.clone());
-    assert_eq!(scope.local_source_view("source"), Some(&integer));
-    scope.mark_reference_changed("source"); assert!(scope.local_source_view("source").is_none());
-    scope.record_local_source_view("source".to_string(), integer);
+    scope.record_local_source_view("source".to_string(), integer.clone(), 0);
+    assert_eq!(scope.local_source_view("source", &context), Some(&integer));
+    scope.mark_reference_changed("source"); assert!(scope.local_source_view("source", &context).is_none());
+    scope.record_local_source_view("source".to_string(), integer, 0);
     let replacement = values.string("new").unwrap();
     let old = scope.set("source", replacement, ScopeCellOwnership::Owned).unwrap(); values.release(old).unwrap();
-    assert!(scope.local_source_view("source").is_none());
+    assert!(scope.local_source_view("source", &context).is_none());
     for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
     for owners in values.cell_owners.values() { assert_eq!(*owners, 0); }
 }
