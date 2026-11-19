@@ -184,15 +184,40 @@ fn publish_call_site(
 
 /// Reads the file published by the nearest real PHP call site into the string result registers.
 ///
-/// The zero-initialized slot means "no call site published yet"; the program entry file is the
-/// same fallback a span-less diagnostic uses.
+/// The file comes from the same activation the line does (`[40]`, a `{ptr, len}` descriptor); a
+/// zero descriptor or no source frame names the program entry file, the fallback a span-less
+/// diagnostic uses.
 pub(super) fn lower_diagnostic_caller_file(ctx: &mut FunctionContext<'_>) {
+    let arm = ctx.emitter.target.arch == Arch::AArch64;
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let cursor = abi::secondary_scratch_reg(ctx.emitter);
+    let limit = abi::tertiary_scratch_reg(ctx.emitter);
+    let scan = ctx.next_label("diagnostic_caller_file_scan");
+    let next = ctx.next_label("diagnostic_caller_file_next");
+    let found = ctx.next_label("diagnostic_caller_file_found");
     let fallback = ctx.next_label("diagnostic_caller_file_fallback");
     let done = ctx.next_label("diagnostic_caller_file_done");
-    abi::emit_load_symbol_to_reg(ctx.emitter, ptr_reg, "_php_diagnostic_file", 0);
-    emit_branch_if_zero(ctx, ptr_reg, &fallback);
-    abi::emit_load_symbol_to_reg(ctx.emitter, len_reg, "_php_diagnostic_file_len", 0);
+    // -- walk the activation chain to the nearest frame with a real PHP call site --
+    abi::emit_load_symbol_to_reg(ctx.emitter, cursor, "_exc_call_frame_top", 0);
+    abi::emit_load_int_immediate(ctx.emitter, limit, i64::from(crate::span::SYNTHETIC_LINE_BASE));
+    ctx.emitter.label(&scan);
+    emit_branch_if_zero(ctx, cursor, &fallback);
+    abi::emit_load_from_address(ctx.emitter, ptr_reg, cursor, 16);
+    ctx.emitter.instruction(&format!("cmp {ptr_reg}, {cursor}"));               // ownership guards are 32-byte records without a source coordinate
+    ctx.emitter.instruction(&format!("{} {next}", if arm { "b.eq" } else { "je" })); // skip guards before reading the larger PHP activation layout
+    abi::emit_load_from_address(ctx.emitter, ptr_reg, cursor, 32);
+    emit_branch_if_zero(ctx, ptr_reg, &next);                                   // skip frames with no source coordinate
+    ctx.emitter.instruction(&format!("cmp {ptr_reg}, {limit}"));                // distinguish real PHP lines from synthetic AST identities
+    ctx.emitter.instruction(&format!("{} {found}", if arm { "b.lo" } else { "jb" })); // the nearest real call site names the caller file
+    ctx.emitter.label(&next);
+    abi::emit_load_from_address(ctx.emitter, cursor, cursor, 0);
+    abi::emit_jump(ctx.emitter, &scan);
+    // -- the activation's caller-file descriptor is `{ptr, len}`, zero for the entry file --
+    ctx.emitter.label(&found);
+    abi::emit_load_from_address(ctx.emitter, len_reg, cursor, 40);
+    emit_branch_if_zero(ctx, len_reg, &fallback);
+    abi::emit_load_from_address(ctx.emitter, ptr_reg, len_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, len_reg, len_reg, 8);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&fallback);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, "_script_source_file");
