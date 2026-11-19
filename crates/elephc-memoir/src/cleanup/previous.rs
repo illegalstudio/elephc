@@ -9,16 +9,18 @@
 //! - Shared previous-slot helpers distinguish compact raw pointers and ordinary nullable boxes.
 //! - Existing chains are inspected before insertion to avoid duplicate links and cycles.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::{abi, Arch, Emitter};
 
-/// Emits the target-specific previous-chain owner transfer helper.
-pub(super) fn emit(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::AArch64 { aarch64(emitter); }
-    else { x86_64(emitter); }
+/// Transfers a suspended owner, excluding the compiler's negative forced-unwind class ID.
+pub fn emit(emitter: &mut impl Emitter, forced_unwind_class: i8) {
+    match emitter.arch() {
+        Arch::AArch64 => aarch64(emitter, forced_unwind_class),
+        Arch::X86_64 => x86_64(emitter, forced_unwind_class),
+    }
 }
 
 /// Scans both chains with preserved AArch64 ownership before appending or consuming a duplicate.
-fn aarch64(emitter: &mut Emitter) {
+fn aarch64(emitter: &mut impl Emitter, forced_unwind_class: i8) {
     emitter.label_global("__rt_cleanup_chain_previous");
     emitter.instruction("cbz x0, __rt_cleanup_chain_previous_empty");           // no suspended owner requires no chain traversal
     emitter.instruction("sub sp, sp, #48");                                     // reserve preserved chain cursors and caller linkage
@@ -29,7 +31,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x19, x1");                                         // retain the enclosing pending-exception state
     emitter.instruction("mov x20, x0");                                         // retain the consumed prior exception owner
     emitter.instruction("ldr x9, [x20]");                                       // inspect the prior owner before exposing it to PHP exception chains
-    emitter.instruction("cmn x9, #3");                                          // private forced-unwind markers are not PHP Throwable ancestors
+    emitter.instruction(&format!("cmn x9, #{}", -i16::from(forced_unwind_class))); // private forced-unwind markers are not PHP Throwable ancestors
     emitter.instruction("b.eq __rt_cleanup_chain_previous_duplicate");          // consume the marker through the protected redundant-owner path
     abi::emit_load_symbol_to_reg(emitter, "x21", "_exc_value", 0);
     emitter.label("__rt_cleanup_chain_previous_outer");
@@ -66,7 +68,7 @@ fn aarch64(emitter: &mut Emitter) {
 }
 
 /// Applies the same chain-intersection algorithm with preserved SysV cursors.
-fn x86_64(emitter: &mut Emitter) {
+fn x86_64(emitter: &mut impl Emitter, forced_unwind_class: i8) {
     emitter.label_global("__rt_cleanup_chain_previous");
     emitter.instruction("test rdi, rdi");                                       // check whether a prior exception owner was suspended
     emitter.instruction("jz __rt_cleanup_chain_previous_empty");                // skip traversal when only the new exception exists
@@ -78,7 +80,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r15");                                            // preserve the old-chain cursor and maintain SysV call alignment
     emitter.instruction("mov r12, rsi");                                        // retain the enclosing pending-exception state
     emitter.instruction("mov r13, rdi");                                        // retain the consumed suspended exception owner
-    emitter.instruction("cmp QWORD PTR [r13], -3");                             // private forced-unwind markers must never become getPrevious results
+    emitter.instruction(&format!("cmp QWORD PTR [r13], {forced_unwind_class}")); // private forced-unwind markers must never become getPrevious results
     emitter.instruction("je __rt_cleanup_chain_previous_duplicate");            // release the marker while preserving the active cleanup exception
     abi::emit_load_symbol_to_reg(emitter, "r14", "_exc_value", 0);
     emitter.label("__rt_cleanup_chain_previous_outer");

@@ -94,5 +94,6 @@ impl Scope {
 
 mod callback;
 pub mod invoke;
+pub mod previous;
 
 pub use callback::emit as emit_deep_cleanup_callback;
