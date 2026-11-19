@@ -8,6 +8,7 @@
 //! - Borrowed cells preserve actual arity, omitted defaults, and original PHP types.
 //! - The shared coordinator owns conversion and returns a single owned Mixed result.
 
+use elephc_memoir::strings::concat_cursor::SavedConcatCursor;
 use super::*;
 use elephc_builtin_contract::RuntimeBuiltinId;
 
@@ -218,8 +219,8 @@ fn emit_missing_reference_warning(
     let target = emitter.target;
     let scratch = if target.arch == Arch::AArch64 { "x9" } else { "r10" };
     abi::emit_reserve_temporary_stack(emitter, 16);
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
-    abi::emit_store_to_sp(emitter, scratch, 0);
+    let concat = SavedConcatCursor::Stack(0);
+    concat.emit_save(emitter, scratch);
     emit_warning_fragment(emitter, &prefix, false);
     abi::emit_reg_move(emitter, abi::int_result_reg(emitter), cursor);
     match target.arch {
@@ -232,8 +233,7 @@ fn emit_missing_reference_warning(
         abi::emit_reg_move(emitter, "rsi", "rdx");
     }
     abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
-    abi::emit_load_temporary_stack_slot(emitter, scratch, 0);
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_concat_off", 0);
+    concat.emit_restore(emitter, scratch);
     match target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {cursor}, #2"));                  // only the first variable has the named $var parameter
