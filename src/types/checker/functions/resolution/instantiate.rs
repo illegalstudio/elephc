@@ -151,7 +151,7 @@ impl Checker {
                     span,
                     format!(
                         "Call to generic function '{}' binds type parameter <{}> to {}, which does not satisfy its bound {}",
-                        name, param.name, argument_ty, bound_ty
+                        shown_function_name(name), param.name, argument_ty, bound_ty
                     ),
                 )?;
             }
@@ -259,7 +259,7 @@ fn describe_infer_error(name: &str, error: &InferError) -> String {
     match error {
         InferError::Unconstrained(param) => format!(
             "Call to generic function '{}' does not determine type parameter <{}>; no argument position mentions it",
-            name, param
+            shown_function_name(name), param
         ),
         InferError::Conflict {
             param,
@@ -267,11 +267,11 @@ fn describe_infer_error(name: &str, error: &InferError) -> String {
             second,
         } => format!(
             "Call to generic function '{}' binds type parameter <{}> to both {} and {}",
-            name, param, first, second
+            shown_function_name(name), param, first, second
         ),
         InferError::Unspellable { param, ty } => format!(
             "Call to generic function '{}' would bind type parameter <{}> to {}, which has no generic spelling",
-            name, param, ty
+            shown_function_name(name), param, ty
         ),
         InferError::TooDeep { param, ty } => format!(
             "Generic function '{}' instantiates itself at an ever-deeper type: <{}> reached {}. \
@@ -280,4 +280,10 @@ fn describe_infer_error(name: &str, error: &InferError) -> String {
             name, param, ty
         ),
     }
+}
+
+/// The name php knows a generic function by: a PHPDoc template's hidden twin is the function as
+/// written, so a diagnostic never names the twin.
+fn shown_function_name(name: &str) -> &str {
+    name.strip_suffix(crate::generics::DOC_TWIN_SUFFIX).unwrap_or(name)
 }

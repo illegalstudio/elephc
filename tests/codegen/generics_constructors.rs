@@ -143,9 +143,9 @@ class Box {
 "#;
     let valid = format!("{declarations}echo (new Box(new User()))->value->hi();\n");
     assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "hi");
-    let error = compile_cli_file_with_flags_expect_failure(
-        &format!("{declarations}new Box(new Other());\n"),
-        &[],
+    // php enforces the written `Model` hint at run time: the call compiles and throws.
+    let mismatch = format!(
+        "{declarations}try {{ new Box(new Other()); }} catch (TypeError $e) {{ echo \"TypeError\"; }}\n"
     );
-    assert!(error.contains("expects Model, got Other"), "{error}");
+    assert_eq!(compile_cli_file_and_run_with_flags(&mismatch, &[]), "TypeError");
 }

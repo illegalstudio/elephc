@@ -74,6 +74,8 @@ fn emit_function_variant_dispatcher(
     let fail_label = format!("{}_undefined_variant", label);
     // Instantiated symbols are internal; PHP diagnostics name the source-level function.
     let public_name = name.split_once('<').map_or(name, |(base, _)| base);
+    // A PHPDoc template's hidden twin is the function as written.
+    let public_name = public_name.strip_suffix(crate::generics::DOC_TWIN_SUFFIX).unwrap_or(public_name);
     let message = format!("Fatal error: Call to undefined function {}()\n", public_name);
     let (message_label, message_len) = data.add_string(message.as_bytes());
     let target_reg = abi::symbol_scratch_reg(emitter);

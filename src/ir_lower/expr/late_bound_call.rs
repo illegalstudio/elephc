@@ -32,7 +32,7 @@ pub(super) fn guard_runtime_function_binding(
     let error = Expr::new(ExprKind::NewObject {
         class_name: Name::unqualified("Error"),
         args: vec![Expr::new(ExprKind::StringLiteral(
-            format!("Call to undefined function {}()", name),
+            format!("Call to undefined function {}()", name.strip_suffix(crate::generics::DOC_TWIN_SUFFIX).unwrap_or(name)),
         ), span)],
     }, span);
     let guard = Stmt::new(StmtKind::If {
@@ -54,7 +54,10 @@ pub(super) fn lower_late_bound_undefined_call(
         return None;
     }
     let span = call_expr.span;
-    let message = format!("Call to undefined function {}()", canonical_name);
+    let message = format!(
+        "Call to undefined function {}()",
+        canonical_name.strip_suffix(crate::generics::DOC_TWIN_SUFFIX).unwrap_or(canonical_name)
+    );
     let message_expr = Expr::new(ExprKind::StringLiteral(message), span);
     let new_error_expr = Expr::new(
         ExprKind::NewObject {

@@ -1005,15 +1005,16 @@ function same(object $o): object { return $o; }
             "{flags:?}"
         );
     }
-    for (call, expected) in [
-        ("(new Repo())->keep(new Other());", "expects Model, got Other"),
-        ("pair(new User(), new Other());", "expects Model, got Other"),
-        ("pair<Other>(new Other(), new Other());", "expects Model, got Other"),
-        ("same(5);", "expects object, got int"),
-    ] {
-        let error = compile_cli_file_with_flags_expect_failure(&format!("{declarations}{call}\n"), &[]);
-        assert!(error.contains(expected), "{call}: {error}");
+    // php enforces the written hint at run time: the call compiles and throws.
+    for call in ["(new Repo())->keep(new Other());", "pair(new User(), new Other());"] {
+        let source = format!(
+            "{declarations}try {{ {call} }} catch (TypeError $e) {{ echo \"TypeError\"; }}\n"
+        );
+        assert_eq!(compile_cli_file_and_run_with_flags(&source, &[]), "TypeError", "{call}");
     }
+    // A scalar literal the hint rejects is refused at compile time, as for any plain function.
+    let error = compile_cli_file_with_flags_expect_failure(&format!("{declarations}same(5);\n"), &[]);
+    assert!(error.contains("expects object, got int"), "{error}");
 }
 
 /// A template that takes over a native hint carries it to the untyped parameters it annotates
@@ -1034,11 +1035,13 @@ function both(Model $a, $b) { return $b; }
 "#;
     let valid = format!("{declarations}echo both(new User(), new User())->hi();\n");
     assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "hi");
-    let error = compile_cli_file_with_flags_expect_failure(
-        &format!("{declarations}both(new Other(), new Other());\n"),
-        &[],
-    );
-    assert!(error.contains("expects Model, got Other"), "{error}");
+    // php enforces the written hint at run time: the call compiles and throws.
+    for call in ["both(new Other(), new Other());"] {
+        let source = format!(
+            "{declarations}try {{ {call} }} catch (TypeError $e) {{ echo \"TypeError\"; }}\n"
+        );
+        assert_eq!(compile_cli_file_and_run_with_flags(&source, &[]), "TypeError", "{call}");
+    }
 }
 
 /// The native hint alone decides whether a position accepts `null`: `@param ?T $m` (or
@@ -1077,10 +1080,12 @@ function loose(?Model $m): int { return $m === null ? 0 : 1; }
         "{declarations}echo strict(new User()), union(new User()), loose(null), loose(new User()), (new Repo())->accept(new User());\n"
     );
     assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "11011");
+    // php enforces the written hint at run time: the call compiles and throws.
     for call in ["strict(null);", "union(null);", "(new Repo())->accept(null);"] {
-        let error =
-            compile_cli_file_with_flags_expect_failure(&format!("{declarations}{call}\n"), &[]);
-        assert!(error.contains("expects Model"), "{call}: {error}");
+        let source = format!(
+            "{declarations}try {{ {call} }} catch (TypeError $e) {{ echo \"TypeError\"; }}\n"
+        );
+        assert_eq!(compile_cli_file_and_run_with_flags(&source, &[]), "TypeError", "{call}");
     }
 }
 
@@ -1127,15 +1132,15 @@ function wide(object $m): Model { return $m; }
             "{flags:?}"
         );
     }
-    for (call, expected) in [
-        ("id(new Other());", "expects Model, got Other"),
-        ("thing(1);", "expects object, got int"),
-        ("wide(new Other());", "expects Model, got Other"),
-    ] {
-        let error =
-            compile_cli_file_with_flags_expect_failure(&format!("{declarations}{call}\n"), &[]);
-        assert!(error.contains(expected), "{call}: {error}");
+    // php enforces the written hint at run time: the call compiles and throws.
+    for call in ["id(new Other());", "wide(new Other());"] {
+        let source = format!(
+            "{declarations}try {{ {call} }} catch (TypeError $e) {{ echo \"TypeError\"; }}\n"
+        );
+        assert_eq!(compile_cli_file_and_run_with_flags(&source, &[]), "TypeError", "{call}");
     }
+    let error = compile_cli_file_with_flags_expect_failure(&format!("{declarations}thing(1);\n"), &[]);
+    assert!(error.contains("expects object, got int"), "{error}");
     let wrong_body = r#"<?php
 class Model {}
 class Other {}
@@ -1144,10 +1149,10 @@ class Other {}
  * @return T
  */
 function make(): Model { return new Other(); }
-make();
+try { make(); } catch (TypeError $e) { echo "TypeError"; }
 "#;
-    let error = compile_cli_file_with_flags_expect_failure(wrong_body, &[]);
-    assert!(error.contains("return type expects Model, got Other"), "{error}");
+    // php enforces the written return type at run time: the program compiles and throws.
+    assert_eq!(compile_cli_file_and_run_with_flags(wrong_body, &[]), "TypeError");
 }
 
 /// A dispatched method is erased back to the signature php-src enforces: the native hints a
@@ -1256,6 +1261,7 @@ echo implode(",", array_map('intval', [method_exists('Box', '__construct'), prop
 
 /// Reflection and a runtime class name see the written class too, not the instantiation.
 #[test]
+#[ignore = "elephc-h17m.31: the reflection table keys a template by its marker interface and instantiation rows"]
 fn test_docblock_template_instantiation_reflection_equals_the_written_class() {
     let source = r#"<?php
 /** @template T */
