@@ -31,6 +31,10 @@ pub(in crate::codegen) struct ValueUseIndex {
     /// `consumed` minus the values only a `MixedBox` takes. `lower_mixed_box` always RETAINS its
     /// operand into a cell of its own, so a box leaves the operand's ownership where it was.
     consumed_beyond_box: FastSet<ValueId>,
+    /// Values some `RuntimeCall` takes as an operand.
+    runtime_call_operands: FastSet<ValueId>,
+    /// Values any instruction other than a `RuntimeCall` or a `Release` takes as an operand.
+    other_operands: FastSet<ValueId>,
     /// `ArrayPush` instructions that append to an `array_new` of their own block that no other
     /// instruction has used yet: an array literal under construction, still packed storage.
     fresh_literal_pushes: FastSet<u32>,
@@ -52,6 +56,11 @@ impl ValueUseIndex {
                 if inst.op != Op::MixedBox {
                     index.consumed_beyond_box.extend(inst.operands.iter().copied());
                 }
+            }
+            match inst.op {
+                Op::RuntimeCall => index.runtime_call_operands.extend(inst.operands.iter().copied()),
+                Op::Release => {}
+                _ => index.other_operands.extend(inst.operands.iter().copied()),
             }
             let position = position as u32;
             match (inst.op, inst.immediate.as_ref()) {
@@ -84,6 +93,14 @@ impl ValueUseIndex {
     /// construction (see `fresh_literal_pushes`).
     pub(in crate::codegen) fn is_fresh_literal_push(&self, position: Option<u32>) -> bool {
         position.is_some_and(|position| self.fresh_literal_pushes.contains(&position))
+    }
+
+    /// Returns whether `value` is only ever read by `RuntimeCall` operands (never stored, passed
+    /// on, branched on or returned), so a borrowed load of it cannot outlive its box.
+    pub(in crate::codegen) fn is_runtime_call_operand_only(&self, value: ValueId) -> bool {
+        self.runtime_call_operands.contains(&value)
+            && !self.other_operands.contains(&value)
+            && !self.consumed.contains(&value)
     }
 
     /// Returns whether a terminator or a storing instruction takes `value` over.

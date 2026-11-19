@@ -65,10 +65,13 @@ pub(super) fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction
     // payload -- so it emits no release for that retain: `function expand(iterable $v) { $v =
     // new Bag($v); ... }` leaked the caller's array on every call. When nothing releases or takes
     // over the loaded value, borrow the box's payload instead, as the string case below does.
-    // A boxed non-parameter local (eval widens every frame slot to boxed storage) is the same:
-    // the box keeps the payload alive and IR never releases an unretained read, so
-    // `$view['a'] = 'b'` before a computed `eval()` leaked the receiver it retained.
-    if !ctx.function.params.get(slot.as_raw() as usize).is_some_and(|param| param.by_ref)
+    // A boxed non-parameter local (eval widens every frame slot to boxed storage) read only as the
+    // object operand of a `runtime_call` is the same: the box keeps the payload alive and IR never
+    // releases that unretained read, so `$view['a'] = 'b'` before a computed `eval()` leaked the
+    // receiver it retained.
+    let is_by_value_param = ctx.function.params.get(slot.as_raw() as usize).is_some_and(|param| !param.by_ref);
+    if (is_by_value_param || (matches!(result_ty.codegen_repr(), PhpType::Object(_))
+            && ctx.value_uses().is_runtime_call_operand_only(result)))
         && matches!(source_ty.codegen_repr(), PhpType::Mixed)
         && matches!(
             result_ty.codegen_repr(),
