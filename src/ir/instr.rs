@@ -955,6 +955,8 @@ pub enum Op {
     /// Detaches the named owner's record, preserving newer fixed return-lease records.
     PopCallOperandOwner,
     LoadGlobal,
+    /// Tests program-symbol presence without dereferencing or creating its boxed value.
+    GlobalBindingPresent,
     /// Acquires a managed activation lease sharing the boxed program symbol's reference identity.
     /// The result must be adopted into a guarded reference owner before replacing a local name.
     LoadGlobalRefCell,
@@ -1520,6 +1522,7 @@ impl Op {
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             LoadStaticLocalRefCell => E::READS_GLOBAL,
+            GlobalBindingPresent => E::READS_GLOBAL,
             LoadGlobalRefCell => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
@@ -1924,6 +1927,7 @@ impl Op {
             PushCallOperandOwner => "push_call_operand_owner",
             PopCallOperandOwner => "pop_call_operand_owner",
             LoadGlobal => "load_global",
+            GlobalBindingPresent => "global_binding_present",
             LoadGlobalRefCell => "load_global_ref_cell",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",

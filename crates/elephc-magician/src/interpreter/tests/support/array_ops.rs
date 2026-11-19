@@ -116,15 +116,16 @@ impl FakeOps {
                 elements
                     .get(index as usize)
                     .copied()
-                    .map_or_else(|| self.null(), Ok)
             }
             FakeValue::Assoc(entries) => entries
                 .iter()
-                .find_map(|(entry_key, value)| (entry_key == &key).then_some(*value))
-                .map_or_else(|| self.null(), Ok),
-            _ => self.null(),
-        }?;
-        self.retain(result)
+                .find_map(|(entry_key, value)| (entry_key == &key).then_some(*value)),
+            _ => None,
+        };
+        match result {
+            Some(value) => self.retain(value),
+            None => self.null(),
+        }
     }
     /// Checks whether a fake array has the requested key without reading its value.
     pub(super) fn runtime_array_key_exists(
@@ -285,4 +286,19 @@ fn fake_sparse_array_key_writes_preserve_count_order_and_values() {
     }
     values.release(value).unwrap(); values.release(array).unwrap();
     assert!(values.cell_owners.values().all(|owners| *owners == 0));
+}
+
+/// A missing read creates one null owner; only existing container elements need retaining.
+#[test]
+fn fake_array_missing_reads_transfer_single_null_owners() {
+    for kind in 0..3 {
+        let mut values = FakeOps::default();
+        let array = match kind { 0 => values.array_new(0), 1 => values.assoc_new(0), _ => values.null() }.unwrap();
+        let key = values.int(0).unwrap();
+        let result = values.array_get(array, key).unwrap();
+        assert_eq!(values.get(result), FakeValue::Null);
+        assert_eq!(values.cell_owners[&(result.as_ptr() as usize)], 1);
+        for value in [result, key, array] { values.release(value).unwrap(); }
+        assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+    }
 }

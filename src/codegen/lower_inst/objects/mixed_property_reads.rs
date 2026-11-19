@@ -924,6 +924,11 @@ pub(super) fn emit_undefined_property_warning(
     class_name: &str,
     property: &str,
 ) {
+    if ctx.property_read_requires_initialization() {
+        super::super::exceptions::emit_error(ctx,
+            &elephc_semantics::initialization::property_message(property));
+        return;
+    }
     let message = format!(
         "Warning: Undefined property: {}::${}\n",
         class_name.trim_start_matches('\\'),
@@ -956,6 +961,11 @@ pub(super) fn emit_undefined_property_warning_for_loaded_object(
     ctx: &mut FunctionContext<'_>,
     property: &str,
 ) {
+    if ctx.property_read_requires_initialization() {
+        super::super::exceptions::emit_error(ctx,
+            &elephc_semantics::initialization::property_message(property));
+        return;
+    }
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

@@ -570,15 +570,32 @@ fn lower_property_get_without_runtime_hooks(
         let result = lower_property_get_without_native_dispatch(ctx, receiver, property, op, expr);
         return stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span);
     }
+    if let Some(value) = super::initialization_properties::magic_read(ctx, object, property, op, expr) {
+        return value;
+    }
+    lower_direct_property_read(ctx, object, property, op, expr)
+}
+
+/// Emits the selected physical read after getter and source-policy dispatch have completed.
+pub(super) fn lower_direct_property_read(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue,
+    property: &str, op: Op, expr: &Expr,
+) -> LoweredValue {
     let data = ctx.intern_string(property);
     let result_type = property_get_result_type(ctx, object.value, property, op, expr);
     let reads_extern_cstr = op == Op::PropGet
         && result_type == PhpType::Str
         && extern_receiver_class(ctx, &ctx.builder.value_php_type(object.value)).is_some();
+    let immediate = if matches!(op, Op::PropGet | Op::NullsafePropGet)
+        && ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization)
+        && ctx.source_mode != crate::source::SourceMode::Internal
+        && !ctx.builder.function().flags.is_internal {
+        Immediate::ProfiledData { data, profile: crate::source::EvalSourceProfile::new(
+            crate::php_only::is_enabled(), ctx.semantic_profile) }
+    } else { Immediate::Data(data) };
     let result = ctx.emit_value(
         op,
         vec![object.value],
-        Some(Immediate::Data(data)),
+        Some(immediate),
         result_type,
         op.default_effects(),
         Some(expr.span),
@@ -1258,11 +1275,14 @@ pub(super) fn lower_property_probe_from_value(
     if !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
         && matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
     { return native_xml_reads::probe(ctx, object, property, expr); }
+    if let Some(value) = super::initialization_properties::magic_probe(ctx, object, property, PropertyFetchMode::Probe, expr) {
+        return value;
+    }
     lower_property_probe_without_native(ctx, object, property, PropertyFetchMode::Probe, expr)
 }
 
 /// Probes ordinary property storage without re-entering a native XML presence branch.
-fn lower_property_probe_without_native(
+pub(super) fn lower_property_probe_without_native(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
     mode: PropertyFetchMode, expr: &Expr,
 ) -> LoweredValue {
@@ -1287,6 +1307,9 @@ pub(super) fn lower_property_empty_probe_from_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(value) = super::initialization_properties::magic_probe(ctx, object, property, PropertyFetchMode::Empty, expr) {
+        return value;
+    }
     if property_can_be_uninitialized(ctx, object.value, property)
         || union_hook_probe_class(ctx, object.value, property).is_some() {
         return lower_initialized_property_value(ctx, object, property, expr);
@@ -1303,6 +1326,9 @@ pub(super) fn lower_property_isset_probe_from_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(value) = super::initialization_properties::magic_probe(ctx, object, property, PropertyFetchMode::Isset, expr) {
+        return value;
+    }
     // As for `??`: a typed slot that may still be uninitialized is probed, never read.
     if property_can_be_uninitialized(ctx, object.value, property)
         || union_hook_probe_class(ctx, object.value, property).is_some() {

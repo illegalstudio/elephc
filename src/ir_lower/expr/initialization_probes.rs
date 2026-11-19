@@ -18,7 +18,7 @@ pub(super) enum Probe { Isset, Empty }
 pub(super) fn boolean(ctx: &mut LoweringContext<'_, '_>, arg: &Expr, probe: Probe, expr: &Expr)
     -> Option<LoweredValue> {
     let ExprKind::Variable(name) = &arg.kind else { return None; };
-    let present = crate::ir_lower::initialization::frame_presence(ctx, name, arg.span)?;
+    let present = crate::ir_lower::initialization::binding_presence(ctx, name, arg.span)?;
     let temp = ctx.declare_hidden_temp(PhpType::Bool);
     let ready = ctx.builder.create_named_block("probe.present", Vec::new());
     let missing = ctx.builder.create_named_block("probe.absent", Vec::new());
@@ -50,7 +50,7 @@ pub(super) fn coalesce_value(ctx: &mut LoweringContext<'_, '_>, arg: &Expr) -> O
     if matches!(ctx.local_type(name).codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_)) {
         return None;
     }
-    let present = crate::ir_lower::initialization::frame_presence(ctx, name, arg.span)?;
+    let present = crate::ir_lower::initialization::binding_presence(ctx, name, arg.span)?;
     let snapshot_type = normalize_union_members(vec![
         ctx.local_type(name), PhpType::Void,
     ]).expect("a coalesce snapshot has at least its null alternative");

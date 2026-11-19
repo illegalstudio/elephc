@@ -11,3 +11,8 @@
 pub fn variable_message(name: &str) -> String {
     format!("--strict-initialization: variable ${name} is not initialized")
 }
+
+/// Describes a property read after ordinary visibility and getter selection have completed.
+pub fn property_message(name: &str) -> String {
+    format!("--strict-initialization: property ${name} is not initialized")
+}

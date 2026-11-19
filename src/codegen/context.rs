@@ -112,6 +112,14 @@ pub(crate) struct FunctionContext<'a> {
 }
 
 impl<'a> FunctionContext<'a> {
+    /// Reads the original named-property policy, including across inlining and getter dispatch.
+    pub(super) fn property_read_requires_initialization(&self) -> bool {
+        self.current_inst.and_then(|id| self.function.instruction(id))
+            .filter(|inst| matches!(inst.op, Op::PropGet | Op::NullsafePropGet)).is_some_and(|inst|
+            matches!(inst.immediate, Some(Immediate::ProfiledData { profile, .. })
+                if profile.semantics().contains(elephc_semantics::StrictFeature::Initialization)))
+    }
+
     /// Returns the PHP lexical class scope the current instruction executes in.
     ///
     /// An instruction the inliner spliced in from a method body keeps that method's class

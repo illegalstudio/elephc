@@ -9,6 +9,23 @@
 
 use super::*;
 
+/// Reads the canonical symbol's cell pointer without interpreting initialized null as absence.
+pub(super) fn lower_global_binding_present(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let name = ctx.global_name_data(expect_global_name(inst)?)?;
+    let symbol = ir_global_symbol(name);
+    ctx.data.add_comm(symbol.clone(), 16);
+    abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &PhpType::Int);
+    let absent = ctx.next_label("global_binding_absent");
+    let done = ctx.next_label("global_binding_presence");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &absent);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&absent);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a global storage load into the result register and SSA destination slot.
 pub(super) fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data = expect_global_name(inst)?;

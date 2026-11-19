@@ -192,7 +192,7 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
             || union_hook_probe_class(ctx, object.value, property).is_some() {
             return lower_initialized_property_value(ctx, object, property, value);
         }
-        if needs_probe {
+        if needs_probe || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization) {
             return lower_property_probe_from_value(ctx, object, property, value);
         }
         return lower_property_get_from_value(ctx, object, property, Op::PropGet, value);

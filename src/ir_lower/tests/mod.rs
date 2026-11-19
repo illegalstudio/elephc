@@ -880,3 +880,4 @@ mod conditional_global_origins;
 mod global_producer_boundaries;
 
 mod initialized_frame_reads;
+mod initialized_scope_reads;

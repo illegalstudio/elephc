@@ -132,6 +132,16 @@ pub(super) fn eval_property_read_result(
                 values,
             );
         }
+        if property.property_type().is_none()
+            && context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization)
+            && !context.dynamic_property_is_initialized(identity, &storage_property_name)
+        {
+            if let Some(result) = eval_magic_property_get(object, &object_class_name, property_name, context, values)? {
+                return Ok(result);
+            }
+            if quiet { return values.null(); }
+            return initialization::missing_property(property_name, context, values);
+        }
         if property.property_type().is_some()
             && !context.dynamic_property_is_initialized(identity, &storage_property_name)
         {
@@ -188,6 +198,9 @@ pub(super) fn eval_property_read_result(
             eval_magic_property_get(object, &object_class_name, property_name, context, values)?
         {
             return Ok(result);
+        }
+        if !quiet && context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization) {
+            return initialization::missing_property(property_name, context, values);
         }
     }
     if quiet && !declared_property_found {
@@ -864,6 +877,8 @@ pub(in crate::interpreter) fn eval_property_isset_result(
         return truthy.and_then(|value| released.map(|()| value));
     }
     let Ok(identity) = values.object_identity(object) else {
+        if context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization)
+            && values.type_tag(object)? != EVAL_TAG_OBJECT { return Ok(false); }
         let value = values.property_get(object, property_name)?;
         return eval_property_probe_value_is_set(value, context, values);
     };
@@ -884,6 +899,13 @@ pub(in crate::interpreter) fn eval_property_isset_result(
         if validate_eval_member_access(&declaring_class, property.visibility(), context).is_ok() {
             let storage_property_name =
                 eval_instance_property_storage_name(&declaring_class, &property);
+            if property.property_type().is_none()
+                && context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization)
+                && !context.dynamic_property_is_initialized(identity, &storage_property_name)
+            {
+                return eval_magic_property_isset(object, &object_class_name, property_name, context, values)
+                    .map(|result| result.unwrap_or(false));
+            }
             if property.property_type().is_some()
                 && !context.dynamic_property_is_initialized(identity, &storage_property_name)
             {

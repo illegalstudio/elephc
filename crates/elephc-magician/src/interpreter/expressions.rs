@@ -56,7 +56,7 @@ pub(in crate::interpreter) fn eval_owned_expr(
 }
 
 /// Evaluates the quiet property probe required by PHP null coalescing.
-fn eval_null_coalesce_value(
+pub(super) fn eval_null_coalesce_value(
     expr: &EvalExpr,
     own_result: bool,
     context: &mut ElephcEvalContext,
@@ -65,22 +65,28 @@ fn eval_null_coalesce_value(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match expr {
         EvalExpr::PropertyGet { object, property } => {
-            with_owned_receiver(object, context, scope, values, |object, context, _, values| {
-                if !eval_property_isset_result(object, property, context, values)? {
+            with_eval_probe_operands(&[object], context, scope, values, |args, context, _, values| {
+                let object = args[0].borrowed();
+                if !initialization::coalesce_uses_getter(object, property, context, values)
+                    && !eval_property_isset_result(object, property, context, values)? {
                     return values.null();
                 }
                 eval_property_get_with_result_ownership(object, property, context, values, true)
             })
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
-            with_owned_receiver(object, context, scope, values, |object, context, scope, values| {
+            with_eval_probe_operands(&[object], context, scope, values, |args, context, scope, values| {
+                let object = args[0].borrowed();
                 let property = eval_dynamic_member_name(property, context, scope, values)?;
-                if !eval_property_isset_result(object, &property, context, values)? {
+                if !initialization::coalesce_uses_getter(object, &property, context, values)
+                    && !eval_property_isset_result(object, &property, context, values)? {
                     return values.null();
                 }
                 eval_property_get_with_result_ownership(object, &property, context, values, true)
             })
         }
+        EvalExpr::ArrayGet { .. } if context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization) =>
+            probe_reads::eval_owned(expr, context, scope, values),
         _ => eval_expr_with_result_ownership(expr, context, scope, values, own_result),
     }
 }

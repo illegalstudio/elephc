@@ -797,8 +797,8 @@ fn validate_instruction_immediate(
         EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
             matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
         }),
-        PropGet => require_immediate(inst_id, inst, "property name or reflected physical slot", |imm| {
-            matches!(imm, Imm::Data(_) | Imm::ReflectionPropertyRef { .. })
+        PropGet | NullsafePropGet => require_immediate(inst_id, inst, "profiled property name or reflected physical slot", |imm| {
+            matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. } | Imm::ReflectionPropertyRef { .. })
         }),
         PropSet => require_immediate(inst_id, inst, "property name or trusted physical slot", |imm| {
             matches!(
@@ -824,7 +824,7 @@ fn validate_instruction_immediate(
         PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
-        LoadGlobalRefCell | EvalScopeGet | EvalScopeBindingType | EvalScopeEndBinding => require_immediate(inst_id, inst, "global name", |imm| {
+        GlobalBindingPresent | LoadGlobalRefCell | EvalScopeGet | EvalScopeBindingType | EvalScopeEndBinding => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
         }),
         EvalScopeBindLocalType => require_immediate(inst_id, inst, "checked scope binding type", |imm| {
@@ -1158,6 +1158,14 @@ fn validate_opcode_rules(
             if inst.result_type != IrType::I64
                 || !matches!(inst.result_php_type, PhpType::Pointer(_))
             {
+                return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            Ok(())
+        }
+        GlobalBindingPresent => {
+            check_count(inst_id, inst, 0, "0")?;
+            let result = inst.result.ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::I64 || inst.result_php_type != PhpType::Bool {
                 return Err(ValidationError::ResultTypeMismatch(result));
             }
             Ok(())

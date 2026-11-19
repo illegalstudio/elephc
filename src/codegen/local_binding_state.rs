@@ -21,6 +21,18 @@ pub(super) fn initialize(ctx: &mut FunctionContext<'_>) {
     let mut offsets = ctx.binding_state_offsets.values().copied().collect::<Vec<_>>();
     offsets.sort_unstable();
     for offset in offsets { abi::emit_store_zero_to_local_slot(ctx.emitter, offset); }
+    // Process entry initializes these payloads before the first source instruction.
+    if ctx.function.flags.is_main && !ctx.module.web {
+        for name in ["argc", "argv"] {
+            let slot = ctx.function.locals.iter().find(|local| local.name.as_deref() == Some(name))
+                .map(|local| local.id);
+            if let Some(offset) = slot.and_then(|slot| ctx.binding_state_offsets.get(&slot).copied()) {
+                let scratch = abi::secondary_scratch_reg(ctx.emitter);
+                abi::emit_load_int_immediate(ctx.emitter, scratch, NATIVE_ORIGIN);
+                abi::store_at_offset(ctx.emitter, scratch, offset);
+            }
+        }
+    }
 }
 
 /// Executes the source binding event without changing the local value or reference identity.

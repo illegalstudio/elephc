@@ -34,6 +34,7 @@ use std::collections::HashSet;
 
 mod constants;
 mod initialization_probes;
+mod initialization_properties;
 mod producer_values;
 mod checked_cast;
 mod array_merge_values;
@@ -714,6 +715,9 @@ fn lower_initialized_property_isset(
     property: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(value) = initialization_properties::magic_probe(ctx, object, property, PropertyFetchMode::Isset, arg) {
+        return probe_value_is_set(ctx, value, arg);
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder
@@ -863,6 +867,9 @@ fn lower_initialized_property_empty(
     construct: &str,
     arg: &Expr,
 ) -> LoweredValue {
+    if let Some(value) = initialization_properties::magic_probe(ctx, object, property, PropertyFetchMode::Empty, arg) {
+        return lazy_isset::lower_empty_of_probed_value(ctx, value, construct, arg);
+    }
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let uninitialized_block = ctx
         .builder

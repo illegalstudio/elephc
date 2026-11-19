@@ -263,7 +263,7 @@ pub(in crate::interpreter) fn with_eval_probe_operand<V: RuntimeValueOps>(
         RuntimeCellHandle, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
     ) -> Result<bool, EvalStatus>,
 ) -> Result<bool, EvalStatus> {
-    let owner = eval_owned_expr(expr, context, scope, values)?;
+    let owner = probe_reads::eval_owned(expr, context, scope, values)?;
     let result = probe(owner.borrowed(), context, scope, values);
     let cleanup = eval_release_value(context, values, owner);
     result.and_then(|answer| cleanup.map(|()| answer))
@@ -279,10 +279,31 @@ pub(in crate::interpreter) fn with_eval_operands<V: RuntimeValueOps>(
         &[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
     ) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_value_operands(args, false, context, scope, values, consume)
+}
+
+/// Reads a quiet receiver chain followed by ordinary source operands with shared cleanup.
+pub(in crate::interpreter) fn with_eval_probe_operands<V: RuntimeValueOps>(
+    args: &[&EvalExpr], context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(&[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_value_operands(args, true, context, scope, values, consume)
+}
+
+/// Shares operand preparation and returned-value cleanup across ordinary and quiet roots.
+fn with_value_operands<V: RuntimeValueOps>(
+    args: &[&EvalExpr], probe_first: bool, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(&[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut operands = Vec::with_capacity(args.len());
     let prepared = (|| {
-        for arg in args {
-            let value = with_runtime_owners(&operands, || eval_owned_expr(arg, context, scope, values))?;
+        for (index, arg) in args.iter().enumerate() {
+            let value = with_runtime_owners(&operands, || if probe_first && index == 0 {
+                probe_reads::eval_owned(arg, context, scope, values)
+            } else { eval_owned_expr(arg, context, scope, values) })?;
             operands.push(value);
         }
         Ok(())
@@ -302,10 +323,31 @@ pub(in crate::interpreter) fn with_eval_void_operands<V: RuntimeValueOps>(
         &[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
     ) -> Result<(), EvalStatus>,
 ) -> Result<(), EvalStatus> {
+    with_void_operands(args, false, context, scope, values, consume)
+}
+
+/// Gives a quiet receiver and ordinary keys to a statement consumer with shared owner cleanup.
+pub(in crate::interpreter) fn with_eval_probe_void_operands<V: RuntimeValueOps>(
+    args: &[&EvalExpr], context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(&[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<(), EvalStatus>,
+) -> Result<(), EvalStatus> {
+    with_void_operands(args, true, context, scope, values, consume)
+}
+
+/// Shares statement-operand preparation without confusing a quiet root with its ordinary key.
+fn with_void_operands<V: RuntimeValueOps>(
+    args: &[&EvalExpr], probe_first: bool, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(&[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+        -> Result<(), EvalStatus>,
+) -> Result<(), EvalStatus> {
     let mut operands = Vec::with_capacity(args.len());
     let prepared = (|| {
-        for arg in args {
-            let value = with_runtime_owners(&operands, || eval_owned_expr(arg, context, scope, values))?;
+        for (index, arg) in args.iter().enumerate() {
+            let value = with_runtime_owners(&operands, || if probe_first && index == 0 {
+                probe_reads::eval_owned(arg, context, scope, values)
+            } else { eval_owned_expr(arg, context, scope, values) })?;
             operands.push(value);
         }
         Ok(())

@@ -1,5 +1,5 @@
 //! Purpose:
-//! Proves ordinary native frame bindings present before their values are observed.
+//! Proves ordinary native bindings present before their values are observed.
 //!
 //! Called from:
 //! - Projected local reads shared by expressions and value captures.
@@ -12,25 +12,31 @@ use super::context::LoweringContext;
 use crate::{ir::{Immediate, LocalKind, Op, Terminator}, span::Span};
 use elephc_semantics::StrictFeature;
 
-/// Finds a frame's presence bits without consulting its incidental value representation.
-pub(super) fn frame_presence(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span)
+/// Finds canonical program presence or frame presence bits without consulting its incidental value representation.
+pub(super) fn binding_presence(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span)
     -> Option<super::context::LoweredValue> {
     if !ctx.semantic_profile.contains(StrictFeature::Initialization)
         || ctx.source_mode == crate::source::SourceMode::Internal
         || ctx.builder.function().flags.is_internal || name == "GLOBALS"
         || crate::names::is_generated_local_name(name)
-        || ctx.reads_from_eval_scope(name) || ctx.has_eval_barrier()
-        || ctx.local_uses_global_storage(name) || ctx.extern_globals.contains_key(name) { return None; }
+        || ctx.reads_from_eval_scope(name)
+        || ctx.extern_globals.contains_key(name) { return None; }
+    if ctx.local_uses_global_storage(name) {
+        let data = ctx.intern_global_name(name);
+        return Some(ctx.emit_value(Op::GlobalBindingPresent, Vec::new(),
+            Some(Immediate::GlobalName(data)), crate::types::PhpType::Bool,
+            Op::GlobalBindingPresent.default_effects(), Some(span)));
+    }
     let ty = ctx.local_type(name);
     let slot = ctx.local_slots.get(name).copied().unwrap_or_else(|| ctx.declare_local(name, ty));
     if ctx.builder.local_kind(slot) != LocalKind::PhpLocal { return None; }
     Some(super::local_binding_state::binding_is_present(ctx, slot, span))
 }
 
-/// Guards a user frame read without changing its value representation or producer origin.
-pub(super) fn guard_frame_read(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span) {
+/// Guards a user read without changing its value representation or producer origin.
+pub(super) fn guard_read(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span) {
     if ctx.suppresses_undefined_reads(name, span) { return; }
-    let Some(present) = frame_presence(ctx, name, span) else { return; };
+    let Some(present) = binding_presence(ctx, name, span) else { return; };
     let ready = ctx.builder.create_named_block("initialized.read", Vec::new());
     let missing = ctx.builder.create_named_block("uninitialized.read", Vec::new());
     ctx.builder.terminate(Terminator::CondBr { cond: present.value,

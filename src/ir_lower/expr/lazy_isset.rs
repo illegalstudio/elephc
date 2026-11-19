@@ -115,7 +115,8 @@ pub(super) fn lower_lazy_isset_operand(
             // A receiver whose class is unknown until run time has no `property_isset_action`
             // answer, so the eager fallback would take the RAISING value-read arm of the Mixed
             // declared-slot ladder. php answers `false` for a property this scope may not reach.
-            if !property_probe_needs_runtime_name_form(ctx, object) {
+            if !property_probe_needs_runtime_name_form(ctx, object)
+                && !ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization) {
                 return None;
             }
             let object = lower_expr(ctx, object);
@@ -268,7 +269,8 @@ pub(super) fn lower_lazy_empty_without_native(
         }
         // Same reason as `isset()`: php's `empty()` is a silent probe, so an inaccessible or
         // never-created name answers `true` instead of raising.
-        if property_probe_needs_runtime_name_form(ctx, object) {
+        if property_probe_needs_runtime_name_form(ctx, object)
+            || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization) {
             let object = lower_expr(ctx, object);
             let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
@@ -399,7 +401,8 @@ fn lower_nullable_receiver_empty(
 /// Returns an expression that can be named twice with the effects of evaluating `expr` once,
 /// plus the hidden temp holding the value when one was needed.
 ///
-/// A variable or a literal already is one; anything else is lowered once into a hidden temp,
+/// Literals can be reused. Initialization-checked variable reads must run before a null branch
+/// can discard their values; other expressions are also lowered once into a hidden temp,
 /// which the caller hands to `release_evaluated_once` as soon as both reads are done. A hidden
 /// temp, not a one-shot owned temp: its loads borrow from the slot, so the `offsetExists` and
 /// `offsetGet` calls can both name it without consuming its reference.
@@ -409,8 +412,9 @@ pub(super) fn evaluate_once(
     arg: &Expr,
 ) -> (Expr, Option<String>) {
     match expr.kind {
-        ExprKind::Variable(_)
-        | ExprKind::This
+        ExprKind::Variable(_) if !ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization)
+            || ctx.source_mode == crate::source::SourceMode::Internal => (expr.clone(), None),
+        ExprKind::This
         | ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
