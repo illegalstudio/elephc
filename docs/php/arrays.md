@@ -413,8 +413,10 @@ Reference elements also constrain later array operations:
   `rsort()`, `usort()`, `shuffle()` and `array_splice()` still detach reference
   cells (the values stay correct, but later writes through the alias no longer
   reach the array); some reference-promoted storage shapes are rejected at
-  compile time by those builtins instead of being miscompiled. Perform the
-  reorder before creating references, or rebuild into a fresh array.
+  compile time by those builtins instead of being miscompiled. `array_values()`
+  and the slicing helpers also return detached snapshots rather than PHP's
+  references. Perform the reorder before creating references, or rebuild into a
+  fresh array.
 - `call_user_func_array()` over an argument array that contains reference
   elements still forwards those cells to the callback. Ordinary values and
   scalar reference variables are passed by value with PHP's warning; dereference
@@ -519,7 +521,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
 | `in_array()` | `in_array(mixed $needle, array $haystack, bool $strict = false): bool` | Search for a value. Omitted or `false` strictness uses PHP loose comparison for supported scalar/string values; `true` requires type-identical membership. A `mixed` haystack (for example a `json_decode()` result) is searched at run time; a non-array payload raises a `TypeError`. |
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys |
-| `array_values()` | `array_values($arr): array` | Returns copy of values. A `mixed` argument holding an array is accepted; a non-array payload raises a `TypeError` |
+| `array_values()` | `array_values($arr): array` | Returns copy of values. A `mixed` argument holding an array is accepted; a non-array payload raises a `TypeError`. A reference element is extracted as a detached snapshot of its current value, unlike PHP, which keeps the reference |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
 | `array_search()` | `array_search($needle, $haystack, $strict = false): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found. `$strict` compares with `===` |
 | `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice from an indexed OR associative array. `$offset` and `$length` count positions in insertion order, not keys, and must be literal only for `$preserve_keys`, which must be a literal `true`/`false`. `$preserve_keys` keeps the source INTEGER keys; string keys survive either way, so `array_slice(["x"=>1,"y"=>2], 1, 1)` is `["y"=>2]` with or without it, while `array_slice([5=>1,9=>2], 1, 1)` is `[0=>2]` without and `[9=>2]` with. Indexed **string** arrays are supported: the slice copies each element's `{pointer, length}` pair and owns its own bytes, so writing into the result never disturbs the source. A `mixed` or declared `array` source is sliced by its runtime storage (a hash keeps its string keys and renumbers integer keys) and returns the boxed `array` type; a direct call then needs `$preserve_keys` to be `false`, while a callable (`array_slice(...)`, also through `call_user_func_array()` with a runtime argument array) applies the flag at run time. |

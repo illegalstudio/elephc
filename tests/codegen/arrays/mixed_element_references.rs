@@ -169,3 +169,36 @@ echo $t, "\n";
     assert_eq!(out.stdout, "60\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A reference-element literal must describe its hash-of-Mixed storage. Before the literal
+/// widened to `AssocArray{Mixed, Mixed}`, `array_values()` inferred `array<int>` and printed
+/// the boxed cell pointer as an integer. elephc extracts the aliased value instead of the
+/// reference (PHP keeps the cell and prints `&int(2)`), so the snapshot keeps the value the
+/// alias held when the array was read; the corruption this guards against printed a pointer.
+#[test]
+fn test_array_values_over_reference_element_literal_keeps_the_scalar_payload() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$a = [&$x];
+$b = array_values($a);
+$x = 2;
+var_dump($b);
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [0]=>\n  int(1)\n}\n");
+}
+
+/// The associative literal spelling widens the same way.
+#[test]
+fn test_array_values_over_assoc_reference_element_literal_keeps_the_scalar_payload() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$a = ["k" => &$x];
+$b = array_values($a);
+var_dump($b);
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [0]=>\n  int(1)\n}\n");
+}
