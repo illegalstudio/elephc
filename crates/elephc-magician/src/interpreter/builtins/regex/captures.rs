@@ -109,12 +109,16 @@ pub(in crate::interpreter) fn eval_preg_offset_value(
 
 /// Resolves a PHP `$offset` to a byte position, or `None` when it is past the end.
 ///
-/// A negative offset counts back from the end and clamps at the subject start.
+/// A negative offset counts back from the end and clamps at the subject start. An offset
+/// past the end records `PREG_INTERNAL_ERROR`, as php-src does before returning `false`.
 pub(in crate::interpreter) fn eval_preg_start_offset(offset: i64, subject_len: usize) -> Option<usize> {
-    let len = i64::try_from(subject_len).ok()?;
-    let start = if offset < 0 { (len + offset).max(0) } else { offset };
-    if start > len {
-        return None;
+    let start = i64::try_from(subject_len).ok().and_then(|len| {
+        let start = if offset < 0 { (len + offset).max(0) } else { offset };
+        (start <= len).then_some(start)
+    });
+    let start = start.and_then(|start| usize::try_from(start).ok());
+    if start.is_none() {
+        super::engine::eval_preg_set_last_error(super::engine::EVAL_PREG_INTERNAL_ERROR);
     }
-    usize::try_from(start).ok()
+    start
 }

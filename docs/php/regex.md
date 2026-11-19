@@ -140,7 +140,9 @@ PHP's `ValueError`; other unknown bits are ignored, as in PHP. A call that passe
 `$offset` (for both `preg_match()` and `preg_match_all()`) starts the search at
 that byte offset while anchors, `\G`, and lookbehind still see the whole
 subject. A negative offset counts back from the end and stops at the start. An
-offset past the end returns `false` and sets `$matches` to `[]`, like PHP.
+offset past the end returns `false`, sets `$matches` to `[]` and records
+`PREG_INTERNAL_ERROR`, like PHP; an offset inside a multibyte character under `/u`
+returns `false` with `PREG_BAD_UTF8_OFFSET_ERROR`.
 
 `preg_match_all()` supports the same by-reference `$matches` parameter and the
 PHP flags Termwind uses for width and trim styling. PHP's return type is
@@ -235,10 +237,6 @@ managed PCRE2 package (10.47), not the PHP build's library.
   `pcre.backtrack_limit` (1,000,000).
 - Pattern and subject strings cross the current shim as NUL-terminated strings,
   preserving the existing embedded-NUL limitation.
-- Match-time PCRE2 errors end the search as if no further match existed. With
-  the `u` modifier, an invalid UTF-8 subject or an `$offset` inside a multibyte
-  character makes `preg_match()` / `preg_match_all()` return `0` (or the matches
-  found so far) where PHP returns `false`; `preg_last_error()` is not available.
 
 <!-- elephc:generated:symbols:begin -->
 

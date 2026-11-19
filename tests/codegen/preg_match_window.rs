@@ -194,3 +194,104 @@ unset($subject);
     assert_eq!(out.stdout, "350:1[[\"a\",1],[\"a\",1]]");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Fixture: each `$flags` / `$offset` form takes part in the `preg_last_error()` protocol.
+/// A success resets the state, malformed UTF-8 under `/u` and an `$offset` inside a
+/// multibyte character fail with their own codes, and an `$offset` past the end fails with
+/// `PREG_INTERNAL_ERROR`, with and without `$matches`.
+const WINDOW_LAST_ERROR: &str = r#"function window_state_SFX() { return preg_last_error() . ':' . preg_last_error_msg(); }
+$r = [];
+$r[] = [preg_match('/b/', 'abc', $m, 0, 1), window_state_SFX()];
+$r[] = [preg_match('/./u', "a\xff", $m, 0, 0), window_state_SFX()];
+$r[] = [preg_match('/a/', 'abc', $m, 0, 9), window_state_SFX(), $m];
+$r[] = [preg_match('/./u', "\xc3\xa9", $m, PREG_OFFSET_CAPTURE, 1), window_state_SFX()];
+$r[] = [preg_match('/b/', 'abc', $m, 0, 1), window_state_SFX()];
+$r[] = [preg_match_all('/b/', 'abcb', $m, 0, 2), window_state_SFX()];
+$r[] = [preg_match_all('/./u', "a\xff", $m, 0, 0), window_state_SFX()];
+$r[] = [preg_match_all('/a/', 'abc', $m, 0, 9), window_state_SFX(), $m];
+$r[] = [preg_match_all('/a/', 'abc', $m, 0, 1), window_state_SFX()];
+$r[] = [preg_match_all('/b/', 'abcb', offset: 2), window_state_SFX()];
+$r[] = [preg_match_all('/./u', "a\xff", offset: 0), window_state_SFX()];
+$r[] = [preg_match_all('/a/', 'abc', offset: 9), window_state_SFX()];
+$r[] = [preg_match_all('/./u', "\xc3\xa9", offset: 1), window_state_SFX()];
+$r[] = [preg_match('/b/', 'abc', offset: 1), window_state_SFX()];
+$r[] = [preg_match('/a/', 'abc', offset: 9), window_state_SFX()];
+$r[] = [preg_match('/./u', "\xc3\xa9", offset: 1), window_state_SFX()];
+$r[] = [preg_match('/./u', "a\xff", offset: 0), window_state_SFX()];
+$r[] = [preg_match('/b/', 'abc'), window_state_SFX()];
+echo json_encode($r), "\n";
+"#;
+
+/// Fixture: an invalid pattern in each `$flags` / `$offset` form records
+/// `PREG_INTERNAL_ERROR` and the next success clears it. Compiled only: eval treats an
+/// invalid `preg_match()` pattern as fatal on main too (#2388).
+const WINDOW_INVALID_PATTERN: &str = r#"function window_invalid_state() { return preg_last_error() . ':' . preg_last_error_msg(); }
+$r = [];
+$r[] = [preg_match('/(/', 'abc', $m, 0, 0), window_invalid_state()];
+$r[] = [preg_match_all('/(/', 'abc', $m, 0, 1), window_invalid_state()];
+$r[] = [preg_match_all('/(/', 'abc', offset: 1), window_invalid_state()];
+$r[] = [preg_match('/(/', 'abc', offset: 0), window_invalid_state()];
+$r[] = [preg_match('/b/', 'abc', offset: 1), window_invalid_state()];
+echo json_encode($r), "\n";
+"#;
+
+/// Fixture: a destructor's nested `preg_*` error while `$matches` is overwritten does not
+/// replace the outer window call's own outcome.
+const WINDOW_MATCHES_DESTRUCTOR: &str = r#"class WindowNoisy_SFX { public function __destruct() { var_dump(preg_match('/./u', "\xff")); } }
+$one = new WindowNoisy_SFX();
+var_dump(preg_match('/a/', 'a', $one, 0, 0), preg_last_error());
+$two = new WindowNoisy_SFX();
+var_dump(preg_match('/a/', 'a', $two, 0, 5), preg_last_error());
+$all = new WindowNoisy_SFX();
+var_dump(preg_match_all('/a/', 'aa', $all, 0, 1), preg_last_error());
+"#;
+
+/// The `$flags` / `$offset` forms record PHP's `preg_last_error()` codes in compiled code
+/// and through a runtime-built `eval()`, sharing one compile. `SFX` keeps the bundled
+/// declarations unique.
+#[test]
+fn test_preg_match_window_last_error() {
+    let internal = "1:Internal error";
+    let utf8 = "4:Malformed UTF-8 characters, possibly incorrectly encoded";
+    let offset = "5:The offset did not correspond to the beginning of a valid UTF-8 code point";
+    let ok = "0:No error";
+    let errors_expected = format!(
+        "[[1,\"{ok}\"],[false,\"{utf8}\"],[false,\"{internal}\",[]],\
+         [false,\"{offset}\"],[1,\"{ok}\"],[1,\"{ok}\"],[false,\"{utf8}\"],\
+         [false,\"{internal}\",[]],[0,\"{ok}\"],[1,\"{ok}\"],[false,\"{utf8}\"],\
+         [false,\"{internal}\"],[false,\"{offset}\"],[1,\"{ok}\"],[false,\"{internal}\"],\
+         [false,\"{offset}\"],[false,\"{utf8}\"],[1,\"{ok}\"]]\n"
+    );
+    let invalid_expected = format!(
+        "[[false,\"{internal}\"],[false,\"{internal}\"],[false,\"{internal}\"],\
+         [false,\"{internal}\"],[1,\"{ok}\"]]\n"
+    );
+    let destructor_expected = "bool(false)\nint(1)\nint(0)\nbool(false)\nbool(false)\nint(1)\n\
+                               bool(false)\nint(1)\nint(0)\n";
+    let aot = |body: &str| format!("<?php\n{}", body.replace("SFX", "aot"));
+    let eval = |body: &str| opaque_eval(&body.replace("SFX", "eval"));
+    let sources = [
+        aot(WINDOW_LAST_ERROR),
+        eval(WINDOW_LAST_ERROR),
+        aot(WINDOW_MATCHES_DESTRUCTOR),
+        eval(WINDOW_MATCHES_DESTRUCTOR),
+        aot(WINDOW_INVALID_PATTERN),
+    ];
+    assert_bundle_with(
+        &[
+            BundleCase { name: "window_last_error_aot", source: &sources[0], expected: &errors_expected },
+            BundleCase { name: "window_last_error_eval", source: &sources[1], expected: &errors_expected },
+            BundleCase { name: "window_destructor_aot", source: &sources[2], expected: destructor_expected },
+            BundleCase { name: "window_destructor_eval", source: &sources[3], expected: destructor_expected },
+            BundleCase { name: "window_invalid_pattern_aot", source: &sources[4], expected: &invalid_expected },
+        ],
+        compile_and_run_with_regex,
+    );
+}
+
+/// Wraps a fixture body in an `eval()` whose source is only known at runtime, so it runs
+/// through Magician rather than being compiled inline.
+fn opaque_eval(body: &str) -> String {
+    let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
+    format!("<?php\neval('{quoted}' . ' // ' . $argc);\n")
+}
