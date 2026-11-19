@@ -410,3 +410,34 @@ fn test_finally_return_is_deprecated_php_86() {
     );
     elephc::codegen::set_compile_profile(PhpVersion::default(), false);
 }
+
+/// PHP 8.6 deprecates the ignored third argument of `define()`; 8.5 stays silent.
+#[test]
+fn test_define_case_insensitive_argument_is_deprecated_php_86() {
+    use elephc::php_version::PhpVersion;
+
+    elephc::codegen::set_compile_profile(PhpVersion::Php86, false);
+    let result = check_source_full("<?php define('X_86_PROBE', 1, false);")
+        .expect("8.6 source must type-check");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("case_insensitive argument to define() is deprecated")),
+        "warnings {:?}",
+        result.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>()
+    );
+
+    elephc::codegen::set_compile_profile(PhpVersion::Php85, false);
+    let older = check_source_full("<?php define('X_85_PROBE', 1, false);")
+        .expect("8.5 source must type-check");
+    assert!(
+        !older
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("case_insensitive argument to define()")),
+        "PHP 8.5 must not deprecate define()'s third argument: {:?}",
+        older.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>()
+    );
+    elephc::codegen::set_compile_profile(PhpVersion::default(), false);
+}

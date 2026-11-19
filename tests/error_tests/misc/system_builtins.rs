@@ -252,7 +252,7 @@ fn test_error_undefined_constant() {
 /// Verifies that `define()` with a single argument (missing value) yields a wrong-args diagnostic.
 #[test]
 fn test_error_define_wrong_args() {
-    expect_error("<?php define(\"X\");", "define() takes exactly 2 arguments");
+    expect_error("<?php define(\"X\");", "define() takes 2 or 3 arguments");
 }
 
 /// Verifies that `define()` with a non-string first argument (int name) yields a non-string-name error.

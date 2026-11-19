@@ -37,12 +37,12 @@ description: "Compiler internals for define(): lowering path, type checks, and r
 ## Signature summary
 
 ```php
-function define(string $constant_name, mixed $value): bool
+function define(string $constant_name, mixed $value, bool $case_insensitive = false): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes 2–3 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

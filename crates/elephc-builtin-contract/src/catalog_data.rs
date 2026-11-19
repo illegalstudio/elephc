@@ -12498,6 +12498,14 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: None,
                 by_ref: false,
             },
+            // PHP 8.6 deprecates passing this ignored argument; it stays in the signature
+            // until PHP 9.0 makes it an error.
+            ParamSpec {
+                name: "case_insensitive",
+                ty: TypeSpec::Bool,
+                default: Some(DefaultSpec::Bool(false)),
+                by_ref: false,
+            },
         ],
         variadic: None,
         variadic_by_ref: false,

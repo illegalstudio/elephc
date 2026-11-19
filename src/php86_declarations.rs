@@ -18,7 +18,9 @@
 //! - `define('name', ...)` is scanned too: the deprecation is about the constant NAME, which
 //!   the call introduces at the same top-level point.
 
-use crate::parser::ast::{ClassConst, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr};
+use crate::parser::ast::{
+    ClassConst, Expr, ExprKind, Program, Stmt, StmtKind, TypeExpr, UseKind,
+};
 use crate::synthetic_class::*;
 
 /// Internal helper that emits every collected declaration deprecation.
@@ -102,7 +104,20 @@ fn collect_statements(statements: &[Stmt], messages: &mut Vec<String>) {
             }
             StmtKind::FunctionDecl { name, .. } => collect_function_name(name, messages),
             StmtKind::ConstDecl { name, .. } => collect_constant_name(name, messages),
-            StmtKind::ExprStmt(expr) => collect_define_name(expr, messages),
+            StmtKind::UseDecl { imports } => {
+                for item in imports {
+                    let kind = match item.kind {
+                        UseKind::Class => "class",
+                        UseKind::Function => "function",
+                        UseKind::Const => "constant",
+                    };
+                    collect_reserved_name(&item.alias, kind, messages);
+                    if item.alias == "_" && !matches!(item.kind, UseKind::Function) {
+                        messages.push(format!("Using _ as a {kind} name is deprecated"));
+                    }
+                }
+            }
+            StmtKind::ExprStmt(expr) => collect_call_declared_name(expr, messages),
             StmtKind::NamespaceBlock { body, .. }
             | StmtKind::Synthetic(body)
             | StmtKind::IncludeOnceGuard { body, .. } => collect_statements(body, messages),
@@ -145,20 +160,29 @@ fn collect_class_constant_names(constants: &[ClassConst], messages: &mut Vec<Str
     }
 }
 
-/// Reports a literal `define('name', ...)` call that introduces a reserved constant name.
-fn collect_define_name(expr: &Expr, messages: &mut Vec<String>) {
+/// Reports a literal `define('name', ...)` or `class_alias(..., 'name')` call that
+/// introduces a reserved declaration name.
+fn collect_call_declared_name(expr: &Expr, messages: &mut Vec<String>) {
     let ExprKind::FunctionCall { name, args } = &expr.kind else {
         return;
     };
-    if !name.as_str().eq_ignore_ascii_case("define") {
-        return;
-    }
-    if let Some(Expr {
-        kind: ExprKind::StringLiteral(value),
-        ..
-    }) = args.first()
-    {
-        collect_constant_name(value, messages);
+    let literal_arg = |index: usize| -> Option<&str> {
+        match args.get(index).map(|arg| &arg.kind) {
+            Some(ExprKind::StringLiteral(value)) => Some(value.as_str()),
+            _ => None,
+        }
+    };
+    if name.as_str().eq_ignore_ascii_case("define") {
+        if let Some(value) = literal_arg(0) {
+            collect_constant_name(value, messages);
+        }
+    } else if name.as_str().eq_ignore_ascii_case("class_alias") {
+        if let Some(alias) = literal_arg(1) {
+            collect_reserved_name(alias, "class", messages);
+            if alias == "_" {
+                messages.push("Using _ as a class name is deprecated".to_string());
+            }
+        }
     }
 }
 
@@ -359,6 +383,14 @@ mod tests {
         assert_eq!(
             messages_of("<?php define('let', 1);"),
             vec!["Using let as a constant name is deprecated"]
+        );
+        assert_eq!(
+            messages_of("<?php use Foo as is;"),
+            vec!["Using is as a class name is deprecated"]
+        );
+        assert_eq!(
+            messages_of("<?php class_alias('Foo', '_');"),
+            vec!["Using _ as a class name is deprecated"]
         );
     }
 

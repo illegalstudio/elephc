@@ -147,6 +147,24 @@ impl Checker {
                 }
             }
         }
+        // PHP 8.6 deprecates the ignored third argument of `define()`: explicitly passing
+        // `false` is a deprecation, while `true` keeps a warning that names the PHP 9 error.
+        if builtin_key == "define"
+            && args.len() == 3
+            && crate::codegen_support::compile_php_version()
+                >= crate::php_version::PhpVersion::Php86
+        {
+            let message = if matches!(
+                args[2].kind,
+                crate::parser::ast::ExprKind::BoolLiteral(true)
+            ) {
+                "Passing true as the case_insensitive argument to define() is deprecated and will become an error in PHP 9.0"
+            } else {
+                "Passing the case_insensitive argument to define() is deprecated"
+            };
+            self.warnings
+                .push(crate::errors::CompileWarning::new(args[2].span, message));
+        }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
         // CUF accepts named variadic entries, then checks them against the callback.
         // Its own callback parameter must still obey duplicate and ordering rules.

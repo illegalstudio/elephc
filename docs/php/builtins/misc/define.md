@@ -6,7 +6,7 @@ description: "Defines a named constant at runtime."
 ## define()
 
 ```php
-function define(string $constant_name, mixed $value): bool
+function define(string $constant_name, mixed $value, bool $case_insensitive = false): bool
 ```
 
 Defines a named constant at runtime.
@@ -14,6 +14,7 @@ Defines a named constant at runtime.
 **Parameters**:
 - `$constant_name` (`string`)
 - `$value` (`mixed`)
+- `$case_insensitive` (`bool`), default `false`, optional
 
 **Returns**: `bool`
 

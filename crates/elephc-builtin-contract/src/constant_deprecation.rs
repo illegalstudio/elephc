@@ -100,10 +100,10 @@ static GLOBAL_CONSTANT_DEPRECATIONS: &[(&str, ConstantDeprecation)] = &[
     global("MYSQLI_SERVER_QUERY_NO_INDEX_USED", "Constant MYSQLI_SERVER_QUERY_NO_INDEX_USED is deprecated since 8.1, as it was unused", PhpVersion::Php81),
     global("MYSQLI_SERVER_QUERY_WAS_SLOW", "Constant MYSQLI_SERVER_QUERY_WAS_SLOW is deprecated since 8.1, as it was unused", PhpVersion::Php81),
     global("MYSQLI_STORE_RESULT_COPY_DATA", "Constant MYSQLI_STORE_RESULT_COPY_DATA is deprecated since 8.4, as the mysqli_store_result() parameter is unused since 8.1", PhpVersion::Php84),
+    global("SORT_LOCALE_STRING", "Constant SORT_LOCALE_STRING is deprecated since 8.6, use Collator::sort() or Collator::asort() instead", PhpVersion::Php86),
     global("SUNFUNCS_RET_DOUBLE", "Constant SUNFUNCS_RET_DOUBLE is deprecated since 8.4, as date_sunrise() and date_sunset() were deprecated in 8.1", PhpVersion::Php84),
     global("SUNFUNCS_RET_STRING", "Constant SUNFUNCS_RET_STRING is deprecated since 8.4, as date_sunrise() and date_sunset() were deprecated in 8.1", PhpVersion::Php84),
     global("SUNFUNCS_RET_TIMESTAMP", "Constant SUNFUNCS_RET_TIMESTAMP is deprecated since 8.4, as date_sunrise() and date_sunset() were deprecated in 8.1", PhpVersion::Php84),
-    global("SORT_LOCALE_STRING", "Constant SORT_LOCALE_STRING is deprecated since 8.6, use Collator::sort() or Collator::asort() instead", PhpVersion::Php86),
 ];
 
 /// Deprecated constants of builtin classes elephc provides, with php-src 8.5's messages
