@@ -41,27 +41,7 @@ pub(crate) fn emit_ptr_read_string(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // establish a stable frame pointer for this helper
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the raw source pointer across allocation
     emitter.instruction("str x1, [sp, #8]");                                    // preserve the requested byte length across allocation
-    emitter.instruction("mov x0, x1");                                          // allocation size = requested raw byte length
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate owned string payload storage on the elephc heap
-    emitter.instruction("mov x3, #1");                                          // heap kind 1 = owned elephc string payload
-    emitter.instruction("str x3, [x0, #-8]");                                   // stamp the allocation as a string while preserving allocator refcount
-
-    // -- copy exactly len bytes from raw memory to the owned string payload --
-    emitter.instruction("ldr x9, [sp, #0]");                                    // restore the raw source pointer after allocation
-    emitter.instruction("ldr x2, [sp, #8]");                                    // restore the original byte length for the result pair
-    emitter.instruction("mov x1, x0");                                          // x1 = owned PHP string payload pointer for the return convention
-    emitter.instruction("mov x10, x1");                                         // initialize destination cursor to the owned string payload
-    emitter.instruction("mov x11, x9");                                         // initialize source cursor to the raw memory address
-    emitter.instruction("mov x12, x2");                                         // initialize remaining byte counter from the requested length
-
-    emitter.label("__rt_ptr_read_string_copy_loop");
-    emitter.instruction("cbz x12, __rt_ptr_read_string_copy_done");             // finish once every requested byte has been copied
-    emitter.instruction("ldrb w13, [x11], #1");                                 // load the next raw source byte and advance the source cursor
-    emitter.instruction("strb w13, [x10], #1");                                 // store the byte into the owned string payload and advance the destination cursor
-    emitter.instruction("sub x12, x12, #1");                                    // decrement the number of bytes left to copy
-    emitter.instruction("b __rt_ptr_read_string_copy_loop");                    // continue copying until the exact requested length is satisfied
-
-    emitter.label("__rt_ptr_read_string_copy_done");
+    elephc_memoir::interop::c_strings::emit_copy_raw_bytes_aarch64(emitter);
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the helper spill frame
     emitter.instruction("ret");                                                 // return x1=owned string pointer, x2=byte length
@@ -104,30 +84,7 @@ fn emit_ptr_read_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // reserve aligned spill slots while keeping nested helper calls aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the raw source pointer across the heap allocation helper call
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the requested byte length across the heap allocation helper call
-    emitter.instruction("mov rax, rdx");                                        // allocation size = requested raw byte length
-    emitter.instruction("call __rt_heap_alloc");                                // allocate owned string payload storage on the elephc heap
-    let kind_instr = format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1));
-    emitter.instruction(&kind_instr);                                           // materialize the x86_64 owned-string heap kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocation as a string while preserving allocator refcount
-    emitter.instruction("mov r8, rax");                                         // initialize destination cursor to the owned string payload
-    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // restore the raw source pointer after allocation
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // restore the requested byte length as the loop counter
-
-    // -- copy exactly len bytes from raw memory to the owned string payload --
-    emitter.label("__rt_ptr_read_string_copy_loop_x86");
-    emitter.instruction("test rcx, rcx");                                       // finish once every requested byte has been copied
-    emitter.instruction("jz __rt_ptr_read_string_copy_done_x86");               // exit the byte-copy loop when the counter reaches zero
-    emitter.instruction("mov r10b, BYTE PTR [r9]");                             // load the next raw source byte
-    emitter.instruction("mov BYTE PTR [r8], r10b");                             // store the copied byte into the owned string payload
-    emitter.instruction("add r9, 1");                                           // advance the raw source cursor after copying one byte
-    emitter.instruction("add r8, 1");                                           // advance the owned destination cursor after copying one byte
-    emitter.instruction("sub rcx, 1");                                          // decrement the number of bytes left to copy
-    emitter.instruction("jmp __rt_ptr_read_string_copy_loop_x86");              // continue copying until the exact requested length is satisfied
-
-    emitter.label("__rt_ptr_read_string_copy_done_x86");
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the byte length for the x86_64 string result pair
-    emitter.instruction("sub r8, rdx");                                         // recover the owned string payload base after the post-increment copy loop
-    emitter.instruction("mov rax, r8");                                         // return the owned string payload pointer in the x86_64 string result register
+    elephc_memoir::interop::c_strings::emit_copy_raw_bytes_x86_64(emitter);
     emitter.instruction("add rsp, 16");                                         // release the helper spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return rax=owned string pointer, rdx=byte length

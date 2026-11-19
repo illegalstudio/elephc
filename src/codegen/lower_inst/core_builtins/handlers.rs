@@ -405,12 +405,7 @@ fn allocate_previous_handler_node(
     mask_symbol: Option<&str>,
     extra_symbols: &[&str],
 ) {
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        node_bytes,
-    );
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    elephc_memoir::handler_owners::emit_allocate_node(ctx.emitter, node_bytes);
     let node_reg = abi::nested_call_reg(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, node_reg, abi::int_result_reg(ctx.emitter));
     let mut fields = vec![stack_symbol, value_symbol, callable_symbol];

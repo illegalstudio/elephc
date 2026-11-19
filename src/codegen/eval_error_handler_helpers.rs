@@ -99,8 +99,7 @@ fn emit_set_error_handler_aarch64(
     emitter.instruction("str x1, [sp, #8]");                                    // save the nullable boxed callback value
     emitter.instruction("str x2, [sp, #16]");                                   // save the selected PHP error-level mask
     emitter.instruction("str x3, [sp, #24]");                                   // save writable previous-callback output storage
-    emitter.instruction(&format!("mov x0, #{ERROR_HANDLER_NODE_BYTES}"));       // allocate one native error-handler stack node
-    emitter.instruction("bl __rt_heap_alloc");                                  // create storage for the previous process-wide state
+    elephc_memoir::handler_owners::emit_allocate_node(emitter, ERROR_HANDLER_NODE_BYTES);
     emitter.instruction("str x0, [sp, #32]");                                   // preserve the node across symbol loads and calls
     elephc_memoir::handler_owners::emit_save_node(emitter, "x0", "x9", &ERROR_HANDLER_FIELDS, true);
     abi::emit_load_symbol_to_reg(emitter, "x0", "_php_error_handler_value", 0);
@@ -168,8 +167,7 @@ fn emit_set_error_handler_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the nullable boxed callback value
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the selected PHP error-level mask
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save writable previous-callback output storage
-    emitter.instruction(&format!("mov rax, {ERROR_HANDLER_NODE_BYTES}"));       // allocate one native error-handler stack node
-    emitter.instruction("call __rt_heap_alloc");                                // create storage for the previous process-wide state
+    elephc_memoir::handler_owners::emit_allocate_node(emitter, ERROR_HANDLER_NODE_BYTES);
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the node across symbol loads and calls
     elephc_memoir::handler_owners::emit_save_node(emitter, "rax", "r10", &ERROR_HANDLER_FIELDS, true);
     abi::emit_load_symbol_to_reg(emitter, "rax", "_php_error_handler_value", 0);

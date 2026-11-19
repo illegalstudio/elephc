@@ -61,8 +61,7 @@ fn emit_set_exception_handler_aarch64(
     emitter.instruction("str x0, [sp, #0]");                                    // save the active eval context pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the nullable boxed callback value
     emitter.instruction("str x2, [sp, #16]");                                   // save writable previous-callback output storage
-    emitter.instruction(&format!("mov x0, #{EXCEPTION_HANDLER_NODE_BYTES}"));   // allocate one native exception-handler stack node
-    emitter.instruction("bl __rt_heap_alloc");                                  // create storage for the previous process-wide state
+    elephc_memoir::handler_owners::emit_allocate_node(emitter, EXCEPTION_HANDLER_NODE_BYTES);
     emitter.instruction("str x0, [sp, #24]");                                   // preserve the node across symbol loads and calls
     let fields = [
         "_php_exception_handler_stack",
@@ -143,8 +142,7 @@ fn emit_set_exception_handler_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the active eval context pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the nullable boxed callback value
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save writable previous-callback output storage
-    emitter.instruction(&format!("mov rax, {EXCEPTION_HANDLER_NODE_BYTES}"));   // allocate one native exception-handler stack node
-    emitter.instruction("call __rt_heap_alloc");                                // create storage for the previous process-wide state
+    elephc_memoir::handler_owners::emit_allocate_node(emitter, EXCEPTION_HANDLER_NODE_BYTES);
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the node across symbol loads and calls
     let fields = [
         "_php_exception_handler_stack",

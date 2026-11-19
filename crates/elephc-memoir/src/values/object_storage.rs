@@ -21,6 +21,15 @@ pub fn emit_allocate_throwable(emitter: &mut impl Emitter) {
     emit_allocate_with_handle(emitter, THROWABLE_HEAP_KIND);
 }
 
+/// Allocates a compact Throwable through the x86-64 cold-path instruction form.
+pub fn emit_allocate_throwable_x86_64(emitter: &mut impl Emitter) {
+    emitter.emit_call_label("__rt_heap_alloc");
+    let kind = crate::layout::x86_64_heap_kind_word(THROWABLE_HEAP_KIND);
+    emitter.emit_load_int_immediate("r10", kind as i64);
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the Throwable kind before acquiring its handle
+    crate::object_handles::emit_acquire_object_handle(emitter);
+}
+
 /// Stamps the supplied heap kind before binding the allocation to a native object handle.
 fn emit_allocate_with_handle(emitter: &mut impl Emitter, heap_kind: u32) {
     crate::heap_alloc::emit_fresh_with_kind(emitter, HeapKind::new(heap_kind));
