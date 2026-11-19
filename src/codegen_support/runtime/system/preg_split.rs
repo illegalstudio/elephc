@@ -16,6 +16,7 @@
 //!   other limit below 2 returns the subject as one piece.
 
 use elephc_memoir::buffers::offset_pairs;
+use elephc_memoir::values::boxed_offset_row::{BoxedOffsetRow, emit_mixed_header};
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 const PREG_SPLIT_NO_EMPTY: i64 = 1;
@@ -277,7 +278,7 @@ fn emit_preg_split_alloc_result_arm64(
     emitter.instruction("mov x0, #8");                                          // initial Mixed-result capacity
     emitter.instruction("mov x1, #8");                                          // Mixed result slots store boxed pointers
     emitter.instruction("bl __rt_array_new");                                   // allocate Mixed result array
-    emit_stamp_indexed_array_mixed_arm64(emitter, "x0");
+    emit_mixed_header(emitter, "x0");
     emitter.instruction(&format!("str x0, [sp, #{}]", array_ptr_off));          // save result array pointer
     emitter.label(&done);
 }
@@ -379,41 +380,10 @@ fn emit_build_offset_capture_row_arm64(
     pair_ptr_off: usize,
     mixed_ptr_off: usize,
 ) {
-    emitter.instruction("mov x0, #2");                                          // capacity for [string, offset]
-    emitter.instruction("mov x1, #8");                                          // row stores boxed Mixed pointers
-    emitter.instruction("bl __rt_array_new");                                   // allocate offset-capture row
-    emit_stamp_indexed_array_mixed_arm64(emitter, "x0");
-    emitter.instruction(&format!("str x0, [sp, #{}]", pair_ptr_off));           // save row array pointer
+    let row = BoxedOffsetRow { array: pair_ptr_off, value: mixed_ptr_off, offset: piece_offset_off };
+    row.emit_allocate(emitter);
     emit_box_saved_piece_string_arm64(emitter, piece_ptr_off, piece_len_off, mixed_ptr_off);
-    emitter.instruction(&format!("ldr x9, [sp, #{}]", pair_ptr_off));           // reload row array pointer for string cell store
-    emitter.instruction(&format!("ldr x10, [sp, #{}]", mixed_ptr_off));         // reload boxed string cell
-    emitter.instruction("str x10, [x9, #24]");                                  // store row[0] = boxed string
-    emitter.instruction("mov x11, #1");                                         // row length after storing the string cell
-    emitter.instruction("str x11, [x9]");                                       // publish row length 1
-    emitter.instruction("mov x0, #0");                                          // runtime value tag 0 = integer
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", piece_offset_off));       // load absolute byte offset for boxing
-    emitter.instruction("mov x2, xzr");                                         // integer payload has no high word
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the integer offset
-    emitter.instruction(&format!("ldr x9, [sp, #{}]", pair_ptr_off));           // reload row array pointer for offset cell store
-    emitter.instruction("str x0, [x9, #32]");                                   // store row[1] = boxed offset
-    emitter.instruction("mov x11, #2");                                         // row length after storing both cells
-    emitter.instruction("str x11, [x9]");                                       // publish row length 2
-    emitter.instruction("mov x0, #4");                                          // runtime value tag 4 = indexed array
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", pair_ptr_off));           // load row array pointer for boxing
-    emitter.instruction("mov x2, xzr");                                         // indexed-array payload has no high word
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the row array as Mixed
-    emitter.instruction(&format!("str x0, [sp, #{}]", mixed_ptr_off));          // save boxed row Mixed pointer
-}
-
-/// Emits ARM64 code that stamps an indexed array as boxed-Mixed slots.
-fn emit_stamp_indexed_array_mixed_arm64(emitter: &mut Emitter, array_reg: &str) {
-    emitter.instruction(&format!("ldr x10, [{array_reg}, #-8]"));               // load indexed-array packed kind word
-    emitter.instruction("mov x11, #0x80ff");                                    // preserve indexed-array kind and persistent COW flag
-    emitter.instruction("and x10, x10, x11");                                   // clear stale value_type bits
-    emitter.instruction("mov x11, #7");                                         // runtime value_type 7 = boxed Mixed
-    emitter.instruction("lsl x11, x11, #8");                                    // move Mixed tag into packed kind word
-    emitter.instruction("orr x10, x10, x11");                                   // combine stable metadata with Mixed tag
-    emitter.instruction(&format!("str x10, [{array_reg}, #-8]"));               // store boxed-Mixed indexed-array metadata
+    row.emit_box(emitter);
 }
 
 /// Emits the ARM64 capture-loop block for delimiter-capture split flags.
@@ -691,7 +661,7 @@ fn emit_preg_split_alloc_result_x86_64(
     emitter.instruction("mov edi, 8");                                          // initial Mixed-result capacity
     emitter.instruction("mov esi, 8");                                          // Mixed result slots store boxed pointers
     emitter.instruction("call __rt_array_new");                                 // allocate Mixed result array
-    emit_stamp_indexed_array_mixed_x86_64(emitter, "rax");
+    emit_mixed_header(emitter, "rax");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", array_ptr_off)); // save result array pointer
     emitter.label(&done);
 }
@@ -793,37 +763,10 @@ fn emit_build_offset_capture_row_x86_64(
     pair_ptr_off: usize,
     mixed_ptr_off: usize,
 ) {
-    emitter.instruction("mov edi, 2");                                          // capacity for [string, offset]
-    emitter.instruction("mov esi, 8");                                          // row stores boxed Mixed pointers
-    emitter.instruction("call __rt_array_new");                                 // allocate offset-capture row
-    emit_stamp_indexed_array_mixed_x86_64(emitter, "rax");
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pair_ptr_off)); // save row array pointer
+    let row = BoxedOffsetRow { array: pair_ptr_off, value: mixed_ptr_off, offset: piece_offset_off };
+    row.emit_allocate(emitter);
     emit_box_saved_piece_string_x86_64(emitter, piece_ptr_off, piece_len_off, mixed_ptr_off);
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", pair_ptr_off)); // reload row array pointer for string cell store
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", mixed_ptr_off)); // reload boxed string cell
-    emitter.instruction("mov QWORD PTR [r9 + 24], r10");                        // store row[0] = boxed string
-    emitter.instruction("mov QWORD PTR [r9], 1");                               // publish row length 1
-    emitter.instruction("xor eax, eax");                                        // runtime value tag 0 = integer
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", piece_offset_off)); // load absolute byte offset for boxing
-    emitter.instruction("xor esi, esi");                                        // integer payload has no high word
-    emitter.instruction("call __rt_mixed_from_value");                          // box the integer offset
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", pair_ptr_off)); // reload row array pointer for offset cell store
-    emitter.instruction("mov QWORD PTR [r9 + 32], rax");                        // store row[1] = boxed offset
-    emitter.instruction("mov QWORD PTR [r9], 2");                               // publish row length 2
-    emitter.instruction("mov rax, 4");                                          // runtime value tag 4 = indexed array
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", pair_ptr_off)); // load row array pointer for boxing
-    emitter.instruction("xor esi, esi");                                        // indexed-array payload has no high word
-    emitter.instruction("call __rt_mixed_from_value");                          // box the row array as Mixed
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); // save boxed row Mixed pointer
-}
-
-/// Emits x86_64 code that stamps an indexed array as boxed-Mixed slots.
-fn emit_stamp_indexed_array_mixed_x86_64(emitter: &mut Emitter, array_reg: &str) {
-    emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg));    // load indexed-array packed kind word
-    emitter.instruction(&format!("mov r8, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0x80ff))); // preserve heap magic, indexed kind, and COW flag
-    emitter.instruction("and r10, r8");                                         // clear stale value_type bits
-    emitter.instruction("or r10, 0x700");                                       // stamp runtime value_type 7 = boxed Mixed
-    emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg));    // store boxed-Mixed indexed-array metadata
+    row.emit_box(emitter);
 }
 
 /// Emits the x86_64 capture-loop block for delimiter-capture split flags.
