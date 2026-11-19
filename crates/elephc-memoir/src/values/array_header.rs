@@ -23,14 +23,38 @@ pub fn emit_array_value_type_stamp(emitter: &mut impl Emitter, array_reg: &str, 
         }
         Arch::X86_64 => {
             abi::emit_push_reg(emitter, "r12");                                 // preserve the x86_64 nested-call scratch register before reusing it as a temporary array-stamp helper
-            emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg)); // load the packed array kind word from the heap header
-            emitter.instruction("mov r12, 0xffffffff000080ff");                 // materialize the x86_64 heap-kind preservation mask without clobbering the array base register
-            emitter.instruction("and r10, r12");                                // preserve the x86_64 heap magic marker plus the indexed-array kind and persistent COW flag
-            emitter.instruction(&format!("mov r12, {}", value_type_tag));       // materialize the runtime array value_type tag in a scratch register that does not alias the array base register
-            emitter.instruction("shl r12, 8");                                  // move the value_type tag into the packed kind-word byte lane
-            emitter.instruction("or r10, r12");                                 // combine the preserved heap kind with the stamped array value_type tag
-            emitter.instruction(&format!("mov QWORD PTR [{} - 8], r10", array_reg)); // persist the packed array kind word in the heap header
+            emit_value_type_stamp_x86_64(emitter, array_reg, value_type_tag, "r12");
             abi::emit_pop_reg(emitter, "r12");                                  // restore the x86_64 nested-call scratch register after the array value-type stamp is complete
+        }
+    }
+}
+
+/// Stamps the packed header using the caller's available metadata scratch register.
+fn emit_value_type_stamp_x86_64(
+    emitter: &mut impl Emitter, array_reg: &str, value_type_tag: ValueTag, scratch: &str,
+) {
+    emitter.instruction(&format!("mov r10, QWORD PTR [{array_reg} - 8]"));      // load the packed header
+    emitter.instruction(&format!("mov {scratch}, 0xffffffff000080ff"));         // preserve the magic, kind and COW flag
+    emitter.instruction(&format!("and r10, {scratch}"));                        // clear the stale tag lane
+    emitter.instruction(&format!("mov {scratch}, {value_type_tag}"));           // stage the new value tag
+    emitter.instruction(&format!("shl {scratch}, 8"));                          // place the tag in the correct byte lane
+    emitter.instruction(&format!("or r10, {scratch}"));                         // combine the tag and existing metadata
+    emitter.instruction(&format!("mov QWORD PTR [{array_reg} - 8], r10"));      // publish the new packed header
+}
+
+/// Allocates an owned array of Mixed slots with its count already in the first C argument register.
+pub fn emit_allocate_mixed_slots(emitter: &mut impl Emitter) {
+    let mixed_tag = ValueTag::new(7);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("mov x1, #8");                                  // allocate one pointer word per boxed argument
+            abi::emit_call_label(emitter, "__rt_array_new");
+            emit_array_value_type_stamp(emitter, "x0", mixed_tag);
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rsi, 8");                                  // allocate one pointer word per boxed argument
+            abi::emit_call_label(emitter, "__rt_array_new");
+            emit_value_type_stamp_x86_64(emitter, "rax", mixed_tag, "r11");
         }
     }
 }

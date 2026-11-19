@@ -9,7 +9,7 @@
 //! - Destructor exceptions join the active chain and never escape this cleanup call.
 //! - The integer result reports whether this cleanup caught a new throw.
 
-use crate::{abi, Emitter, FrameOffset, TargetAbi};
+use crate::{abi, Arch, Emitter, FrameOffset, TargetAbi};
 
 const FRAME: usize = 64;
 const ENTRY: usize = 8;
@@ -60,4 +60,22 @@ pub fn emit_restore_exception(emitter: &mut impl TargetAbi, pending: FrameOffset
     let result = emitter.int_result_reg();
     emitter.load_at_offset(result, pending.bytes());
     emitter.emit_store_reg_to_symbol(result, "_exc_value", 0);
+}
+
+/// Takes and clears the intercepted exception before conditionally releasing its owner.
+pub fn emit_discard_caught_exception(emitter: &mut impl Emitter, released: &str) {
+    let result = emitter.int_result_reg();
+    emitter.emit_load_symbol_to_reg(result, "_exc_value", 0);
+    emitter.emit_store_zero_to_symbol("_exc_value", 0);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbz x0, {released}"));                // skip release when there is no intercepted owner
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rax, rax");                               // check for an intercepted owner
+            emitter.instruction(&format!("jz {released}"));                     // skip release when the pending slot was empty
+        }
+    }
+    emitter.emit_call_label("__rt_decref_any");
+    emitter.label(released);
 }

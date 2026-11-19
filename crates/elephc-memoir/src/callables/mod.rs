@@ -13,3 +13,4 @@ pub use descriptor_release::emit_callable_descriptor_release;
 pub mod argument_owners;
 
 pub mod storage;
+pub mod argument_storage;
