@@ -636,6 +636,7 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
         ExprKind::Cast { target: _, expr } => audit_expr(expr, errors),
         ExprKind::Closure {
             params,
+            param_attributes: _,
             variadic: _,
             variadic_by_ref: _,
             variadic_type,

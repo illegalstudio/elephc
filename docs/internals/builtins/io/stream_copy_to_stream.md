@@ -37,12 +37,12 @@ description: "Compiler internals for stream_copy_to_stream(): lowering path, typ
 ## Signature summary
 
 ```php
-function stream_copy_to_stream(resource $from, resource $to, ?int $length = null, int $offset = -1): mixed
+function stream_copy_to_stream(resource $from, resource $to, ?int $length = null, int $offset = -1, mixed $context = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–4 arguments (2 optional).
+- **Arity**: takes 2–5 arguments (3 optional).
 
 ## Eval interpreter (magician)
 

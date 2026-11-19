@@ -5007,3 +5007,47 @@ catch (ReflectionException $error) { echo $error->getMessage(); }
 Cannot set read-only property ReflectionRuntimeMirrorSubclass::$class"
     );
 }
+
+/// PHP 8.6 adds the namespace helpers to `ReflectionAttribute`.
+///
+/// They describe the attribute CLASS name for a global attribute, a namespaced
+/// attribute, and an aliased import, matching the class-level reflector's split.
+#[test]
+fn test_reflection_attribute_namespace_helpers_php86() {
+    let out = compile_and_run(r#"<?php
+namespace {
+    #[\Attribute] class GlobalMarker {}
+
+    foreach (['global', 'namespaced', 'aliased'] as $kind) {
+        if ($kind === 'global') {
+            $attribute = (new \ReflectionClass(\Attrs\GlobalTarget::class))->getAttributes()[0];
+        } elseif ($kind === 'namespaced') {
+            $attribute = (new \ReflectionClass(\Attrs\NamespacedTarget::class))->getAttributes()[0];
+        } else {
+            $attribute = (new \ReflectionClass(\Attrs\AliasedTarget::class))->getAttributes()[0];
+        }
+        echo $attribute->getName(), '|', $attribute->getShortName(), '|',
+            $attribute->getNamespaceName(), '|', $attribute->inNamespace() ? '1' : '0', "\n";
+    }
+}
+namespace Attrs {
+    #[\Attribute] class NamespacedAttribute {}
+    use Attrs\NamespacedAttribute as AliasedAttribute;
+
+    #[\GlobalMarker]
+    class GlobalTarget {}
+
+    #[NamespacedAttribute]
+    class NamespacedTarget {}
+
+    #[AliasedAttribute]
+    class AliasedTarget {}
+}
+"#);
+    assert_eq!(
+        out,
+        "GlobalMarker|GlobalMarker||0\n\
+Attrs\\NamespacedAttribute|NamespacedAttribute|Attrs|1\n\
+Attrs\\NamespacedAttribute|NamespacedAttribute|Attrs|1\n"
+    );
+}

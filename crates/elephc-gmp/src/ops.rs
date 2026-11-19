@@ -61,9 +61,11 @@ pub const UN_TESTBIT: i32 = 17;
 pub const UN_SCAN0: i32 = 20;
 pub const UN_SCAN1: i32 = 21;
 pub const UN_BINOMIAL: i32 = 22;
+pub const UN_PREVPRIME: i32 = 23;
 
 /* Ternary operation codes. */
 pub const TER_POWM: i32 = 0;
+pub const TER_POWM_SEC: i32 = 1;
 
 /// Parses a canonical decimal operand or reports an internal protocol error.
 fn operand(value: &str) -> Result<Mpz, String> {
@@ -196,6 +198,14 @@ pub fn unary(op: i32, value: &str, argument: i64) -> String {
         UN_ABS => unsafe { __gmpz_abs(result.as_mut_ptr(), value.as_ptr()) },
         UN_COM => unsafe { __gmpz_com(result.as_mut_ptr(), value.as_ptr()) },
         UN_NEXTPRIME => unsafe { __gmpz_nextprime(result.as_mut_ptr(), value.as_ptr()) },
+        UN_PREVPRIME => {
+            let status = unsafe { __gmpz_prevprime(result.as_mut_ptr(), value.as_ptr()) };
+            return ok(format!(
+                "{}|{}",
+                result.to_decimal(),
+                if status == 2 { 1 } else { 0 }
+            ));
+        }
         UN_SQRT => {
             if value.sign() < 0 {
                 return value_error("must be greater than or equal to 0");
@@ -299,6 +309,41 @@ pub fn unary(op: i32, value: &str, argument: i64) -> String {
             unsafe { __gmpz_bin_ui(result.as_mut_ptr(), value.as_ptr(), argument as u64) }
         }
         _ => return internal_error(format!("unknown GMP unary operation {op}")),
+    }
+    ok(result.to_decimal())
+}
+
+/// Evaluates side-channel quiet modular exponentiation.
+pub fn powm_sec(base: &str, exponent: &str, modulus: &str) -> String {
+    let base = match operand(base) {
+        Ok(value) => value,
+        Err(error) => return internal_error(error),
+    };
+    let exponent = match operand(exponent) {
+        Ok(value) => value,
+        Err(error) => return internal_error(error),
+    };
+    let modulus = match operand(modulus) {
+        Ok(value) => value,
+        Err(error) => return internal_error(error),
+    };
+    if exponent.sign() <= 0 {
+        return value_error("must be greater than 0");
+    }
+    if modulus.is_zero() {
+        return division_by_zero("Modulo by zero");
+    }
+    if unsafe { __gmpz_tstbit(modulus.as_ptr(), 0) } == 0 {
+        return value_error("must be odd");
+    }
+    let mut result = Mpz::new();
+    unsafe {
+        __gmpz_powm_sec(
+            result.as_mut_ptr(),
+            base.as_ptr(),
+            exponent.as_ptr(),
+            modulus.as_ptr(),
+        );
     }
     ok(result.to_decimal())
 }

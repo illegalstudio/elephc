@@ -443,9 +443,9 @@ return function_exists("stream_get_filters");"#,
 #[test]
 fn execute_program_dispatches_stream_predicate_builtins() {
     let program = parse_fragment(
-        br#"echo stream_is_local("php://memory") ? "local" : "bad"; echo ":";
+        br#"echo stream_is_local("php://memory", null) ? "local" : "bad"; echo ":";
 echo stream_supports_lock($handle) ? "lock" : "bad"; echo ":";
-echo call_user_func("stream_is_local", "file://tmp") ? "call" : "bad"; echo ":";
+echo call_user_func("stream_is_local", "file://tmp", null) ? "call" : "bad"; echo ":";
 echo call_user_func_array("stream_supports_lock", ["stream" => $handle]) ? "spread" : "bad"; echo ":";
 echo function_exists("stream_is_local");
 return function_exists("stream_supports_lock");"#,

@@ -31,6 +31,12 @@ struct ReflectionAttributeLayout {
     property_count: usize,
     name_lo: usize,
     name_hi: usize,
+    short_name_lo: usize,
+    short_name_hi: usize,
+    namespace_name_lo: usize,
+    namespace_name_hi: usize,
+    in_namespace_lo: usize,
+    in_namespace_hi: usize,
     public_name_lo: usize,
     public_name_hi: usize,
     args_lo: usize,
@@ -171,6 +177,7 @@ pub(in crate::codegen::lower_inst) fn emit_reflection_attribute_array(
         emit_reflection_attribute_object(ctx, &layout);
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_set_name_property(ctx, attr_name, &layout);
+        emit_set_name_parts(ctx, attr_name, &layout);
         emit_set_args_property(ctx, attr_arg_list, &layout)?;
         emit_set_factory_property(ctx, factory_id, &layout);
         emit_set_target_property(ctx, target, &layout);
@@ -193,6 +200,9 @@ fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAt
         .get("ReflectionAttribute")
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let name_lo = reflection_property_offset(info, "__name")?;
+    let short_name_lo = reflection_property_offset(info, "__short_name")?;
+    let namespace_name_lo = reflection_property_offset(info, "__namespace_name")?;
+    let in_namespace_lo = reflection_property_offset(info, "__in_namespace")?;
     let public_name_lo = reflection_property_offset(info, "name")?;
     let args_lo = reflection_property_offset(info, "__args")?;
     let factory_lo = reflection_property_offset(info, "__factory")?;
@@ -203,6 +213,12 @@ fn reflection_attribute_layout(ctx: &FunctionContext<'_>) -> Result<ReflectionAt
         property_count: info.properties.len(),
         name_lo,
         name_hi: name_lo + 8,
+        short_name_lo,
+        short_name_hi: short_name_lo + 8,
+        namespace_name_lo,
+        namespace_name_hi: namespace_name_lo + 8,
+        in_namespace_lo,
+        in_namespace_hi: in_namespace_lo + 8,
         public_name_lo,
         public_name_hi: public_name_lo + 8,
         args_lo,
@@ -301,6 +317,68 @@ fn emit_set_name_property(
                 abi::emit_store_to_address(ctx.emitter, "rax", object_reg, low_offset);
                 abi::emit_store_to_address(ctx.emitter, "rdx", object_reg, high_offset);
             }
+        }
+    }
+}
+
+/// Stores the namespace-aware name parts for a statically materialized attribute.
+///
+/// PHP 8.6 adds `ReflectionAttribute::getShortName()`, `getNamespaceName()`, and
+/// `inNamespace()`; they describe the attribute CLASS name, so the split mirrors the
+/// class-level reflector's `\` boundary and ignores a leading separator.
+fn emit_set_name_parts(
+    ctx: &mut FunctionContext<'_>,
+    attr_name: &str,
+    layout: &ReflectionAttributeLayout,
+) {
+    let trimmed = attr_name.trim_start_matches('\\');
+    let (namespace_name, short_name) = match trimmed.rfind('\\') {
+        Some(separator) => (&trimmed[..separator], &trimmed[separator + 1..]),
+        None => ("", trimmed),
+    };
+    emit_attribute_literal_string(
+        ctx,
+        short_name,
+        layout.short_name_lo,
+        layout.short_name_hi,
+    );
+    emit_attribute_literal_string(
+        ctx,
+        namespace_name,
+        layout.namespace_name_lo,
+        layout.namespace_name_hi,
+    );
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let flag_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, flag_reg, if namespace_name.is_empty() { 0 } else { 1 });
+    abi::emit_store_to_address(ctx.emitter, flag_reg, object_reg, layout.in_namespace_lo);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, layout.in_namespace_hi);
+}
+
+/// Stores one immutable literal string in a property of the stacked attribute object.
+fn emit_attribute_literal_string(
+    ctx: &mut FunctionContext<'_>,
+    value: &str,
+    low_offset: usize,
+    high_offset: usize,
+) {
+    let (label, len) = ctx.data.add_string(value.as_bytes());
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+            abi::emit_store_to_address(ctx.emitter, "x1", object_reg, low_offset);
+            abi::emit_store_to_address(ctx.emitter, "x2", object_reg, high_offset);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rax", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, low_offset);
+            abi::emit_store_to_address(ctx.emitter, "rdx", object_reg, high_offset);
         }
     }
 }

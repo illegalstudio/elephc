@@ -471,7 +471,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`timezone_transitions_get()`](./builtins/date/timezone_transitions_get.md) | `(mixed $object, int $timestampBegin = PHP_INT_MIN, int $timestampEnd = PHP_INT_MAX): mixed` | `mixed` | ✓ | ✓ |
 | [`timezone_version_get()`](./builtins/date/timezone_version_get.md) | `(): string` | `string` | ✓ | ✓ |
 
-Classes: `DateError`, `DateException`, `DateInterval`, `DateInvalidOperationException`, `DateInvalidTimeZoneException`, `DateMalformedIntervalStringException`, `DateMalformedPeriodStringException`, `DateMalformedStringException`, `DateObjectError`, `DatePeriod`, `DateRangeError`, `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`.
+Classes: `DateError`, `DateException`, `DateInterval`, `DateInvalidOperationException`, `DateInvalidTimeZoneException`, `DateMalformedIntervalStringException`, `DateMalformedPeriodStringException`, `DateMalformedStringException`, `DateObjectError`, `DatePeriod`, `DateRangeError`, `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `Time\Duration`, `Time\TimeException`.
 
 Constants: `DATE_ATOM`, `DATE_COOKIE`, `DATE_ISO8601`, `DATE_ISO8601_EXPANDED`, `DATE_RFC1036`, `DATE_RFC1123`, `DATE_RFC2822`, `DATE_RFC3339`, `DATE_RFC3339_EXTENDED`, `DATE_RFC7231`, `DATE_RFC822`, `DATE_RFC850`, `DATE_RSS`, `DATE_W3C`, `SUNFUNCS_RET_DOUBLE`, `SUNFUNCS_RET_STRING`, `SUNFUNCS_RET_TIMESTAMP`.
 

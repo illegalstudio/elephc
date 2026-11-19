@@ -37,6 +37,7 @@ AREAS: list[str] = [
     "Image",
     "XML",
     "Tidy",
+    "URI",
 ]
 
 
@@ -51,6 +52,7 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     "callables": ("Misc", "Callables"),
     "spl": ("SPL", "SPL"),
     "pointers": ("Pointer", "Pointer"),
+    "uri": ("URI", "URI"),
     # `Area::Curl` covers BOTH halves of ext/curl, and they render differently:
     #
     #  - the forty-three `internal: true` `__elephc_curl_*` entry points, which the

@@ -57,10 +57,16 @@ fn emit_close_loaded_stream_fd(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("jge {}", user_wrapper_label));    // dispatch synthetic handles without indexing fd tables
         }
     }
-    if ctx.module.web_application {
-        ctx.emitter.instruction(if ctx.emitter.target.arch == Arch::AArch64 { "cmp x0, #256" } else { "cmp rax, 256" }); // metadata tables cover only the bounded descriptor range
-        ctx.emitter.instruction(&format!("{} {native_close_label}", if ctx.emitter.target.arch == Arch::AArch64 { "b.ge" } else { "jge" })); // ordinary higher descriptors still close without indexing side tables
-    }
+    // The per-fd filter/TLS metadata tables cover 0..1023 (`FD_SETSIZE`). Descriptors above
+    // that range still close natively, but their side-table teardown is skipped instead of
+    // indexing past the table.
+    let fd_limit_cmp = if ctx.emitter.target.arch == Arch::AArch64 {
+        format!("cmp x0, #{}", crate::codegen_support::runtime::FD_TABLE_SLOTS)
+    } else {
+        format!("cmp rax, {}", crate::codegen_support::runtime::FD_TABLE_SLOTS)
+    };
+    ctx.emitter.instruction(&fd_limit_cmp); // metadata tables cover only the bounded descriptor range
+    ctx.emitter.instruction(&format!("{} {native_close_label}", if ctx.emitter.target.arch == Arch::AArch64 { "b.ge" } else { "jge" })); // higher descriptors close without indexing side tables
     emit_zlib_flush_on_close_for_current_fd(ctx);
     emit_bz2_flush_on_close_for_current_fd(ctx);
     emit_iconv_flush_on_close_for_current_fd(ctx);

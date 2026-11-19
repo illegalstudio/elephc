@@ -103,6 +103,8 @@ pub fn emit_stash_connect_host(emitter: &mut Emitter) {
     emitter.instruction("mov x2, x11");                                         // x2 = host length (trimmed of any :port)
 
     // -- persist the host bytes (heap-owned) and store (ptr, len) in the table --
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the descriptor for the side-table bounds check
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x9", "__rt_sch_done");
     abi::emit_call_label(emitter, "__rt_str_persist");                          // x1 = persisted host ptr, x2 = len (unchanged)
     abi::emit_symbol_address(emitter, "x10", "_stream_connect_host");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the fd for the table index
@@ -179,6 +181,8 @@ fn emit_stash_connect_host_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_sch_persist_x86");
 
     // -- persist the host bytes; __rt_str_persist takes rax=ptr, rdx=len --
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the descriptor for the side-table bounds check
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "r9", "__rt_sch_done_x86");
     emitter.instruction("mov rax, rsi");                                        // str_persist source pointer = host pointer
     emitter.instruction("mov rdx, r11");                                        // str_persist length = trimmed host length
     abi::emit_call_label(emitter, "__rt_str_persist");                          // rax = persisted host ptr, rdx = len (unchanged)

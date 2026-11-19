@@ -128,6 +128,11 @@ impl Mpz {
         unsafe { __gmpz_get_si(&self.raw) as i64 }
     }
 
+    /// Reports whether the value fits into an unsigned machine word, matching `mpz_fits_ulong_p`.
+    pub fn fits_ulong(&self) -> bool {
+        unsafe { __gmpz_fits_ulong_p(self.as_ptr()) != 0 }
+    }
+
     /// Returns the unsigned machine word, matching php-src's `mpz_get_ui`.
     pub fn to_u64(&self) -> u64 {
         unsafe { __gmpz_get_ui(&self.raw) as u64 }

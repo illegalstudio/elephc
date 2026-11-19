@@ -174,9 +174,11 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
 
     emitter.label("__rt_fpassthru_done");
     emitter.instruction(&format!("ldr x9, [sp, #{}]", fd_off));                 // reload fd so feof() observes that passthru reached EOF
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x9", "__rt_fpassthru_eof_done");
     abi::emit_symbol_address(emitter, "x10", "_eof_flags");
     emitter.instruction("mov w11, #1");                                         // eof marker value for fpassthru completion
     emitter.instruction("strb w11, [x10, x9]");                                 // set _eof_flags[fd] after consuming the stream
+    emitter.label("__rt_fpassthru_eof_done");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", total_off));              // total bytes copied
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_off));         // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate frame
@@ -184,9 +186,11 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
 
     emitter.label("__rt_fpassthru_read_error");
     emitter.instruction(&format!("ldr x9, [sp, #{}]", fd_off));                 // reload fd so feof() observes the exhausted error state
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x9", "__rt_fpassthru_error_eof_done");
     abi::emit_symbol_address(emitter, "x10", "_eof_flags");
     emitter.instruction("mov w11, #1");                                         // eof marker value after fpassthru read failure
     emitter.instruction("strb w11, [x10, x9]");                                 // set _eof_flags[fd] after a failed read
+    emitter.label("__rt_fpassthru_error_eof_done");
     emitter.instruction("mov x0, #-1");                                         // read failure sentinel, matching PHP's -1 byte count
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_off));         // restore frame pointer and return address (read-error path)
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate frame (read-error path)
@@ -275,8 +279,10 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction("add x0, sp, #0");                                      // unlink path argument (the now-resolved template)
     emitter.bl_c("unlink");                                                     // libc unlink — file auto-deletes when fd closes
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload fd as the return value
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x0", "__rt_tmpfile_eof_done");
     abi::emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("strb wzr, [x9, x0]");                                  // clear stale EOF state for the temporary descriptor
+    emitter.label("__rt_tmpfile_eof_done");
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", tmpl_save));        // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", tmpl_frame));               // deallocate frame
     emitter.instruction("ret");                                                 // return fd
@@ -381,8 +387,10 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fpassthru_done_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd so feof() observes that passthru reached EOF
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "r10", "__rt_fpassthru_eof_done_x86");
     abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table for fpassthru completion
     emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // set _eof_flags[fd] after consuming the stream
+    emitter.label("__rt_fpassthru_eof_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return total
     emitter.instruction(&format!("add rsp, {}", buf_size + 16));                // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
@@ -390,8 +398,10 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fpassthru_read_error_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd so feof() observes the exhausted error state
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "r10", "__rt_fpassthru_error_eof_done_x86");
     abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table after fpassthru read failure
     emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // set _eof_flags[fd] after a failed read
+    emitter.label("__rt_fpassthru_error_eof_done_x86");
     emitter.instruction("mov rax, -1");                                         // read failure sentinel, matching PHP's -1 byte count
     emitter.instruction(&format!("add rsp, {}", buf_size + 16));                // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer

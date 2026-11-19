@@ -62,6 +62,8 @@ pub mod gmp_perfect_square;
 pub mod gmp_popcount;
 pub mod gmp_pow;
 pub mod gmp_powm;
+pub mod gmp_powm_sec;
+pub mod gmp_prevprime;
 pub mod gmp_prob_prime;
 pub mod gmp_random_bits;
 pub mod gmp_random_range;
@@ -129,6 +131,9 @@ pub(crate) const HELPERS: &[&str] = &[
     "__elephc_gmp_minmax_array",
     "__elephc_gmp_floatval_cast",
     "__elephc_gmp_powm",
+    "__elephc_gmp_powm_sec",
+    "__elephc_gmp_prevprime",
+    "__elephc_gmp_prevprime_no_flag",
     "__elephc_gmp_prob_prime",
     "__elephc_gmp_random_bits",
     "__elephc_gmp_random_range",
@@ -269,6 +274,83 @@ pub(crate) const fn string_semantics() -> BuiltinSemantics {
 /// Semantics for a void result.
 pub(crate) const fn void_semantics() -> BuiltinSemantics {
     semantics_for(void_result, BuiltinResultOwnership::NonHeap)
+}
+
+/// Semantics for `gmp_prevprime()`, whose write-only output parameter is stored back.
+pub(crate) const fn prevprime_semantics() -> BuiltinSemantics {
+    BuiltinSemantics {
+        validation: BuiltinValidation::Shared(accept_any_arguments),
+        result_type: BuiltinResultType::Shared(object_result),
+        effects: BuiltinEffects::Static(Effects::all()),
+        result_ownership: BuiltinResultOwnership::Fresh,
+        requirements: BuiltinRequirements::Static(GMP_REQUIREMENTS),
+        target_strategy: BuiltinTargetStrategy::EirGraph,
+        target_support: BuiltinTargetSupport::All,
+        runtime_functions: BuiltinRuntimeFunctions::None,
+        argument_lowering: BuiltinArgumentLowering::PreserveUncoerced,
+        callable: BuiltinCallablePolicy::Dynamic(
+            crate::builtins::semantics::callable_accepts_any_source,
+        ),
+        lowering: BuiltinLowering::Eir(lower_prevprime),
+    }
+}
+
+/// Lowers `gmp_prevprime()` and writes its optional `$definitely_prime` flag back.
+fn lower_prevprime(
+    ctx: &mut dyn BuiltinLoweringContext,
+    call: &NormalizedBuiltinCall<'_>,
+) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+    let strict = ctx.emit_value(
+        Op::ConstBool,
+        Vec::new(),
+        Some(Immediate::Bool(crate::source::current_strict_types())),
+        PhpType::Bool,
+        Op::ConstBool.default_effects(),
+        Some(call.span),
+    );
+    let num = call.operand(0)?;
+    let representation = ctx.value_php_type(num).codegen_repr();
+    let (boxed_num, box_owner) = if matches!(representation, PhpType::Mixed | PhpType::Union(_)) {
+        (num, None)
+    } else {
+        let boxed = ctx.emit_value(
+            Op::MixedBox,
+            vec![num],
+            None,
+            PhpType::Mixed,
+            Op::MixedBox.default_effects(),
+            Some(call.span),
+        );
+        (boxed.value, Some(boxed.value))
+    };
+    let prime = if let Some(&flag_target) = call.operands.get(1) {
+        // The helper writes the flag itself, after validating the operand: a ValueError
+        // must leave the caller's variable untouched, which a separate store could not
+        // guarantee when the helper throws.
+        ctx.emit_user_call(
+            "__elephc_gmp_prevprime",
+            vec![strict.value, boxed_num, flag_target],
+            PhpType::Object("GMP".to_string()),
+            Some(call.span),
+        )
+    } else {
+        ctx.emit_user_call(
+            "__elephc_gmp_prevprime_no_flag",
+            vec![strict.value, boxed_num],
+            PhpType::Object("GMP".to_string()),
+            Some(call.span),
+        )
+    };
+    if let Some(owner) = box_owner {
+        ctx.emit_void(
+            Op::Release,
+            vec![owner],
+            None,
+            Op::Release.default_effects(),
+            Some(call.span),
+        );
+    }
+    Ok(prime)
 }
 
 /// Lowers one public GMP builtin by calling its prelude helper with boxed raw operands.

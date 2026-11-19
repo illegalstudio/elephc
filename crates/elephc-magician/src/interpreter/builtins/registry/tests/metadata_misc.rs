@@ -97,7 +97,7 @@ fn declared_builtin_registry_derives_misc_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("stream_is_local"),
-            Some(["stream"].as_slice())
+            Some(["stream", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("stream_supports_lock"),

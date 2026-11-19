@@ -22,7 +22,7 @@ pub(crate) use serialization::SerializableReturnAbi;
 pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
 pub(crate) use user::emit_runtime_data_user;
-pub(crate) use user::{is_user_filter_contract_method, is_user_wrapper_contract_method};
+pub(crate) use user::{is_uri_opaque_handle, is_user_filter_contract_method, is_user_wrapper_contract_method};
 pub(crate) use user::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 pub(crate) use user::USER_WRAPPER_VTABLE_CAST_RESULT_OFFSET;
 

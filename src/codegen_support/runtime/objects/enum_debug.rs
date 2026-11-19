@@ -280,3 +280,137 @@ fn emit_var_dump_emit_enum_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
 }
+
+/// `__rt_var_dump_open_enum_n`: write `<indent>enum(Class::Case) (N) {\n`.
+///
+/// Input: AArch64 x0 / x86_64 rdi = enum instance pointer, x1 / rsi = the number of
+/// entries returned by `__debugInfo()`. This is the debug-info header variant of
+/// `__rt_var_dump_emit_enum_line`; the body walker then dumps the returned container.
+pub fn emit_var_dump_open_enum_n(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_var_dump_open_enum_n_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: var_dump_open_enum_n ---");
+    emitter.label_global("__rt_var_dump_open_enum_n");
+
+    // Frame (48 bytes): [0] object ptr, [8] entry count, [32] saved x29, [40] saved x30.
+    emitter.instruction("sub sp, sp, #48");                                     // allocate the enum-header frame
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish the enum-header frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the enum instance pointer
+    emitter.instruction("str x1, [sp, #8]");                                    // save the debug-info entry count
+
+    emitter.instruction("bl __rt_vd_pad");                                      // indent the enum header line
+    abi::emit_symbol_address(emitter, "x1", "_vd_enum_prefix");                 // load the `enum(` prefix
+    emitter.instruction("mov x2, #5");                                          // len("enum(") = 5
+    emitter.instruction("bl __rt_vd_write");                                    // write `enum(`
+
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the enum instance pointer
+    emitter.instruction("ldr x9, [x9]");                                        // load the runtime class id from the object header
+    abi::emit_symbol_address(emitter, "x10", "_class_name_count");              // resolve the class-name table extent
+    emitter.instruction("ldr x10, [x10]");                                      // load the number of named class ids
+    emitter.instruction("cmp x9, x10");                                         // is the class id within the name table?
+    emitter.instruction("b.hs __rt_vd_enum_open_anon");                         // an unknown class id writes no name
+    abi::emit_symbol_address(emitter, "x11", "_class_name_entries");            // resolve the class-name entry table
+    emitter.instruction("add x11, x11, x9, lsl #4");                            // each entry is a 16-byte (ptr, len) pair
+    emitter.instruction("ldr x1, [x11]");                                       // load the class-name pointer
+    emitter.instruction("ldr x2, [x11, #8]");                                   // load the class-name length
+    emitter.instruction("b __rt_vd_enum_open_name");                            // write the resolved name
+    emitter.label("__rt_vd_enum_open_anon");
+    abi::emit_symbol_address(emitter, "x1", "_class_name_missing");             // fall back to the empty class-name slot
+    emitter.instruction("mov x2, #0");                                          // a zero-length write emits nothing
+    emitter.label("__rt_vd_enum_open_name");
+    emitter.instruction("bl __rt_vd_write");                                    // write the enum class name
+
+    abi::emit_symbol_address(emitter, "x1", "_vd_enum_sep");                    // load the `::` case separator
+    emitter.instruction("mov x2, #2");                                          // len("::") = 2
+    emitter.instruction("bl __rt_vd_write");                                    // write `::`
+
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the enum instance pointer
+    emitter.instruction("bl __rt_obj_enum_case_name");                          // x0=case-name ptr, x1=case-name len
+    emitter.instruction("mov x2, x1");                                          // case-name length → write length argument
+    emitter.instruction("mov x1, x0");                                          // case-name pointer → write buffer argument
+    emitter.instruction("bl __rt_vd_write");                                    // write the case name
+
+    abi::emit_symbol_address(emitter, "x1", "_vd_enum_count_open");             // load the `) (` entry-count opener
+    emitter.instruction("mov x2, #3");                                          // len(") (") = 3
+    emitter.instruction("bl __rt_vd_write");                                    // write `) (`
+
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the debug-info entry count
+    emitter.instruction("bl __rt_itoa");                                        // x1=digits ptr, x2=digits len
+    emitter.instruction("bl __rt_vd_write");                                    // write the entry-count digits
+
+    abi::emit_symbol_address(emitter, "x1", "_vd_brace_open");                  // load the `) {\n` opener
+    emitter.instruction("mov x2, #4");                                          // len(") {\n") = 4
+    emitter.instruction("bl __rt_vd_write");                                    // write `) {\n`
+
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the enum-header frame
+    emitter.instruction("ret");                                                 // return to caller
+}
+
+/// Emits the Linux x86_64 `enum(Class::Case) (N) {\n` header writer.
+fn emit_var_dump_open_enum_n_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: var_dump_open_enum_n ---");
+    emitter.label_global("__rt_var_dump_open_enum_n");
+
+    // rbp-relative frame: [-8] object ptr, [-16] entry count.
+    emitter.instruction("push rbp");                                            // save caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the enum-header frame pointer
+    emitter.instruction("sub rsp, 16");                                         // allocate the enum-header frame
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the enum instance pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the debug-info entry count
+
+    emitter.instruction("call __rt_vd_pad");                                    // indent the enum header line
+    abi::emit_symbol_address(emitter, "rsi", "_vd_enum_prefix");                // load the `enum(` prefix
+    emitter.instruction("mov edx, 5");                                          // len("enum(") = 5
+    emitter.instruction("call __rt_vd_write");                                  // write `enum(`
+
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the enum instance pointer
+    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the runtime class id from the object header
+    abi::emit_symbol_address(emitter, "r10", "_class_name_count");              // resolve the class-name table extent
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of named class ids
+    emitter.instruction("cmp r9, r10");                                         // is the class id within the name table?
+    emitter.instruction("jae __rt_vd_enum_open_anon_x86");                      // an unknown class id writes no name
+    abi::emit_symbol_address(emitter, "r11", "_class_name_entries");            // resolve the class-name entry table
+    emitter.instruction("shl r9, 4");                                           // each entry is a 16-byte (ptr, len) pair
+    emitter.instruction("add r11, r9");                                         // advance to this class's entry
+    emitter.instruction("mov rsi, QWORD PTR [r11]");                            // load the class-name pointer
+    emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                        // load the class-name length
+    emitter.instruction("jmp __rt_vd_enum_open_name_x86");                      // write the resolved name
+    emitter.label("__rt_vd_enum_open_anon_x86");
+    abi::emit_symbol_address(emitter, "rsi", "_class_name_missing");            // fall back to the empty class-name slot
+    emitter.instruction("xor edx, edx");                                        // a zero-length write emits nothing
+    emitter.label("__rt_vd_enum_open_name_x86");
+    emitter.instruction("call __rt_vd_write");                                  // write the enum class name
+
+    abi::emit_symbol_address(emitter, "rsi", "_vd_enum_sep");                   // load the `::` case separator
+    emitter.instruction("mov edx, 2");                                          // len("::") = 2
+    emitter.instruction("call __rt_vd_write");                                  // write `::`
+
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the enum instance pointer
+    emitter.instruction("call __rt_obj_enum_case_name");                        // rax=case-name ptr, rdx=case-name len
+    emitter.instruction("mov rsi, rax");                                        // case-name pointer → write buffer argument
+    emitter.instruction("call __rt_vd_write");                                  // write the case name
+
+    abi::emit_symbol_address(emitter, "rsi", "_vd_enum_count_open");            // load the `) (` entry-count opener
+    emitter.instruction("mov edx, 3");                                          // len(") (") = 3
+    emitter.instruction("call __rt_vd_write");                                  // write `) (`
+
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the debug-info entry count
+    emitter.instruction("call __rt_itoa");                                      // rax=digits ptr, rdx=digits len
+    emitter.instruction("mov rsi, rax");                                        // digits ptr → write buffer
+    emitter.instruction("call __rt_vd_write");                                  // write the entry-count digits
+
+    abi::emit_symbol_address(emitter, "rsi", "_vd_brace_open");                 // load the `) {\n` opener
+    emitter.instruction("mov edx, 4");                                          // len(") {\n") = 4
+    emitter.instruction("call __rt_vd_write");                                  // write `) {\n`
+
+    emitter.instruction("add rsp, 16");                                         // release the enum-header frame
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return to caller
+}

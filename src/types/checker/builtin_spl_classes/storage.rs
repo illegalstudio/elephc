@@ -121,7 +121,7 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "__construct",
             vec![
-                param_default("array", array_type(), empty_array_expr()),
+                param_default("array", bare_array_type(), empty_array_expr()),
                 param_default("flags", TypeExpr::Int, int_expr(0)),
             ],
             Some(TypeExpr::Void),
@@ -181,7 +181,7 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
         method_with_body(
             "__construct",
             vec![
-                param_default("array", array_type(), empty_array_expr()),
+                param_default("array", bare_array_type(), empty_array_expr()),
                 param_default("flags", TypeExpr::Int, int_expr(0)),
             ],
             Some(TypeExpr::Void),

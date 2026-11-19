@@ -13,7 +13,7 @@ sidebar:
 | [`constant()`](./misc/constant.md) | `(string $name): mixed` | `mixed` | ✓ | ✓ |
 | [`debug_backtrace()`](./misc/debug_backtrace.md) | `(int $options = 1, int $limit = 0): array` | `array` | ✓ | ✓ |
 | [`debug_print_backtrace()`](./misc/debug_print_backtrace.md) | `(int $options = 0, int $limit = 0): void` | `void` | ✓ | ✓ |
-| [`define()`](./misc/define.md) | `(string $constant_name, mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`define()`](./misc/define.md) | `(string $constant_name, mixed $value, bool $case_insensitive = false): bool` | `bool` | ✓ | ✓ |
 | [`defined()`](./misc/defined.md) | `(string $constant_name): bool` | `bool` | ✓ | ✓ |
 | [`empty()`](./misc/empty.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`error_reporting()`](./misc/error_reporting.md) | `(mixed $error_level = null): int` | `int` | ✓ | ✓ |

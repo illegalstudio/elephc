@@ -11,6 +11,8 @@ use crate::support::*;
 
 #[path = "preg_match_all_review.rs"]
 mod preg_match_all_review;
+#[path = "php86_deprecations.rs"]
+mod php86_deprecations;
 
 // --- Date/time functions ---
 

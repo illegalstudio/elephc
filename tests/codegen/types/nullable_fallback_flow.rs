@@ -2484,6 +2484,31 @@ captured(null); incremented(null); incremented(9223372036854775807); converted(n
     }
 }
 
+/// A conditional null/typed join keeps the typed value on the branch that assigns it:
+/// the merge slot is boxed Mixed instead of a constant null, and a later typed write
+/// still replaces it.
+#[test]
+fn test_nullable_fallback_flow_conditional_null_typed_join_runtime() {
+    let source = r#"<?php
+final class JoinProbe {
+    public function pick(bool $choose): void {
+        $value = null;
+        if ($choose) { $value = "typed"; }
+        echo $value === null ? "null" : $value, ":";
+        $value = 42;
+        echo $value, "\n";
+    }
+}
+$probe = new JoinProbe();
+$probe->pick(true);
+$probe->pick(false);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "typed:42\nnull:42\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
 /// Nullable returns and mixed matches observe writes only on the selected expression path.
 #[test]
 fn test_nullable_fallback_flow_review_conditional_runtime() {

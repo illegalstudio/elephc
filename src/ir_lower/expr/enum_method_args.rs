@@ -35,7 +35,7 @@ pub(super) fn lower_arguments(
     let container = lower_named_descriptor_invoker_arg_container(ctx, args, Some(signature), true, span);
     let container = unbox_array_param_storage(ctx, container, PhpType::AssocArray {
         key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed),
-    }, Some(span));
+    }, Some(span), false);
     let container_slot = call_intermediate(ctx, container, span);
     let regular = crate::types::call_args::regular_param_count(signature);
     let argc = ctx.declare_hidden_temp(PhpType::Int);

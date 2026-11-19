@@ -51,6 +51,26 @@ pub(super) fn eval_literal_needs_barrier(ctx: &LoweringContext<'_, '_>, fragment
     true
 }
 
+/// Returns every caller local a literal `eval` fragment writes.
+///
+/// A fully static fragment still executes against the caller's eval scope, so its writes must
+/// widen those locals even when the fragment needs no interpreter bridge.
+pub(super) fn eval_literal_all_writes(
+    ctx: &LoweringContext<'_, '_>,
+    fragment: &str,
+) -> std::collections::BTreeSet<String> {
+    let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
+        fragment,
+        ctx.source_path(),
+        crate::strict_php::is_enabled(),
+        |name, args| eval_literal_static_function_supported_by_lowering(ctx, name, args),
+        |receiver, method, args| {
+            eval_literal_static_method_supported_by_lowering(ctx, receiver, method, args)
+        },
+    );
+    plan.writes().clone()
+}
+
 /// Returns the caller locals written by an EIR literal `eval` that only needs scope state.
 pub(super) fn eval_literal_scope_barrier_writes(
     ctx: &LoweringContext<'_, '_>,

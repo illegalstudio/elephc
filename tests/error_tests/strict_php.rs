@@ -68,9 +68,7 @@ fn test_strict_error_extension_builtin_call_is_undefined() {
 #[test]
 fn test_strict_error_elephc_only_catalog_functions_are_undefined() {
     for (call, name) in [
-        ("clamp(1, 0, 2)", "clamp"),
         ("log2(8)", "log2"),
-        ("grapheme_strrev('abc')", "grapheme_strrev"),
         ("is_real(1.0)", "is_real"),
     ] {
         expect_strict_error(

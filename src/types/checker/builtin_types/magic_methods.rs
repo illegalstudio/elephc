@@ -198,6 +198,43 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         ));
                     }
                 }
+                "__debuginfo" => {
+                    if method.is_static {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!("Method {}::__debugInfo() cannot be static", class_name),
+                        ));
+                        continue;
+                    }
+                    if source_param_count(method) != 0 || declares_source_variadic(method) {
+                        errors.push(CompileError::new(
+                            method.span,
+                            &format!(
+                                "Method {}::__debugInfo() cannot take arguments",
+                                class_name
+                            ),
+                        ));
+                        continue;
+                    }
+                    if let Some(sig) = class_info.methods.get("__debuginfo") {
+                        if sig.declared_return
+                            && !matches!(
+                                sig.return_type.codegen_repr(),
+                                PhpType::Array(_)
+                                    | PhpType::AssocArray { .. }
+                                    | PhpType::Mixed
+                            )
+                        {
+                            errors.push(CompileError::new(
+                                method.span,
+                                &format!(
+                                    "{}::__debugInfo(): Return type must be ?array",
+                                    class_name
+                                ),
+                            ));
+                        }
+                    }
+                }
                 "__isset" => {
                     if method.is_static {
                         errors.push(CompileError::new(

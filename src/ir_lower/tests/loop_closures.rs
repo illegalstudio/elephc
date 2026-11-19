@@ -78,11 +78,15 @@ fn known_loop_closure_rejects_every_backedge_writer() {
         "$sum+=$f(1);if($i==0){$f=$g;continue;}",
         "$sum+=$f(1);for($j=0;$j<1;$j++){$f=$g;}",
         "$sum+=$f(1);$alias=&$f;",
-        "$sum+=$f(1);eval('$f=null;');",
     ] {
         let source = format!("<?php $n=$argc;$f=function($x){{return $x+1;}};$g=function($x){{return $x+10;}};$sum=0;for($i=0;$i<$n;$i++){{{body}}}echo$sum;");
         assert_eq!(calls(&super::lower_source(&source)), (0, 1), "{source}");
     }
+    // A literal eval is AOT-compiled into its own direct fragment call, so main carries one
+    // `Op::Call` for the fragment plus the descriptor invoke for the loop closure. The loop
+    // closure itself must still not be called directly.
+    let source = "<?php $n=$argc;$f=function($x){return $x+1;};$g=function($x){return $x+10;};$sum=0;for($i=0;$i<$n;$i++){$sum+=$f(1);eval('$f=null;');}echo$sum;";
+    assert_eq!(calls(&super::lower_source(source)), (1, 1), "{source}");
     let source = "<?php $f=function($x){return $x+1;};$g=function($x){return $x+10;};$sum=0;for($i=0;$i<$argc;$f=$g){$sum+=$f(1);$i++;}echo$sum;";
     assert_eq!(calls(&super::lower_source(source)), (0, 1));
 }

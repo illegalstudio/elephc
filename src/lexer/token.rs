@@ -17,6 +17,8 @@ pub struct TokenMetadata {
     /// Source extent used by parser and semantic diagnostics.
     pub span: Span,
     source_spelling: Option<Box<str>>,
+    /// The last `/** ... */` doc comment immediately before this token.
+    doc_comment: Option<Box<str>>,
 }
 
 impl TokenMetadata {
@@ -25,6 +27,7 @@ impl TokenMetadata {
         Self {
             span,
             source_spelling: None,
+            doc_comment: None,
         }
     }
 
@@ -33,6 +36,7 @@ impl TokenMetadata {
         Self {
             span,
             source_spelling: Some(spelling.into()),
+            doc_comment: None,
         }
     }
 
@@ -45,6 +49,17 @@ impl TokenMetadata {
     pub(crate) fn with_span(mut self, span: Span) -> Self {
         self.span = span;
         self
+    }
+
+    /// Attaches the last doc comment seen before this token.
+    pub(crate) fn with_doc_comment(mut self, doc_comment: Option<String>) -> Self {
+        self.doc_comment = doc_comment.map(Into::into);
+        self
+    }
+
+    /// Returns the raw `/** ... */` comment immediately before this token, if any.
+    pub fn doc_comment(&self) -> Option<&str> {
+        self.doc_comment.as_deref()
     }
 }
 

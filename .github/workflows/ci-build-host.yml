@@ -44,6 +44,8 @@ env:
     -p elephc-bcmath
     -p elephc-gmp
     -p elephc-random
+    -p elephc-uri
+    -p elephc-pack
     -p elephc-mbstring
     -p elephc-iconv
     -p elephc-phar

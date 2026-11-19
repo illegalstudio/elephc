@@ -550,7 +550,7 @@ fn emit_object_hash_projection(
                     let object_label = ctx.next_label("object_hash_mixed_object");
                     ctx.emitter.instruction("cmp x0, #6");                      // require the boxed Mixed object tag
                     ctx.emitter
-                        .instruction(&format!("b.eq {}", object_label));         // branch to the object payload extraction path
+                        .instruction(&format!("b.eq {}", object_label));        // branch to the object payload extraction path
                     emit_dynamic_non_object_projection_fatal(ctx, cast_mode);
                     ctx.emitter.label(&object_label);
                     ctx.emitter.instruction("mov x0, x1");                      // move the unboxed object pointer into the helper input
@@ -559,7 +559,7 @@ fn emit_object_hash_projection(
                     let object_label = ctx.next_label("object_hash_mixed_object_x");
                     ctx.emitter.instruction("cmp rax, 6");                      // require the boxed Mixed object tag
                     ctx.emitter
-                        .instruction(&format!("je {}", object_label));           // branch to the object payload extraction path
+                        .instruction(&format!("je {}", object_label));          // branch to the object payload extraction path
                     emit_dynamic_non_object_projection_fatal(ctx, cast_mode);
                     ctx.emitter.label(&object_label);
                     ctx.emitter.instruction("mov rax, rdi");                    // move the unboxed object pointer into the helper input
@@ -620,14 +620,14 @@ fn emit_dynamic_non_object_projection_fatal(ctx: &mut FunctionContext<'_>, cast_
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #2");                              // select stderr for the dynamic projection fatal diagnostic
             abi::emit_symbol_address(ctx.emitter, "x1", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);       // pass the exact dynamic projection diagnostic byte length
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);        // pass the exact dynamic projection diagnostic byte length
             ctx.emitter.syscall(4);
             abi::emit_exit(ctx.emitter, 1);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov edi, 2");                              // select stderr for the dynamic projection fatal diagnostic
             abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);      // pass the exact dynamic projection diagnostic byte length
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);       // pass the exact dynamic projection diagnostic byte length
             ctx.emitter.instruction("mov eax, 1");                              // select the Linux write syscall for the diagnostic
             ctx.emitter.instruction("syscall");                                 // write the dynamic projection diagnostic before exiting
             abi::emit_exit(ctx.emitter, 1);
@@ -1025,7 +1025,22 @@ fn emit_no_arg_class_name_lookup(ctx: &mut FunctionContext<'_>, name: &str) {
 }
 
 /// Emits dynamic class-name lookup for an object pointer already loaded in the result register.
-pub(in crate::codegen::lower_inst::builtins) fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
+pub(in crate::codegen::lower_inst) fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
+    emit_dynamic_object_class_name_from_table(ctx, name, "_class_name_entries");
+}
+
+/// Emits `get_debug_type()`'s class-name lookup: the same object class id, but through
+/// the table that maps anonymous classes to PHP's `Parent@anonymous` spelling.
+pub(in crate::codegen::lower_inst) fn emit_dynamic_object_debug_name(ctx: &mut FunctionContext<'_>) {
+    emit_dynamic_object_class_name_from_table(ctx, "get_class", "_class_debug_name_entries");
+}
+
+/// Emits a dynamic object class-name lookup through one `(ptr, len)` metadata table.
+fn emit_dynamic_object_class_name_from_table(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    table: &str,
+) {
     let empty_label = ctx.next_label("get_class_empty");
     let done_label = ctx.next_label("get_class_done");
     if ctx.module.required_runtime_features.eval_bridge {
@@ -1039,8 +1054,8 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_dynamic_object_class_name(c
         ctx.emitter.label(&fallback_label);
     }
     match ctx.emitter.target.arch {
-        Arch::AArch64 => emit_dynamic_object_class_name_aarch64(ctx, name, &empty_label, &done_label),
-        Arch::X86_64 => emit_dynamic_object_class_name_x86_64(ctx, name, &empty_label, &done_label),
+        Arch::AArch64 => emit_dynamic_object_class_name_aarch64(ctx, name, table, &empty_label, &done_label),
+        Arch::X86_64 => emit_dynamic_object_class_name_x86_64(ctx, name, table, &empty_label, &done_label),
     }
 }
 
@@ -1265,6 +1280,7 @@ fn emit_class_lookup_type_error(ctx: &mut FunctionContext<'_>, name: &str, type_
 fn emit_dynamic_object_class_name_aarch64(
     ctx: &mut FunctionContext<'_>,
     name: &str,
+    table: &str,
     empty_label: &str,
     done_label: &str,
 ) {
@@ -1280,7 +1296,7 @@ fn emit_dynamic_object_class_name_aarch64(
         ctx.emitter.instruction("ldr x10, [x10]");                              // load dense class-name lookup bound
         ctx.emitter.instruction("cmp x9, x10");                                 // validate the object class id before indexing metadata
         ctx.emitter.instruction(&format!("b.hs {}", empty_label));              // invalid ids produce an empty class name
-        abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_entries");
+        abi::emit_symbol_address(ctx.emitter, "x11", table);
         ctx.emitter.instruction("lsl x12, x9, #4");                             // scale class id by the 16-byte metadata row
         ctx.emitter.instruction("add x11, x11, x12");                           // select the class-name metadata row
         ctx.emitter.instruction(&format!("ldr {}, [x11]", ptr_reg));            // load the real class-name pointer
@@ -1305,7 +1321,7 @@ fn emit_dynamic_object_class_name_aarch64(
     }
     ctx.emitter.instruction("cmp x9, x10");                                     // validate the class id before indexing class-name metadata
     ctx.emitter.instruction(&format!("b.hs {}", empty_label));                  // invalid class ids produce an empty class name
-    abi::emit_symbol_address(ctx.emitter, "x11", "_class_name_entries");
+    abi::emit_symbol_address(ctx.emitter, "x11", table);
     ctx.emitter.instruction("lsl x12, x9, #4");                                 // scale the class id by the 16-byte class-name row size
     ctx.emitter.instruction("add x11, x11, x12");                               // point at the selected class-name metadata row
     ctx.emitter.instruction(&format!("ldr {}, [x11]", ptr_reg));                // load the concrete class-name string pointer
@@ -1323,6 +1339,7 @@ fn emit_dynamic_object_class_name_aarch64(
 fn emit_dynamic_object_class_name_x86_64(
     ctx: &mut FunctionContext<'_>,
     name: &str,
+    table: &str,
     empty_label: &str,
     done_label: &str,
 ) {
@@ -1336,7 +1353,7 @@ fn emit_dynamic_object_class_name_x86_64(
         ctx.emitter.instruction("mov r9, QWORD PTR [rip + _class_name_count]"); // load dense class-name lookup bound
         ctx.emitter.instruction("cmp r8, r9");                                  // validate the object class id before indexing metadata
         ctx.emitter.instruction(&format!("jae {}", empty_label));               // invalid ids produce an empty class name
-        ctx.emitter.instruction("lea r10, [rip + _class_name_entries]");        // materialize class-name metadata table base
+        ctx.emitter.instruction(&format!("lea r10, [rip + {}]", table));        // materialize class-name metadata table base
         ctx.emitter.instruction("shl r8, 4");                                   // scale class id by 16-byte row size
         ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r8]");               // load the real class-name pointer
         ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + r8 + 8]");           // load the real class-name length
@@ -1357,7 +1374,7 @@ fn emit_dynamic_object_class_name_x86_64(
     }
     ctx.emitter.instruction("cmp r8, r9");                                      // validate the class id before indexing class-name metadata
     ctx.emitter.instruction(&format!("jae {}", empty_label));                   // invalid class ids produce an empty class name
-    ctx.emitter.instruction("lea r10, [rip + _class_name_entries]");            // materialize the class-name metadata table base pointer
+    ctx.emitter.instruction(&format!("lea r10, [rip + {}]", table));            // materialize the class-name metadata table base pointer
     ctx.emitter.instruction("shl r8, 4");                                       // scale the class id by the 16-byte class-name row size
     ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r8]");                   // load the concrete class-name string pointer
     ctx.emitter.instruction("mov rdx, QWORD PTR [r10 + r8 + 8]");               // load the concrete class-name string length

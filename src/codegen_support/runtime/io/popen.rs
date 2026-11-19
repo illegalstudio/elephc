@@ -66,6 +66,7 @@ pub fn emit_popen(emitter: &mut Emitter, web: bool) {
     // -- fileno(FILE*) recovers the raw descriptor --
     emitter.bl_c("fileno");
     emitter.instruction("mov w9, w0");                                          // x9 = the pipe descriptor
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x9", "__rt_popen_untrackable");
 
     // -- record the FILE* in the fd->FILE* table for pclose() --
     abi::emit_symbol_address(emitter, "x10", "_popen_files");
@@ -75,6 +76,14 @@ pub fn emit_popen(emitter: &mut Emitter, web: bool) {
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the frame
     emitter.instruction("ret");                                                 // return the descriptor
+
+    emitter.label("__rt_popen_untrackable");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the untrackable FILE*
+    emitter.bl_c("pclose");                                                     // reap the child instead of leaking the pipe
+    emitter.instruction("mov x0, #-1");                                         // report the unsupported descriptor as a popen failure
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the frame
+    emitter.instruction("ret");                                                 // return the failure result
 
     emitter.label("__rt_popen_fail");
     emitter.instruction("mov x0, #-1");                                         // -1 reports a popen failure
@@ -132,6 +141,7 @@ fn emit_popen_linux_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.instruction("mov rdi, rax");                                        // FILE* argument for fileno
     emitter.bl_c("fileno");
     emitter.instruction("mov r9d, eax");                                        // r9 = the pipe descriptor
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "r9", "__rt_popen_untrackable_x86");
 
     // -- record the FILE* in the fd->FILE* table for pclose() --
     abi::emit_symbol_address(emitter, "r10", "_popen_files");                   // base of the fd->FILE* table
@@ -141,6 +151,14 @@ fn emit_popen_linux_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.instruction("add rsp, 48");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the descriptor
+
+    emitter.label("__rt_popen_untrackable_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the untrackable FILE*
+    emitter.bl_c("pclose");                                                     // reap the child instead of leaking the pipe
+    emitter.instruction("mov rax, -1");                                         // report the unsupported descriptor as a popen failure
+    emitter.instruction("add rsp, 48");                                         // release the frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the failure result
 
     emitter.label("__rt_popen_fail_x86");
     emitter.instruction("mov rax, -1");                                         // -1 reports a popen failure

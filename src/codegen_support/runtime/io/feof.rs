@@ -32,11 +32,19 @@ pub fn emit_feof(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_feof_local_fd");                             // not a wrapper fd → read the local eof-flag table
     emitter.instruction("b __rt_user_wrapper_feof");                            // wrapper fd: tail-call stream_eof (uncond → cross-atom safe)
     emitter.label("__rt_feof_local_fd");
+    crate::codegen_support::abi::emit_branch_if_fd_table_index_out_of_range(
+        emitter,
+        "x0",
+        "__rt_feof_out_of_range",
+    );
 
     // -- load eof flag for this fd from _eof_flags array --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("ldrb w0, [x9, x0]");                                   // load _eof_flags[fd] into return register
     emitter.instruction("ret");                                                 // return to caller
+    emitter.label("__rt_feof_out_of_range");
+    emitter.instruction("mov x0, #0");                                          // descriptors above the side-table capacity report no tracked EOF
+    emitter.instruction("ret");
 }
 
 /// x86_64 Linux implementation of `__rt_feof`.
@@ -52,8 +60,12 @@ fn emit_feof_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("cmp rdi, r9");                                         // is this a synthetic user-wrapper fd?
     emitter.instruction("jge __rt_user_wrapper_feof");                          // dispatch into the wrapper's stream_eof instead of reading the eof-flag table
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "rdi", "__rt_feof_out_of_range_x86");
 
     abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table base address for the queried file descriptor
     emitter.instruction("movzx eax, BYTE PTR [r10 + rdi]");                     // load the tracked eof flag byte for the requested file descriptor into the integer result register
     emitter.instruction("ret");                                                 // return the eof flag to the caller using the standard x86_64 integer result register
+    emitter.label("__rt_feof_out_of_range_x86");
+    emitter.instruction("xor eax, eax");                                        // descriptors above the side-table capacity report no tracked EOF
+    emitter.instruction("ret");
 }

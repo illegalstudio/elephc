@@ -23,12 +23,15 @@ pub(in crate::interpreter) fn eval_stream_socket_pair_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [domain, socket_type, protocol] = args else {
+    if !(3..=4).contains(&args.len()) {
         return Err(EvalStatus::RuntimeFatal);
-    };
-    let _ = eval_expr(domain, context, scope, values)?;
-    let _ = eval_expr(socket_type, context, scope, values)?;
-    let _ = eval_expr(protocol, context, scope, values)?;
+    }
+    let _ = eval_expr(&args[0], context, scope, values)?;
+    let _ = eval_expr(&args[1], context, scope, values)?;
+    let _ = eval_expr(&args[2], context, scope, values)?;
+    if let Some(context_arg) = args.get(3) {
+        let _ = eval_expr(context_arg, context, scope, values)?;
+    }
     eval_stream_socket_pair_result(context, values)
 }
 
@@ -38,10 +41,12 @@ pub(in crate::interpreter) fn eval_stream_socket_pair_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [_domain, _socket_type, _protocol] = evaluated_args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    eval_stream_socket_pair_result(context, values)
+    match evaluated_args {
+        [_domain, _socket_type, _protocol] | [_domain, _socket_type, _protocol, _] => {
+            eval_stream_socket_pair_result(context, values)
+        }
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
 }
 
 /// Creates a pair of connected local stream resources.

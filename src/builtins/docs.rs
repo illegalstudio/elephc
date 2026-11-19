@@ -69,6 +69,7 @@ fn area_str(area: Area) -> &'static str {
         Area::Xml => "xml",
         Area::Tidy => "tidy",
         Area::Random => "random",
+        Area::Uri => "uri",
     }
 }
 

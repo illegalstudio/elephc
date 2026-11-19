@@ -20,6 +20,7 @@ fn test_effect_analysis_tracks_pure_iife_expr_calls() {
             callee: Box::new(Expr::new(
                 ExprKind::Closure {
                     params: Vec::new(),
+                    param_attributes: Vec::new(),
                     variadic: None,
                     variadic_by_ref: false,
                     variadic_type: None,

@@ -491,7 +491,9 @@ fn wrapper_result_ownership(
 struct WrapperBuiltinLoweringContext<'a, 'f> {
     builder: &'a mut Builder<'f>,
     data: &'a mut crate::ir::DataPool,
-    /// Lowered functions, for the callee signature a generated wrapper call must match.
+    /// Lowered module functions, so a composing builtin can reproduce the hidden
+    /// argument-collector operand its prelude helper declares, and a generated wrapper call can
+    /// match the callee signature it must satisfy.
     functions: &'a [crate::ir::Function],
     strict_php: bool,
 }
@@ -600,95 +602,111 @@ impl crate::builtins::semantics::BuiltinLoweringContext
 
     /// Emits a direct call to a declared PHP function from the synthetic wrapper body.
     ///
-    /// A builtin whose semantic lowering composes a prelude helper (`array_rand` forwards to
-    /// `__elephc_array_rand`) can then serve a runtime-selected callable, because the wrapper
-    /// interns the callee name in the module data pool exactly like AST lowering does. The
-    /// callee must be declared in the same module; the registry policy that admits dynamic
+    /// A builtin whose semantic lowering composes a prelude helper (`clamp`'s mixed path, or
+    /// `array_rand` forwarding to `__elephc_array_rand`) must reproduce that call here: answering
+    /// a null constant would hand the descriptor caller a value the callee never produced. The
+    /// wrapper interns the callee name in the module data pool exactly like AST lowering does, so
+    /// the callee must be declared in the same module; the registry policy that admits dynamic
     /// dispatch is what guarantees reachability retained it.
     fn emit_user_call(
         &mut self,
         name: &str,
-        operands: Vec<ValueId>,
+        mut operands: Vec<ValueId>,
         php_type: PhpType,
         span: Option<crate::span::Span>,
     ) -> crate::builtins::semantics::LoweredBuiltinValue {
-        // A call generated here bypasses the `func_args::desugar` AST rewrite; when the
-        // callee carries the hidden surplus-argument collector, supply an empty one.
-        let mut operands = operands;
-        let callee_sig = self
+        // A call generated here bypasses the `func_args::desugar` AST rewrite. Reproduce the
+        // hidden operands that rewrite adds, in the same order: the hidden argument count first,
+        // then the surplus-argument collector array.
+        let signature = self
             .functions
             .iter()
             .find(|function| {
                 crate::names::php_symbol_key(&function.name)
                     == crate::names::php_symbol_key(name)
             })
-            .and_then(|function| function.signature.as_ref());
+            .map(crate::codegen::callable_signatures::function_signature_from_eir);
         let mut collector = None;
-        if callee_sig.is_some_and(crate::func_args::sig_collects_surplus_args) {
-            let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
-            let empty = self.emit_value(
-                Op::ArrayNew,
-                Vec::new(),
-                Some(Immediate::Capacity(0)),
-                array_ty,
-                Op::ArrayNew.default_effects(),
-                span,
-            );
-            if callee_sig.is_some_and(crate::func_args::sig_collects_optional_arg_count) {
+        if let Some(signature) = signature {
+            let actual_count = operands.len();
+            if crate::func_args::sig_has_hidden_argc_param(&signature) {
                 let count = self.emit_value(
                     Op::ConstI64,
                     Vec::new(),
-                    Some(Immediate::I64(operands.len() as i64)),
+                    Some(Immediate::I64(actual_count as i64)),
                     PhpType::Int,
                     Op::ConstI64.default_effects(),
                     span,
                 );
-                let boxed = self.emit_value(
-                    Op::MixedBox,
-                    vec![count.value],
-                    None,
-                    PhpType::Mixed,
-                    Op::MixedBox.default_effects(),
-                    span,
-                );
-                self.emit_void(
-                    Op::ArrayPush,
-                    vec![empty.value, boxed.value],
-                    None,
-                    Op::ArrayPush.default_effects(),
-                    span,
-                );
-                self.emit_void(
-                    Op::Release,
-                    vec![boxed.value],
-                    None,
-                    Op::Release.default_effects(),
-                    span,
-                );
+                operands.push(count.value);
             }
-            // The helper can throw (array_rand's ValueError/TypeError). Register the collector
-            // with the exception guard chain so a caught failure releases it; the normal path
-            // unguards and releases it below.
-            let anchor = self.emit_value(
-                Op::ConstI64,
-                Vec::new(),
-                Some(Immediate::I64(0)),
-                PhpType::Int,
-                Op::ConstI64.default_effects(),
-                span,
-            );
-            let guard = self.emit_value(
-                Op::RuntimeCall,
-                vec![empty.value, anchor.value],
-                Some(Immediate::RuntimeCall(
-                    crate::ir::RuntimeCallTarget::ExceptionGuardOwned,
-                )),
-                PhpType::Int,
-                crate::ir::Effects::WRITES_GLOBAL,
-                span,
-            );
-            collector = Some((empty.value, guard.value));
-            operands.push(empty.value);
+            if crate::func_args::sig_collects_surplus_args(&signature) {
+                let count_element = crate::func_args::sig_collects_optional_arg_count(&signature);
+                let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+                let array = self.emit_value(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(u32::from(count_element))),
+                    array_ty,
+                    Op::ArrayNew.default_effects(),
+                    span,
+                );
+                if count_element {
+                    let count = self.emit_value(
+                        Op::ConstI64,
+                        Vec::new(),
+                        Some(Immediate::I64(actual_count as i64)),
+                        PhpType::Int,
+                        Op::ConstI64.default_effects(),
+                        span,
+                    );
+                    let boxed = self.emit_value(
+                        Op::MixedBox,
+                        vec![count.value],
+                        None,
+                        PhpType::Mixed,
+                        Op::MixedBox.default_effects(),
+                        span,
+                    );
+                    self.emit_void(
+                        Op::ArrayPush,
+                        vec![array.value, boxed.value],
+                        None,
+                        Op::ArrayPush.default_effects(),
+                        span,
+                    );
+                    self.emit_void(
+                        Op::Release,
+                        vec![boxed.value],
+                        None,
+                        Op::Release.default_effects(),
+                        span,
+                    );
+                }
+                // The callee can throw (`array_rand`'s ValueError/TypeError). Register the
+                // collector with the exception guard chain so a caught failure releases it; the
+                // normal path unguards and releases it below.
+                let anchor = self.emit_value(
+                    Op::ConstI64,
+                    Vec::new(),
+                    Some(Immediate::I64(0)),
+                    PhpType::Int,
+                    Op::ConstI64.default_effects(),
+                    span,
+                );
+                let guard = self.emit_value(
+                    Op::RuntimeCall,
+                    vec![array.value, anchor.value],
+                    Some(Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::ExceptionGuardOwned,
+                    )),
+                    PhpType::Int,
+                    crate::ir::Effects::WRITES_GLOBAL,
+                    span,
+                );
+                collector = Some((array.value, guard.value));
+                operands.push(array.value);
+            }
         }
         let data = self.data.intern_function_name(name);
         let result = self.emit_value(

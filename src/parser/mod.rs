@@ -15,7 +15,8 @@ pub mod ast;
 mod attributes;
 /// Control flow statements: `if`, `while`, `for`, `foreach`, `switch`, `try`, `goto`, and `label` parsing.
 mod control;
-pub mod expr;
+pub(crate) mod doc_comments;
+pub(crate) mod expr;
 /// Maps tokens that may legally appear as bareword names (identifiers and semi-reserved keywords).
 mod keyword_name;
 mod declare_context;

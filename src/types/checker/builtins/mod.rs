@@ -95,6 +95,11 @@ impl Checker {
         }
     }
 
+    /// Returns whether a name is a language construct that the deprecation pass must skip.
+    fn is_lazy_construct_for_deprecation(name: &str) -> bool {
+        matches!(name, "isset" | "unset" | "empty" | "exit" | "die")
+    }
+
     /// Type-checks a PHP builtin function call, returning the inferred return type or `None` if unhandled.
     pub fn check_builtin(
         &mut self,
@@ -123,6 +128,42 @@ impl Checker {
         // never applied to the call.
         if catalog::strict_php_hidden_builtin(&builtin_key) {
             return Ok(None);
+        }
+        // A builtin deprecation names the first profile that reports it (PHP 8.6 adds the
+        // non-canonical aliases and the SPL helpers). The notice is compile-time here, while
+        // php-src raises it when the call executes; `--version` profiles gate it the same way.
+        if !Self::is_lazy_construct_for_deprecation(&builtin_key) {
+            if let Some(def) = crate::builtins::registry::lookup(name) {
+                if let Some(deprecation) = def.spec.deprecation.filter(|deprecation| {
+                    deprecation.is_active_for(crate::codegen_support::compile_php_version())
+                }) {
+                    self.warnings.push(crate::errors::CompileWarning::new(
+                        span,
+                        &format!(
+                            "Call to deprecated function: {}() — {}",
+                            def.name, deprecation.message
+                        ),
+                    ));
+                }
+            }
+        }
+        // PHP 8.6 deprecates the ignored third argument of `define()`: explicitly passing
+        // `false` is a deprecation, while `true` keeps a warning that names the PHP 9 error.
+        if builtin_key == "define"
+            && args.len() == 3
+            && crate::codegen_support::compile_php_version()
+                >= crate::php_version::PhpVersion::Php86
+        {
+            let message = if matches!(
+                args[2].kind,
+                crate::parser::ast::ExprKind::BoolLiteral(true)
+            ) {
+                "Passing true as the case_insensitive argument to define() is deprecated and will become an error in PHP 9.0"
+            } else {
+                "Passing the case_insensitive argument to define() is deprecated"
+            };
+            self.warnings
+                .push(crate::errors::CompileWarning::new(args[2].span, message));
         }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
         // CUF accepts named variadic entries, then checks them against the callback.

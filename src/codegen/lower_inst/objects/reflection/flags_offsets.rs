@@ -215,7 +215,7 @@ pub(super) fn reflection_property_modifiers_for_info(
             false,
             false,
             false,
-            None,
+            info.property_set_visibilities.get(property_name),
         ));
     }
     None

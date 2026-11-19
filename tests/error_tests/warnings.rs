@@ -318,3 +318,126 @@ fn test_warning_no_deprecation_for_undeprecated_function() {
         "deprecated",
     );
 }
+
+/// Builtin deprecations carry the profile that introduced them: PHP 8.6 reports the
+/// non-canonical alias functions and the SPL helpers, while 8.5 keeps the plain call.
+#[test]
+fn test_builtin_deprecations_start_at_php_86() {
+    use elephc::php_version::PhpVersion;
+
+    let cases = [
+        (
+            "<?php is_double(1.0);",
+            "Call to deprecated function: is_double() — use is_float() instead",
+        ),
+        (
+            "<?php is_long(1);",
+            "Call to deprecated function: is_long() — use is_int() instead",
+        ),
+        (
+            "<?php is_integer(1);",
+            "Call to deprecated function: is_integer() — use is_int() instead",
+        ),
+        (
+            "<?php spl_classes();",
+            "Call to deprecated function: spl_classes() — use ReflectionExtension::getClassNames() instead",
+        ),
+        (
+            "<?php spl_object_hash(new stdClass());",
+            "Call to deprecated function: spl_object_hash() — use spl_object_id() instead",
+        ),
+    ];
+    for (source, expected) in cases {
+        elephc::codegen::set_compile_profile(PhpVersion::Php86, false);
+        let result = check_source_full(source).expect("8.6 source must type-check");
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains(expected)),
+            "{source}: warnings {:?} do not contain {expected:?}",
+            result
+                .warnings
+                .iter()
+                .map(|warning| warning.message.clone())
+                .collect::<Vec<_>>()
+        );
+
+        elephc::codegen::set_compile_profile(PhpVersion::Php85, false);
+        let older = check_source_full(source).expect("8.5 source must type-check");
+        assert!(
+            !older
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("Call to deprecated function")),
+            "{source}: PHP 8.5 must not report the 8.6 deprecation, got {:?}",
+            older
+                .warnings
+                .iter()
+                .map(|warning| warning.message.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+    elephc::codegen::set_compile_profile(PhpVersion::default(), false);
+}
+
+/// PHP 8.6 deprecates `return` inside a `finally` block; earlier profiles keep it silent.
+#[test]
+fn test_finally_return_is_deprecated_php_86() {
+    use elephc::php_version::PhpVersion;
+    let source = "<?php function f(): int { try { return 1; } finally { return 2; } }";
+
+    elephc::codegen::set_compile_profile(PhpVersion::Php86, false);
+    let result = check_source_full(source).expect("8.6 source must type-check");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("Returning from a finally block is deprecated")),
+        "warnings {:?}",
+        result.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>()
+    );
+
+    elephc::codegen::set_compile_profile(PhpVersion::Php85, false);
+    let older = check_source_full(source).expect("8.5 source must type-check");
+    assert!(
+        !older
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("finally block is deprecated")),
+        "PHP 8.5 must not deprecate the finally return: {:?}",
+        older.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>()
+    );
+    elephc::codegen::set_compile_profile(PhpVersion::default(), false);
+}
+
+/// PHP 8.6 deprecates the ignored third argument of `define()`; 8.5 stays silent.
+#[test]
+fn test_define_case_insensitive_argument_is_deprecated_php_86() {
+    use elephc::php_version::PhpVersion;
+
+    elephc::codegen::set_compile_profile(PhpVersion::Php86, false);
+    let result = check_source_full("<?php define('X_86_PROBE', 1, false);")
+        .expect("8.6 source must type-check");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("case_insensitive argument to define() is deprecated")),
+        "warnings {:?}",
+        result.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>()
+    );
+
+    elephc::codegen::set_compile_profile(PhpVersion::Php85, false);
+    let older = check_source_full("<?php define('X_85_PROBE', 1, false);")
+        .expect("8.5 source must type-check");
+    assert!(
+        !older
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("case_insensitive argument to define()")),
+        "PHP 8.5 must not deprecate define()'s third argument: {:?}",
+        older.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>()
+    );
+    elephc::codegen::set_compile_profile(PhpVersion::default(), false);
+}

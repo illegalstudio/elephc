@@ -347,6 +347,18 @@ $c = new Counter();
 $c->increment();
 echo $c->value;   // 2 — public read
 // $c->value = 9; // rejected: write is private
+
+class Registry {
+    public private(set) static int $calls = 0;
+
+    public static function record(): void {
+        self::$calls = self::$calls + 1;
+    }
+}
+
+Registry::record();
+echo Registry::$calls;           // 1 — public read
+// Registry::$calls = 9;         // rejected: write is private
 ```
 
 Rules:
@@ -355,7 +367,7 @@ Rules:
 - A lone `private(set)` / `protected(set)` leaves the read visibility at its `public` default.
 - `protected(set)` allows writes from the declaring class and its subclasses; `private(set)` only from the declaring class.
 - The write visibility must not be weaker than the read visibility (`private public(set)` is rejected).
-- The property must be typed, and the modifier is not allowed on static properties.
+- The property must be typed. PHP 8.5 extends the same modifier to static properties: `public private(set) static int $calls = 0` is publicly readable and writable only from the declaring class.
 - A property may have only one `(set)` modifier. Explicit `public(set)` on a public readonly property suppresses the implicit `protected(set)` reflection flag.
 - Indirect writes through an array element (`$obj->items[] = x`, `$obj->items['k'] = x`) are writes too, so they honor the `set` visibility — not the (wider) read visibility.
 - Abstract and interface property hook contracts may carry asymmetric write visibility on writable (`{ set; }`) contracts. `private(set)` contracts are final and cannot be implemented or redeclared by a concrete child property.
@@ -371,7 +383,7 @@ A child class may redeclare a property inherited from a non-private parent. The 
 - The `readonly` modifier is invariant for non-private concrete inherited properties, including virtual getters. A child cannot add or remove `readonly`, even with explicit `public(set)` access. Abstract parent properties are exempt from this flag comparison, but their setter access and hook contracts still apply. Readonly storage can implement an abstract getter; over a getter/setter contract it is allowed on an abstract child, while a concrete child redeclaring the property still lacks the setter implementation. A private parent property is a separate slot and may be shadowed independently.
 
 - The by-reference qualifier on a property cannot change across inheritance.
-- `final` parent properties cannot be redeclared. A `private(set)` restriction on a public or protected property makes it implicitly final, including promoted properties. An entirely private property still permits a separate child property with the same name.
+- `final` parent properties cannot be redeclared. A `private(set)` restriction on a public or protected property makes it implicitly final, including promoted properties and static properties. An entirely private property still permits a separate child property with the same name.
 - The child shares the parent's slot, so reads of the property from inherited methods see the child's value.
 
 An abstract readonly storage redeclaration must still accept the inherited setter's

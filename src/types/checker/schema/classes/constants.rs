@@ -282,6 +282,7 @@ fn rewrite_expr(
         },
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -307,6 +308,7 @@ fn rewrite_expr(
                     ))
                 })
                 .collect::<Result<Vec<_>, CompileError>>()?,
+            param_attributes: param_attributes.clone(),
             variadic: variadic.clone(),
             variadic_by_ref: *variadic_by_ref,
             variadic_type: variadic_type.clone(),

@@ -4358,6 +4358,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::StrInterpolate
                     | Op::ArrayNew
                     | Op::HashNew
+                    | Op::LoadGlobalsArray
                     | Op::ArrayCloneShallow
                     | Op::HashCloneShallow
                     | Op::ArrayUnion
@@ -4824,6 +4825,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                         | Op::HashGet
                         | Op::HashGetSilent
                         | Op::HashGetForWrite
+                        | Op::LoadGlobalDynamic
                 )
             )
     }
@@ -4857,6 +4859,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashGetForWrite
                     | Op::ArrayGetMixedKey
                     | Op::ArrayGetMixedKeySilent
+                    | Op::LoadGlobalDynamic
             )
         )
     }

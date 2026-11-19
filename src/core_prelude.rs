@@ -238,6 +238,7 @@ pub fn program_uses_weak_reference(program: &[Stmt]) -> bool {
 /// cannot show.
 pub fn inject_if_used(
     program: Program,
+    force_pack: bool,
     autoloaded_weak_map: bool,
     autoloaded_weak_reference: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
@@ -250,8 +251,12 @@ pub fn inject_if_used(
             || dynamic
             || usage.classes.contains("weakmap")
             || usage.literals.contains("weakmap");
+        let io_poll_requested = crate::codegen_support::compile_php_version()
+            >= crate::php_version::PhpVersion::Php86
+            && crate::io_poll_prelude::requested(&usage);
         let weak_reference = weak_map
             || autoloaded_weak_reference
+            || io_poll_requested
             || usage.classes.contains("weakreference")
             || usage.literals.contains("weakreference");
         declarations.retain(|stmt| {
@@ -267,6 +272,30 @@ pub fn inject_if_used(
             true
         });
         inventory.record_program("core", &declarations);
+        // PHP's core pack()/unpack() family is pay-for-use: its float conversions
+        // require the small elephc_pack bridge, so programs that never call it link nothing.
+        if force_pack || crate::pack_prelude::requested(&usage) {
+            let pack = crate::pack_prelude::declarations(crate::codegen_support::compile_php_version());
+            inventory.record_program("pack", &pack);
+            declarations.extend(pack);
+        }
+        // PHP 8.6's Io\Poll surface is pay-for-use; injecting it before the Time prelude
+        // lets that pass see its ?Time\Duration signature and bring Time\Duration with it.
+        if io_poll_requested {
+            let io_poll = crate::io_poll_prelude::declarations();
+            inventory.record_program("io-poll", &io_poll);
+            declarations.extend(io_poll);
+        }
+        // PHP 8.6's stream error surface is pay-for-use: it is injected only for a
+        // program that reaches one of its functions, enums, or classes.
+        if crate::codegen_support::compile_php_version()
+            >= crate::php_version::PhpVersion::Php86
+            && crate::stream_errors_prelude::requested(&usage)
+        {
+            let stream_errors = crate::stream_errors_prelude::declarations();
+            inventory.record_program("stream-errors", &stream_errors);
+            declarations.extend(stream_errors);
+        }
         declarations.extend(program);
         declarations
     })
@@ -281,7 +310,7 @@ mod tests {
             let tokens = crate::lexer::tokenize("<?php get_declared_classes();").unwrap();
             let program = crate::parser::parse(&tokens).unwrap();
             let mut inventory = crate::optimize::reachability::PreludeInventory::new();
-            let program = super::inject_if_used(program, false, false, &mut inventory);
+            let program = super::inject_if_used(program, false, false, false, &mut inventory);
             let program = crate::name_resolver::resolve(program).unwrap();
             let target = crate::codegen_support::platform::Target::parse(target).unwrap();
             let result = crate::types::checker::check_types(&program, target)

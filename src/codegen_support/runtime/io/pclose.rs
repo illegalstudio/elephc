@@ -28,6 +28,7 @@ pub fn emit_pclose(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #16");                                     // minimal frame for the libc call
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x0", "__rt_pclose_plain");
 
     // -- look up the FILE* recorded for this descriptor --
     abi::emit_symbol_address(emitter, "x9", "_popen_files");
@@ -56,6 +57,7 @@ fn emit_pclose_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "rdi", "__rt_pclose_plain_x86");
 
     // -- look up the FILE* recorded for this descriptor --
     abi::emit_symbol_address(emitter, "r9", "_popen_files");                    // base of the fd->FILE* table

@@ -290,6 +290,13 @@ pub(super) fn lower_lazy_empty_without_native(
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
         }
     }
+    // `empty($undefined)` is a silent probe in PHP: an unbound local is simply empty and
+    // must not emit the ordinary undefined-variable warning the plain read would.
+    if let ExprKind::Variable(variable) = &args[0].kind {
+        if !ctx.has_local_slot(variable) && !crate::superglobals::is_superglobal(variable) {
+            return Some(lower_bool_literal(ctx, true, expr));
+        }
+    }
     let ordinary_value = match &args[0].kind {
         ExprKind::Variable(name) => ctx.has_local_slot(name),
         ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }

@@ -39,11 +39,12 @@ pub(crate) use dump_dynamic_props::{
 };
 pub(crate) use enum_debug::{
     emit_obj_enum_case_name, emit_obj_enum_kind, emit_obj_enum_name_offset,
-    emit_var_dump_emit_enum_line,
+    emit_var_dump_emit_enum_line, emit_var_dump_open_enum_n,
 };
 pub(crate) use export_props::{emit_obj_prop_count, emit_obj_prop_name, emit_obj_prop_value};
 pub(crate) use debug_info::{
-    emit_obj_debuginfo_fetch, emit_pr_debuginfo_object, emit_vd_debuginfo_object,
+    emit_obj_debuginfo_fetch, emit_pr_debuginfo_object, emit_vd_debuginfo_enum,
+    emit_vd_debuginfo_object,
 };
 pub(crate) use print_r_object::{emit_pr_obj_desc, emit_print_r_object};
 pub(crate) use handles::{

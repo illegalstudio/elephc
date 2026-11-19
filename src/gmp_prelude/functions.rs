@@ -128,7 +128,7 @@ fn unary_objects() -> Vec<Stmt> {
                 .build(),
         );
     }
-    for (name, operation) in [("gmp_fact", UN_FACT), ("gmp_sqrt", UN_SQRT)] {
+    for (name, operation) in [("gmp_sqrt", UN_SQRT)] {
         functions.push(
             helper(name)
                 .param("num", t_mixed())
@@ -153,6 +153,33 @@ fn unary_objects() -> Vec<Stmt> {
                 .build(),
         );
     }
+    // php-src 8.6 rejects a factorial operand that does not fit an unsigned machine word.
+    functions.push(
+        helper("gmp_fact")
+            .param("num", t_mixed())
+            .returns(gmp())
+            .body(vec![
+                assign("value", operand("num", "gmp_fact", 1, "num")),
+                if_(
+                    bin(
+                        call("elephc_gmp_fits_ulong", vec![v("value")]),
+                        BinOp::StrictEq,
+                        i(0),
+                    ),
+                    vec![throw_new(
+                        "ValueError",
+                        s("gmp_fact(): Argument #1 ($num) must be between 0 and 18446744073709551615"),
+                    )],
+                    Vec::new(),
+                    None,
+                ),
+                ret(gmp_from(call(
+                    "elephc_gmp_unary",
+                    vec![i(UN_FACT), v("value"), i(0)],
+                ))),
+            ])
+            .build(),
+    );
     functions
 }
 
@@ -555,6 +582,7 @@ fn special_family() -> Vec<Stmt> {
         root(),
         pow(),
         powm(),
+        powm_sec(),
         random_seed(),
         random_bits(),
         random_range(),
@@ -567,6 +595,7 @@ fn special_family() -> Vec<Stmt> {
         minmax_array(),
         legacy_property_writer(),
     ];
+    functions.extend(prevprime());
     functions.extend(intval_helpers());
     functions
 }
@@ -1043,7 +1072,7 @@ fn root() -> Stmt {
                 bin(v("nth"), BinOp::LtEq, i(0)),
                 vec![throw_new(
                     "ValueError",
-                    s("gmp_root(): Argument #2 ($nth) must be greater than 0"),
+                    s("gmp_root(): Argument #2 ($nth) must be between 1 and 18446744073709551615"),
                 )],
                 Vec::new(),
                 None,
@@ -1087,7 +1116,7 @@ fn pow() -> Stmt {
                 bin(v("exponent"), BinOp::Lt, i(0)),
                 vec![throw_new(
                     "ValueError",
-                    s("gmp_pow(): Argument #2 ($exponent) must be greater than or equal to 0"),
+                    s("gmp_pow(): Argument #2 ($exponent) must be between 0 and 18446744073709551615"),
                 )],
                 Vec::new(),
                 None,
@@ -1124,18 +1153,139 @@ fn powm() -> Stmt {
                 "packet",
                 call(
                     "elephc_gmp_ternary",
-                    vec![i(0), v("base"), v("power"), v("mod")],
+                    vec![i(TER_POWM), v("base"), v("power"), v("mod")],
                 ),
             ),
             if_(
                 bin(index(v("packet"), i(0)), BinOp::StrictEq, s("Z")),
-                vec![throw_new("DivisionByZeroError", s("Modulo by zero"))],
+                vec![throw_new(
+                    "DivisionByZeroError",
+                    s("gmp_powm(): Argument #3 ($modulus) Modulo by zero"),
+                )],
                 Vec::new(),
                 None,
             ),
             ret(gmp_from(v("packet"))),
         ])
         .build()
+}
+
+/// `gmp_powm_sec()`.
+fn powm_sec() -> Stmt {
+    helper("gmp_powm_sec")
+        .param("num", t_mixed())
+        .param("exponent", t_mixed())
+        .param("modulus", t_mixed())
+        .returns(gmp())
+        .body(vec![
+            assign("base", operand("num", "gmp_powm_sec", 1, "num")),
+            assign("power", operand("exponent", "gmp_powm_sec", 2, "exponent")),
+            assign("mod", operand("modulus", "gmp_powm_sec", 3, "modulus")),
+            if_(
+                or(
+                    bin(index(v("power"), i(0)), BinOp::StrictEq, s("-")),
+                    bin(v("power"), BinOp::StrictEq, s("0")),
+                ),
+                vec![throw_new(
+                    "ValueError",
+                    s("gmp_powm_sec(): Argument #2 ($exponent) must be greater than 0"),
+                )],
+                Vec::new(),
+                None,
+            ),
+            if_(
+                bin(v("mod"), BinOp::StrictEq, s("0")),
+                vec![throw_new(
+                    "DivisionByZeroError",
+                    s("gmp_powm_sec(): Argument #3 ($modulus) Modulo by zero"),
+                )],
+                Vec::new(),
+                None,
+            ),
+            assign("last_digit", as_int(call("substr", vec![v("mod"), i(-1)]))),
+            if_(
+                bin(bin(v("last_digit"), BinOp::Mod, i(2)), BinOp::StrictEq, i(0)),
+                vec![throw_new(
+                    "ValueError",
+                    s("gmp_powm_sec(): Argument #3 ($modulus) must be odd"),
+                )],
+                Vec::new(),
+                None,
+            ),
+            ret(gmp_from(call(
+                "elephc_gmp_ternary",
+                vec![i(TER_POWM_SEC), v("base"), v("power"), v("mod")],
+            ))),
+        ])
+        .build()
+}
+
+/// `gmp_prevprime()` and the write-only `$definitely_prime` output.
+///
+/// The helper owns the assignment so a validation failure leaves the caller's variable
+/// untouched: php-src throws before it ever writes the flag.
+fn prevprime() -> Vec<Stmt> {
+    let body = |assign_flag: bool| -> Vec<Stmt> {
+        let mut statements = vec![
+            assign("value", operand("num", "gmp_prevprime", 1, "num")),
+            if_(
+                or(
+                    bin(index(v("value"), i(0)), BinOp::StrictEq, s("-")),
+                    or(
+                        bin(v("value"), BinOp::StrictEq, s("0")),
+                        or(
+                            bin(v("value"), BinOp::StrictEq, s("1")),
+                            bin(v("value"), BinOp::StrictEq, s("2")),
+                        ),
+                    ),
+                ),
+                vec![throw_new(
+                    "ValueError",
+                    s("gmp_prevprime(): Argument #1 ($num) must be greater than 2"),
+                )],
+                Vec::new(),
+                None,
+            ),
+            assign(
+                "parts",
+                call(
+                    "explode",
+                    vec![
+                        s("|"),
+                        call(
+                            "__elephc_gmp_value",
+                            vec![call(
+                                "elephc_gmp_unary",
+                                vec![i(UN_PREVPRIME), v("value"), i(0)],
+                            )],
+                        ),
+                    ],
+                ),
+            ),
+        ];
+        if assign_flag {
+            statements.push(assign(
+                "definitely_prime",
+                bin(index(v("parts"), i(1)), BinOp::StrictEq, s("1")),
+            ));
+        }
+        statements.push(ret(new("GMP", vec![index(v("parts"), i(0))])));
+        statements
+    };
+    vec![
+        helper("gmp_prevprime")
+            .param("num", t_mixed())
+            .param_by_ref_default("definitely_prime", Some(TypeExpr::Bool), e_null())
+            .returns(gmp())
+            .body(body(true))
+            .build(),
+        function("__elephc_gmp_prevprime_no_flag")
+            .param("strict", TypeExpr::Bool)
+            .param("num", t_mixed())
+            .returns(gmp())
+            .body(body(false))
+            .build(),
+    ]
 }
 
 /// `gmp_random_seed()`.
@@ -1371,7 +1521,7 @@ fn binomial() -> Stmt {
                 bin(v("k"), BinOp::Lt, i(0)),
                 vec![throw_new(
                     "ValueError",
-                    s("gmp_binomial(): Argument #2 ($k) must be greater than or equal to 0"),
+                    s("gmp_binomial(): Argument #2 ($k) must be between 0 and 18446744073709551615"),
                 )],
                 Vec::new(),
                 None,
@@ -1399,7 +1549,7 @@ fn rootrem_body() -> Vec<Stmt> {
             bin(v("nth"), BinOp::LtEq, i(0)),
             vec![throw_new(
                 "ValueError",
-                s("gmp_rootrem(): Argument #2 ($nth) must be greater than or equal to 1"),
+                s("gmp_rootrem(): Argument #2 ($nth) must be between 1 and 18446744073709551615"),
             )],
             Vec::new(),
             None,

@@ -10,7 +10,7 @@
 //! - Precise initializer types are strict apart from PHP's allowed int-to-float widening.
 //! - Conservative `Mixed` inference is accepted when an expression cannot be narrowed statically.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::parser::ast::{ClassConst, Program, StmtKind, TypeExpr};
@@ -35,6 +35,9 @@ pub(crate) fn validate_deferred_class_constants(
         for constant in &class.constants {
             validate_constant_declaration(checker, &class.name, constant, &mut errors);
             validate_class_constant_contract(checker, class, constant, &mut errors);
+            validate_override_constant_attribute(
+                checker, &class.name, constant, ConstantOverrideScope::Class, &mut errors,
+            );
         }
     }
 
@@ -47,6 +50,9 @@ pub(crate) fn validate_deferred_class_constants(
                 &interface.extends,
                 constant,
                 &mut errors,
+            );
+            validate_override_constant_attribute(
+                checker, &interface.name, constant, ConstantOverrideScope::Interface, &mut errors,
             );
         }
     }
@@ -61,11 +67,119 @@ pub(crate) fn validate_deferred_class_constants(
                 constant,
                 &mut errors,
             );
+            validate_override_constant_attribute(
+                checker, &enum_unit.name, constant, ConstantOverrideScope::Enum, &mut errors,
+            );
         }
     }
 
     validate_trait_constants(checker, program, &mut errors);
     errors
+}
+
+/// Which declaration family carries an `#[\Override]` class constant.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConstantOverrideScope {
+    /// A class: the constant may override a parent-class or implemented-interface constant.
+    Class,
+    /// An interface: the constant may override an extended-interface constant.
+    Interface,
+    /// An enum: the constant may override an implemented-interface constant.
+    Enum,
+}
+
+/// Validates PHP 8.6's `#[\Override]` marker on one class constant.
+///
+/// The marker requires a matching constant in a parent class, an extended interface, or an
+/// implemented interface. php-src reports a fatal error when none exists; the compiler rejects
+/// the declaration at the same point in the schema pass.
+fn validate_override_constant_attribute(
+    checker: &Checker,
+    owner: &str,
+    constant: &ClassConst,
+    scope: ConstantOverrideScope,
+    errors: &mut Vec<CompileError>,
+) {
+    if !constant
+        .attributes
+        .iter()
+        .flat_map(|group| &group.attributes)
+        .any(|attribute| super::validation::matches_global_builtin_attribute(attribute, "Override"))
+    {
+        return;
+    }
+    let has_parent = match scope {
+        ConstantOverrideScope::Interface => {
+            checker.interfaces.get(owner).is_some_and(|info| {
+                info.parents.iter().any(|parent| {
+                    interface_chain_has_constant(checker, parent, &constant.name, &mut HashSet::new())
+                })
+            })
+        }
+        ConstantOverrideScope::Class | ConstantOverrideScope::Enum => checker
+            .classes
+            .get(owner)
+            .is_some_and(|info| {
+                info.parent.as_ref().is_some_and(|parent| {
+                    class_chain_has_constant(checker, parent, &constant.name)
+                }) || info.interfaces.iter().any(|interface| {
+                    interface_chain_has_constant(checker, interface, &constant.name, &mut HashSet::new())
+                })
+            }),
+    };
+    if !has_parent {
+        errors.push(CompileError::new(
+            constant.span,
+            &format!(
+                "{}::{} has #[\\Override] attribute, but no matching parent constant exists",
+                owner, constant.name
+            ),
+        ));
+    }
+}
+
+/// Returns whether a class or any of its ancestors declares `member`, including interfaces.
+fn class_chain_has_constant(checker: &Checker, class_name: &str, member: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    let mut guard = 0usize;
+    while let Some(name) = current {
+        guard += 1;
+        if guard > 128 {
+            return false;
+        }
+        let Some(info) = checker.classes.get(&name) else {
+            return false;
+        };
+        if info.constants.contains_key(member) {
+            return true;
+        }
+        if info.interfaces.iter().any(|interface| {
+            interface_chain_has_constant(checker, interface, member, &mut HashSet::new())
+        }) {
+            return true;
+        }
+        current = info.parent.clone();
+    }
+    false
+}
+
+/// Returns whether an interface or any of its parent interfaces declares `member`.
+pub(super) fn interface_chain_has_constant(
+    checker: &Checker,
+    interface_name: &str,
+    member: &str,
+    visited: &mut HashSet<String>,
+) -> bool {
+    if !visited.insert(interface_name.to_string()) {
+        return false;
+    }
+    let Some(info) = checker.interfaces.get(interface_name) else {
+        return false;
+    };
+    info.constants.contains_key(member)
+        || info.parents.iter().any(|parent| {
+            interface_chain_has_constant(checker, parent, member, visited)
+        })
 }
 
 /// Validates one constant's allowed type and initializer value.

@@ -42,10 +42,14 @@ pub(in crate::interpreter) fn eval_builtin_stream_bool_predicate_named(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [stream] = args else {
+    let max_args = if name == "stream_is_local" { 2 } else { 1 };
+    if args.is_empty() || args.len() > max_args {
         return Err(EvalStatus::RuntimeFatal);
-    };
-    let stream = eval_expr(stream, context, scope, values)?;
+    }
+    let stream = eval_expr(&args[0], context, scope, values)?;
+    if let Some(context_arg) = args.get(1) {
+        let _ = eval_expr(context_arg, context, scope, values)?;
+    }
     eval_stream_bool_predicate_named_result(name, stream, values)
 }
 

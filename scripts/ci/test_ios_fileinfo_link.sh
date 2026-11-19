@@ -125,6 +125,7 @@ xcrun --sdk "$APPLE_SDK" clang \
   "$TLS_ARCHIVE" \
   "$SHIM_ARCHIVE" \
   "$LIBMAGIC_ARCHIVE" \
+  -liconv \
   -lz \
   -lbz2 \
   -o "$WORK_DIR/ios-fileinfo-host"

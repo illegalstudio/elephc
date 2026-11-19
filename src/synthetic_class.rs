@@ -462,6 +462,11 @@ pub fn e_not(value: Expr) -> Expr {
     Expr::new(ExprKind::Not(Box::new(value)), Span::dummy())
 }
 
+/// `clone value`.
+pub fn e_clone(value: Expr) -> Expr {
+    Expr::new(ExprKind::Clone(Box::new(value)), Span::dummy())
+}
+
 /// `@value` — evaluates `value` while suppressing PHP diagnostics.
 pub fn e_error_suppress(value: Expr) -> Expr {
     Expr::new(ExprKind::ErrorSuppress(Box::new(value)), Span::dummy())
@@ -579,6 +584,11 @@ pub fn s_namespace(name: &str, body: Vec<Stmt>) -> Stmt {
 /// `return <value>;`
 pub fn s_return(value: Expr) -> Stmt {
     Stmt::new(StmtKind::Return(Some(value)), Span::dummy())
+}
+
+/// A `global $a, $b;` declaration that aliases the listed program globals.
+pub fn s_global(vars: Vec<String>) -> Stmt {
+    Stmt::new(StmtKind::Global { vars }, Span::dummy())
 }
 
 /// A bare `return;`.
@@ -795,9 +805,12 @@ impl ClosureBuilder {
 
     /// Builds the closure expression.
     pub fn build(self) -> Expr {
+        let mut param_attributes = Vec::new();
+        param_attributes.resize(self.params.len(), Vec::new());
         Expr::new(
             ExprKind::Closure {
                 params: self.params,
+                param_attributes,
                 variadic: None,
                 variadic_by_ref: false,
                 variadic_type: None,
@@ -886,14 +899,10 @@ pub fn s_static_prop_array_assign(
     )
 }
 
-/// `<array-access chain> = <value>;` in statement position, for a write through more than
-/// one index (`Class::$prop[$a][$b] = <value>`, `$x[$a][$b] = <value>`): the parser's
-/// `NestedArrayAssign`, whose target is the full `ArrayAccess` chain.
-pub fn s_nested_array_assign(target: Expr, value: Expr) -> Stmt {
-    Stmt::new(StmtKind::NestedArrayAssign { target, value }, Span::dummy())
-}
-
 /// `self::$prop[<index>] = <value>;` in statement position.
+///
+/// The `self::` receiver keeps the assignment inside the declaring class instead of binding a
+/// same-named subclass property; `s_static_prop_array_assign` names a concrete class.
 pub fn s_self_static_prop_array_assign(property: &str, index: Expr, value: Expr) -> Stmt {
     Stmt::new(
         StmtKind::StaticPropertyArrayAssign {
@@ -905,6 +914,14 @@ pub fn s_self_static_prop_array_assign(property: &str, index: Expr, value: Expr)
         Span::dummy(),
     )
 }
+
+/// `<array-access chain> = <value>;` in statement position, for a write through more than
+/// one index (`Class::$prop[$a][$b] = <value>`, `$x[$a][$b] = <value>`): the parser's
+/// `NestedArrayAssign`, whose target is the full `ArrayAccess` chain.
+pub fn s_nested_array_assign(target: Expr, value: Expr) -> Stmt {
+    Stmt::new(StmtKind::NestedArrayAssign { target, value }, Span::dummy())
+}
+
 
 /// `self::$prop[] = <value>;` in statement position.
 pub fn s_self_static_prop_array_push(property: &str, value: Expr) -> Stmt {
@@ -1729,7 +1746,7 @@ impl MethodBuilder {
     }
 
     /// Builds the method, prepending the `$_unused` consumption when it is needed.
-    fn build(mut self) -> ClassMethod {
+    pub(crate) fn build(mut self) -> ClassMethod {
         let param_attributes = std::mem::take(&mut self.param_attributes);
         let variadic = self.signature.variadic.take();
         let variadic_by_ref = self.signature.variadic_by_ref;
@@ -2261,6 +2278,7 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
             }
         }
         ExprKind::Spread(inner) => audit_expr(inner, out),
+        ExprKind::Clone(inner) => audit_expr(inner, out),
         // Leaves: nothing to descend into. A class-constant read names no function.
         ExprKind::ScopedConstantAccess { .. } | ExprKind::ClassConstant { .. } => {}
         ExprKind::Variable(_)
@@ -2364,6 +2382,8 @@ pub struct ClassBuilder {
     constants: Vec<ClassConst>,
     properties: Vec<ClassProperty>,
     methods: Vec<ClassMethod>,
+    /// Span stamped on the declaration; `Span::dummy()` marks it compiler-internal.
+    span: Span,
 }
 
 /// Starts a concrete (non-abstract, non-final) class named `name`.
@@ -2377,10 +2397,20 @@ pub fn class(name: &str) -> ClassBuilder {
         constants: Vec::new(),
         properties: Vec::new(),
         methods: Vec::new(),
+        span: Span::dummy(),
     }
 }
 
 impl ClassBuilder {
+    /// Sets the span stamped on the class declaration.
+    ///
+    /// A non-dummy source span marks the class as user-declared for `__debugInfo()` and the
+    /// other behaviors compiler-internal classes deliberately skip.
+    pub fn span(mut self, span: Span) -> Self {
+        self.span = span;
+        self
+    }
+
     /// Makes the class `abstract`.
     pub fn abstract_(mut self) -> Self {
         self.is_abstract = true;
@@ -2621,7 +2651,7 @@ impl ClassBuilder {
                 methods: self.methods,
                 constants: self.constants,
             },
-            Span::dummy(),
+            self.span,
         )
     }
 }

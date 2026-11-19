@@ -86,7 +86,7 @@ pub(crate) fn lower_stream_context_create(
         store_stream_context_options(ctx, options, true)?;
     }
     capture_stream_notification_callback(ctx, inst.operands.get(1).copied())?;
-    emit_fd_result(ctx, crate::codegen_support::runtime::DEFAULT_CONTEXT_PAYLOAD);
+    emit_unique_context_payload(ctx);
     store_if_result(ctx, inst)
 }
 
@@ -127,6 +127,18 @@ pub(crate) fn lower_stream_context_set_option(
         }
         _ => emit_bool_result(ctx, true),
     }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `stream_context_set_options(context, options)` into the shared option store.
+pub(crate) fn lower_stream_context_set_options(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "stream_context_set_options", 2)?;
+    let options = expect_operand(inst, 1)?;
+    store_stream_context_options(ctx, options, false)?;
+    emit_bool_result(ctx, true);
     store_if_result(ctx, inst)
 }
 

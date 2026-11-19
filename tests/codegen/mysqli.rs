@@ -249,7 +249,7 @@ try {
 /// all. `options()` is the exception: it just records state and succeeds.
 #[test]
 fn test_mysqli_unconnected_ops_raise_error() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_php_version(
         r#"<?php
 mysqli_report(MYSQLI_REPORT_OFF);
 $db = mysqli_init();
@@ -262,11 +262,14 @@ $probe = function(callable $fn): string {
 echo $probe(fn() => $db->ping());
 echo "|", $probe(fn() => $db->select_db("nope"));
 echo "|", $probe(fn() => $db->real_escape_string("a'b"));
+echo "|", $probe(fn() => $db->quote_string("a'b"));
+echo "|", $probe(fn() => mysqli_quote_string($db, "a'b"));
 echo "|", $probe(fn() => $db->character_set_name());
 echo "|", $db->options(MYSQLI_OPT_CONNECT_TIMEOUT, 1) ? "opt-T" : "opt-F";
 "#,
+        elephc::php_version::PhpVersion::Php86,
     );
-    assert_eq!(out, "err|err|err|err|opt-T");
+    assert_eq!(out, "err|err|err|err|err|err|opt-T");
 }
 
 /// An empty query string throws `ValueError` (php-src's message); a query on an

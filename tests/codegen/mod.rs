@@ -124,9 +124,12 @@ mod runtime_reachability;
 mod runtime_introspection;
 mod math;
 mod gmp_phpt;
+mod time_duration_php_src;
+mod time_duration_serialization;
 mod gmp_eval;
 mod gmp_class;
 mod gmp_math;
+mod gmp_php86;
 mod random;
 mod misc;
 mod pointers;
@@ -163,5 +166,8 @@ mod ctype_php_src;
 mod fileinfo_stream_magic;
 
 mod tidy_php_src;
+mod uri86_php_src;
+mod uri_php_src;
 
 mod tidy;
+mod uri;

@@ -169,6 +169,7 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
 
     emitter.label("__rt_stream_get_line_eof");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the file descriptor
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x0", "__rt_stream_get_line_done");
     emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("mov w10, #1");                                         // EOF marker value
     emitter.instruction("strb w10, [x9, x0]");                                  // record EOF for this descriptor
@@ -321,6 +322,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_stream_get_line_eof_x86");
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the file descriptor
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "r9", "__rt_stream_get_line_done_x86");
     abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // eof-flag table base address
     emitter.instruction("mov BYTE PTR [r10 + r9], 1");                          // record EOF for this descriptor
 

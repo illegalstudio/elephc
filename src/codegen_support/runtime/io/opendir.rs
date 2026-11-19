@@ -84,6 +84,7 @@ pub fn emit_opendir(emitter: &mut Emitter) {
 
     // -- recover the underlying descriptor with dirfd --
     emitter.bl_c("dirfd");
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x0", "__rt_opendir_untrackable");
 
     // -- record the DIR* in the fd->DIR* table for readdir/closedir --
     abi::emit_symbol_address(emitter, "x9", "_dir_handles");
@@ -92,6 +93,14 @@ pub fn emit_opendir(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the frame
     emitter.instruction("ret");                                                 // return the directory descriptor
+
+    emitter.label("__rt_opendir_untrackable");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the untrackable DIR*
+    emitter.bl_c("closedir");                                                   // release the directory stream
+    emitter.instruction("mov x0, #-1");                                         // report the unsupported descriptor as an opendir failure
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the frame
+    emitter.instruction("ret");                                                 // return the failure result
 
     emitter.label("__rt_opendir_fail");
     emitter.instruction("mov x0, #-1");                                         // -1 reports an opendir failure
@@ -168,6 +177,7 @@ fn emit_opendir_linux_x86_64(emitter: &mut Emitter) {
     // -- recover the underlying descriptor with dirfd --
     emitter.instruction("mov rdi, rax");                                        // DIR* argument for dirfd
     emitter.bl_c("dirfd");
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "rax", "__rt_opendir_untrackable_x86");
 
     // -- record the DIR* in the fd->DIR* table for readdir/closedir --
     abi::emit_symbol_address(emitter, "r10", "_dir_handles");                   // base of the fd->DIR* table
@@ -176,6 +186,14 @@ fn emit_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the directory descriptor
+
+    emitter.label("__rt_opendir_untrackable_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                         // reload the untrackable DIR*
+    emitter.bl_c("closedir");                                                   // release the directory stream
+    emitter.instruction("mov rax, -1");                                         // report the unsupported descriptor as an opendir failure
+    emitter.instruction("add rsp, 16");                                         // release the frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the failure result
 
     emitter.label("__rt_opendir_fail_x86");
     emitter.instruction("mov rax, -1");                                         // -1 reports an opendir failure

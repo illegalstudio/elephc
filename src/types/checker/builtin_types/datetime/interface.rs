@@ -113,3 +113,90 @@ pub(super) fn datetime_get_offset() -> ClassMethod {
         ],
     )
 }
+
+/// Builds the internal ordering adapter used by mixed comparisons and `clamp()`.
+///
+/// php-src's date classes install a `compare` object handler that orders by the stored
+/// instant. The synthetic classes keep that instant in `timestamp`/`microsecond`, so the
+/// adapter compares those fields in order. Foreign operands return `2` (`Unordered`),
+/// the shared convention for an internal handler that cannot order them.
+pub(super) fn datetime_compare_adapter() -> ClassMethod {
+    let var = |name: &str| Expr::new(ExprKind::Variable(name.to_string()), dummy());
+    let method_call = |object: Expr, method: &str| {
+        Expr::new(
+            ExprKind::MethodCall {
+                object: Box::new(object),
+                method: method.to_string(),
+                args: Vec::new(),
+            },
+            dummy(),
+        )
+    };
+    let binary = |left: Expr, op: BinOp, right: Expr| {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            },
+            dummy(),
+        )
+    };
+    let is_date = |name: &str| {
+        Expr::new(
+            ExprKind::InstanceOf {
+                value: Box::new(var(name)),
+                target: crate::parser::ast::InstanceOfTarget::Name(Name::unqualified("DateTimeInterface")),
+            },
+            dummy(),
+        )
+    };
+    let return_int = |value: i64| return_expr(Expr::new(ExprKind::IntLiteral(value), dummy()));
+    let if_return = |condition: Expr, value: i64| {
+        Stmt::new(
+            StmtKind::If {
+                condition,
+                then_body: vec![return_int(value)],
+                elseif_clauses: Vec::new(),
+                else_body: None,
+            },
+            dummy(),
+        )
+    };
+    let left_timestamp = method_call(var("left"), "getTimestamp");
+    let right_timestamp = method_call(var("right"), "getTimestamp");
+    let left_microsecond = method_call(var("left"), "getMicrosecond");
+    let right_microsecond = method_call(var("right"), "getMicrosecond");
+    let mut adapter = method(
+        "__elephc_compare",
+        vec![
+            ("left".to_string(), Some(TypeExpr::Named(Name::unqualified("mixed"))), None, false),
+            ("right".to_string(), Some(TypeExpr::Named(Name::unqualified("mixed"))), None, false),
+        ],
+        Some(TypeExpr::Int),
+        vec![
+            Stmt::new(
+                StmtKind::If {
+                    condition: Expr::new(
+                        ExprKind::Not(Box::new(binary(is_date("left"), BinOp::And, is_date("right")))),
+                        dummy(),
+                    ),
+                    then_body: vec![return_int(2)],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy(),
+            ),
+            if_return(binary(left_timestamp.clone(), BinOp::Lt, right_timestamp.clone()), -1),
+            if_return(binary(left_timestamp, BinOp::Gt, right_timestamp), 1),
+            if_return(
+                binary(left_microsecond.clone(), BinOp::Lt, right_microsecond.clone()),
+                -1,
+            ),
+            if_return(binary(left_microsecond, BinOp::Gt, right_microsecond), 1),
+            return_int(0),
+        ],
+    );
+    adapter.is_static = true;
+    adapter
+}

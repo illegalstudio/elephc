@@ -1390,6 +1390,84 @@ fn web_superglobal_visible_in_function() {
     assert!(resp.ends_with("DELETE"), "body: {:?}", resp);
 }
 
+/// A computed `$GLOBALS[$name]` resolves a web superglobal through its typed Hash slot.
+///
+/// The dynamic table marks superglobals with kind 1; a read boxes the hash for the caller, and
+/// an array write publishes a hash into the same slot `$_SERVER` statically reads. A list is
+/// converted to hash storage; a scalar is refused with a catchable TypeError because the request
+/// prelude and static accesses require an array.
+#[test]
+fn web_computed_globals_reads_and_writes_typed_superglobals() {
+    let dir = make_test_dir("web_computed_superglobal");
+    let src = r#"<?php
+$name = ($_SERVER['REQUEST_URI'] ?? '') === '/computed' ? '_SERVER' : '_GET';
+// `_GET` is never spelled statically here, yet the request prelude populates it.
+$unnamed = $GLOBALS['_GET'];
+echo is_array($unnamed) ? 'seeded' : 'missing';
+$literal = $GLOBALS['_SERVER'];
+echo '|', is_array($literal) ? ($literal['REQUEST_URI'] ?? 'no-uri') : 'literal-bad';
+echo '|', $GLOBALS['_SERVER']['REQUEST_URI'] ?? 'no-chain';
+$copy = $GLOBALS[$name];
+echo '|', is_array($copy) ? 'read' : 'bad';
+echo '|', $copy['REQUEST_URI'] ?? 'missing';
+$GLOBALS[$name] = ['injected' => 'yes'];
+echo '|', $_SERVER['injected'] ?? 'missing';
+$GLOBALS[$name] = [10, 20];
+echo '|', $_SERVER[1] ?? 'missing';
+$hash = ['from' => 'hash'];
+$GLOBALS[$name] = $hash;
+echo '|', $_SERVER['from'] ?? 'missing';
+echo '|', $hash['from'] ?? 'lost';
+$list = [7, 8];
+$GLOBALS[$name] = $list;
+echo '|', $_SERVER[1] ?? 'missing';
+$mixed = ['literal' => 'ok'];
+$GLOBALS['_SERVER'] = $mixed;
+echo '|', $_SERVER['literal'] ?? 'missing';
+$snapshot = $GLOBALS;
+echo '|', $snapshot['_SERVER']['literal'] ?? 'missing';
+// The snapshot carries request superglobals the source never names.
+echo '|', is_array($snapshot['_GET'] ?? null) ? 'snap-get' : 'no-snap-get';
+try {
+    $GLOBALS[$name] = 5;
+    echo '|no-type';
+} catch (TypeError $error) {
+    echo '|type';
+}
+try {
+    $GLOBALS['_SERVER'] = 'literal-oops';
+    echo '|no-lit-type';
+} catch (TypeError $error) {
+    echo '|lit-type';
+}
+try {
+    $GLOBALS[$name] = 'dynamic-oops';
+    echo '|no-dyn-type';
+} catch (TypeError $error) {
+    echo '|dyn-type';
+}
+echo '|', is_array($_SERVER) ? 'array' : 'no';
+// A computed unset detaches the typed slot; probe it through the dynamic table, since a static
+// `$_SERVER` read is folded from the superglobal's declared array type.
+unset($GLOBALS[$name]);
+echo '|', isset($GLOBALS[$name]) ? 'still' : 'gone';
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(&addr, "GET", "/computed", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        resp.ends_with(
+            "seeded|/computed|/computed|read|/computed|yes|20|hash|hash|8|ok|ok|snap-get|type|lit-type|dyn-type|array|gone"
+        ),
+        "body: {:?}",
+        resp
+    );
+}
+
 /// Verifies a router storing an interface-typed handler survives repeated web requests.
 #[test]
 fn web_router_interface_handler_survives_repeated_requests() {
@@ -2531,6 +2609,27 @@ fn web_cookie_parsed() {
 }
 
 /// Verifies $_REQUEST (A4): merges $_GET then $_POST (POST overrides on collision).
+/// A runtime-created `$GLOBALS[$name]` entry is drained at the request boundary, so
+/// the next request on the same worker starts with a fresh global table.
+#[test]
+fn web_dynamic_global_is_not_visible_in_the_next_request() {
+    let dir = make_test_dir("elephc_web_dynamic_global_reset");
+    let bin = compile_web(
+        &dir,
+        r#"<?php
+$name = str_repeat("a", $argc);
+$seen = isset($GLOBALS[$name]) ? "stale" : "fresh";
+$GLOBALS[$name] = "value";
+echo $seen;
+"#,
+        "main",
+    );
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    assert!(http_get(&addr, "/one").ends_with("fresh"));
+    assert!(http_get(&addr, "/two").ends_with("fresh"));
+}
+
 #[test]
 fn web_request_superglobal_merges_get_post() {
     let dir = make_test_dir("web_request_merge");

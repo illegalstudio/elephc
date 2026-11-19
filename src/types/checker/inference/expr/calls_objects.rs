@@ -187,6 +187,7 @@ impl Checker {
             }
             ExprKind::Closure {
                 params,
+                param_attributes: _,
                 variadic,
                 variadic_by_ref,
                 variadic_type,
@@ -362,7 +363,9 @@ impl Checker {
                     PhpType::Object(_) => true,
                     PhpType::Union(members) => {
                         !members.is_empty()
-                            && members.iter().all(|member| matches!(member, PhpType::Object(_)))
+                            && members
+                                .iter()
+                                .all(|member| matches!(member, PhpType::Object(_) | PhpType::Void))
                     }
                     _ => false,
                 };

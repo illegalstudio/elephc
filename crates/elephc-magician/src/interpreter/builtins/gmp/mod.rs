@@ -50,6 +50,8 @@ mod gmp_mod;
 mod gmp_mul;
 mod gmp_neg;
 mod gmp_nextprime;
+mod gmp_powm_sec;
+mod gmp_prevprime;
 mod gmp_or;
 mod gmp_perfect_power;
 mod gmp_perfect_square;

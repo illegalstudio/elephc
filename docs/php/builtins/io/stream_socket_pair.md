@@ -6,7 +6,7 @@ description: "Creates a pair of connected, indistinguishable socket streams."
 ## stream_socket_pair()
 
 ```php
-function stream_socket_pair(int $domain, int $type, int $protocol): mixed
+function stream_socket_pair(int $domain, int $type, int $protocol, mixed $context = null): mixed
 ```
 
 Creates a pair of connected, indistinguishable socket streams.
@@ -15,6 +15,7 @@ Creates a pair of connected, indistinguishable socket streams.
 - `$domain` (`int`)
 - `$type` (`int`)
 - `$protocol` (`int`)
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 

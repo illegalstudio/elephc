@@ -1035,6 +1035,13 @@ impl Checker {
                         .collect();
                     self.finally_break_continue_bases
                         .push(self.break_continue_depth);
+                    // PHP 8.6 deprecates returning from a `finally` block: the return silently
+                    // discards an exception thrown by the try/catch or overwrites their value.
+                    if crate::codegen_support::compile_php_version()
+                        >= crate::php_version::PhpVersion::Php86
+                    {
+                        self.warn_finally_returns(body);
+                    }
                     errors.extend(self.check_body(body, env));
                     self.finally_break_continue_bases.pop();
                     let diverges = crate::termination::block_guarantees_function_exit_with_divergence(
@@ -1318,6 +1325,90 @@ impl Checker {
     /// Unlike `check_break_continue_target_body`, this does not update `break_continue_depth`.
     /// Used for `switch` cases, `if` branches, `try` blocks, and other bodies where the
     /// break/continue level is managed at a higher level.
+    /// Reports PHP 8.6's deprecation for every `return` reachable from a `finally` body.
+    ///
+    /// The walk follows the finally block's own control flow but stops at nested function-like
+    /// bodies: a closure declared inside `finally` has its own `finally` semantics.
+    fn warn_finally_returns(&mut self, statements: &[Stmt]) {
+        for statement in statements {
+            self.warn_finally_return(statement);
+        }
+    }
+
+    /// Reports one statement's `finally` return, recursing into compound bodies.
+    fn warn_finally_return(&mut self, statement: &Stmt) {
+        match &statement.kind {
+            StmtKind::Return(_) => self.warnings.push(crate::errors::CompileWarning::new(
+                statement.span,
+                "Returning from a finally block is deprecated",
+            )),
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                self.warn_finally_returns(then_body);
+                for (_, body) in elseif_clauses {
+                    self.warn_finally_returns(body);
+                }
+                if let Some(body) = else_body {
+                    self.warn_finally_returns(body);
+                }
+            }
+            StmtKind::IfDef {
+                then_body, else_body, ..
+            } => {
+                self.warn_finally_returns(then_body);
+                if let Some(body) = else_body {
+                    self.warn_finally_returns(body);
+                }
+            }
+            StmtKind::While { body, .. }
+            | StmtKind::DoWhile { body, .. }
+            | StmtKind::Foreach { body, .. } => self.warn_finally_returns(body),
+            StmtKind::For {
+                init,
+                update,
+                body,
+                ..
+            } => {
+                if let Some(init) = init {
+                    self.warn_finally_return(init);
+                }
+                if let Some(update) = update {
+                    self.warn_finally_return(update);
+                }
+                self.warn_finally_returns(body);
+            }
+            StmtKind::Switch { cases, default, .. } => {
+                for (_, body) in cases {
+                    self.warn_finally_returns(body);
+                }
+                if let Some(body) = default {
+                    self.warn_finally_returns(body);
+                }
+            }
+            StmtKind::Try {
+                try_body,
+                catches,
+                finally_body,
+            } => {
+                self.warn_finally_returns(try_body);
+                for catch in catches {
+                    self.warn_finally_returns(&catch.body);
+                }
+                if let Some(body) = finally_body {
+                    self.warn_finally_returns(body);
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. }
+            | StmtKind::Synthetic(body) => self.warn_finally_returns(body),
+            _ => {}
+        }
+    }
+
     fn check_body(&mut self, body: &[Stmt], env: &mut TypeEnv) -> Vec<CompileError> {
         self.check_body_flow(body, env).0
     }

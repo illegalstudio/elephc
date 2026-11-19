@@ -115,6 +115,9 @@ pub(super) fn lower(
         RuntimeFnId::StreamContextSetOption => Some({
             crate::codegen::lower_inst::builtins::io::lower_stream_context_set_option(ctx, inst)
         }),
+        RuntimeFnId::StreamContextSetOptions => Some({
+            crate::codegen::lower_inst::builtins::io::lower_stream_context_set_options(ctx, inst)
+        }),
         RuntimeFnId::StreamContextSetParams => Some({
             crate::codegen::lower_inst::builtins::io::lower_stream_context_set_params(ctx, inst)
         }),

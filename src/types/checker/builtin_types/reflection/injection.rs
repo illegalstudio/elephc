@@ -83,6 +83,24 @@ pub(crate) fn inject_builtin_reflection(
                     empty_string(),
                 ),
                 builtin_property(
+                    "__short_name",
+                    Visibility::Private,
+                    Some(TypeExpr::Str),
+                    empty_string(),
+                ),
+                builtin_property(
+                    "__namespace_name",
+                    Visibility::Private,
+                    Some(TypeExpr::Str),
+                    empty_string(),
+                ),
+                builtin_property(
+                    "__in_namespace",
+                    Visibility::Private,
+                    Some(TypeExpr::Bool),
+                    false_bool(),
+                ),
+                builtin_property(
                     "__args",
                     Visibility::Private,
                     Some(array_type()),
@@ -110,6 +128,9 @@ pub(crate) fn inject_builtin_reflection(
             methods: vec![
                 builtin_reflection_attribute_constructor_method(),
                 builtin_reflection_attribute_get_name_method(),
+                builtin_reflection_class_string_method("getShortName", "__short_name"),
+                builtin_reflection_class_string_method("getNamespaceName", "__namespace_name"),
+                builtin_reflection_class_bool_method("inNamespace", "__in_namespace"),
                 builtin_reflection_attribute_get_arguments_method(),
                 builtin_reflection_attribute_new_instance_method(),
                 builtin_reflection_class_int_method("getTarget", "__target"),

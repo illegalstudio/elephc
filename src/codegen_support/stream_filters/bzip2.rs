@@ -178,6 +178,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.label(skip_label);
     emitter.instruction("sub sp, sp, #16");                                     // frame: [0]=fd [8]=bz_stream pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the file descriptor across the calls
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x0", &format!("{}_fd_skip", skip_label));
     emitter.instruction(&format!("mov x0, #{}", BZ_STREAM_SIZE));               // request a bz_stream-sized heap block
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the bz_stream struct, x0 = payload
     emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned allocation
@@ -219,6 +220,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction("str x11, [x9]");                                       // _bz2_close_fn = the compress close helper
 
     // -- re-box the descriptor as a resource, matching stream_filter_append --
+    emitter.label(&format!("{}_fd_skip", skip_label));
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the file descriptor
     emitter.instruction("add sp, sp, #16");                                     // release the initialization frame
     emitter.instruction("mov x1, x0");                                          // resource payload = the descriptor
@@ -346,6 +348,7 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("mov rbp, rsp");                                        // establish the initialization frame pointer
     emitter.instruction("sub rsp, 24");                                         // frame: [-8]=fd [-16]=bz_stream ptr (24: this inline block enters rsp 16-aligned, push rbp made it 8, so +24≡8 mod 16 realigns to 0 at the libc calls)
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the file descriptor across the calls
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "rax", &format!("{}_fd_skip", skip_label));
     emitter.instruction(&format!("mov rax, {}", BZ_STREAM_SIZE));               // request a bz_stream-sized heap block
     emitter.instruction("call __rt_heap_alloc");                                // allocate the bz_stream struct, rax = payload
     emitter.instruction(&format!(
@@ -390,6 +393,7 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("mov QWORD PTR [r9], r10");                             // _bz2_close_fn = the compress close helper
 
     // -- re-box the descriptor as a resource, matching stream_filter_append --
+    emitter.label(&format!("{}_fd_skip", skip_label));
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // resource payload = the descriptor
     emitter.instruction("add rsp, 24");                                         // release the initialization frame (matches the aligned sub rsp, 24)
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

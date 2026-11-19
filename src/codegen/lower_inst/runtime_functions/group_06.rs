@@ -82,6 +82,9 @@ pub(super) fn lower(
         RuntimeFnId::StreamSocketEnableCrypto => Some({
             crate::codegen::lower_inst::builtins::io::lower_stream_socket_enable_crypto(ctx, inst)
         }),
+        RuntimeFnId::StreamSocketGetCryptoStatus => Some({
+            crate::codegen::lower_inst::builtins::io::lower_stream_socket_get_crypto_status(ctx, inst)
+        }),
         RuntimeFnId::StreamSocketGetName => Some({
             crate::codegen::lower_inst::builtins::io::lower_stream_socket_get_name(ctx, inst)
         }),

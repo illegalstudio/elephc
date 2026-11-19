@@ -269,13 +269,25 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
             attr_names: sig
                 .param_attributes
                 .get(index)
-                .map(|groups| crate::types::collect_attribute_names(groups))
+                .map(|groups| {
+                    crate::types::collect_attribute_names(
+                        &super::parameter_doc_comments::visible_parameter_attributes(groups),
+                    )
+                })
                 .unwrap_or_default(),
             attr_args: sig
                 .param_attributes
                 .get(index)
-                .map(|groups| crate::types::collect_attribute_args(groups))
+                .map(|groups| {
+                    crate::types::collect_attribute_args(
+                        &super::parameter_doc_comments::visible_parameter_attributes(groups),
+                    )
+                })
                 .unwrap_or_default(),
+            doc_comment: sig
+                .param_attributes
+                .get(index)
+                .and_then(|groups| super::parameter_doc_comments::parameter_doc_comment(groups)),
             // Numbered among the visible parameters, so a hidden slot leaves no gap.
             position: parameters.len() as i64,
             is_optional: is_variadic

@@ -57,6 +57,11 @@ pub(super) const UN_TESTBIT: i64 = 17;
 pub(super) const UN_SCAN0: i64 = 20;
 pub(super) const UN_SCAN1: i64 = 21;
 pub(super) const UN_BINOMIAL: i64 = 22;
+pub(super) const UN_PREVPRIME: i64 = 23;
+
+/// GMP bridge ternary operation codes.
+pub(super) const TER_POWM: i64 = 0;
+pub(super) const TER_POWM_SEC: i64 = 1;
 
 /// A variable read.
 pub(super) fn v(name: &str) -> Expr {

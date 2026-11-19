@@ -39,6 +39,12 @@ impl Checker {
                 value: Box::new(PhpType::Mixed),
             }),
             ExprKind::Variable(name) => {
+                if name == "GLOBALS" {
+                    return Ok(PhpType::AssocArray {
+                        key: Box::new(PhpType::Str),
+                        value: Box::new(PhpType::Mixed),
+                    });
+                }
                 let ty = match self.variable_type_or_eval_dynamic(name, expr.span, env) {
                     Ok(ty) => ty,
                     // PHP 8 reads an undefined variable as `null` and raises E_WARNING. The
@@ -90,7 +96,14 @@ impl Checker {
                 self.infer_type(inner, env)?;
                 Ok(PhpType::Int)
             }
-            ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
+            ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
+                if name == "GLOBALS" {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+                    ));
+                }
+                match env.get(name) {
                 Some(ty) if crate::types::object_operators::binary_plan_with_classes(
                     &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
                 ).is_some() => {
@@ -133,8 +146,16 @@ impl Checker {
                     expr.span,
                     &format!("Undefined variable: ${}", name),
                 )),
-            },
-            ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => match env.get(name) {
+                }
+            }
+            ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => {
+                if name == "GLOBALS" {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+                    ));
+                }
+                match env.get(name) {
                 Some(ty) if crate::types::object_operators::binary_plan_with_classes(
                     &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
                 ).is_some() => {
@@ -173,7 +194,8 @@ impl Checker {
                     expr.span,
                     &format!("Undefined variable: ${}", name),
                 )),
-            },
+                }
+            }
             ExprKind::ArrayLiteralAssoc(pairs) => {
                 if pairs.is_empty() {
                     return Err(CompileError::new(

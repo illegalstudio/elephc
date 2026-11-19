@@ -355,6 +355,15 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             let (index, value) = propagate_write_key_and_value(index, value, &env);
             let mut next_env = env_after_expr_side_effects(env, &[&index, &value]);
             next_env.remove(&array);
+            if array == "GLOBALS" {
+                if let ExprKind::StringLiteral(key) = &index.kind {
+                    // `$GLOBALS['name'] = ...` writes the top-level `$name` slot.
+                    next_env.remove(key);
+                } else {
+                    // A runtime key can update any top-level global.
+                    next_env.clear();
+                }
+            }
             (
                 Stmt::new(
                     StmtKind::ArrayAssign {

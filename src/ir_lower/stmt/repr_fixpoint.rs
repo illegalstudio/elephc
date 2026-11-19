@@ -714,6 +714,7 @@ impl<'a> ConversionScan<'a> {
             }
             ExprKind::Closure {
                 params,
+                param_attributes: _,
                 variadic: _,
                 variadic_type: _,
                 return_type: _,

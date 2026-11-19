@@ -39,6 +39,10 @@ pub fn emit_ltrim(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_ltrim_skip");                                // if newline, skip it
     emitter.instruction("cmp w9, #11");                                         // check for vertical tab (0x0B)
     emitter.instruction("b.eq __rt_ltrim_skip");                                // if vertical tab, skip it
+    if crate::codegen_support::compile_php_version().version_id() >= 80600 {
+        emitter.instruction("cmp w9, #12");                                     // check for form feed (0x0C), added to PHP's default mask in 8.6
+        emitter.instruction("b.eq __rt_ltrim_skip");                            // if form feed, skip it
+    }
     emitter.instruction("cmp w9, #13");                                         // check for carriage return (0x0D)
     emitter.instruction("b.eq __rt_ltrim_skip");                                // if CR, skip it
     emitter.instruction("b __rt_ltrim_done");                                   // byte outside PHP's default trim mask found, stop trimming
@@ -76,6 +80,10 @@ fn emit_ltrim_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_ltrim_skip_x86");                              // strip the leading newline and continue trimming from the new front
     emitter.instruction("cmp cl, 11");                                          // is the first byte a vertical tab that ltrim() should discard?
     emitter.instruction("je __rt_ltrim_skip_x86");                              // strip the leading vertical tab and continue trimming from the new front
+    if crate::codegen_support::compile_php_version().version_id() >= 80600 {
+        emitter.instruction("cmp cl, 12");                                      // is the first byte a form feed that PHP 8.6 ltrim() should discard?
+        emitter.instruction("je __rt_ltrim_skip_x86");                          // strip the leading form feed and continue trimming from the new front
+    }
     emitter.instruction("cmp cl, 13");                                          // is the first byte a carriage return that ltrim() should discard?
     emitter.instruction("je __rt_ltrim_skip_x86");                              // strip the leading carriage return and continue trimming from the new front
     emitter.instruction("jmp __rt_ltrim_done_x86");                             // stop once the first byte is outside PHP's default trim mask

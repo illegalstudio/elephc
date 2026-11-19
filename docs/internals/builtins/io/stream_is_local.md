@@ -37,12 +37,12 @@ description: "Compiler internals for stream_is_local(): lowering path, type chec
 ## Signature summary
 
 ```php
-function stream_is_local(resource $stream): bool
+function stream_is_local(resource $stream, mixed $context = null): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

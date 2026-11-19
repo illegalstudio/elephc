@@ -27,6 +27,20 @@ pub(in crate::interpreter) fn eval_builtin_gettype(
         return Err(EvalStatus::RuntimeFatal);
     };
     let value = eval_expr(value, context, scope, values)?;
+    eval_gettype_result_with_context(value, context, values)
+}
+
+/// Converts one eval value into PHP's `gettype()` spelling, including the closed-resource name.
+pub(in crate::interpreter) fn eval_gettype_result_with_context(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if values.type_tag(value)? == EVAL_TAG_RESOURCE
+        && super::super::scalars::eval_resource_is_closed(value, context, values)?
+    {
+        return values.string("resource (closed)");
+    }
     eval_gettype_result(value, values)
 }
 

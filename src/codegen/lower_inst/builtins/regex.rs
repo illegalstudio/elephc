@@ -648,7 +648,7 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
 /// `MATCH_ERROR_COUNT` before `$matches` was written, also yields `false`.
 /// The EIR result is a union, so its representation is a Mixed cell and the raw
 /// count must be boxed before storage.
-fn box_count_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
+pub(crate) fn box_count_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let invalid_label = ctx.next_label("preg_count_invalid");
     let false_label = ctx.next_label("preg_count_false");
     let done_label = ctx.next_label("preg_count_done");

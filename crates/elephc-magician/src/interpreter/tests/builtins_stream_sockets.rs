@@ -33,6 +33,7 @@ echo $remoteAddr !== "" ? "addrout" : "bad"; echo ":";
 fwrite($peer, "pong");
 echo fread($client, 4) === "pong" ? "roundtrip" : "bad"; echo ":";
 echo stream_socket_enable_crypto($client, false) ? "cryptooff" : "bad"; echo ":";
+echo stream_socket_get_crypto_status($client) === 0 ? "cryptostatus" : "bad"; echo ":";
 echo stream_socket_shutdown($client, 2) ? "shutdown" : "bad"; echo ":";
 fclose($peer); fclose($client); fclose($server);
 $server = stream_socket_server("tcp://127.0.0.1:0");
@@ -72,7 +73,7 @@ $recv = stream_socket_recvfrom(...);
 $dynAddr = "";
 echo $recv($peer, 4, 0, $dynAddr) === "call" && $dynAddr !== "" ? "dynrecv" : "bad"; echo ":";
 fclose($client); fclose($peer); fclose($server);
-$pair = stream_socket_pair(1, 1, 0);
+$pair = stream_socket_pair(1, 1, 0, null);
 echo is_array($pair) && is_resource($pair[0]) && is_resource($pair[1]) ? "pair" : "bad"; echo ":";
 fwrite($pair[0], "xy");
 echo fread($pair[1], 2) === "xy" ? "pairio" : "bad"; echo ":";
@@ -87,6 +88,7 @@ echo stream_select($read, $write, $except, 0) === 0 ? "select" : "bad"; echo ":"
 echo function_exists("fsockopen"); echo function_exists("pfsockopen");
 echo function_exists("stream_select"); echo function_exists("stream_socket_accept");
 echo function_exists("stream_socket_client"); echo function_exists("stream_socket_enable_crypto");
+echo function_exists("stream_socket_get_crypto_status");
 echo function_exists("stream_socket_get_name"); echo function_exists("stream_socket_pair");
 echo function_exists("stream_socket_recvfrom"); echo function_exists("stream_socket_sendto");
 echo function_exists("stream_socket_server"); echo function_exists("stream_socket_shutdown");
@@ -102,8 +104,8 @@ return true;"#,
         values.output,
         concat!(
             "server:name:client:accept:peerout:peername:send:recv:addrout:",
-            "roundtrip:cryptooff:shutdown:fsock:pfsock:dynfsock:dynaccept:dynrecv:",
-            "pair:pairio:selectclear:dynselect:select:111111111111"
+            "roundtrip:cryptooff:cryptostatus:shutdown:fsock:pfsock:dynfsock:dynaccept:dynrecv:",
+            "pair:pairio:selectclear:dynselect:select:1111111111111"
         )
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));

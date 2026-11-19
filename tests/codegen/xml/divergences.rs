@@ -301,14 +301,15 @@ $w->writeElement("out"); var_dump($w->flush());
     // PHP 8.5.10:
     //   "bool(true)\nstring(4) \"<f/>\"\nbool(true)\nbool(true)\nint(4)\nbool(true)\n
     //    bool(true)\nbool(true)\n<out/>int(6)\n"
+    // `php://memory` now opens through the stream layer; only `file://` remains unsupported.
     assert_eq!(
         out.stdout,
-        "bool(false)\nbool(false)\nbool(false)\nValueError: XMLWriter::toUri(): Argument #1 ($uri) must resolve to a valid file path\nValueError: XMLWriter::toUri(): Argument #1 ($uri) must resolve to a valid file path\nbool(true)\n<out/>int(6)\n"
+        "bool(false)\nbool(false)\nbool(true)\nbool(true)\nint(4)\nbool(true)\nValueError: XMLWriter::toUri(): Argument #1 ($uri) must resolve to a valid file path\nbool(true)\n<out/>int(6)\n"
     );
     assert_eq!(
         out.stderr.matches("Warning: fopen(): Failed to open stream").count(),
-        4,
-        "the two schemes fail through the stream layer, once per open: {}",
+        2,
+        "the file:// scheme fails through the stream layer, once per open: {}",
         out.stderr
     );
 }

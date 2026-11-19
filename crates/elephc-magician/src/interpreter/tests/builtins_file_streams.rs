@@ -42,11 +42,13 @@ echo fclose($h) ? "close" : "bad"; echo ":";
 echo file_get_contents("{file}") === "abc" ? "truncated" : "bad"; echo ":";
 $src = fopen("{file}", "r");
 $dst = fopen("{copy}", "w+");
-echo stream_copy_to_stream($src, $dst, null, 1) === 2 ? "copy" : "bad"; echo ":";
+echo stream_copy_to_stream($src, $dst, null, 1, null) === 2 ? "copy" : "bad"; echo ":";
 rewind($dst);
 echo stream_get_contents($dst) === "bc" ? "copied" : "bad"; echo ":";
 fclose($src);
 fclose($dst);
+$ctx = stream_context_create(["stream" => ["x" => 1]]);
+echo stream_context_set_options($ctx, ["stream" => ["y" => 2]]) ? "setoptions" : "bad"; echo ":";
 $tmp = tmpfile();
 echo is_resource($tmp) ? "tmp" : "bad"; echo ":";
 fwrite($tmp, "xy");
@@ -82,7 +84,7 @@ return true;"#
     }
     assert_eq!(
         values.output,
-        "open:rtype:rid:write:tell:rewind:read:seek:bounded:contents:eof:meta:truncate:fstat:sync:close:truncated:copy:copied:tmp:tmpread:callwrite:callread:callclose:cleanup:11111111111111111"
+        "open:rtype:rid:write:tell:rewind:read:seek:bounded:contents:eof:meta:truncate:fstat:sync:close:truncated:copy:copied:setoptions:tmp:tmpread:callwrite:callread:callclose:cleanup:11111111111111111"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

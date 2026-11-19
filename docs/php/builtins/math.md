@@ -78,6 +78,8 @@ sidebar:
 | [`gmp_popcount()`](./math/gmp_popcount.md) | `(object|string|int $num): int` | `int` | ✓ | ✓ |
 | [`gmp_pow()`](./math/gmp_pow.md) | `(object|string|int $num, int $exponent): object` | `object` | ✓ | ✓ |
 | [`gmp_powm()`](./math/gmp_powm.md) | `(object|string|int $num, object|string|int $exponent, object|string|int $modulus): object` | `object` | ✓ | ✓ |
+| [`gmp_powm_sec()`](./math/gmp_powm_sec.md) | `(object|string|int $num, object|string|int $exponent, object|string|int $modulus): object` | `object` | ✓ | ✓ |
+| [`gmp_prevprime()`](./math/gmp_prevprime.md) | `(object|string|int $num, bool $definitely_prime = null): object` | `object` | ✓ | ✓ |
 | [`gmp_prob_prime()`](./math/gmp_prob_prime.md) | `(object|string|int $num, int $repetitions = 10): int` | `int` | ✓ | ✓ |
 | [`gmp_random_bits()`](./math/gmp_random_bits.md) | `(int $bits): object` | `object` | ✓ | ✓ |
 | [`gmp_random_range()`](./math/gmp_random_range.md) | `(object|string|int $min, object|string|int $max): object` | `object` | ✓ | ✓ |

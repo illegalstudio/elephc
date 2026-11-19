@@ -1052,6 +1052,14 @@ pub enum Op {
     PopCallOperandOwner,
     LoadGlobal,
     StoreGlobal,
+    /// Clears one named program-global cell and releases its previous Mixed owner.
+    UnsetGlobal,
+    /// Loads a program global selected by a runtime string name (`$GLOBALS[$name]`).
+    /// Operand 0 is the string key; the immediate Bool records whether a missing name warns.
+    LoadGlobalDynamic,
+    /// Stores one boxed Mixed value into a program global selected by a runtime string name.
+    /// Operand 0 is the string key, operand 1 the value.
+    StoreGlobalDynamic,
     LoadStaticLocal,
     StoreStaticLocal,
     InitStaticLocal,
@@ -1179,6 +1187,8 @@ pub enum Op {
     WriteStrStdout,
     ArrayNew,
     HashNew,
+    /// Materializes the program's initialized globals as an associative Mixed-value hash.
+    LoadGlobalsArray,
     ArrayLen,
     HashLen,
     ArrayGet,
@@ -1619,6 +1629,7 @@ impl Op {
                 E::READS_LOCAL | E::READS_GLOBAL | E::WRITES_GLOBAL
             }
             LoadGlobal
+            | LoadGlobalDynamic
             | LoadStaticProperty
             | StaticPropInitialized
             | StaticLocalUninitialized
@@ -1636,6 +1647,8 @@ impl Op {
             // Declared slots can reject a value with a catchable TypeError before the write.
             StoreStaticProperty | StoreReflectionStaticProperty => E::WRITES_GLOBAL | E::WRITES_LOCAL | E::MAY_THROW,
             StoreGlobal
+            | UnsetGlobal
+            | StoreGlobalDynamic
             | StoreStaticLocal
             | InitStaticLocal
             | IncludeOnceMark
@@ -1672,6 +1685,7 @@ impl Op {
             }
             NormalizeCallable => E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
                 | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
+            LoadGlobalsArray => E::READS_GLOBAL | E::ALLOC_HEAP | E::REFCOUNT_OP,
             ClosureNew => E::READS_LOCAL | E::WRITES_LOCAL
                 | E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
                 | E::WRITES_GLOBAL | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
@@ -1995,6 +2009,9 @@ impl Op {
             PopCallOperandOwner => "pop_call_operand_owner",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
+            UnsetGlobal => "unset_global",
+            LoadGlobalDynamic => "load_global_dynamic",
+            StoreGlobalDynamic => "store_global_dynamic",
             LoadStaticLocal => "load_static_local",
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",
@@ -2086,6 +2103,7 @@ impl Op {
             WriteStrStdout => "write_str_stdout",
             ArrayNew => "array_new",
             HashNew => "hash_new",
+            LoadGlobalsArray => "load_globals_array",
             ArrayLen => "array_len",
             HashLen => "hash_len",
             ArrayGet => "array_get",

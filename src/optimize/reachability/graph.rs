@@ -96,6 +96,15 @@ pub fn compute(
         check_result,
     );
     state.apply_usage(executable_usage, true);
+    // Enum cases are singleton instances even though no `new` expression names them. Keep
+    // their magic methods (notably `__debugInfo()`, reached only through the var_dump table)
+    // with the same rule ordinary instantiated classes get.
+    for enum_name in check_result.enums.keys() {
+        let key = php_symbol_key(enum_name);
+        state.reach.classes.insert(key.clone());
+        state.instantiated_classes.insert(key.clone());
+        state.behavioral.instantiated_classes.insert(key);
+    }
     // A class or trait statement whose trait binding compares defaults that read a deprecated
     // constant raises that notice when execution reaches it, used or not.
     let mut statement_roots = usage::Usage::default();

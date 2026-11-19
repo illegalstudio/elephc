@@ -35,6 +35,10 @@ pub(super) fn parse_function_decl(
 
     let name = match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Identifier(n)) => n.clone(),
+        // php-src carries a lexer exception for `function readonly()`: the keyword lexes as a
+        // name in this position so an existing userland function keeps working (PHP 8.6 then
+        // deprecates it; the declaration scan reports that).
+        Some(Token::ReadOnly) => "readonly".to_string(),
         _ => return Err(CompileError::new(span, "Expected function name")),
     };
     *pos += 1;
@@ -730,8 +734,9 @@ pub(super) fn parse_params(
                 break;
             }
         }
+        let leading_doc = crate::parser::doc_comments::doc_comment_before(tokens, *pos);
         // PHP 8.0 parameter attributes (`function f(#[Sensitive] $s)`).
-        let attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
+        let mut attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
         if variadic.is_some() {
             return Err(CompileError::new(
                 span,
@@ -759,6 +764,7 @@ pub(super) fn parse_params(
                     variadic = Some(n.clone());
                     variadic_by_ref = is_ref;
                     variadic_type = type_ann;
+                    append_param_doc_comment(tokens, *pos, leading_doc, &mut attributes);
                     param_attributes.push(attributes);
                     *pos += 1;
                 }
@@ -776,6 +782,7 @@ pub(super) fn parse_params(
                 } else {
                     None
                 };
+                append_param_doc_comment(tokens, *pos, leading_doc, &mut attributes);
                 param_attributes.push(attributes);
                 params.push((n, type_ann, default, is_ref));
             }
@@ -908,4 +915,17 @@ pub(super) fn parse_name_list(
         break;
     }
     Ok((names, type_args))
+}
+
+/// Attaches a leading or trailing parameter doc comment to the synthetic attribute list.
+fn append_param_doc_comment(
+    tokens: &[SpannedToken],
+    pos: usize,
+    leading: Option<String>,
+    attributes: &mut Vec<AttributeGroup>,
+) {
+    let trailing = crate::parser::doc_comments::doc_comment_before(tokens, pos);
+    if let Some(doc) = trailing.or(leading) {
+        attributes.push(crate::parser::doc_comments::doc_comment_attribute(doc));
+    }
 }

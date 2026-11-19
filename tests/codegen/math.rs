@@ -13,6 +13,8 @@ mod bcmath;
 mod bcmath_number;
 #[path = "math/functions.rs"]
 mod functions;
+#[path = "math/clamp_php86.rs"]
+mod clamp_php86;
 #[path = "math/php_float_to_int.rs"]
 mod php_float_to_int;
 #[path = "math/rounding_modes.rs"]

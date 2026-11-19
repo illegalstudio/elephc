@@ -196,6 +196,71 @@ string, turns `""` into `int(-1)`, and leaves every other string alone.
 See [Operators](./operators.md#increment--decrement) for the full rules and the one
 documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 
+## Binary data: `pack()` and `unpack()`
+
+`pack()` builds a binary string from one or more values; `unpack()` reads
+values back:
+
+```php
+<?php
+$record = pack('N', 0xCAFEBABE) . pack('s<', -2) . pack('e', 3.5);
+print_r(unpack('Nmagic/s<count/evalue', $record));
+```
+
+Supported format codes:
+
+| Code | Meaning |
+|---|---|
+| `a` / `A` / `Z` | NUL-padded / space-padded / NUL-terminated string |
+| `h` / `H` | Hex string, low nibble first / high nibble first |
+| `c` / `C` | Signed / unsigned 8-bit integer |
+| `s` / `S` | Signed / unsigned 16-bit integer (machine byte order) |
+| `n` / `v` | Unsigned 16-bit big-endian / little-endian |
+| `i` / `I` | Signed / unsigned 32-bit integer (machine byte order) |
+| `l` / `L` | Signed / unsigned 32-bit integer (machine byte order) |
+| `N` / `V` | Unsigned 32-bit big-endian / little-endian |
+| `q` / `Q` | Signed / unsigned 64-bit integer (machine byte order) |
+| `J` / `P` | Unsigned 64-bit big-endian / little-endian |
+| `f` | 32-bit float (machine byte order) |
+| `g` / `G` | 32-bit float little-endian / big-endian |
+| `d` | 64-bit double (machine byte order) |
+| `e` / `E` | 64-bit double little-endian / big-endian |
+| `x` / `X` / `@` | NUL byte / back up / absolute output position |
+| `*` | Repeat to the end of the input or value |
+
+PHP 8.6 adds `<` and `>` endianness modifiers to `s`, `S`, `l`, `L`, `q`,
+`Q`, `f`, and `d`:
+
+```php
+<?php
+echo bin2hex(pack('s<', 0x0102)); // 0201
+echo bin2hex(pack('s>', 0x0102)); // 0102
+echo bin2hex(pack('q<', 1));      // 0100000000000000
+```
+
+The modifier is written immediately after the format code and before the
+repeat count: `s<2`. It is rejected on codes with inherent byte order (`n`,
+`v`, `N`, `V`, `J`, `P`, `g`, `G`, `e`, `E`) and on codes that have no
+endianness (`c`, `C`, `a`, `A`, `h`, `H`, `i`, `I`, `x`, `X`, `@`).
+
+`unpack()` accepts element names after the code. Everything after the code
+(and its optional modifier/repeat) up to the next `/` is the element name:
+
+```php
+<?php
+print_r(unpack('Nmagic/s<count/evalue', $record));
+print_r(unpack('V2pairs/Vtotal', $data)); // pairs1, pairs2, total
+```
+
+A repeated named element adds a 1-based suffix; an unnamed element uses the
+1-based position as its key. `unpack()` also accepts the optional `$offset`
+argument, and `@` in the format is relative to that offset.
+
+The implementation is an AOT prelude linked with the small `elephc_pack`
+bridge for IEEE-754 bit conversion. Literal source and eval code that spell
+`pack`/`unpack` get the prelude automatically; opaque dynamic eval source can be enabled with `--with-pack`, which force-links
+the bridge and injects the prelude.
+
 ## Built-in string functions
 
 `mb_parse_str($string, &$result)` decodes a URL-encoded query into the output

@@ -239,6 +239,12 @@ pub fn emit_fs(emitter: &mut Emitter) {
 
     // -- read source file contents --
     emitter.instruction("bl __rt_file_get_contents");                           // read source, x1=data ptr, x2=data len
+    emitter.instruction("cbz x1, __rt_copy_failed");                            // a null pointer means the source could not be read
+    emitter.instruction("b __rt_copy_read");                                    // a valid buffer, even for an empty file, continues
+    emitter.label("__rt_copy_failed");
+    emitter.instruction("mov x0, #0");                                          // PHP reports an unreadable source as false
+    emitter.instruction("b __rt_copy_return");                                  // skip the destination write
+    emitter.label("__rt_copy_read");
 
     // -- write contents to destination file --
     emitter.instruction("mov x3, x1");                                          // move data ptr to x3 (data arg)
@@ -246,11 +252,12 @@ pub fn emit_fs(emitter: &mut Emitter) {
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload destination path ptr and len
     emitter.instruction("bl __rt_file_put_contents");                           // write data to dest file, x0=bytes written
 
-    // -- return 1 if bytes were written --
-    emitter.instruction("cmp x0, #0");                                          // check if any bytes were written
-    emitter.instruction("cset x0, gt");                                         // x0 = 1 if bytes written > 0
+    // -- return 1 unless the write failed; an empty source writes 0 bytes successfully --
+    emitter.instruction("cmp x0, #0");                                          // -1 reports a failed open/write/close
+    emitter.instruction("cset x0, ge");                                         // x0 = 1 for any non-negative byte count, including empty files
 
     // -- restore frame and return --
+    emitter.label("__rt_copy_return");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
@@ -320,6 +327,8 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the destination elephc path pointer while the source file is read into owned storage
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the destination elephc path length while the source file is read into owned storage
     emitter.instruction("call __rt_file_get_contents");                         // read the source file into an owned elephc string before writing it to the destination path
+    emitter.instruction("test rax, rax");                                       // a null pointer means the source could not be read
+    emitter.instruction("jz __rt_copy_failed_x86");                             // PHP reports an unreadable source as false
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the copied file payload pointer across the destination-path reload and write helper call
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // preserve the copied file payload length across the destination-path reload and write helper call
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the destination elephc path pointer into the primary x86_64 string argument register
@@ -333,6 +342,12 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the aligned stack locals used by copy()
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the copy() success predicate
     emitter.instruction("ret");                                                 // return the copy() success predicate to the caller
+
+    emitter.label("__rt_copy_failed_x86");
+    emitter.instruction("xor eax, eax");                                        // PHP reports an unreadable source as false
+    emitter.instruction("add rsp, 32");                                         // release the aligned stack locals used by copy()
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer on the failure path
+    emitter.instruction("ret");                                                 // return the copy() failure predicate to the caller
 
 }
 

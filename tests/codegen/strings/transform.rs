@@ -163,7 +163,7 @@ fn test_grapheme_strrev_preserves_nul_bytes() {
 /// Verifies grapheme_strrev participates in builtin lookup, namespace fallback, and first-class callable syntax.
 #[test]
 fn test_grapheme_strrev_lookup_and_first_class_callable() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_php_version(
         r#"<?php
 namespace Demo;
 echo function_exists("GrApHeMe_StRrEv") ? "1" : "0";
@@ -173,6 +173,7 @@ echo ":";
 $rev = grapheme_strrev(...);
 echo $rev("tool");
 "#,
+        elephc::php_version::PhpVersion::Php86,
     );
     assert_eq!(out, "1:ksed:loot");
 }

@@ -123,6 +123,12 @@ fn isset_object_receiver_type(checker: &Checker, ty: &PhpType) -> bool {
 /// Like `isset()`, `unset()` accepts a never-declared chain root (PHP's `unset($never)`
 /// is a silent no-op), so the root is bound to `null` for the operand.
 fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+    if matches!(&arg.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+        return Err(CompileError::new(
+            arg.span,
+            "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+        ));
+    }
     if unset_operand_is_short_circuited(arg) {
         return Err(CompileError::new(
             arg.span,
