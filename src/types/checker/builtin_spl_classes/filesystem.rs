@@ -13,7 +13,8 @@
 use std::collections::HashMap;
 
 use crate::parser::ast::{
-    BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, TypeExpr, Visibility,
+    Attribute, AttributeGroup, BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt,
+    TypeExpr, Visibility,
 };
 use crate::types::traits::FlattenedClass;
 
@@ -375,7 +376,7 @@ fn spl_file_info_methods() -> Vec<ClassMethod> {
 
 /// Builds SplFileObject methods.
 fn spl_file_object_methods() -> Vec<ClassMethod> {
-    vec![
+    let mut methods = vec![
         method_with_body(
             "__construct",
             vec![
@@ -462,7 +463,34 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Nullable(Box::new(named_type("RecursiveIterator")))),
             null_return_body(),
         ),
-    ]
+    ];
+
+    // PHP 8.6 deprecates the object-oriented CSV helpers in favour of the functions.
+    if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
+        for method in &mut methods {
+            let reason = match method.name.as_str() {
+                "fgetcsv" => "use the fgetcsv() function instead",
+                "fputcsv" => "use the fputcsv() function instead",
+                "setCsvControl" => "use the fgetcsv()/fputcsv() functions instead",
+                "getCsvControl" => "use the fgetcsv()/fputcsv() functions instead",
+                _ => continue,
+            };
+            method.attributes.push(deprecated_attribute(reason));
+        }
+    }
+    methods
+}
+
+/// Builds one `#[Deprecated("reason")]` attribute group for a synthetic SPL method.
+fn deprecated_attribute(reason: &str) -> AttributeGroup {
+    AttributeGroup {
+        attributes: vec![Attribute {
+            name: crate::names::Name::unqualified("Deprecated"),
+            args: vec![string_expr(reason)],
+            span: crate::span::Span::dummy(),
+        }],
+        span: crate::span::Span::dummy(),
+    }
 }
 
 /// Builds SplTempFileObject methods.

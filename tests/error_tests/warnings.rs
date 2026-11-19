@@ -441,3 +441,86 @@ fn test_define_case_insensitive_argument_is_deprecated_php_86() {
     );
     elephc::codegen::set_compile_profile(PhpVersion::default(), false);
 }
+
+/// PHP 8.6 deprecates a string subject when `$allow_string` is statically false.
+#[test]
+fn test_is_a_and_is_subclass_of_string_subject_deprecation_php86() {
+    use elephc::php_version::PhpVersion;
+
+    elephc::codegen::set_compile_profile(PhpVersion::Php86, false);
+    let result = check_source_full("<?php var_dump(is_a('Foo', 'Bar'));").expect("must type-check");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("Calling is_a() with a string when $allow_string is false")),
+        "{:?}",
+        result.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>()
+    );
+    let allowed = check_source_full("<?php var_dump(is_a('Foo', 'Bar', true));").expect("must type-check");
+    assert!(
+        !allowed.warnings.iter().any(|warning| warning.message.contains("Calling is_a()")),
+        "$allow_string = true must stay silent"
+    );
+
+    let subclass = check_source_full("<?php var_dump(is_subclass_of('Foo', 'Bar', false));")
+        .expect("must type-check");
+    assert!(
+        subclass
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("Calling is_subclass_of() with a string when $allow_string is false")),
+        "{:?}",
+        subclass.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>()
+    );
+    let default_allowed = check_source_full("<?php var_dump(is_subclass_of('Foo', 'Bar'));")
+        .expect("must type-check");
+    assert!(
+        !default_allowed
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("Calling is_subclass_of()")),
+        "is_subclass_of defaults $allow_string to true"
+    );
+
+    elephc::codegen::set_compile_profile(PhpVersion::Php85, false);
+    let older = check_source_full("<?php var_dump(is_a('Foo', 'Bar'));").expect("must type-check");
+    assert!(
+        !older
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("Calling is_a()")),
+        "PHP 8.5 must not deprecate the string subject"
+    );
+    elephc::codegen::set_compile_profile(PhpVersion::default(), false);
+}
+
+/// PHP 8.6 deprecates SplFileObject's object-oriented CSV helpers.
+#[test]
+fn test_spl_file_object_csv_methods_are_deprecated_php86() {
+    use elephc::php_version::PhpVersion;
+
+    let source = "<?php $file = new SplFileObject('x'); $file->fgetcsv(); $file->fputcsv(['a']);";
+    elephc::codegen::set_compile_profile(PhpVersion::Php86, false);
+    let result = check_source_full(source).expect("must type-check");
+    for method in ["fgetcsv", "fputcsv"] {
+        assert!(
+            result.warnings.iter().any(|warning| {
+                warning.message.contains(&format!("Call to deprecated method: SplFileObject::{}", method))
+            }),
+            "missing {method}: {:?}",
+            result.warnings.iter().map(|w| w.message.clone()).collect::<Vec<_>>()
+        );
+    }
+
+    elephc::codegen::set_compile_profile(PhpVersion::Php85, false);
+    let older = check_source_full(source).expect("must type-check");
+    assert!(
+        !older
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("Call to deprecated method: SplFileObject::")),
+        "PHP 8.5 must not deprecate the CSV helpers"
+    );
+    elephc::codegen::set_compile_profile(PhpVersion::default(), false);
+}
