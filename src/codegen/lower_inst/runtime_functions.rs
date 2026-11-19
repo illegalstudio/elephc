@@ -114,7 +114,7 @@ pub(super) fn lower(
                     Ok(PhpType::Array(element))
                         if !matches!(
                             element.codegen_repr(),
-                            PhpType::Mixed | PhpType::Void | PhpType::Never
+                            PhpType::Void | PhpType::Never
                         )
                 ) && !ctx.value_type_overrides.contains_key(operand)
             })
@@ -217,7 +217,12 @@ fn lower_promoted_operands(
                 ctx.value_type_overrides.insert(
                     array,
                     PhpType::AssocArray {
-                        key: Box::new(PhpType::Int),
+                        // A boxed-element array may hold string keys behind its promoted view.
+                        key: Box::new(if element.codegen_repr() == PhpType::Mixed {
+                            PhpType::Mixed
+                        } else {
+                            PhpType::Int
+                        }),
                         value: element.clone(),
                     },
                 );
