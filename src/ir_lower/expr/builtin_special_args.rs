@@ -559,7 +559,8 @@ pub(super) fn lower_json_source_args(
         operands.push(root_evaluated_call_argument(ctx, value, arg.span).value);
     }
     if ctx.builtin_source_mode() != crate::source::SourceMode::Internal
-        && ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+        && (ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+            || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability))
     {
         if let Some(sig) = sig { operands = coerce_operands_to_params(ctx, sig, operands); }
     }

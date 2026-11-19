@@ -2758,3 +2758,43 @@ runs before null rejection, nullable/mixed/void contracts accept null, non-null
 integer-to-string weak conversions remain available, and native heap cleanup is
 balanced. This step does not admit Nullability: builtin source folding, remaining
 callable/reference/host boundaries and final public/eval acceptance are pending.
+
+### Verified221: original builtin null contracts
+
+Builtin input contracts now select independent Nullability checks without exact
+Coercions membership. Pre-fold source evidence reuses the existing signature and
+named/static-spread planner, original neutral parameter types and null-default
+adapters. Known null builtin arguments are rejected before folding, including
+unreachable code, const aliases and recursively verified literal eval. Namespace
+ambiguity and user shadowing retain their existing conservative rules. The
+checker observes the same resolved non-null contract. NN-only source controls
+retain weak conversions and unrelated arithmetic/comparison/overflow behavior.
+
+Native builtin argument preparation preserves original neutral declarations and
+checks before generic or JSON-source conversion. The common interpreted values
+and captured source dispatchers validate only actual null under NN, while their
+existing exact-kind path remains owned by Coercions. Output-reference protocols
+and explicit nullable/mixed/default-null inputs retain their adapters and owners.
+Direct, named, static spread, call_user_func, call_user_func_array, first-class,
+known Reflection invoke/invokeArgs and source-effect cases pass, with clean native
+heap and fake owners. Native and fake fixtures differ explicitly: builtin
+Reflection requires a native catalog unavailable in FakeOps, and the native
+strlen checker accepts weak integer input through Mixed rather than a literal
+integer. Neither boundary was expanded merely to satisfy a fixture.
+
+IR tracing showed that a reflector whose target facts are lost after a call/try
+can reach a pre-existing generic invokeArgs stub returning null, rather than a
+conversion of the reflected argument. Nullability now shares ArrayKeys' explicit
+unsupported-target policy for ordinary reflected invocation: known targets lower
+normally; runtime-selected/lost targets are refused (or guarded when receiver
+identity is dynamic). Fresh known-target invocation is tested separately. This
+is an intentional documented unsupported path, not a claim that runtime-selected
+Reflection dispatch was implemented. Existing ArrayKeys diagnostics remain valid.
+The temporary IR dump and its test-only debug scaffolding were removed.
+
+Eight distinct focused gates pass: source before folding plus independent-policy
+controls, interpreted builtin routes, native values/owners in both optimization
+modes, all-five EIR validation/emission, explicit unknown Reflection refusal,
+existing ArrayKeys join diagnostics, existing builtin Coercions controls and the
+prior native declaration boundary regression. Public NN and opaque eval remain
+gated pending remaining alias/typed-store/callable/host/proof and admission work.

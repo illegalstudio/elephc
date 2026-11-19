@@ -49,6 +49,9 @@ impl Checker {
     /// Checks an implicit scalar boundary using its source operation rather than physical storage.
     pub(crate) fn require_noncoercive_value_type(&self, expected: &PhpType, actual: &PhpType,
         source: crate::source::SourceMode, span: Span, context: &str) -> Result<(), CompileError> {
+        if crate::semantics::nullability::non_null_contract(expected) {
+            crate::semantics::nullability::validate_receiver(self.semantic_profile, source, actual, false, span)?;
+        }
         if let elephc_semantics::conversions::ConversionPlan::Reject(feature) =
             crate::semantics::conversions::implicit(self.semantic_profile, source, expected, actual) {
             return Err(CompileError::new(span, &format!(

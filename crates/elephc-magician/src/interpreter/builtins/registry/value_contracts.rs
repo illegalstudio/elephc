@@ -19,12 +19,13 @@ pub(super) fn validate_builtin_value_contracts(
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let coercions = context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions);
-    if !coercions && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Comparisons) { return Ok(()); }
+    let nullability = context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability);
+    if !coercions && !nullability && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Comparisons) { return Ok(()); }
     let Some(spec) = eval_declared_builtin_spec(name) else { return Ok(()); };
     if arguments.len() >= spec.required_param_count() {
         super::comparison_contracts::validate(spec, |index| arguments.get(index).copied(), context, values)?;
     }
-    if !coercions { return Ok(()); }
+    if !coercions && !nullability { return Ok(()); }
     for (index, (parameter, value)) in spec.params.iter().zip(arguments).enumerate() {
         validate_parameter(name, index, parameter, *value, context, values)?;
     }
@@ -37,7 +38,8 @@ pub(in crate::interpreter) fn validate_builtin_call_arguments(
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let coercions = context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions);
-    if !coercions && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Comparisons) { return Ok(()); }
+    let nullability = context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability);
+    if !coercions && !nullability && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Comparisons) { return Ok(()); }
     let Some(spec) = eval_declared_builtin_spec(name) else { return Ok(()); };
     let (bound, _) = bind_evaluated_ref_builtin_args(&spec.param_names, arguments, spec.variadic.is_some())?;
     // The existing callee retains its missing-required-argument diagnostic priority.
@@ -45,7 +47,7 @@ pub(in crate::interpreter) fn validate_builtin_call_arguments(
     super::comparison_contracts::validate(spec,
         |index| bound.get(index).and_then(|argument| argument.as_ref().map(|argument| argument.value)),
         context, values)?;
-    if !coercions { return Ok(()); }
+    if !coercions && !nullability { return Ok(()); }
     for (index, (parameter, argument)) in spec.params.iter().zip(&bound).enumerate() {
         if let Some(argument) = argument {
             validate_parameter(name, index, parameter, argument.value, context, values)?;
@@ -61,7 +63,8 @@ pub(in crate::interpreter) fn with_eval_builtin_call_arguments<V: RuntimeValueOp
     consume: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
         -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let modes = if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) {
+    let modes = if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)
+        || context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability) {
         CallArgumentModes::for_builtin(name)
     } else { CallArgumentModes::default() };
     with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |arguments, context, scope, values| {
@@ -78,6 +81,11 @@ fn validate_parameter(
     if parameter.by_ref { return Ok(()); }
     let tag = values.type_tag(value)?;
     if tag == EVAL_TAG_NULL && parameter.default == Some(EvalBuiltinDefaultValue::Null) { return Ok(()); }
+    if tag == EVAL_TAG_NULL && context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
+        && !builtin_type_accepts_exact(parameter.ty, value, tag, context, values)? {
+        return eval_throw_type_error(elephc_semantics::nullability::NON_NULL_MESSAGE, context, values);
+    }
+    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) { return Ok(()); }
     if builtin_type_accepts_exact(parameter.ty, value, tag, context, values)? { return Ok(()); }
     eval_throw_type_error(&format!(
         "{name}(): Argument #{} (${}) must be of type {} (--strict-coercions)",

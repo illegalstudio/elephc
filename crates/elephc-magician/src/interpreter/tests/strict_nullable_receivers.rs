@@ -209,3 +209,19 @@ fn strict_nullability_eval_property_reference_preflight_preserves_storage() {
     assert_eq!(values.output, "N:kept");
     finish(&mut context, &mut scope, &mut values, source);
 }
+
+/// Neutral builtin declarations reject only null while retaining nullable defaults and weak kinds.
+#[test]
+fn strict_nullability_eval_builtin_original_contracts_and_owners() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    let source = include_str!("../../../../../tests/fixtures/strict/nullable_eval_builtins.php")
+        .strip_prefix("<?php\ndeclare(strict_types=0);").unwrap();
+    for fallback in [false, true] {
+        let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        let result = execute(source, fallback, &mut context, &mut scope, &mut values);
+        assert!(result.is_ok(), "{:?}; {}", result.as_ref().err(), values.output);
+        assert_eq!(values.output, "DNSCAFLTJ|bc:1:NULL:0");
+        finish(&mut context, &mut scope, &mut values, "builtin contracts");
+    }
+}

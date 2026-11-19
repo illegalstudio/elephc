@@ -163,3 +163,71 @@ fn nullable_declared_boundaries_emit_on_every_target() {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Original neutral builtin contracts reject known null before folding, including named/static unpacking.
+#[test]
+fn nullable_builtin_source_contracts_survive_folding() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for source in ["<?php echo strlen(null);", "<?php echo strlen(string: null);",
+        "<?php echo strlen(...[null]);", "<?php if (false) { echo strlen(null); }",
+        "<?php const ABSENT = null; echo strlen(ABSENT);", "<?php eval('echo strlen(null);');"] {
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        let error = crate::semantics::validate_source(&program, profile).unwrap_err();
+        assert!(error.message.contains("strict-nullability"), "{source}: {error:?}");
+        crate::semantics::validate_source(&program, SemanticProfile::PERMISSIVE).unwrap();
+    }
+    for source in ["<?php echo substr('abc', 1, null);", "<?php echo strlen(7);",
+        "<?php echo gettype(null);", "<?php echo strlen((string)null);",
+        "<?php if(false){echo 1/0;} echo PHP_INT_MAX+1;",
+        "<?php if(false){echo 1+'bad';} echo 1=='1';",
+        "<?php namespace App; function strlen($value) { return 0; } echo strlen(null);"] {
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        crate::semantics::validate_source(&program, profile).unwrap();
+    }
+}
+
+/// Dynamic builtin inputs retain original null through direct, planned and callable argument paths.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn nullable_builtin_native_contracts_and_owners() {
+    let source = include_str!("../../../tests/fixtures/strict/nullable_builtins.php");
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for optimize in [false, true] {
+        let module = super::semantic_sources::lower_capturing_arguments(source, Target::detect_host(), profile, optimize, SourceMode::Php);
+        let output = super::native_module::run(&module);
+        let stdout = String::from_utf8_lossy(&output.stdout); let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "optimize={optimize}: {stdout}; {stderr}");
+        assert_eq!(stdout, "DNSCAFIRLTJ|bc:1:NULL:0", "{stderr}");
+        assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+        assert!(!stderr.contains("Warning:"), "{stderr}");
+    }
+}
+
+/// The original builtin contract is available to every target's EIR lowering.
+#[test]
+fn nullable_builtin_contracts_emit_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/nullable_builtins.php");
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let module = super::semantic_sources::lower_capturing_arguments(source, target, profile, false, SourceMode::Php);
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Unknown Reflection targets cannot bypass null contracts through their legacy stub bodies.
+#[test]
+fn nullable_builtin_reflection_unknown_targets_are_explicit() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for source in [
+        "<?php if($argc>0){$r=new ReflectionFunction('strlen');}else{$r=new ReflectionFunction('trim');}$r->invokeArgs(['x']);",
+        "<?php function nullableReflectionSource():mixed{return null;}$r=new ReflectionFunction('strlen');try{$r->invoke(nullableReflectionSource());}catch(TypeError $e){}$r->invokeArgs(['x']);",
+    ] {
+        let error = super::semantic_sources::try_lower_capturing_arguments(source, Target::detect_host(), profile, false, SourceMode::Php).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("strict-nullability") && message.contains("known ReflectionFunction"), "{message}");
+        super::semantic_sources::try_lower_capturing_arguments(source, Target::detect_host(), SemanticProfile::PERMISSIVE, false, SourceMode::Php).unwrap();
+    }
+}

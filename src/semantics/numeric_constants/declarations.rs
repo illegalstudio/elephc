@@ -28,8 +28,13 @@ pub(super) fn check_value(annotation: &TypeExpr, value: &Expr, class: Option<&st
 /// Checks original scalar evidence against a declaration projected by its owning metadata adapter.
 pub(super) fn check_expected(expected: &crate::types::PhpType, value: &Expr, class: Option<&str>,
     definitions: &Definitions, evidence: &mut Evidence, context: &str) -> Result<(), CompileError> {
-    let Some(allowed) = super::super::conversions::scalar_contract(expected) else { return Ok(()); };
     let Some(actual) = evaluate(value, true, class, definitions, evidence)? else { return Ok(()); };
+    if evidence.profile.contains(StrictFeature::Nullability) && matches!(actual, Number::Null)
+        && super::super::nullability::non_null_contract(expected) {
+        return Err(CompileError::new(value.span, super::super::nullability::NON_NULL_MESSAGE));
+    }
+    if !evidence.profile.contains(StrictFeature::Coercions) { return Ok(()); }
+    let Some(allowed) = super::super::conversions::scalar_contract(expected) else { return Ok(()); };
     if matches!(plan_implicit_kinds(evidence.profile, actual.value_kind(), allowed), ConversionPlan::Reject(_))
         || super::super::conversions::only_false(expected) && matches!(actual, Number::Bool(true)) {
         return Err(CompileError::new(value.span, &format!(

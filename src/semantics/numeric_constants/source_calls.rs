@@ -130,7 +130,8 @@ fn key(name: &str) -> String { crate::names::php_symbol_key(name.trim_start_matc
 /// Checks known scalar operands without executing defaults, dynamic dispatch or uncertain unpacking.
 pub(super) fn check(expr: &Expr, class: Option<&str>, definitions: &Definitions, evidence: &Evidence)
     -> Result<(), CompileError> {
-    if !(evidence.profile.contains(StrictFeature::Coercions) || evidence.profile.contains(StrictFeature::Comparisons))
+    if !(evidence.profile.contains(StrictFeature::Coercions) || evidence.profile.contains(StrictFeature::Comparisons)
+        || evidence.profile.contains(StrictFeature::Nullability))
         || definitions.unresolved_namespaces { return Ok(()); }
     let signatures = &definitions.calls;
     let generated;
@@ -190,7 +191,8 @@ pub(super) fn check(expr: &Expr, class: Option<&str>, definitions: &Definitions,
             }
         }
     }
-    if !evidence.profile.contains(StrictFeature::Coercions) { return Ok(()); }
+    if !evidence.profile.contains(StrictFeature::Coercions)
+        && !evidence.profile.contains(StrictFeature::Nullability) { return Ok(()); }
     let regular = crate::types::call_args::regular_param_count(sig);
     if plan.first_named_pos.is_none() {
         for (index, value) in plan.source_args.iter().enumerate() {
@@ -219,6 +221,7 @@ fn check_argument(sig: &FunctionSig, builtin: Option<&crate::builtins::registry:
         }
         return Ok(());
     }
+    if !evidence.profile.contains(StrictFeature::Coercions) { return Ok(()); }
     let Some(Some(hint)) = sig.param_type_exprs.get(index) else { return Ok(()); };
     declarations::check_value(hint, value, class, definitions, evidence, "call argument")
 }

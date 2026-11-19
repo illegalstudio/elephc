@@ -16,7 +16,8 @@ pub(super) fn checked_signature(
     signature: Option<&FunctionSig>,
 ) -> Option<FunctionSig> {
     if ctx.builtin_source_mode() == crate::source::SourceMode::Internal
-        || !ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+        || !(ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+            || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability))
     { return None; }
     let definition = definition?;
     let mut signature = signature?.clone();
