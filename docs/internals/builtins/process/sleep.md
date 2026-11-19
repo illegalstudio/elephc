@@ -21,8 +21,8 @@ description: "Compiler internals for sleep(): lowering path, type checks, and ru
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `signature`
-- **Result type source**: `declared`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (1 declared effects)`
 - **Requirements**: `static (0 requirements)`

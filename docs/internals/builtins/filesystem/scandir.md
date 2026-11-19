@@ -37,12 +37,12 @@ description: "Compiler internals for scandir(): lowering path, type checks, and 
 ## Signature summary
 
 ```php
-function scandir(string $directory): array
+function scandir(string $directory, int $sorting_order = 0, mixed $context = null): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–3 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

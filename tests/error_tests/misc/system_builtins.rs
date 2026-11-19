@@ -1057,3 +1057,72 @@ fn test_php86_sleep_usleep_range_and_linkinfo_empty() {
         );
     }
 }
+
+/// PHP 8.6 validates scandir()'s sort flag and rejects an empty directory.
+#[test]
+fn test_php86_scandir_flag_and_empty_directory() {
+    use elephc::php_version::PhpVersion;
+
+    for (source, message) in [
+        (
+            "<?php scandir('/tmp', 99);",
+            "scandir(): Argument #2 ($flags) must be one of the SCANDIR_SORT_ASCENDING, SCANDIR_SORT_DESCENDING, or SCANDIR_SORT_NONE constants",
+        ),
+        (
+            "<?php scandir('');",
+            "scandir(): Argument #1 ($directory) cannot be empty",
+        ),
+    ] {
+        let error = error_at(PhpVersion::Php86, source).expect("PHP 8.6 must reject");
+        assert!(error.contains(message), "{error}");
+        assert!(
+            error_at(PhpVersion::Php85, source).is_none(),
+            "PHP 8.5 must accept: {source}"
+        );
+    }
+}
+
+/// PHP 8.6 validates pathinfo()'s flag value and rejects combined single flags.
+#[test]
+fn test_php86_pathinfo_invalid_flags() {
+    use elephc::php_version::PhpVersion;
+
+    for (source, message) in [
+        (
+            "<?php pathinfo('/a/b', 99);",
+            "pathinfo(): Argument #2 ($flags) must be one of the PATHINFO_* constants",
+        ),
+        (
+            "<?php pathinfo('/a/b', 3);",
+            "pathinfo(): Argument #2 ($flags) must be only one of the PATHINFO_* constants",
+        ),
+    ] {
+        let error = error_at(PhpVersion::Php86, source).expect("PHP 8.6 must reject");
+        assert!(error.contains(message), "{error}");
+        assert!(
+            error_at(PhpVersion::Php85, source).is_none(),
+            "PHP 8.5 must accept: {source}"
+        );
+    }
+}
+
+/// PHP 8.6 rejects NUL bytes in the file metadata predicates' path argument.
+#[test]
+fn test_php86_file_metadata_nul_paths() {
+    use elephc::php_version::PhpVersion;
+
+    for function in ["filesize", "file_exists", "is_file", "stat", "lstat", "fileperms"] {
+        let source = format!("<?php {function}(\"a\\0\");");
+        let error = error_at(PhpVersion::Php86, &source).expect("PHP 8.6 must reject the NUL path");
+        assert!(
+            error.contains(&format!(
+                "{function}(): Argument #1 ($filename) must not contain any null bytes"
+            )),
+            "{error}"
+        );
+        assert!(
+            error_at(PhpVersion::Php85, &source).is_none(),
+            "PHP 8.5 must accept: {source}"
+        );
+    }
+}

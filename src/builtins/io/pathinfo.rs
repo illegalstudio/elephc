@@ -46,6 +46,22 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
         None => None,
     };
+    if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
+        if let (Some(flags), Some(value)) = (cx.args.get(1), flag) {
+            if !(1..=15).contains(&value) {
+                return Err(CompileError::new(
+                    flags.span,
+                    "pathinfo(): Argument #2 ($flags) must be one of the PATHINFO_* constants",
+                ));
+            }
+            if value < 15 && (value & (value - 1)) != 0 {
+                return Err(CompileError::new(
+                    flags.span,
+                    "pathinfo(): Argument #2 ($flags) must be only one of the PATHINFO_* constants",
+                ));
+            }
+        }
+    }
     if cx.args.get(1).is_none() || flag == Some(15) {
         Ok(PhpType::AssocArray {
             key: Box::new(PhpType::Str),

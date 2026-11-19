@@ -55,7 +55,7 @@ sidebar:
 | [`realpath_cache_size()`](./filesystem/realpath_cache_size.md) | `(): int` | `int` | ✓ | ✓ |
 | [`rename()`](./filesystem/rename.md) | `(string $from, string $to): bool` | `bool` | ✓ | ✓ |
 | [`rmdir()`](./filesystem/rmdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
-| [`scandir()`](./filesystem/scandir.md) | `(string $directory): array` | `array` | ✓ | ✓ |
+| [`scandir()`](./filesystem/scandir.md) | `(string $directory, int $sorting_order = 0, mixed $context = null): array` | `array` | ✓ | ✓ |
 | [`stat()`](./filesystem/stat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`symlink()`](./filesystem/symlink.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
 | [`sys_get_temp_dir()`](./filesystem/sys_get_temp_dir.md) | `(): string` | `string` | ✓ | ✓ |

@@ -21,8 +21,8 @@ description: "Compiler internals for is_subclass_of(): lowering path, type check
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `signature`
-- **Result type source**: `declared`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`

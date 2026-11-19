@@ -83613,7 +83613,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "is_a"
       ],
@@ -83627,7 +83627,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -86839,7 +86840,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "is_subclass_of"
       ],
@@ -86853,7 +86854,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -90494,7 +90496,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "linkinfo"
       ],
@@ -90508,7 +90510,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -127577,7 +127580,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "putenv"
       ],
@@ -127591,7 +127594,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -131128,6 +131132,20 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "sorting_order",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -131155,6 +131173,20 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "sorting_order",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -131248,6 +131280,20 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "sorting_order",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "array",
@@ -134869,7 +134915,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "sleep"
       ],
@@ -134883,7 +134929,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -155488,7 +155535,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "usleep"
       ],
@@ -155502,7 +155549,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {

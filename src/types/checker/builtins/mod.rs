@@ -147,6 +147,43 @@ impl Checker {
                 }
             }
         }
+        // PHP 8.6 rejects NUL bytes in the path argument of the file metadata predicates.
+        if crate::codegen_support::compile_php_version()
+            >= crate::php_version::PhpVersion::Php86
+            && matches!(
+                builtin_key.as_str(),
+                "fileperms"
+                    | "fileinode"
+                    | "filesize"
+                    | "fileowner"
+                    | "filegroup"
+                    | "fileatime"
+                    | "filemtime"
+                    | "filectime"
+                    | "filetype"
+                    | "is_writable"
+                    | "is_readable"
+                    | "is_executable"
+                    | "is_file"
+                    | "is_dir"
+                    | "is_link"
+                    | "file_exists"
+                    | "lstat"
+                    | "stat"
+            )
+        {
+            if let Some(arg) = args.first() {
+                if matches!(&arg.kind, ExprKind::StringLiteral(value) if value.contains('\0')) {
+                    return Err(CompileError::new(
+                        arg.span,
+                        &format!(
+                            "{}(): Argument #1 ($filename) must not contain any null bytes",
+                            builtin_key
+                        ),
+                    ));
+                }
+            }
+        }
         // PHP 8.6 deprecates the ignored third argument of `define()`: explicitly passing
         // `false` is a deprecation, while `true` keeps a warning that names the PHP 9 error.
         if builtin_key == "define"

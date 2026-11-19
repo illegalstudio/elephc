@@ -70,7 +70,13 @@ pub(crate) fn lower_tempnam(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 
 /// Lowers `scandir(path)` through the target-aware runtime directory listing helper.
 pub(crate) fn lower_scandir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_array(ctx, inst, "scandir", "__rt_scandir")
+    // PHP accepts `$sorting_order` and `$context`; the local directory helper lists
+    // ascending entries, so the optional values are evaluated but not forwarded yet.
+    super::super::ensure_arg_count_between(inst, "scandir", 1, 3)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "scandir")?;
+    abi::emit_call_label(ctx.emitter, "__rt_scandir");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `glob(pattern)` through the target-aware runtime glob expansion helper.
