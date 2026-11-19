@@ -158,3 +158,28 @@ fn emit_move_window(emitter: &mut impl Emitter, slots: WindowSlots) {
         emitter.instruction(&format!("mov QWORD PTR [rbp - {buffer}], rax"));   // publish the grown accumulation buffer
     }
 }
+
+/// Discards a read chunk by rewinding scratch storage or retiring a heap owner.
+/// The current string result contains the chunk pointer. Some callers reload it from their frame.
+pub fn emit_discard_chunk(emitter: &mut impl Emitter, spill: Option<usize>) {
+    // -- first return the scratch window, then release any owned chunk --
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("mov x2, #0");                                  // return the entire temporary window
+            emitter.instruction("bl __rt_concat_publish");                      // rewind only a scratch-backed chunk
+            if let Some(spill) = spill {
+                emitter.instruction(&format!("ldr x0, [sp, #{spill}]"));        // pass the saved chunk to the release helper
+            } else {
+                emitter.instruction("mov x0, x1");                              // pass the published pointer to the release helper
+            }
+        }
+        Arch::X86_64 => {
+            emitter.instruction("xor edx, edx");                                // return the entire temporary window
+            emitter.instruction("call __rt_concat_publish");                    // rewind only a scratch-backed chunk
+            if let Some(spill) = spill {
+                emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {spill}]")); // reload the chunk saved for release
+            }
+        }
+    }
+    emitter.emit_call_label("__rt_decref_any");
+}
