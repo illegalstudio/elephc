@@ -59,7 +59,7 @@ fn test_nowdoc_no_interpolation_token() {
 /// A multibyte closing label consumes bytes through the label and leaves punctuation intact.
 #[test]
 fn test_unicode_heredoc_label_leaves_following_tokens() {
-    let tokens = crate::tokenize("<?php echo <<<标签\ncontent\n标签; echo 7;")
+    let tokens = tokenize("<?php echo <<<标签\ncontent\n标签; echo 7;")
         .expect("Unicode heredoc should tokenize");
     let kinds: Vec<_> = tokens.iter().map(|(token, _)| token.clone()).collect();
     assert_eq!(kinds, [
