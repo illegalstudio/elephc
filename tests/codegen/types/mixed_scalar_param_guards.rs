@@ -1013,10 +1013,9 @@ echo s($o), "\n";
     assert_eq!(out, "1\n2\n[ev]\n[ev]\n");
 }
 
-/// A refused argument whose release runs a throwing destructor no longer leaks the `TypeError`
-/// message: the operands are released before the message is built. (PHP reports the
-/// `TypeError` and destroys the argument afterwards; here the destructor's exception escapes
-/// the binding, so only the leak is asserted.)
+/// A refused argument whose release runs a throwing destructor does not leak the `TypeError`
+/// message (see `test_refused_argument_destructor_throws_after_the_type_error` for the
+/// exception order).
 #[test]
 fn test_guard_refusal_with_throwing_destructor_does_not_leak_the_message() {
     let output = compile_and_run_with_heap_debug(
@@ -1319,4 +1318,36 @@ function handler(int $no, string $msg): bool { global $x; $x = 2; return true; }
 "#,
     );
     assert_eq!(out, "caught closure\nTypeError: ts(): Argument #1 ($s) must be of type string, null given, called in F on line 13\nTypeError: K::st(): Argument #1 ($s) must be of type string, null given, called in F on line 14\nTypeError: K::m(): Argument #1 ($s) must be of type string, null given, called in F on line 15\nobj\nTypeError: K::m(): Argument #1 ($s) must be of type string, null given, called in F on line 16\ncaught var\n[ok]\n[5]\nclosure 2\nfcc 2\nvarfcc 2\nliteral 1\n");
+}
+
+/// A refused argument is released after its `TypeError` is thrown, while it unwinds, so a
+/// destructor it runs throws with the `TypeError` as its previous exception. The guarded value
+/// itself (`p(mk())`) and another guarded operand (`q(box(null), mk())`) used to be released
+/// before the `TypeError` existed, which lost it; an ordinary operand (`r([mk()], ...)`) was
+/// already released by the unwinder. Expected output: php 8.5 with
+/// `zend.exception_ignore_args=1`, the non-retaining trace configuration elephc follows (with
+/// trace arguments retained, PHP keeps the object alive until the `TypeError` is released).
+#[test]
+fn test_refused_argument_destructor_throws_after_the_type_error() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class D {
+    public function __construct(public string $n) {}
+    public function __destruct() { echo "destruct ", $this->n, "\n"; throw new LogicException($this->n); }
+}
+function mk(string $n): mixed { return new D($n); }
+function box(mixed $v): mixed { return $v; }
+function p(string $s): void { echo "body\n"; }
+function q(int $i, string $s): void { echo "body\n"; }
+function r(array $a, string $s): void { echo "body\n"; }
+function desc(?Throwable $e): string { return $e ? get_class($e) . "(" . explode(', called', $e->getMessage())[0] . ")" . " <- " . desc($e->getPrevious()) : "none"; }
+try { p(mk("a")); echo "after\n"; } catch (Throwable $e) { echo "caught ", desc($e), "\n"; }
+try { q(box(null), mk("b")); echo "after\n"; } catch (Throwable $e) { echo "caught ", desc($e), "\n"; }
+try { r([mk("c")], box(null)); echo "after\n"; } catch (Throwable $e) { echo "caught ", desc($e), "\n"; }
+echo "next\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "destruct a\ncaught LogicException(a) <- TypeError(p(): Argument #1 ($s) must be of type string, D given) <- none\ndestruct b\ncaught LogicException(b) <- TypeError(q(): Argument #1 ($i) must be of type int, null given) <- none\ndestruct c\ncaught LogicException(c) <- TypeError(r(): Argument #2 ($s) must be of type string, null given) <- none\nnext\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
