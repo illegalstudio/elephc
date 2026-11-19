@@ -282,6 +282,10 @@ pub(super) fn sign_archive_openssl(path: &[u8], key_pem: &[u8]) -> Option<()> {
 /// Re-signs the phar at `path` with a hash-based signature (MD5/SHA1/SHA256/SHA512
 /// per `algo` 1..=4). Native PHARs append `digest ++ LE32(algo) ++ "GBMB"`; tar/zip
 /// phars gain a `.phar/signature.bin` entry.
+///
+/// This explicit re-signing API does not manage an adjacent `<archive>.pubkey`
+/// sidecar. Callers switching away from OpenSSL must remove that sidecar too;
+/// while it exists, verified reads reject the resulting hash-signed archive.
 pub(super) fn sign_archive_hash(path: &[u8], algo: u32) -> Option<()> {
     let fs_path = std::path::Path::new(std::str::from_utf8(path).ok()?);
     let (data, archive) = read_verified_archive(fs_path)?;
