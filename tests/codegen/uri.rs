@@ -1994,3 +1994,24 @@ withHost "%78n--a-.com" => https://xn--a-.com/ host="xn--a-.com" uni="a.com"
 "#
     );
 }
+
+/// A runtime `null` bound to a URI method's `string` parameter is coerced as for any internal
+/// method (PHP only deprecates it), not refused by the user-function scalar parameter guard.
+#[test]
+fn test_uri_methods_coerce_a_runtime_null_string_argument() {
+    let out = compile_and_run(
+        r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
+function box(mixed $v): mixed { return $v; }
+$n = box(null);
+$u = Uri\Rfc3986\Uri::parse($n);
+echo $u === null ? "null" : "[" . $u->toString() . "]", "\n";
+$v = Uri\Rfc3986\Uri::parse(uri: $n);
+echo $v === null ? "null" : "[" . $v->toString() . "]", "\n";
+$w = Uri\Rfc3986\Uri::parse("https://example.com/x");
+echo $w->withPath($n)->toString(), "|", $w->withPath(box("/p"))->toString(), "\n";
+echo (new Uri\WhatWg\Url("https://example.com/"))->withQuery($n)->toAsciiString(), "\n";
+"#,
+    );
+    assert_eq!(out, "[]\n[]\nhttps://example.com|https://example.com/p\nhttps://example.com/\n");
+}
