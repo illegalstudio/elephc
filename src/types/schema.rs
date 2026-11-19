@@ -180,7 +180,7 @@ fn fold_attr_value(expr: &Expr, span: Span) -> Option<AttrArgValue> {
         ExprKind::FloatLiteral(value) => Some(AttrArgValue::Float(value.to_bits())),
         ExprKind::BoolLiteral(value) => Some(AttrArgValue::Bool(*value)),
         ExprKind::Null => Some(AttrArgValue::Null),
-        ExprKind::ConstRef(name) => Some(AttrArgValue::ConstRef(name.as_str().to_string(), span.line)),
+        ExprKind::ConstRef(name) => Some(AttrArgValue::ConstRef(name.as_str().to_string(), expr.span.line)),
         ExprKind::ScopedConstantAccess {
             receiver: StaticReceiver::Named(class),
             name,
@@ -188,7 +188,7 @@ fn fold_attr_value(expr: &Expr, span: Span) -> Option<AttrArgValue> {
             builtin_attribute_flag(class.as_str(), name).map(AttrArgValue::Int)
         }
         ExprKind::ScopedConstantAccess { receiver, name } => scoped_receiver_type_name(receiver)
-            .map(|type_name| AttrArgValue::ScopedConst(type_name, name.clone(), span.line)),
+            .map(|type_name| AttrArgValue::ScopedConst(type_name, name.clone(), expr.span.line)),
         // `#[\Attribute(\Attribute::TARGET_CLASS | \Attribute::IS_REPEATABLE)]`: flags combine.
         ExprKind::BinaryOp {
             left,
