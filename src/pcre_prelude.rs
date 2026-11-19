@@ -1,5 +1,6 @@
 //! Purpose:
-//! Injects `preg_grep()` as a declared PHP function built on `preg_split()` and `preg_match()`.
+//! Injects `preg_grep()` as a declared PHP function that compiles its pattern once and
+//! matches each entry through the internal compiled-pattern builtins.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()`, next to the version prelude and before name resolution,
@@ -11,30 +12,23 @@
 //! - Pay-for-use with a redeclaration guard, like `crate::version_prelude`: a program that
 //!   never mentions `preg_grep` carries nothing, and a program declaring its own global
 //!   `preg_grep` keeps it. A namespaced `App\preg_grep` does not suppress the injection.
-//! - The body is PHP's algorithm over the shared regex builtins, so every target and the
-//!   regex runtime detection see ordinary `preg_split()` / `preg_match()` calls. The
-//!   pattern is validated up front without matching anything: `preg_split()` with a limit
-//!   of 1 compiles it and stops before its first match, so an invalid pattern is `false`
-//!   even for an empty array, while a valid pattern that would fail on some subject
-//!   (`/a|(?R)/` on `""`) never fails the call before an entry runs. Each entry is then
-//!   matched by its own `preg_match()` call, which compiles the pattern again (no compiled
-//!   pattern is cached across calls). Each entry is matched as its string value and keeps
-//!   its key; a match error stops the scan and returns the entries collected so far with
-//!   `preg_last_error()` still set, like php-src before 8.6. From PHP 8.6 (php-src
-//!   GH-11936) an error left in `preg_last_error()` makes the call return `false`.
-//! - php-src resets the error state once per `preg_grep()` call, so a nested `preg_*`
-//!   error recorded by an entry's `__toString()` survives the later matches and, from 8.6,
-//!   fails the call. Each generated `preg_match()` clears the state, so the body carries
-//!   such an error in `$nested` for the 8.6 check. Two cases still differ from php-src:
-//!   `preg_last_error()` after the call reports the last generated match's outcome rather
-//!   than the carried nested code, and a later `__toString()` whose own `preg_*` call
-//!   succeeds does not clear an earlier carried error.
+//! - The body follows php-src's `preg_grep()`. `__elephc_preg_compile()` resets the
+//!   `preg_last_error()` state once and compiles the pattern once; an invalid pattern
+//!   returns `false` with `PREG_INTERNAL_ERROR` before any entry is converted, even for an
+//!   empty array. Each entry is matched as its string value by
+//!   `__elephc_preg_match_compiled()` and keeps its key; the handle is freed in a `finally`
+//!   block, so a throwing `__toString()` does not leak it.
+//! - The per-entry match does not reset the error state. A nested `preg_*` error an entry's
+//!   `__toString()` records therefore stays in `preg_last_error()` after the call, and a
+//!   later nested call that succeeds clears it, as in php-src. A match error stops the scan
+//!   and returns the entries collected so far, like php-src before 8.6. From PHP 8.6
+//!   (php-src GH-11936) an error left in `preg_last_error()` makes the call return `false`.
 
 use crate::parser::ast::{BinOp, CastType, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_array, e_binop, e_bool, e_call, e_cast, e_const, e_int, e_str, e_var, function,
-    internal_declarations, s_array_assign, s_assign, s_break, s_foreach, s_if, s_return,
-    t_array, t_union,
+    e_array, e_binop, e_bool, e_call, e_cast, e_const, e_int, e_var, function,
+    internal_declarations, s_array_assign, s_assign, s_break, s_expr, s_foreach, s_if,
+    s_return, s_try, t_array, t_union,
 };
 
 /// `preg_grep(string $pattern, array $array, int $flags = 0): array|false`.
@@ -46,14 +40,11 @@ fn preg_grep_decl() -> Stmt {
         .param_default("flags", TypeExpr::Int, e_int(0))
         .returns(t_union(vec![t_array(), TypeExpr::False]))
         .body(vec![
-            // An invalid pattern fails before any entry is inspected. A one-piece split
-            // compiles the pattern but runs no match, so no subject can fail this check.
+            // Resets the error state once per call and compiles the pattern once. An invalid
+            // pattern fails before any entry is inspected.
+            s_assign("regex", e_call("__elephc_preg_compile", vec![e_var("pattern")])),
             s_if(
-                e_binop(
-                    e_call("preg_split", vec![e_var("pattern"), e_str(""), e_int(1)]),
-                    BinOp::StrictEq,
-                    e_bool(false),
-                ),
+                e_binop(e_var("regex"), BinOp::StrictEq, e_int(0)),
                 vec![s_return(e_bool(false))],
                 vec![],
                 None,
@@ -67,49 +58,40 @@ fn preg_grep_decl() -> Stmt {
                 ),
             ),
             s_assign("result", e_array(vec![])),
-            // php-src resets the error state once per call, and an entry's `__toString()` can
-            // record a nested `preg_*` error that php-src keeps. Each generated `preg_match()`
-            // clears the state again, so a nested error is carried here instead.
-            s_assign("nested", e_const("PREG_NO_ERROR")),
-            s_foreach(
-                e_var("array"),
-                Some("key"),
-                "value",
-                vec![
-                    // The state is clean before the conversion (the previous match succeeded),
-                    // so a code read right after it was recorded by `__toString()`.
-                    s_assign("subject", e_cast(CastType::String, e_var("value"))),
-                    s_if(
-                        e_binop(
-                            e_call("preg_last_error", vec![]),
-                            BinOp::StrictNotEq,
-                            e_const("PREG_NO_ERROR"),
+            s_try(
+                vec![s_foreach(
+                    e_var("array"),
+                    Some("key"),
+                    "value",
+                    vec![
+                        s_assign(
+                            "matched",
+                            e_call(
+                                "__elephc_preg_match_compiled",
+                                vec![e_var("regex"), e_cast(CastType::String, e_var("value"))],
+                            ),
                         ),
-                        vec![s_assign("nested", e_call("preg_last_error", vec![]))],
-                        vec![],
-                        None,
-                    ),
-                    s_assign(
-                        "matched",
-                        e_call("preg_match", vec![e_var("pattern"), e_var("subject")]),
-                    ),
-                    s_if(
-                        e_binop(matched(), BinOp::StrictEq, e_bool(false)),
-                        vec![s_break(1)],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(
-                            e_binop(matched(), BinOp::StrictEq, e_int(1)),
-                            BinOp::StrictNotEq,
-                            e_var("invert"),
+                        // A match error is recorded in `preg_last_error()` and stops the scan.
+                        s_if(
+                            e_binop(matched(), BinOp::Lt, e_int(0)),
+                            vec![s_break(1)],
+                            vec![],
+                            None,
                         ),
-                        vec![s_array_assign("result", e_var("key"), e_var("value"))],
-                        vec![],
-                        None,
-                    ),
-                ],
+                        s_if(
+                            e_binop(
+                                e_binop(matched(), BinOp::StrictEq, e_int(1)),
+                                BinOp::StrictNotEq,
+                                e_var("invert"),
+                            ),
+                            vec![s_array_assign("result", e_var("key"), e_var("value"))],
+                            vec![],
+                            None,
+                        ),
+                    ],
+                )],
+                vec![],
+                Some(vec![s_expr(e_call("__elephc_preg_free", vec![e_var("regex")]))]),
             ),
             // PHP 8.6 (php-src GH-11936) returns false instead of the partial result when the
             // call's own match or an entry's conversion left an error.
@@ -118,13 +100,9 @@ fn preg_grep_decl() -> Stmt {
                     e_binop(e_const("PHP_VERSION_ID"), BinOp::GtEq, e_int(80600)),
                     BinOp::And,
                     e_binop(
-                        e_binop(
-                            e_call("preg_last_error", vec![]),
-                            BinOp::StrictNotEq,
-                            e_const("PREG_NO_ERROR"),
-                        ),
-                        BinOp::Or,
-                        e_binop(e_var("nested"), BinOp::StrictNotEq, e_const("PREG_NO_ERROR")),
+                        e_call("preg_last_error", vec![]),
+                        BinOp::StrictNotEq,
+                        e_const("PREG_NO_ERROR"),
                     ),
                 ),
                 vec![s_return(e_bool(false))],

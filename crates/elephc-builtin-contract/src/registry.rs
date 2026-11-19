@@ -185,6 +185,7 @@ mod tests {
         // +3: the internal libc setlocale and nl_langinfo helpers it calls.
         // +3: `preg_grep`, `preg_last_error`, and `preg_last_error_msg`.
         // +1: the internal `__elephc_set_memory_limit` runtime setter.
+        // +3: the internal compiled-pattern helpers the `preg_grep()` prelude calls.
         assert_eq!(contracts().len(), 1319 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
