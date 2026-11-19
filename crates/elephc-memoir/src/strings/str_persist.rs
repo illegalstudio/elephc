@@ -372,3 +372,19 @@ fn emit_str_persist_linux_x86_64(emitter: &mut impl Emitter, mbstring: bool) {
     emitter.label("__rt_str_persist_done");
     emitter.instruction("ret");                                                 // return to the caller with rax=owned_ptr and rdx=length
 }
+
+/// Persists the string described by the two original frame words.
+pub fn emit_persist_from_frame(emitter: &mut impl Emitter, low: usize) {
+    let high = low + 8;
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x1, [sp, #{low}]"));              // load the borrowed string pointer
+            emitter.instruction(&format!("ldr x2, [sp, #{high}]"));             // load the borrowed string length
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {low}]"));  // load the borrowed string pointer
+            emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {high}]")); // load the borrowed string length
+        }
+    }
+    crate::abi::emit_call_label(emitter, "__rt_str_persist");
+}
