@@ -37,4 +37,5 @@ pub(super) fn eval_owned(expr: &EvalExpr, context: &mut ElephcEvalContext,
 pub(super) fn uses_quiet_roots(context: &ElephcEvalContext) -> bool {
     context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization)
         || context.semantic_profile().contains(elephc_semantics::StrictFeature::Indexing)
+        || context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
 }

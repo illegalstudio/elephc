@@ -142,6 +142,7 @@ fn eval_array_get_with_reference(
     array: RuntimeCellHandle, index: RuntimeCellHandle, preserve: bool, checked: bool,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if checked { super::super::checked_nullability::require_non_null(array, context, values)?; }
     let tag = values.type_tag(array)?;
     if tag != EVAL_TAG_OBJECT {
         checked_array_keys::for_receiver(array, index, context, values)?;

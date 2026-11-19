@@ -2676,3 +2676,25 @@ receivers, owned key/receiver cleanup, and trusted/permissive source controls.
 Nullability remains publicly gated until all remaining receiver, declaration,
 builtin and interpreted-eval consumers are integrated. No further strict family
 or umbrella is admitted by this bounded change.
+
+### Verified218: interpreted non-null dimension receivers
+
+The interpreter consumes the shared NullState/NullPlan policy at ordinary
+array-get receiver boundaries. Actual null schedules the normal pending
+TypeError after selector evaluation, without a native exception jump across
+Rust. Checks borrow handles; existing operand frames own cleanup on rejection.
+Quiet reference/slot-creation reads stay separate from ordinary consumers.
+Nullability alone now enables recursive quiet probe roots, preserving nested
+isset/empty/coalesce while ordinary selector expressions still enforce null
+receiver checks.
+
+Five exact focused gates pass: native-cell fake-owner coverage, selector effects,
+exact semantic failure messages, present null/non-null values, nested probes,
+quiet unknown roots, ordinary keys within probes, intentional nested writes and
+by-reference slot creation, permissive/Initialization/Indexing controls, existing
+Indexing probe regressions and the public pending-feature gate. Both walker and
+explicit bytecode fallback decisions are checked. The legacy fake unchecked
+array getter does not model strings, so no string success is claimed from this
+fixture; actual native string coverage remains part of final admission.
+Public Nullability and opaque eval execution stay gated until all remaining
+consumers are integrated. No additional family is admitted.

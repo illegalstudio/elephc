@@ -11,6 +11,7 @@
 //! - Child modules import the interpreter entry points from their parent module.
 
 mod array_literals;
+mod strict_nullable_receivers;
 mod array_references;
 mod bytecode;
 mod bytecode_calls;

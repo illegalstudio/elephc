@@ -1,0 +1,118 @@
+//! Purpose:
+//! Verifies interpreted non-null dimension receivers and independently quiet probe roots.
+//!
+//! Called from:
+//! - Focused staged strict-nullability interpreter tests.
+//!
+//! Key details:
+//! - Explicit dispatcher fallback is checked without weakening public admission gates.
+
+use super::super::*;
+use super::support::*;
+use elephc_semantics::{SemanticProfile, StrictFeature};
+
+/// Runs staged syntax through the walker and optionally checks the real bytecode fallback.
+fn execute(source: &str, fallback: bool, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut FakeOps,
+) -> Result<EvalControl, EvalStatus> {
+    let program = crate::parser::parse_fragment_with_semantics(source.as_bytes(), context.semantic_profile()).unwrap();
+    if fallback { assert!(bytecode::try_execute(context, &program, scope, values)?.is_none()); }
+    execute_statements(program.statements(), context, scope, values)
+}
+
+/// Retires all fixture leases, including a pending semantic error, before the owner audit.
+fn finish(context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut FakeOps, source: &str) {
+    if let Some(error) = context.take_pending_throw() { values.release(error).unwrap(); }
+    for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+    for value in context.take_persistent_cell_owners() { values.release(value).unwrap(); }
+    for (id, owners) in &values.cell_owners {
+        assert_eq!(*owners, 0, "{source}: owner {id}: {:?}", values.values[id]);
+    }
+}
+
+/// Null receivers fail after selectors run, with borrowed and newly produced owners balanced.
+#[test]
+fn strict_nullability_eval_dimension_receivers_and_owners() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for fallback in [false, true] {
+        for (source, expected, stdout) in [
+            ("$a=null;return $a[0];", None, ""),
+            ("$a=[null];return $a[0][0];", None, ""),
+            ("function nullableEvalKey(){echo 'K';return 'owned-key';}$a=null;return $a[nullableEvalKey()];", None, "K"),
+            ("function nullableEvalReceiver(){return [null][0];}return nullableEvalReceiver()['owned-key'];", None, ""),
+            ("$a=[null];return $a[0];", Some(FakeValue::Null), ""),
+            ("$a=[7];return $a[0];", Some(FakeValue::Int(7)), ""),
+        ] {
+            let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+            let result = execute(source, fallback, &mut context, &mut scope, &mut values);
+            if let Some(expected) = expected {
+                let EvalControl::Return(value) = result.unwrap() else { panic!("return"); };
+                assert_eq!(values.get(value), expected, "{source}"); values.release(value).unwrap();
+            } else {
+                assert!(matches!(result, Err(EvalStatus::UncaughtThrowable)), "{source}: {:?}", result.as_ref().err());
+                let error = context.take_pending_throw().unwrap();
+                assert!(values.object_is_a(error, "TypeError", false).unwrap(), "{source}");
+                let FakeValue::Object(properties) = values.get(error) else { panic!("throwable object"); };
+                let message = properties.iter().find(|(name, _)| name == "message").unwrap().1;
+                assert_eq!(values.get(message), FakeValue::String(
+                    elephc_semantics::nullability::NON_NULL_MESSAGE.into()), "{source}");
+                values.release(error).unwrap();
+            }
+            assert_eq!(values.output, stdout, "{source}");
+            assert!(values.warnings.is_empty(), "{source}: {:?}", values.warnings);
+            finish(&mut context, &mut scope, &mut values, source);
+        }
+    }
+}
+
+/// Only receiver spines are quiet; selectors retain ordinary null receiver checks.
+#[test]
+fn strict_nullability_eval_quiet_spines_and_selectors() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for fallback in [false, true] {
+        for (source, expected) in [
+            ("$a=null;return $a[0][0]??'q';", Some(FakeValue::String("q".into()))),
+            ("return $unknown[0][0]??'q';", Some(FakeValue::String("q".into()))),
+            ("$a=null;return isset($a[0][0]);", Some(FakeValue::Bool(false))),
+            ("$a=null;return empty($a[0][0]);", Some(FakeValue::Bool(true))),
+            ("$a=null;$outer=[];return isset($outer[$a[0]]);", None),
+            ("$a=null;$outer=[];return $outer[$a[0]]??'q';", None),
+        ] {
+            let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+            let result = execute(source, fallback, &mut context, &mut scope, &mut values);
+            if let Some(expected) = expected {
+                let EvalControl::Return(value) = result.unwrap() else { panic!("return"); };
+                assert_eq!(values.get(value), expected, "{source}"); values.release(value).unwrap();
+            } else { assert!(matches!(result, Err(EvalStatus::UncaughtThrowable)), "{source}"); }
+            assert!(values.warnings.is_empty(), "{source}: {:?}", values.warnings);
+            finish(&mut context, &mut scope, &mut values, source);
+        }
+    }
+}
+
+/// Slot creation, other strict rules and permissive reads retain their independent policies.
+#[test]
+fn strict_nullability_eval_creation_and_independent_controls() {
+    for strict in [false, true] {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, strict);
+        for source in ["$a=null;$a['outer']['inner']=7;return $a['outer']['inner'];",
+            "$a=['existing'=>0];function fill(&$slot){$slot=7;}fill($a['new']);return $a['new'];"] {
+            let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+            let EvalControl::Return(value) = execute(source, true, &mut context, &mut scope, &mut values).unwrap() else { panic!("return"); };
+            assert_eq!(values.get(value), FakeValue::Int(7), "{source}"); values.release(value).unwrap();
+            finish(&mut context, &mut scope, &mut values, source);
+        }
+    }
+    for feature in [None, Some(StrictFeature::Indexing), Some(StrictFeature::Initialization)] {
+        let profile = feature.map_or(SemanticProfile::PERMISSIVE, |feature| SemanticProfile::PERMISSIVE.with(feature, true));
+        let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        let source = "$a=null;return $a[0];";
+        let EvalControl::Return(value) = execute(source, true, &mut context, &mut scope, &mut values).unwrap() else { panic!("return"); };
+        assert_eq!(values.get(value), FakeValue::Null); values.release(value).unwrap();
+        finish(&mut context, &mut scope, &mut values, source);
+    }
+}
