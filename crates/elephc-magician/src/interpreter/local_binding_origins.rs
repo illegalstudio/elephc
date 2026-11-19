@@ -27,7 +27,8 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
     context: &ElephcEvalContext, scope: &ElephcEvalScope,
 ) -> Option<EvalParameterType> {
     let arrays = context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes);
-    if !arrays && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals) { return None; }
+    if !arrays && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals)
+        && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { return None; }
     let mixed = || EvalParameterType::new(vec![EvalParameterTypeVariant::Mixed], false);
     match expr {
         EvalExpr::LoadVar(name) => {
@@ -178,8 +179,11 @@ pub(in crate::interpreter) fn store_local_with_origin(context: &mut ElephcEvalCo
     producer: LocalAssignmentProducer, values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     let LocalAssignmentProducer { binding: producer, source } = producer;
-    let source = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
-        match source.map(Ok).unwrap_or_else(|| value_contract(value, context, values)) {
+    let source = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
+        || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        match source.map(Ok).unwrap_or_else(|| if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+            Ok(parameter_type(&Type::atom("mixed")))
+        } else { value_contract(value, context, values) }) {
             Ok(source) => Some(source),
             Err(status) => { let _ = eval_release_value(context, values, value); return Err(status); }
         }

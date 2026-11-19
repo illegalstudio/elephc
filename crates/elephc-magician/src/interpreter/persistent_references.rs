@@ -62,6 +62,7 @@ fn promote_array_reference_variable(
         return promote_array_reference_variable(global_scope, name, context, values);
     }
     let source_view = source.local_source_view(name, context).cloned();
+    let guarded = source.local_guard_source_view(name, context).is_some();
     let (value, ownership) = source.entry(name).filter(|entry| entry.flags().is_visible())
         .map(|entry| (entry.cell(), entry.flags().ownership))
         .map_or_else(|| values.null().map(|value| (value, ScopeCellOwnership::Owned)), Ok)?;
@@ -76,7 +77,10 @@ fn promote_array_reference_variable(
     for old in source.set_respecting_references(name.to_string(), reference, ScopeCellOwnership::Owned) {
         values.release(old)?;
     }
-    if let Some(view) = source_view { source.record_local_source_view(name.to_string(), view, context.source_view_epoch()); }
+    if let Some(view) = source_view {
+        if guarded { source.record_local_guard_source_view(name.to_string(), view, context.source_view_epoch()); }
+        else { source.record_local_source_view(name.to_string(), view, context.source_view_epoch()); }
+    }
     Ok(reference)
 }
 

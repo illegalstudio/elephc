@@ -177,6 +177,14 @@ including ordinary builtin calls, are `UnresolvedCall` gaps. The tree
 walker then runs the whole fragment. Effects, declarations, and scope writes
 still run on every execution; only the executable form is cached.
 
+The staged Mixed guarantee selects the walker before executable-cache lookup,
+including calls into functions whose bodies already have bytecode. Its scalar
+consumers carry logical source alternatives and predicate-derived views with
+owned operands. Bytecode values currently carry storage metadata without those
+proofs. The shared selector records the execution mode at both entry paths.
+Mixed remains excluded from public admission while its remaining consumers and
+native source channels are completed.
+
 The cache is keyed by the eval source bytes (64 KiB, 256 entries, including
 gaps) and is separate from the parse cache. A frame records the resume
 instruction index, the value-stack base, and the scope. That record is what a

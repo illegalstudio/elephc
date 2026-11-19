@@ -32,6 +32,13 @@ use crate::eval_ir::EvalProgram;
 use crate::interpreter::{EvalControl, RuntimeValueOps};
 use crate::scope::ElephcEvalScope;
 
+/// Selects and records the walker while logical source proofs are absent from bytecode values.
+pub(in crate::interpreter) fn source_proofs_require_walker(context: &ElephcEvalContext) -> bool {
+    let required = context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed);
+    if required { vm::mark_tree_walk(); }
+    required
+}
+
 /// Runs the slice when the fragment compiles. `Ok(None)` means the tree walker must run.
 pub(in crate::interpreter) fn try_execute(
     context: &mut ElephcEvalContext,
@@ -39,6 +46,7 @@ pub(in crate::interpreter) fn try_execute(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalControl>, EvalStatus> {
+    if source_proofs_require_walker(context) { return Ok(None); }
     let cache_key = cache::copy_current_key();
     if let Some(code) = cache_key.as_deref() {
         if let Some(cached) = cache::lookup_executable(code, context.semantic_profile()) {

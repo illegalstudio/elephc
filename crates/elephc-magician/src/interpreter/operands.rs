@@ -37,6 +37,9 @@ pub(in crate::interpreter) fn eval_unary_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        return mixed_eval::unary(op, expr, context, scope, values).map(|result| result.0);
+    }
     with_eval_operands(&[expr], context, scope, values, |args, context, _, values| {
         eval_unary_value(op, args[0], context, values)
     })
@@ -100,6 +103,9 @@ pub(in crate::interpreter) fn eval_binary_expr(
             eval_condition(right, context, scope, values)?
         };
         return values.bool_value(result);
+    }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        return mixed_eval::binary(op, left, right, context, scope, values).map(|result| result.0);
     }
     with_eval_operands(&[left, right], context, scope, values, |args, context, _, values| {
         eval_binary_result(op, args[0], args[1], context, values)
@@ -266,7 +272,9 @@ pub(in crate::interpreter) fn eval_condition(
     let value = eval_owned_expr(expr, context, scope, values)?;
     let result = eval_boolean_condition(value, context, values);
     let released = eval_release_value(context, values, value);
-    result.and_then(|result| released.map(|()| result))
+    let result = result.and_then(|result| released.map(|()| result))?;
+    mixed_guards::record(expr, result, context, scope);
+    Ok(result)
 }
 
 /// Keeps a quiet probe's receiver alive and retires its lease on success or failure.

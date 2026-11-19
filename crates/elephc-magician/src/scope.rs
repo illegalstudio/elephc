@@ -14,6 +14,7 @@
 use std::collections::{HashMap, HashSet};
 
 mod native_snapshots;
+mod source_views;
 
 use crate::context::EvalReferenceTarget;
 use crate::value::RuntimeCellHandle;
@@ -140,12 +141,21 @@ impl ScopeEntry {
     }
 }
 
+/// One binding-local source observation, separate from its enforced value contract.
+#[derive(Clone)]
+struct LocalSourceView {
+    generation: u64,
+    write_epoch: u64,
+    ty: crate::eval_ir::EvalParameterType,
+    predicate_guard: bool,
+}
+
 /// Materialized activation scope passed opaquely across the eval ABI.
 pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
     local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     inferred_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
-    local_source_views: HashMap<String, (u64, u64, crate::eval_ir::EvalParameterType)>,
+    local_source_views: HashMap<String, LocalSourceView>,
     array_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_storage_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_binding_types: HashMap<String, crate::eval_ir::EvalParameterType>,
@@ -200,24 +210,6 @@ impl ElephcEvalScope {
     /// Returns a successful producer's contract, including explicitly open mixed origins.
     pub(crate) fn inferred_local_type(&self, name: &str) -> Option<&crate::eval_ir::EvalParameterType> {
         self.inferred_local_types.get(name)
-    }
-
-    /// Records a current source view without adding it to the enforced local contracts.
-    pub(crate) fn record_local_source_view(&mut self, name: String, ty: crate::eval_ir::EvalParameterType, epoch: u64) {
-        if let Some(entry) = self.entry(&name).filter(|entry| entry.flags().is_visible()) {
-            self.local_source_views.insert(name, (entry.generation(), epoch, ty));
-        }
-    }
-
-    /// Reads a generation-current source, requiring no intervening write to the same shared source.
-    pub(crate) fn local_source_view(&self, name: &str, context: &crate::context::ElephcEvalContext) -> Option<&crate::eval_ir::EvalParameterType> {
-        let entry = self.entry(name).filter(|entry| entry.flags().is_visible())?;
-        let (generation, source_epoch, ty) = self.local_source_views.get(name)?;
-        if *generation != entry.generation() { return None; }
-        let shared = entry.flags().by_ref || self.reference_target(name).is_some()
-            || self.global_alias_target(name).is_some();
-        if shared && !context.source_view_is_current(entry.cell(), *source_epoch) { return None; }
-        Some(ty)
     }
 
     /// Records array contents independently from the whole binding's producer kind.

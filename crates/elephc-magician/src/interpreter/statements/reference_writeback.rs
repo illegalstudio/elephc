@@ -86,7 +86,8 @@ pub(in crate::interpreter) fn bind_method_scope_args(
             let value = copy_scope_value(bound_arg.value, context, values)?;
             method_scope.set(name.clone(), value, ScopeCellOwnership::Owned);
         }
-        if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+        if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
+            || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
             let source = parameter_types.get(position).and_then(Option::as_ref)
                 .map(crate::eval_ir::generic_type).unwrap_or_else(|| elephc_generics::Type::atom("mixed"));
             let source = if parameter_is_variadic.get(position).copied().unwrap_or(false) {

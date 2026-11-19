@@ -28,10 +28,12 @@ pub(in crate::interpreter) fn prepare_assignment(expr: &EvalExpr,
 pub(in crate::interpreter) fn source_view(expr: &EvalExpr,
     context: &ElephcEvalContext, scope: &ElephcEvalScope,
 ) -> Option<EvalParameterType> {
-    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) { return None; }
+    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
+        && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { return None; }
     match expr {
         EvalExpr::LoadVar(name) => {
-            let view = scope.local_type(name).or_else(|| scope.local_source_view(name, context)).cloned();
+            let view = scope.local_guard_source_view(name, context).or_else(|| scope.local_type(name))
+                .or_else(|| scope.local_source_view(name, context)).cloned();
             if view.as_ref().is_some_and(|ty| generic_type(ty) == Type::atom("array"))
                 && generic_local_contracts(scope, name, context).iter()
                     .any(|ty| arrays::contains_contents(&generic_type(ty))) {
@@ -73,6 +75,11 @@ pub(in crate::interpreter) fn evaluate_assignment(expr: &EvalExpr, name: &str,
             producer.binding = Some(source.clone()); producer.source = Some(source);
             return Ok(value);
         }
+    }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        let (value, source) = mixed_eval::evaluate(expr, context, scope, values)?;
+        producer.source = Some(parameter_type(&source));
+        return Ok(value);
     }
     eval_owned_expr(expr, context, scope, values)
 }

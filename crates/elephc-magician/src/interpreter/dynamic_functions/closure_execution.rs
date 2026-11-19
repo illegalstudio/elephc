@@ -120,7 +120,8 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     frame.set_sensitive_parameters(function.parameter_attributes(), function.parameter_is_variadic());
     context.push_function_args(frame);
     let result = binding_result.and_then(|()| {
-        if let Some(body) = function.bytecode().cloned() {
+        if let Some(body) = function.bytecode().filter(|_|
+            !super::super::bytecode::source_proofs_require_walker(context)).cloned() {
             super::super::bytecode::execute_bound_body(body, context, &mut function_scope, values)
         } else {
             execute_statements(function.body(), context, &mut function_scope, values)
@@ -482,7 +483,8 @@ fn eval_closure_with_optional_binding(
         backtrace_object.is_none(),
     );
     let result = binding_result.and_then(|()| {
-        if let Some(body) = function.bytecode().cloned() {
+        if let Some(body) = function.bytecode().filter(|_|
+            !super::super::bytecode::source_proofs_require_walker(context)).cloned() {
             super::super::bytecode::execute_bound_body(body, context, &mut function_scope, values)
         } else {
             execute_statements(function.body(), context, &mut function_scope, values)
