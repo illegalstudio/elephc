@@ -435,7 +435,7 @@ impl ReuseSite {
     fn arm_instruction(self, emitter: &mut impl AssemblyEmitter, instruction: &str, comment: &str) {
         if self == Self::HashEntry {
             let padding = 76usize.saturating_sub(instruction.len()).max(1);
-            let annotation = "//";
+            let annotation = "                                      //";
             emitter.instruction(&format!("{instruction}{:padding$}{annotation} {comment}", "")); // emit the existing annotated listing
         } else {
             emitter.instruction(instruction);                                   // emit the existing plain listing

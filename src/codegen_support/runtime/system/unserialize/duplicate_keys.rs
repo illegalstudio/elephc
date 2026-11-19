@@ -29,7 +29,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
 /// Preserves the ARM listing's inline assembly annotations.
 fn emit_annotated_arm_instruction(emitter: &mut Emitter, instruction: &str, comment: &str) {
     let padding = 76usize.saturating_sub(instruction.len()).max(1);
-    let annotation = "//";
+    let annotation = "                                      //";
     emitter.instruction(&format!("{instruction}{:padding$}{annotation} {comment}", "")); // emit the existing annotated listing
 }
 
