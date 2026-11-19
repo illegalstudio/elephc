@@ -117,5 +117,7 @@ mod mbstring_output_handler;
 #[path = "strings/mbstring_regex_settings.rs"]
 mod mbstring_regex_settings;
 
+#[path = "strings/base_conversion_notice_php86.rs"]
+mod base_conversion_notice_php86;
 #[path = "strings/pack_unpack_php86.rs"]
 mod pack_unpack_php86;

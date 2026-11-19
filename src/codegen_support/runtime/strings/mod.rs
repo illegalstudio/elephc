@@ -263,7 +263,7 @@ pub use bin2hex_len::emit_bin2hex_len;
 /// Emit the shared unsigned integer-to-base renderer used by dechex/decbin/decoct.
 pub use dec_to_base::emit_dec_to_base;
 /// Emit the shared base-digit parser used by hexdec/bindec/octdec.
-pub use base_to_number::emit_base_to_number;
+pub use base_to_number::{emit_base_conversion_imprecise_notice, emit_base_to_number};
 /// Emit binary-to-hexadecimal encoding.
 pub use hex2bin::emit_hex2bin;
 /// Emit hexadecimal-to-binary decoding.

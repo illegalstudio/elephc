@@ -114,6 +114,23 @@ pub(crate) fn lower_base_to_number(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_base_to_number");
+    if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
+        // The parse reports a widened float in the integer result register; PHP 8.6 warns
+        // about the precision loss before the value is boxed. The wrapper tail-jumps into
+        // the shared warning dispatcher, which preserves the result registers.
+        let exact = ctx.next_label(&format!("{}_parse_exact", name));
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz x0, {}", exact));     // exact integer parses are silent
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                   // did the parse widen the value to a float?
+                ctx.emitter.instruction(&format!("jz {}", exact));          // exact integer parses are silent
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_base_conversion_imprecise_notice");
+        ctx.emitter.label(&exact);
+    }
     box_base_to_number_result(ctx, name);
     store_if_result(ctx, inst)
 }

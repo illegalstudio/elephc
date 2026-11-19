@@ -464,6 +464,11 @@ pub(crate) fn emit_runtime_data_fixed(
     for (symbol, value) in [("_rt_warning_prefix", "Warning: "), ("_rt_notice_prefix", "Notice: "), ("_rt_deprecated_prefix", "Deprecated: ")] {
         out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{value}\"\n"));
     }
+    // -- PHP 8.6's imprecise base-conversion notice, shared by base_convert/bindec/hexdec/octdec --
+    // Emitted for every profile even though only 8.6 call sites reference it: like the NAN
+    // coercion text below, keeping the literal unconditional keeps the runtime `.data` layout
+    // independent from the version gate that lives on the CALL sites.
+    out.push_str(".globl _diag_base_conversion_imprecise\n_diag_base_conversion_imprecise:\n    .ascii \"Notice: Input number is larger than PHP_INT_MAX, precision has been lost in conversion\\n\"\n");
     // -- ctype deprecation text and its kind-indexed function-name table --
     for (symbol, value) in [
         ("_ctype_deprecated_suffix", crate::codegen_support::runtime::strings::ctype::DEPRECATION_SUFFIX),

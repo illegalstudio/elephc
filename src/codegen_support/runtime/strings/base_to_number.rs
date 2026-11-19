@@ -22,6 +22,44 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::php_version::PhpVersion;
+
+/// The `.data` label carrying PHP 8.6's imprecise base-conversion notice.
+///
+/// The message begins with `Notice: ` so `__rt_diag_warning` classifies it as `E_NOTICE`
+/// after stripping the category prefix, exactly like php-src's `zend_error(E_NOTICE, ...)`.
+const IMPRECISE_CONVERSION_MESSAGE: &str = "_diag_base_conversion_imprecise";
+
+/// Returns true when the active compile profile reports imprecise base conversions.
+///
+/// The diagnostic landed in PHP 8.6: 8.5 and earlier silently widen the accumulator to
+/// `double`, so older profiles emit neither the probe nor the call.
+pub(crate) fn imprecise_conversion_notice_enabled() -> bool {
+    crate::codegen_support::compile_php_version() >= PhpVersion::Php86
+}
+
+/// Emits `__rt_base_conversion_imprecise_notice`, the tail-call wrapper that reports PHP
+/// 8.6's precision-loss notice.
+///
+/// The callers (`bindec`/`hexdec`/`octdec` lowering and `__rt_base_convert`) invoke it only
+/// when the parse widened to `double`. It is a tail jump: `__rt_diag_warning` preserves every
+/// live register and the float result, so the caller keeps its parse result untouched.
+pub fn emit_base_conversion_imprecise_notice(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: base conversion imprecise notice ---");
+    emitter.label_global("__rt_base_conversion_imprecise_notice");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x1", IMPRECISE_CONVERSION_MESSAGE);
+            emitter.instruction("mov x2, #87");                                 // pass the complete imprecision notice length
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "rdi", IMPRECISE_CONVERSION_MESSAGE);
+            emitter.instruction("mov esi, 87");                                 // pass the complete imprecision notice length
+        }
+    }
+    abi::emit_jump(emitter, "__rt_diag_warning");
+}
 
 /// Emits the `__rt_base_to_number` runtime helper.
 ///

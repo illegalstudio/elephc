@@ -72,6 +72,14 @@ pub fn emit_base_convert(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #64]");                                   // save the target base across the parse call
     emitter.instruction("bl __rt_base_to_number");                              // parse the numeral exactly like php-src's _php_math_basetozval
     emitter.instruction("ldr x4, [sp, #64]");                                   // reload the target base after the parse
+    if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
+        // The parse reports a widened float in `x0`; PHP 8.6 warns about the precision loss
+        // before rendering. The wrapper tail-jumps into the shared dispatcher, which
+        // preserves `x0`/`x1`/`d0`, so the widened result survives unchanged.
+        emitter.instruction("cbz x0, __rt_base_convert_parse_exact");           // exact integer parses are silent
+        emitter.instruction("bl __rt_base_conversion_imprecise_notice");         // report PHP 8.6's precision loss for the widening parse
+        emitter.label("__rt_base_convert_parse_exact");
+    }
     emitter.instruction("cbnz x0, __rt_base_convert_float");                    // a widened parse result renders through php-src's lossy float loop
 
     // -- integer result: render it exactly, like dechex/decbin/decoct do --
@@ -192,6 +200,13 @@ fn emit_base_convert_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // save the target base across the parse call
     emitter.instruction("call __rt_base_to_number");                            // parse the numeral exactly like php-src's _php_math_basetozval
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the target base after the parse
+    if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
+        // `rax` carries the widened marker; the dispatcher preserves it and the float value.
+        emitter.instruction("test rax, rax");                                   // did the parse widen the value to a float?
+        emitter.instruction("jz __rt_base_convert_parse_exact_linux_x86_64");  // exact integer parses are silent
+        emitter.instruction("call __rt_base_conversion_imprecise_notice");      // report PHP 8.6's precision loss for the widening parse
+        emitter.label("__rt_base_convert_parse_exact_linux_x86_64");
+    }
     emitter.instruction("test rax, rax");                                       // did the parse widen the value to a float?
     emitter.instruction("jnz __rt_base_convert_float_linux_x86_64");            // a widened parse result renders through php-src's lossy float loop
 

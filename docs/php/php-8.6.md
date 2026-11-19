@@ -45,6 +45,7 @@ sensitive.
 | `SortDirection` | `Ascending` / `Descending`, catalogued as a PHP 8.6 core enum. |
 | `array_filter()` mode validation | An invalid `$mode` raises `ValueError` on the 8.6 profile instead of silently using value mode. |
 | `json_decode()` error positions | Token coordinates in decoder messages follow PHP 8.6. |
+| Base conversion notices | `base_convert()`, `bindec()`, `hexdec()` and `octdec()` raise php-src's `Notice: Input number is larger than PHP_INT_MAX, precision has been lost in conversion` the moment the integer accumulator widens to `double`. The notice is emitted from the callers around the shared parse helper, so `base_convert()`'s intermediate widening is reported too; 8.5 and earlier stay silent. Covered by `tests/codegen/strings/base_conversion_notice_php86.rs`. |
 
 ## Deliberately deferred
 

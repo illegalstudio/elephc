@@ -118,6 +118,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_bin2hex_len(emitter);
     strings::emit_dec_to_base(emitter);
     strings::emit_base_to_number(emitter);
+    strings::emit_base_conversion_imprecise_notice(emitter);
     strings::emit_base_convert(emitter);
     strings::emit_long2ip(emitter);
     strings::emit_ip2long(emitter);
