@@ -374,9 +374,11 @@ pub extern "C" fn elephc_proc_release(process: i64) {
 
 /// `proc_nice()`: changes the priority by `increment`; returns 1 on success, 0 when the
 /// C library reported an error (php-src tests errno, since -1 is a valid result).
+/// php-src passes its `zend_long` straight to `nice(int)`, so an increment outside the C
+/// `int` range keeps only its low 32 bits (`-4294967296` is 0, `2147483648` is `INT_MIN`).
 #[no_mangle]
 pub extern "C" fn elephc_proc_nice(increment: i64) -> i64 {
-    let increment = std::os::raw::c_int::try_from(increment).unwrap_or(std::os::raw::c_int::MAX);
+    let increment = increment as std::os::raw::c_int;
     unsafe {
         *errno_location() = 0;
         libc::nice(increment);

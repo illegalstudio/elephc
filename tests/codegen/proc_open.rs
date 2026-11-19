@@ -225,6 +225,30 @@ fn test_proc_nice_zero_succeeds() {
     assert_eq!(out, "bool(true)\n");
 }
 
+/// An increment outside the C `int` range keeps only its low 32 bits, as php-src's
+/// `nice((int) $priority)` does: large negatives never flip to the lowest priority.
+/// Only unprivileged-safe increments, so the result is the same under root.
+#[test]
+fn test_proc_nice_narrows_out_of_range_increments_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+function nice_level() {
+    $process = proc_open(['sh', '-c', 'ps -o nice= -p $$'], [1 => ['pipe', 'w']], $pipes);
+    $level = (int) trim(stream_get_contents($pipes[1]));
+    fclose($pipes[1]);
+    proc_close($process);
+    return $level;
+}
+$base = nice_level();
+foreach ([PHP_INT_MIN, -4294967296, 4294967296, -4294967295, 4294967297] as $increment) {
+    var_dump(proc_nice($increment));
+    echo nice_level() - $base, "\n";
+}
+"#,
+    );
+    assert_eq!(out, "bool(true)\n0\nbool(true)\n0\nbool(true)\n0\nbool(true)\n1\nbool(true)\n2\n");
+}
+
 /// A proc builtin reached only through a string callable keeps its prelude helper.
 #[test]
 fn test_proc_nice_through_call_user_func_keeps_helper() {
