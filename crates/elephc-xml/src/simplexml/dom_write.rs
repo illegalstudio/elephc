@@ -28,6 +28,10 @@ extern "C" {
     fn save_doc(ctx: *mut c_void, doc: Node) -> c_long;
     #[link_name = "xmlSaveClose"]
     fn save_close(ctx: *mut c_void) -> c_int;
+    #[link_name = "xmlCopyDtd"]
+    fn copy_dtd(dtd: Node) -> Node;
+    #[link_name = "xmlFreeDtd"]
+    fn free_dtd(dtd: Node);
     #[link_name = "xmlSaveTree"]
     fn save_tree(ctx: *mut c_void, node: Node) -> c_long;
     #[link_name = "xmlOutputBufferCreateIO"]
@@ -111,6 +115,21 @@ fn write(view: &View, operation: i64, document: bool, options: i64, format: bool
                 html_node_dump(buf, doc, node, std::ptr::null(), c_int::from(format));
                 output_buffer_close(buf);
             }
+            // The DOCTYPE node of a document: "name \x1f publicId \x1f systemId [\x1f internalSubset]"
+            // read back from libxml2's own serialization, which has no opaque accessor.
+            4 if !document => {
+                // Copy the DTD out of its document first: an HTML document would serialize it
+                // through the HTML writer, which has no DTD form for a bare node.
+                let copy = copy_dtd(node);
+                if copy.is_null() { return None; }
+                let ctx = save_to_io(Some(collect), None, sink, b"UTF-8\0".as_ptr().cast(), 0);
+                if ctx.is_null() { free_dtd(copy); return None; }
+                let written = save_tree(ctx, copy);
+                save_close(ctx);
+                free_dtd(copy);
+                if written < 0 { return None; }
+                return Some(doctype_fields(&out));
+            }
             2 => {
                 let buf = output_buffer_create_io(Some(collect), None, sink, std::ptr::null_mut());
                 if buf.is_null() { return None; }
@@ -127,6 +146,42 @@ fn write(view: &View, operation: i64, document: bool, options: i64, format: bool
         }
     }
     Some(out)
+}
+
+/// Splits `<!DOCTYPE name [PUBLIC "p" "s" | SYSTEM "s"] [ [subset] ]>` into its fields.
+fn doctype_fields(dump: &[u8]) -> Vec<u8> {
+    let text = dump.strip_prefix(b"<!DOCTYPE ").unwrap_or(dump);
+    let name_end = text.iter().position(|b| matches!(b, b' ' | b'>' | b'[' | b'\n')).unwrap_or(text.len());
+    let (name, mut rest) = text.split_at(name_end);
+    let quoted = |rest: &mut &[u8]| -> Vec<u8> {
+        while rest.first() == Some(&b' ') { *rest = &rest[1..]; }
+        let Some(&quote) = rest.first().filter(|q| matches!(q, b'"' | b'\'')) else { return Vec::new(); };
+        let body = &rest[1..];
+        let end = body.iter().position(|b| *b == quote).unwrap_or(body.len());
+        *rest = &body[(end + 1).min(body.len())..];
+        body[..end].to_vec()
+    };
+    while rest.first() == Some(&b' ') { rest = &rest[1..]; }
+    let (mut public, mut system) = (Vec::new(), Vec::new());
+    if rest.starts_with(b"PUBLIC") {
+        rest = &rest[6..];
+        public = quoted(&mut rest);
+        system = quoted(&mut rest);
+    } else if rest.starts_with(b"SYSTEM") {
+        rest = &rest[6..];
+        system = quoted(&mut rest);
+    }
+    let subset = rest.iter().position(|b| *b == b'[').map(|start| {
+        let body = &rest[start + 1..];
+        let body = body.strip_prefix(b"\n").unwrap_or(body);
+        let end = body.iter().rposition(|b| *b == b']').unwrap_or(body.len());
+        let body = &body[..end];
+        body.strip_suffix(b"\n").unwrap_or(body).to_vec()
+    });
+    let mut out = name.to_vec();
+    for field in [public, system] { out.push(0x1f); out.extend(field); }
+    if let Some(subset) = subset { out.push(0x1f); out.extend(subset); }
+    out
 }
 
 /// Serializes for the DOM prelude. `target` 0 selects the document of the wrapper, 1 the node it

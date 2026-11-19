@@ -2731,6 +2731,24 @@ fn decl_class_simplexmlelement() -> Stmt {
                         None,
                     ),
                     s_if(
+                        e_binop(e_binop(e_var("kind"), BinOp::StrictEq, e_int(10)), BinOp::Or, e_binop(e_var("kind"), BinOp::StrictEq, e_int(14))),
+                        vec![
+                            s_assign("info", e_call("explode", vec![e_str("\u{1f}"), e_method_call(e_this(), "__elephc_dom_write", vec![e_int(4), e_int(1), e_int(0), e_bool(false)])])),
+                            s_assign("doctype", e_new("DOMDocumentType", vec![e_index(e_var("info"), e_int(0)), e_index(e_var("info"), e_int(1)), e_index(e_var("info"), e_int(2))])),
+                            s_if(
+                                e_binop(e_call("count", vec![e_var("info")]), BinOp::Gt, e_int(3)),
+                                vec![
+                                    s_prop_assign(e_var("doctype"), "internalSubset", e_index(e_var("info"), e_int(3))),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_return(e_method_call(e_this(), "__elephc_dom_bind_node", vec![e_var("doctype"), e_var("document"), e_var("parent"), e_index(e_var("info"), e_int(0))])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
                         e_binop(e_var("kind"), BinOp::StrictEq, e_int(4)),
                         vec![
                             s_assign("cdata", e_new("DOMCdataSection", vec![e_str("")])),
@@ -3396,6 +3414,9 @@ fn decl_fn_elephc_simplexml_import_child() -> Stmt {
                 (e_instance_of(e_var("node"), "DOMProcessingInstruction"), vec![
                     s_assign("kind", e_int(6)),
                 ]),
+                (e_instance_of(e_var("node"), "DOMDocumentType"), vec![
+                    s_assign("kind", e_int(7)),
+                ]),
             ],
                 None,
             ),
@@ -3407,7 +3428,7 @@ fn decl_fn_elephc_simplexml_import_child() -> Stmt {
                 vec![],
                 None,
             ),
-            s_assign("value", e_ternary(e_binop(e_var("kind"), BinOp::StrictEq, e_int(1)), e_str(""), e_cast(CastType::String, e_prop(e_var("node"), "nodeValue")))),
+            s_assign("value", e_ternary(e_binop(e_var("kind"), BinOp::StrictEq, e_int(1)), e_str(""), e_ternary(e_binop(e_var("kind"), BinOp::StrictEq, e_int(7)), e_binop(e_binop(e_cast(CastType::String, e_prop(e_var("node"), "publicId")), BinOp::Concat, e_str("\u{1f}")), BinOp::Concat, e_cast(CastType::String, e_prop(e_var("node"), "systemId"))), e_cast(CastType::String, e_prop(e_var("node"), "nodeValue"))))),
             s_assign("handle", e_call("elephc_xml_sx_html_append", vec![e_var("parent"), e_var("kind"), e_prop(e_var("node"), "nodeName"), e_var("value")])),
             s_if(
                 e_binop(e_var("handle"), BinOp::StrictEq, e_int(0)),

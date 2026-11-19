@@ -65,6 +65,16 @@ fn load_html() -> MethodBuilder {
             s_assign("_kids", e_call("__elephc_dom_make_children", vec![e_this(), e_this(), e_index(e_var("_tree"), e_str("children"))])),
             s_prop_assign(e_this(), "childNodes", e_new("DOMNodeList", vec![e_var("_kids")])),
             s_prop_assign(e_this(), "nodeValue", e_null()),
+            // Materialize the eager parse as a native HTML document and bind every node to it, so the
+            // tree is shared with SimpleXML like a loadXML document (called by name: a program
+            // without the bridge never reaches loadHTML).
+            s_assign("_native", e_expr_call(e_str("__elephc_simplexml_import_document"), vec![e_this(), e_str("SimpleXMLElement")])),
+            s_if(
+                e_instance_of(e_var("_native"), "SimpleXMLElement"),
+                vec![s_expr(e_expr_call(e_str("__elephc_simplexml_bind_dom"), vec![e_this(), e_var("_native")]))],
+                vec![],
+                None,
+            ),
             s_return(e_bool(true)),
         ])
 }

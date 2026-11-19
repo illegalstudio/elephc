@@ -79,7 +79,18 @@ pub unsafe extern "C" fn elephc_xml_sx_html_append(handle: i64, kind: i64, name:
     guard(|| {
         let Some(parent) = view(handle) else { return 0; };
         let Ok(kind) = i32::try_from(kind) else { return 0; };
-        let node = ffi::html_append(parent.doc.raw, parent.first().unwrap_or(std::ptr::null_mut()), kind, name, value);
+        // Kind 7 is the DOCTYPE: `value` packs "publicId \x1f systemId" (an empty id is absent).
+        let node = if kind == 7 {
+            let packed = bytes(value);
+            let mut ids = packed.splitn(2, |byte| *byte == 0x1f).map(|id| if id.is_empty() { None } else { Some(cstring(id)) });
+            let public = ids.next().flatten();
+            let system = ids.next().flatten();
+            ffi::create_int_subset(parent.doc.raw, name,
+                public.as_ref().map_or(std::ptr::null(), |id| id.as_ptr()),
+                system.as_ref().map_or(std::ptr::null(), |id| id.as_ptr()))
+        } else {
+            ffi::html_append(parent.doc.raw, parent.first().unwrap_or(std::ptr::null_mut()), kind, name, value)
+        };
         if node.is_null() { return 0; }
         insert(parent.with_scope(Scope::Node(node)))
     })

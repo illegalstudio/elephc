@@ -25,6 +25,9 @@ extern "C" {
     /// Appends a literal DOM node, with no XML parser or namespace interpretation.
     #[link_name = "elephc_libxml2_v1_sx_html_append"]
     pub(super) fn html_append(doc: Node, parent: Node, kind: c_int, name: *const c_char, value: *const c_char) -> Node;
+    /// Creates the internal subset (the DOCTYPE node) of a document through libxml2's public API.
+    #[link_name = "xmlCreateIntSubset"]
+    pub(super) fn create_int_subset(doc: Node, name: *const c_char, external_id: *const c_char, system_id: *const c_char) -> Node;
     /// Appends a sibling with the source node's exact name and namespace.
     #[link_name = "elephc_libxml2_v1_sx_append_sibling"]
     pub(super) fn append_sibling(node: Node) -> Node;
