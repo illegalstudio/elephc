@@ -8,6 +8,7 @@
 //! Key details:
 //! - Regex helpers preserve PHP PCRE-flavored inputs for PCRE2 and must preserve match array construction.
 
+use elephc_memoir::buffers::offset_pairs;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// __rt_preg_match: check if a PCRE regex matches a subject string.
@@ -168,12 +169,7 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
 
     // -- allocate fixed Elephc offset pairs for every compiled capture --
     emitter.instruction(&format!("ldr x9, [sp, #{}]", nmatch_off));             // load match-slot count returned by the shim
-    emitter.instruction("lsr x10, x9, #60");                                    // reject slot counts whose 16-byte size would overflow
-    emitter.instruction("cbnz x10, __rt_preg_match_capture_malloc_fail");       // free the handle instead of allocating a wrapped size
-    emitter.instruction("lsl x0, x9, #4");                                      // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
-    emitter.instruction("cbz x0, __rt_preg_match_capture_malloc_fail");         // allocation failure returns no match after freeing the handle
-    emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic offset-pair buffer pointer
+    offset_pairs::emit_allocate(emitter, "x9", regmatches_ptr_off, "__rt_preg_match_capture_malloc_fail");
 
     // -- null-terminate subject and run regex --
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_ptr_off));        // reload subject ptr
@@ -406,14 +402,7 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test eax, eax");                                       // did regex compilation succeed?
     emitter.instruction("jnz __rt_preg_match_capture_compile_fail_linux_x86_64"); // compile failure returns PHP false plus an empty matches array
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // load match-slot count returned by the shim
-    emitter.instruction("mov r10, rdi");                                        // copy slot count for allocation-overflow validation
-    emitter.instruction("shr r10, 60");                                         // detect a wrapped 16-byte pair-vector size
-    emitter.instruction("jnz __rt_preg_match_capture_malloc_fail_linux_x86_64"); // free the handle instead of allocating a wrapped size
-    emitter.instruction("shl rdi, 4");                                          // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
-    emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
-    emitter.instruction("jz __rt_preg_match_capture_malloc_fail_linux_x86_64"); // allocation failure frees the opaque handle and returns no match
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic offset-pair buffer pointer
+    offset_pairs::emit_allocate(emitter, "rdi", regmatches_ptr_off, "__rt_preg_match_capture_malloc_fail_linux_x86_64");
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload subject pointer before C-string conversion
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // reload subject length before C-string conversion
     emitter.instruction("call __rt_cstr2");                                     // materialize null-terminated subject for regexec

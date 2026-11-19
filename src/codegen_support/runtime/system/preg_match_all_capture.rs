@@ -20,6 +20,7 @@
 //!   once, return count `0` and `[]`. A successful compile with zero matches
 //!   still materializes `nmatch` empty PATTERN_ORDER rows.
 
+use elephc_memoir::buffers::offset_pairs;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 use super::preg_match_all_capture_window::{self as window, CaptureWindowSlots};
@@ -119,12 +120,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("mov x9, #1");                                          // force at least the full-match row
     emitter.instruction(&format!("str x9, [sp, #{}]", nmatch_off));             // publish the normalized slot count
     emitter.label("__rt_pma_cap_nmatch_ok");
-    emitter.instruction("lsr x10, x9, #60");                                    // reject slot counts whose 16-byte size would overflow
-    emitter.instruction("cbnz x10, __rt_pma_cap_malloc_fail");                  // free the handle instead of allocating a wrapped size
-    emitter.instruction("lsl x0, x9, #4");                                      // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the reusable offset-pair vector
-    emitter.instruction("cbz x0, __rt_pma_cap_malloc_fail");                    // allocation failure frees the handle and returns []
-    emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic offset-pair buffer pointer
+    offset_pairs::emit_allocate(emitter, "x9", regmatches_ptr_off, "__rt_pma_cap_malloc_fail");
 
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_ptr_off));        // load elephc subject pointer
     emitter.instruction(&format!("ldr x2, [sp, #{}]", subject_len_off));        // load elephc subject length
@@ -650,15 +646,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, 1");                                           // force at least the full-match row
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", nmatch_off));  // publish the normalized slot count
     emitter.label("__rt_pma_cap_nmatch_ok_linux_x86_64");
-    emitter.instruction("mov r10, r9");                                         // copy slot count for overflow validation
-    emitter.instruction("shr r10, 60");                                         // detect a wrapped 16-byte pair-vector size
-    emitter.instruction("jnz __rt_pma_cap_malloc_fail_linux_x86_64");           // free the handle instead of allocating a wrapped size
-    emitter.instruction("mov rdi, r9");                                         // load slot count for the pair-vector allocation
-    emitter.instruction("shl rdi, 4");                                          // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the reusable offset-pair vector
-    emitter.instruction("test rax, rax");                                       // did malloc return a pair buffer?
-    emitter.instruction("jz __rt_pma_cap_malloc_fail_linux_x86_64");            // allocation failure frees the handle and returns []
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic offset-pair buffer pointer
+    offset_pairs::emit_allocate(emitter, "r9", regmatches_ptr_off, "__rt_pma_cap_malloc_fail_linux_x86_64");
 
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload the elephc subject pointer
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // reload the elephc subject length

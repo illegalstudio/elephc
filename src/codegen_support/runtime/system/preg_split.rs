@@ -15,6 +15,7 @@
 //!   `PREG_SPLIT_NO_EMPTY` drops does not use it up. A limit of -1 or 0 is unlimited; any
 //!   other limit below 2 returns the subject as one piece.
 
+use elephc_memoir::buffers::offset_pairs;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 const PREG_SPLIT_NO_EMPTY: i64 = 1;
@@ -105,12 +106,7 @@ pub(crate) fn emit_preg_split(emitter: &mut Emitter) {
 
     // -- allocate a reusable fixed offset-pair buffer --
     emitter.instruction(&format!("ldr x9, [sp, #{}]", nmatch_off));             // load match-slot count returned by the shim
-    emitter.instruction("lsr x10, x9, #60");                                    // reject slot counts whose 16-byte size would overflow
-    emitter.instruction("cbnz x10, __rt_preg_split_malloc_fail");               // free the handle instead of allocating a wrapped size
-    emitter.instruction("lsl x0, x9, #4");                                      // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
-    emitter.instruction("cbz x0, __rt_preg_split_malloc_fail");                 // allocation failure frees the handle and returns an empty array
-    emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic offset-pair buffer pointer
+    offset_pairs::emit_allocate(emitter, "x9", regmatches_ptr_off, "__rt_preg_split_malloc_fail");
 
     // -- create result array with the required runtime element layout --
     emit_preg_split_alloc_result_arm64(emitter, "main", preg_flags_off, array_ptr_off);
@@ -537,14 +533,7 @@ fn emit_preg_split_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_preg_split_fail_linux_x86_64");               // return an empty result array on compilation failure
 
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // load match-slot count returned by the shim
-    emitter.instruction("mov r10, rdi");                                        // copy slot count for allocation-overflow validation
-    emitter.instruction("shr r10, 60");                                         // detect a wrapped 16-byte pair-vector size
-    emitter.instruction("jnz __rt_preg_split_malloc_fail_linux_x86_64");        // free the handle instead of allocating a wrapped size
-    emitter.instruction("shl rdi, 4");                                          // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
-    emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
-    emitter.instruction("jz __rt_preg_split_malloc_fail_linux_x86_64");         // allocation failure frees the opaque handle and returns an empty array
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic offset-pair buffer pointer
+    offset_pairs::emit_allocate(emitter, "rdi", regmatches_ptr_off, "__rt_preg_split_malloc_fail_linux_x86_64");
 
     emit_preg_split_alloc_result_x86_64(emitter, "main", preg_flags_off, array_ptr_off);
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload elephc subject pointer before C-string conversion
