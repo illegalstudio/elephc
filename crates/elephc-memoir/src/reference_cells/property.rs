@@ -8,7 +8,7 @@
 //! - The ordinary two-word payload precedes the guard's metadata.
 //! - The host supplies the acceptance code and the static diagnostic suffix.
 
-use crate::{abi, Arch, Emitter};
+use crate::{abi, Arch, Emitter, TargetAbi};
 use crate::layout::{x86_64_heap_kind_word, REFERENCE_CELL_HEAP_KIND, REFERENCE_CELL_SIZE};
 
 /// Header flag distinguishing a typed-property reference cell from an ordinary owned cell.
@@ -104,4 +104,44 @@ pub fn emit_new(emitter: &mut impl Emitter) {
             abi::emit_return(emitter);
         }
     }
+}
+
+/// Stores the persisted string pair into one object slot, through a fresh reference cell when
+/// the slot owns one.
+///
+/// `reload_object` must load the owner object pointer into `object_reg`; it runs after any
+/// cell allocation, so it may read the helper's stack frame at its usual offsets.
+pub fn emit_store_owned_string_property<E: TargetAbi>(
+    emitter: &mut E,
+    object_reg: &str,
+    offset: usize,
+    owns_reference: bool,
+    reload_object: impl Fn(&mut E),
+) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+    if !owns_reference {
+        reload_object(emitter);
+        abi::emit_store_to_address(emitter, ptr_reg, object_reg, offset);
+        abi::emit_store_to_address(emitter, len_reg, object_reg, offset + 8);
+        return;
+    }
+    // -- wrap the string in the object-owned reference cell its slot expects --
+    abi::emit_push_reg(emitter, ptr_reg);
+    abi::emit_push_reg(emitter, len_reg);
+    abi::emit_load_int_immediate(
+        emitter,
+        abi::int_arg_reg_name(emitter, 0),
+        crate::layout::STRING_REFERENCE_PAYLOAD_TAG,
+    );
+    abi::emit_call_label(emitter, "__rt_reference_cell_new");
+    let cell_reg = abi::int_result_reg(emitter);
+    let value_ptr_reg = abi::secondary_scratch_reg(emitter);
+    let value_len_reg = abi::tertiary_scratch_reg(emitter);
+    abi::emit_pop_reg(emitter, value_len_reg);
+    abi::emit_pop_reg(emitter, value_ptr_reg);
+    abi::emit_store_to_address(emitter, value_ptr_reg, cell_reg, 0);
+    abi::emit_store_to_address(emitter, value_len_reg, cell_reg, 8);
+    reload_object(emitter);
+    abi::emit_store_to_address(emitter, cell_reg, object_reg, offset);
+    abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);
 }

@@ -82,6 +82,9 @@ pub fn emit_branch_if_null_container(
 
 /// Bytes in a Mixed cell: one tag word and two payload words.
 pub const MIXED_CELL_SIZE: usize = 24;
+/// Descriptor tag for a reference cell owning a string pair.
+pub const STRING_REFERENCE_PAYLOAD_TAG: i64 = 1;
+
 /// Bytes in the payload of a managed native reference cell.
 pub const REFERENCE_CELL_SIZE: usize = 16;
 /// Indexed-array header tag for inline scalar slots storing a payload and tag pair.

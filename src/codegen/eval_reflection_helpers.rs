@@ -227,16 +227,12 @@ fn emit_alloc_reflection_attribute_object_x86_64(
 
 /// Stores the incoming ARM64 attribute name into the private slot and public mirror.
 fn emit_set_name_property_aarch64(emitter: &mut Emitter, layout: &ReflectionAttributeLayout) {
-    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the attribute-name pointer for persistence
-    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the attribute-name length for persistence
-    emitter.instruction("bl __rt_str_persist");                                 // copy the eval-owned name bytes for object ownership
+    elephc_memoir::strings::str_persist::emit_persist_from_frame(emitter, 0);
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "x1", "x9", layout.name_lo);
     abi::emit_store_to_address(emitter, "x2", "x9", layout.name_hi);
-    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the original name pointer for the public mirror copy
-    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the original name length for the public mirror copy
-    emitter.instruction("bl __rt_str_persist");                                 // give the mutable public mirror independent string storage
-    super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+    elephc_memoir::strings::str_persist::emit_persist_from_frame(emitter, 0);
+    elephc_memoir::reference_cells::property::emit_store_owned_string_property(
         emitter,
         "x9",
         layout.public_name_lo,
@@ -249,16 +245,12 @@ fn emit_set_name_property_aarch64(emitter: &mut Emitter, layout: &ReflectionAttr
 
 /// Stores the incoming x86_64 attribute name into the private slot and public mirror.
 fn emit_set_name_property_x86_64(emitter: &mut Emitter, layout: &ReflectionAttributeLayout) {
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the attribute-name pointer for persistence
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the attribute-name length for persistence
-    emitter.instruction("call __rt_str_persist");                               // copy the eval-owned name bytes for object ownership
+    elephc_memoir::strings::str_persist::emit_persist_from_frame(emitter, 8);
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the ReflectionAttribute object pointer
     abi::emit_store_to_address(emitter, "rax", "r10", layout.name_lo);
     abi::emit_store_to_address(emitter, "rdx", "r10", layout.name_hi);
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the original name pointer for the public mirror copy
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the original name length for the public mirror copy
-    emitter.instruction("call __rt_str_persist");                               // give the mutable public mirror independent string storage
-    super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+    elephc_memoir::strings::str_persist::emit_persist_from_frame(emitter, 8);
+    elephc_memoir::reference_cells::property::emit_store_owned_string_property(
         emitter,
         "r10",
         layout.public_name_lo,

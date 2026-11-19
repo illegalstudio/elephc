@@ -65,7 +65,7 @@ pub(crate) const TAGGED_REFERENCE_ASSIGNMENT_MSG: &str =
 /// Returns the descriptor tag for the actual stored property representation.
 pub(crate) fn payload_tag(php_type: &PhpType) -> i64 {
     match php_type.codegen_repr() {
-        PhpType::Str => 1,
+        PhpType::Str => elephc_memoir::layout::STRING_REFERENCE_PAYLOAD_TAG,
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
