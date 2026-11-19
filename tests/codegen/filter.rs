@@ -342,14 +342,14 @@ var_dump(filter_var("42", FILTER_VALIDATE_INT, FILTER_THROW_ON_FAILURE));
 
 
 /// Verifies loading the filter surface with the default `filter.default` leaves CLI superglobals
-/// untouched, including `$_ENV` populated by the CLI SAPI.
+/// untouched, including `$_SERVER` populated by the CLI SAPI.
 #[test]
 fn test_filter_surface_preserves_cli_superglobals_without_filter_default() {
     let out = compile_and_run(
         r#"<?php
-$before = count($_ENV);
+$before = count($_SERVER);
 filter_var("x", FILTER_SANITIZE_SPECIAL_CHARS);
-echo $before > 0 && count($_ENV) === $before ? "kept" : "lost";
+echo $before > 0 && count($_SERVER) === $before ? "kept" : "lost";
 "#,
     );
     assert_eq!(out, "kept");

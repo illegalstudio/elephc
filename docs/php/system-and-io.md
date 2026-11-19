@@ -78,6 +78,9 @@ HTTP request instead.
 Seeding is pay-for-use: only the superglobals a program actually spells are built,
 which is what PHP's `auto_globals_jit` does for the same reason.
 
+`$_ENV` is populated only when `variables_order` contains `E`, and `$_SERVER` only when it
+contains `S`; the default `GPCS` therefore leaves `$_ENV` empty, as PHP does.
+
 `$_ENV` and `$_SERVER` are **snapshots taken before the program ran**, so a later
 `putenv()` does not reach them — only `getenv()`. PHP has the same asymmetry:
 
