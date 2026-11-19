@@ -259,3 +259,41 @@ fn strict_array_splice_preserves_string_and_reindexed_aliases() {
         assert_eq!(output, "10:20:30"); assert_eq!(returned, FakeValue::Int(3));
     }
 }
+
+
+/// A stored mixed array producer keeps its scalar alternatives when nested as an element.
+#[test]
+fn strict_array_origins_stored_mixed_arrays_keep_open_elements() {
+    let source = "function stored_mixed_array():mixed{return [1];} \
+        $value=stored_mixed_array();$items=[$value];$items[]='allowed'; \
+        $other=[];$other[]=$value;$other[]=false;return count($items)+count($other);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert!(output.is_empty());assert_eq!(returned, FakeValue::Int(4));
+    }
+}
+
+/// An inferred scalar reference does not invent an explicitly mixed array element source.
+#[test]
+fn strict_array_origins_shared_inferred_scalars_keep_closed_elements() {
+    let source = "$value=1;$alias=&$value;$items=[$alias]; \
+        try{$items[]='bad';}catch(TypeError $error){echo 'L';} \
+        $other=[];$other[]=$alias;try{$other[]=false;}catch(TypeError $error){echo 'A';}return count($items)+count($other);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output,"LA");assert_eq!(returned, FakeValue::Int(2));
+    }
+}
+
+/// Rebinding a mixed alias to an inferred scalar discards the displaced open producer.
+#[test]
+fn strict_array_origins_mixed_reference_rebinding_refreshes_sources() {
+    let source = "function alias_mixed_array():mixed{return [1];} \
+        $value=alias_mixed_array();$alias=&$value;$items=[$alias];$items[]='allowed'; \
+        $number=2;$alias=&$number;$closed=[$alias]; \
+        try{$closed[]='bad';}catch(TypeError $error){echo 'R';}return count($items)+count($closed);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output,"R");assert_eq!(returned, FakeValue::Int(3));
+    }
+}

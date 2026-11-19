@@ -209,12 +209,15 @@ impl ElephcEvalScope {
         }
     }
 
-    /// Reads only a still-current unshared view; alias and external writes require fresh proof.
+    /// Reads a current source view; a shared mixed source preserves openness without proving a kind.
     pub(crate) fn local_source_view(&self, name: &str) -> Option<&crate::eval_ir::EvalParameterType> {
-        if self.reference_target(name).is_some() || self.global_alias_target(name).is_some() { return None; }
-        let entry = self.entry(name).filter(|entry| entry.flags().is_visible() && !entry.flags().by_ref)?;
+        let entry = self.entry(name).filter(|entry| entry.flags().is_visible())?;
         let (generation, ty) = self.local_source_views.get(name)?;
-        (*generation == entry.generation()).then_some(ty)
+        if *generation != entry.generation() { return None; }
+        if self.reference_target(name).is_some() || self.global_alias_target(name).is_some() { return None; }
+        let open = ty.variants() == [crate::eval_ir::EvalParameterTypeVariant::Mixed];
+        if entry.flags().by_ref && !open { return None; }
+        Some(ty)
     }
 
     /// Records array contents independently from the whole binding's producer kind.
