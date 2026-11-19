@@ -1444,3 +1444,29 @@ echo "next\n";
     assert_eq!(output.stdout, "caught TypeError(f(): Argument #2 ($b) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, array given) <- none\ncaught TypeError(g(): Argument #3 ($c) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, array given) <- none\ncaught TypeError(g(): Argument #3 ($c) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, array given) <- none\ncaught TypeError(g(): Argument #3 ($c) must be of type string, null given) <- none\ncaught TypeError(f(): Argument #2 ($b) must be of type string, null given) <- none\nnext\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A by-reference property argument and a runtime-checked scalar of the same call are checked
+/// in parameter order: an earlier property refusal wins over a later `mixed` null, and an
+/// earlier `mixed` null wins over a later property refusal. The accepted path still binds the
+/// live property.
+#[test]
+fn test_property_reference_and_scalar_checks_raise_in_parameter_order() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public string $s = "abc"; public int $n = 4; }
+function f(int &$a, int $b): void { echo "f ", $a, " ", $b, "\n"; $a = 9; }
+function g(int $b, int &$a): void { echo "g ", $a, " ", $b, "\n"; }
+function box(mixed $v): mixed { return $v; }
+function show(Throwable $e): void { echo get_class($e), ": ", explode(', called', $e->getMessage())[0], "\n"; }
+$o = new C;
+try { f($o->s, box(null)); } catch (TypeError $e) { show($e); }
+try { g(box(null), $o->s); } catch (TypeError $e) { show($e); }
+try { f($o->n, box(null)); } catch (TypeError $e) { show($e); }
+try { f($o->n, box("5")); } catch (TypeError $e) { show($e); }
+echo $o->n, "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "TypeError: f(): Argument #1 ($a) must be of type int, string given\nTypeError: g(): Argument #1 ($b) must be of type int, null given\nTypeError: f(): Argument #2 ($b) must be of type int, null given\nf 4 5\n9\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}

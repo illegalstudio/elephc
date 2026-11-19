@@ -112,6 +112,7 @@ fn lower_signature_argument(
                         callee_temp_ty: None,
                         span: place_arg.span,
                         unconditional_message: Some(format!("{prefix}{given} given")),
+                        param_index: index,
                     };
                     if !defer_property_type_guard(ctx, guard.clone()) {
                         emit_property_type_guard(ctx, &guard);
@@ -147,6 +148,7 @@ fn lower_signature_argument(
                     callee_temp_ty: None,
                     span: place_arg.span,
                     unconditional_message: None,
+                    param_index: index,
                 };
                 if !defer_property_type_guard(ctx, guard.clone()) {
                     emit_property_type_guard(ctx, &guard);
@@ -1680,6 +1682,7 @@ pub(super) fn coerce_operands_to_params_guarded(
         };
         let value = operands[index];
         if let Some(source) = needs_guard[index] {
+            emit_property_type_guards_before(ctx, index);
             let lowered = lowered_value_from_id(ctx, value);
             if let Some(converted) = super::scalar_param_guards::guard_scalar_param(
                 ctx, sig, index, lowered, source, guard_span, false, &[],
@@ -1788,6 +1791,30 @@ pub(super) fn coerce_operands_to_params_guarded(
         }
     }
     operands
+}
+
+/// Raises the current call's deferred property by-reference checks for parameters before
+/// `index`, ahead of the runtime scalar check on `index`.
+///
+/// Both kinds of check run after every argument was evaluated, and PHP raises the first
+/// failing parameter's `TypeError`: `f($box->text, $null)` for `f(int &$a, int $b)` must
+/// report argument #1. The remaining property checks stay with the scope and still run in
+/// `finish_call_argument_evaluation`.
+fn emit_property_type_guards_before(ctx: &mut LoweringContext<'_, '_>, index: usize) {
+    let depth = ctx.expression_depth;
+    let Some(scope) = ctx.call_argument_evaluation_scopes.last_mut() else {
+        return;
+    };
+    if scope.expression_depth != depth {
+        return;
+    }
+    let (earlier, later): (Vec<_>, Vec<_>) = std::mem::take(&mut scope.pending_property_type_guards)
+        .into_iter()
+        .partition(|guard| guard.param_index < index);
+    scope.pending_property_type_guards = later;
+    for guard in &earlier {
+        emit_property_type_guard(ctx, guard);
+    }
 }
 
 /// Returns whether parameter-order normalization will emit a conversion for one operand.

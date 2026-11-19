@@ -234,6 +234,9 @@ pub(crate) struct PendingPropertyTypeGuard {
     pub span: Span,
     /// Static diagnostic for the unconditional refusal.
     pub unconditional_message: Option<String>,
+    /// Declared parameter this argument binds: a runtime scalar check on a later parameter
+    /// must not raise before this one (PHP checks parameters in order).
+    pub param_index: usize,
 }
 
 /// Staging for one `$target = &call()`, recorded while its source expression is lowered.
