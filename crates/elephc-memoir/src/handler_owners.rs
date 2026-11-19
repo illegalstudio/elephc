@@ -12,6 +12,12 @@ use crate::{Arch, Emitter};
 /// Frame offset of the pending exception owner shared with the host completion routine.
 pub const PENDING: usize = 8;
 
+/// Allocates a record for the previous handler state, leaving the pointer in the result register.
+pub fn emit_allocate_node(emitter: &mut impl Emitter, bytes: i64) {
+    emitter.emit_load_int_immediate(emitter.int_result_reg(), bytes);
+    emitter.emit_call_label("__rt_heap_alloc");
+}
+
 /// Publishes a previous handler record into its stack after saving each active field.
 /// Eval's C entry uses explicit displacement syntax for the node's link word.
 pub fn emit_save_node(

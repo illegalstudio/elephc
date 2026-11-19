@@ -3826,14 +3826,7 @@ fn emit_invoker_throwable(
         }
         Arch::X86_64 => {
             emitter.instruction("mov eax, 56");                                 // request the compact Throwable payload
-            emitter.instruction("call __rt_heap_alloc");                        // allocate the catchable builtin throwable
-            abi::emit_load_int_immediate(
-                emitter,
-                "r10",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(6) as i64,
-            );
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the canonical throwable heap kind
-            emitter.instruction("call __rt_object_handle_acquire");             // assign the object its runtime handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable_x86_64(emitter);
             abi::emit_load_symbol_to_reg(
                 emitter,
                 "r10",

@@ -259,13 +259,7 @@ fn throw_type_error(emitter: &mut Emitter) {
         }
         Arch::X86_64 => {
             emitter.instruction("mov eax, 56");                                 // allocate the compact Throwable payload
-            emitter.instruction("call __rt_heap_alloc");                        // acquire the exception's owned block
-            abi::emit_load_int_immediate(
-                emitter, "r10",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(6) as i64,
-            );
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the canonical Throwable heap kind
-            emitter.instruction("call __rt_object_handle_acquire");             // acquire its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable_x86_64(emitter);
             abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_type_error_class_id", 0);
             emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the TypeError class
             let diagnostic_ptr = abi::symbol_scratch_reg(emitter);

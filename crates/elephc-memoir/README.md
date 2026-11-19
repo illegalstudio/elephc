@@ -240,6 +240,15 @@ snapshots add another 60 fingerprints across all five targets and six modes.
 Changes to these emitters therefore invalidate cached runtime objects even when
 no compiler-local emitter source changes.
 
+The native activation record module defines the ordinary frame, extended operand
+and compact guard layouts shared by codegen, unwind and the GC. The compiler
+supplies cleanup, backtrace and visitor labels when publishing a frame. The
+stream registration table shares acquisition and retirement of its two string
+owners. Memoir also supplies physical transfers for owned string properties,
+staged hash insertion payloads and Zend array backing blocks. Scratch completion
+retains the distinction between publishing an owned string and discarding a
+read chunk.
+
 ## Typed configuration
 
 `HeapKind` contains only a storage-kind byte, while `ValueTag` represents a boxed

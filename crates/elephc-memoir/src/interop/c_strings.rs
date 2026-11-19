@@ -223,3 +223,155 @@ fn emit_cstr_to_str_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return the owned elephc string pair in rax=ptr, rdx=len
 }
+
+/// Copies the nonempty input slice staged by the aarch64 caller into owned storage.
+pub fn emit_copy_raw_bytes_aarch64(emitter: &mut impl Emitter) {
+    emitter.instruction("mov x0, x1");                                          // allocation size = requested raw byte length
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate owned string payload storage on the elephc heap
+    emitter.instruction("mov x3, #1");                                          // heap kind 1 = owned elephc string payload
+    emitter.instruction("str x3, [x0, #-8]");                                   // stamp the allocation as a string while preserving allocator refcount
+
+    // -- copy exactly len bytes from raw memory to the owned string payload --
+    emitter.instruction("ldr x9, [sp, #0]");                                    // restore the raw source pointer after allocation
+    emitter.instruction("ldr x2, [sp, #8]");                                    // restore the original byte length for the result pair
+    emitter.instruction("mov x1, x0");                                          // x1 = owned PHP string payload pointer for the return convention
+    emitter.instruction("mov x10, x1");                                         // initialize destination cursor to the owned string payload
+    emitter.instruction("mov x11, x9");                                         // initialize source cursor to the raw memory address
+    emitter.instruction("mov x12, x2");                                         // initialize remaining byte counter from the requested length
+
+    emitter.label("__rt_ptr_read_string_copy_loop");
+    emitter.instruction("cbz x12, __rt_ptr_read_string_copy_done");             // finish once every requested byte has been copied
+    emitter.instruction("ldrb w13, [x11], #1");                                 // load the next raw source byte and advance the source cursor
+    emitter.instruction("strb w13, [x10], #1");                                 // store the byte into the owned string payload and advance the destination cursor
+    emitter.instruction("sub x12, x12, #1");                                    // decrement the number of bytes left to copy
+    emitter.instruction("b __rt_ptr_read_string_copy_loop");                    // continue copying until the exact requested length is satisfied
+
+    emitter.label("__rt_ptr_read_string_copy_done");
+}
+
+/// Copies the nonempty input slice staged by the x86_64 caller into owned storage.
+pub fn emit_copy_raw_bytes_x86_64(emitter: &mut impl Emitter) {
+    emitter.instruction("mov rax, rdx");                                        // allocation size = requested raw byte length
+    crate::strings::str_new_owned::emit_allocate_owned_string(emitter);
+    emitter.instruction("mov r8, rax");                                         // initialize destination cursor to the owned string payload
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // restore the raw source pointer after allocation
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // restore the requested byte length as the loop counter
+
+    // -- copy exactly len bytes from raw memory to the owned string payload --
+    emitter.label("__rt_ptr_read_string_copy_loop_x86");
+    emitter.instruction("test rcx, rcx");                                       // finish once every requested byte has been copied
+    emitter.instruction("jz __rt_ptr_read_string_copy_done_x86");               // exit the byte-copy loop when the counter reaches zero
+    emitter.instruction("mov r10b, BYTE PTR [r9]");                             // load the next raw source byte
+    emitter.instruction("mov BYTE PTR [r8], r10b");                             // store the copied byte into the owned string payload
+    emitter.instruction("add r9, 1");                                           // advance the raw source cursor after copying one byte
+    emitter.instruction("add r8, 1");                                           // advance the owned destination cursor after copying one byte
+    emitter.instruction("sub rcx, 1");                                          // decrement the number of bytes left to copy
+    emitter.instruction("jmp __rt_ptr_read_string_copy_loop_x86");              // continue copying until the exact requested length is satisfied
+
+    emitter.label("__rt_ptr_read_string_copy_done_x86");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the byte length for the x86_64 string result pair
+    emitter.instruction("sub r8, rdx");                                         // recover the owned string payload base after the post-increment copy loop
+    emitter.instruction("mov rax, r8");                                         // return the owned string payload pointer in the x86_64 string result register
+}
+
+/// Allocates one block and writes two NUL-terminated copies from staged byte pairs.
+/// Returns the two C pointers in the native C argument registers.
+pub fn emit_stage_owned_c_string_pair(emitter: &mut impl Emitter) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.blank();
+            emitter.comment("-- stage both operands as NUL-terminated C strings in one heap block --");
+            emitter.instruction("ldr x0, [sp, #48]");                           // left byte count
+            emitter.instruction("ldr x9, [sp, #64]");                           // right byte count
+            emitter.instruction("add x0, x0, x9");                              // bytes needed by both operands
+            emitter.instruction("add x0, x0, #2");                              // plus one NUL per operand
+            emitter.instruction("bl __rt_heap_alloc");                          // one allocation serves strcoll's two operands
+            emitter.instruction("str x0, [sp, #128]");                          // keep the staging block base
+            emitter.instruction("ldr x1, [sp, #40]");                           // left operand source
+            emitter.instruction("ldr x2, [sp, #48]");                           // left operand length
+            emitter.instruction("mov x9, #0");                                  // copy from the first byte
+            emitter.instruction("cbz x2, __rt_kcf_locale_left_done");           // an empty operand has no bytes to copy
+            emitter.label("__rt_kcf_locale_left_copy");
+            emitter.instruction("ldrb w10, [x1, x9]");                          // load the next left byte
+            emitter.instruction("strb w10, [x0, x9]");                          // store it into the staged operand
+            emitter.instruction("add x9, x9, #1");                              // advance
+            emitter.instruction("cmp x9, x2");                                  // copied the whole operand?
+            emitter.instruction("b.lo __rt_kcf_locale_left_copy");              // keep copying
+            emitter.label("__rt_kcf_locale_left_done");
+            emitter.instruction("strb wzr, [x0, x2]");                          // NUL-terminate the left operand
+            emitter.instruction("add x0, x0, x2");                              // step past the left operand
+            emitter.instruction("add x0, x0, #1");                              // and past its NUL
+            emitter.instruction("ldr x1, [sp, #56]");                           // right operand source
+            emitter.instruction("ldr x2, [sp, #64]");                           // right operand length
+            emitter.instruction("mov x9, #0");                                  // copy from the first byte
+            emitter.instruction("cbz x2, __rt_kcf_locale_right_done");          // an empty operand has no bytes to copy
+            emitter.label("__rt_kcf_locale_right_copy");
+            emitter.instruction("ldrb w10, [x1, x9]");                          // load the next right byte
+            emitter.instruction("strb w10, [x0, x9]");                          // store it into the staged operand
+            emitter.instruction("add x9, x9, #1");                              // advance
+            emitter.instruction("cmp x9, x2");                                  // copied the whole operand?
+            emitter.instruction("b.lo __rt_kcf_locale_right_copy");             // keep copying
+            emitter.label("__rt_kcf_locale_right_done");
+            emitter.instruction("strb wzr, [x0, x2]");                          // NUL-terminate the right operand
+            emitter.instruction("ldr x0, [sp, #128]");                          // pass the staged left C string
+            emitter.instruction("ldr x9, [sp, #48]");                           // left byte count
+            emitter.instruction("add x1, x0, x9");                              // step past the left operand
+            emitter.instruction("add x1, x1, #1");                              // and past its NUL: the staged right C string
+        }
+        Arch::X86_64 => {
+            emitter.blank();
+            emitter.comment("-- stage both operands as NUL-terminated C strings in one heap block --");
+            emitter.instruction("mov rax, QWORD PTR [rbp - 56]");               // left byte count
+            emitter.instruction("add rax, QWORD PTR [rbp - 72]");               // bytes needed by both operands
+            emitter.instruction("add rax, 2");                                  // plus one NUL per operand
+            emitter.instruction("call __rt_heap_alloc");                        // one allocation serves strcoll's two operands
+            emitter.instruction("mov QWORD PTR [rbp - 136], rax");              // keep the staging block base
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");               // left operand source
+            emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");               // left operand length
+            emitter.instruction("xor edx, edx");                                // copy from the first byte
+            emitter.instruction("test rcx, rcx");                               // an empty operand has no bytes to copy
+            emitter.instruction("jz __rt_kcf_locale_left_done");                // skip the copy loop
+            emitter.label("__rt_kcf_locale_left_copy");
+            emitter.instruction("mov r8b, BYTE PTR [rsi + rdx]");               // load the next left byte
+            emitter.instruction("mov BYTE PTR [rax + rdx], r8b");               // store it into the staged operand
+            emitter.instruction("inc rdx");                                     // advance
+            emitter.instruction("cmp rdx, rcx");                                // copied the whole operand?
+            emitter.instruction("jb __rt_kcf_locale_left_copy");                // keep copying
+            emitter.label("__rt_kcf_locale_left_done");
+            emitter.instruction("mov BYTE PTR [rax + rcx], 0");                 // NUL-terminate the left operand
+            emitter.instruction("add rax, rcx");                                // step past the left operand
+            emitter.instruction("inc rax");                                     // and past its NUL
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");               // right operand source
+            emitter.instruction("mov rcx, QWORD PTR [rbp - 72]");               // right operand length
+            emitter.instruction("xor edx, edx");                                // copy from the first byte
+            emitter.instruction("test rcx, rcx");                               // an empty operand has no bytes to copy
+            emitter.instruction("jz __rt_kcf_locale_right_done");               // skip the copy loop
+            emitter.label("__rt_kcf_locale_right_copy");
+            emitter.instruction("mov r8b, BYTE PTR [rsi + rdx]");               // load the next right byte
+            emitter.instruction("mov BYTE PTR [rax + rdx], r8b");               // store it into the staged operand
+            emitter.instruction("inc rdx");                                     // advance
+            emitter.instruction("cmp rdx, rcx");                                // copied the whole operand?
+            emitter.instruction("jb __rt_kcf_locale_right_copy");               // keep copying
+            emitter.label("__rt_kcf_locale_right_done");
+            emitter.instruction("mov BYTE PTR [rax + rcx], 0");                 // NUL-terminate the right operand
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 136]");              // pass the staged left C string
+            emitter.instruction("mov rsi, rdi");                                // start the right C string at the block base...
+            emitter.instruction("add rsi, QWORD PTR [rbp - 56]");               // ...past the left operand...
+            emitter.instruction("inc rsi");                                     // ...and past its NUL
+        }
+    }
+}
+
+/// Releases the staged pair after the caller has consumed its C pointers.
+pub fn emit_release_owned_c_string_pair(emitter: &mut impl Emitter) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [sp, #128]");                          // release the staging block
+            emitter.instruction("bl __rt_heap_free");                           // return the block to the runtime heap
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, QWORD PTR [rbp - 136]");              // release the staging block
+            emitter.instruction("call __rt_heap_free");                         // return the block to the runtime heap
+        }
+    }
+}
