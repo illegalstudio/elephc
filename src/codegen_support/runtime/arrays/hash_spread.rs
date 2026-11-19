@@ -144,9 +144,9 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_spread_value_reference");
     emitter.instruction("ldr x0, [sp, #48]");                                   // load the borrowed managed reference cell pointer
-    emitter.instruction("bl __rt_incref");                                      // retain the shared cell for the destination entry
+    emitter.instruction("bl __rt_reference_cell_clone");                        // separate an unaliased cell, share a live reference
     emitter.instruction("str xzr, [sp, #56]");                                  // reference entries carry no high payload word
-    emitter.instruction("ldr x3, [sp, #48]");                                   // reload the retained cell as the entry value
+    emitter.instruction("mov x3, x0");                                          // use the cloned or shared cell as the entry value
     emitter.instruction("mov x4, xzr");                                         // clear the reference entry's high payload word
     emitter.instruction("ldr x5, [sp, #64]");                                   // reload the managed reference runtime tag
     emitter.instruction("b __rt_hash_spread_insert");                           // insert the retained reference cell
@@ -197,7 +197,7 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.label("__rt_hash_spread_set");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the destination hash pointer
     // x3/x4/x5 already hold the retained value and runtime tag
-    emitter.instruction("bl __rt_hash_set");                                    // insert or overwrite the destination entry
+    emitter.instruction("bl __rt_hash_set_value");                              // insert or overwrite the destination entry
     emitter.instruction("str x0, [sp, #0]");                                    // save the possibly reallocated destination hash pointer
 
     // -- advance the running integer key only when an integer source key was reindexed --
@@ -323,9 +323,9 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_spread_x86_value_reference");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the borrowed managed reference cell pointer
-    emitter.instruction("call __rt_incref");                                    // retain the shared cell for the destination entry
+    emitter.instruction("call __rt_reference_cell_clone");                      // separate an unaliased cell, share a live reference
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // reference entries carry no high payload word
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the retained cell as the entry value
+    emitter.instruction("mov rcx, rax");                                        // use the cloned or shared cell as the entry value
     emitter.instruction("xor r8d, r8d");                                        // clear the reference entry's high payload word
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the managed reference runtime tag
     emitter.instruction("jmp __rt_hash_spread_x86_insert");                     // insert the retained reference cell
@@ -378,7 +378,7 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_spread_x86_set");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the destination hash pointer
     // rcx/r8/r9 already hold the retained value and runtime tag
-    emitter.instruction("call __rt_hash_set");                                  // insert or overwrite the destination entry
+    emitter.instruction("call __rt_hash_set_value");                            // insert or overwrite the destination entry
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the possibly reallocated destination hash pointer
 
     // -- advance the running integer key only when an integer source key was reindexed --

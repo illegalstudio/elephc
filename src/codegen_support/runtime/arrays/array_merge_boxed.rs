@@ -114,15 +114,14 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // recover the unique result hash
     emitter.instruction("mov x4, #0");                                          // Mixed pointers occupy one payload word
     emitter.instruction("mov x5, #7");                                          // the result now owns the boxed value
-    emitter.instruction("bl __rt_hash_set");                                    // persist string keys and release an overwritten result owner
+    emitter.instruction("bl __rt_hash_set_value");                              // persist string keys and release an overwritten result owner
     emitter.instruction("str x0, [sp, #32]");                                   // preserve any hash relocation
     emitter.instruction("b __rt_array_merge_boxed_loop");                       // copy the next live source entry
 
     emitter.label("__rt_array_merge_boxed_reference");
-    emitter.instruction("ldr w9, [x1, #-12]");                                  // read the managed reference cell's refcount
-    emitter.instruction("add w9, w9, #1");                                      // retain the shared cell for the result entry
-    emitter.instruction("str w9, [x1, #-12]");                                  // publish the additional result owner
-    emitter.instruction("mov x3, x1");                                          // transfer the cell as the entry value
+    emitter.instruction("mov x0, x1");                                          // pass the borrowed cell to the singleton-aware clone
+    emitter.instruction("bl __rt_reference_cell_clone");                        // separate an unaliased cell, share a live reference
+    emitter.instruction("mov x3, x0");                                          // transfer the cloned or shared cell as the entry value
     emitter.instruction("ldp x1, x2, [sp, #64]");                               // reload the source key
     emitter.instruction("cmn x2, #1");                                          // integer keys are always renumbered
     emitter.instruction("b.ne __rt_array_merge_boxed_reference_insert");        // string keys retain their spelling
@@ -133,7 +132,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // recover the unique result hash
     emitter.instruction("mov x4, #0");                                          // reference entries carry no high payload word
     emitter.instruction("mov x5, #11");                                         // preserve the managed reference tag
-    emitter.instruction("bl __rt_hash_set");                                    // persist the retained reference cell
+    emitter.instruction("bl __rt_hash_set_value");                              // persist the retained reference cell
     emitter.instruction("str x0, [sp, #32]");                                   // preserve any hash relocation
     emitter.instruction("b __rt_array_merge_boxed_loop");                       // copy the next live source entry
 
@@ -263,15 +262,14 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // recover the unique result hash
     emitter.instruction("xor r8d, r8d");                                        // Mixed cells use one payload word
     emitter.instruction("mov r9, 7");                                           // transfer the boxed value owner into the hash entry
-    emitter.instruction("call __rt_hash_set");                                  // persist borrowed keys and release overwritten result cells
+    emitter.instruction("call __rt_hash_set_value");                            // persist borrowed keys and release overwritten result cells
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve any relocation
     emitter.instruction("jmp __rt_array_merge_boxed_loop");                     // copy the next live source entry
 
     emitter.label("__rt_array_merge_boxed_reference");
-    emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                      // read the managed reference cell's refcount
-    emitter.instruction("add r10d, 1");                                         // retain the shared cell for the result entry
-    emitter.instruction("mov DWORD PTR [rdi - 12], r10d");                      // publish the additional result owner
-    emitter.instruction("mov rcx, rdi");                                        // transfer the cell as the entry value
+    emitter.instruction("mov rax, rdi");                                        // pass the borrowed cell to the singleton-aware clone
+    emitter.instruction("call __rt_reference_cell_clone");                      // separate an unaliased cell, share a live reference
+    emitter.instruction("mov rcx, rax");                                        // transfer the cloned or shared cell as the entry value
     emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // reload the source key's low word
     emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // reload its integer marker or string length
     emitter.instruction("cmp rdx, -1");                                         // integer keys are always renumbered
@@ -282,7 +280,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // recover the unique result hash
     emitter.instruction("xor r8d, r8d");                                        // reference entries carry no high payload word
     emitter.instruction("mov r9, 11");                                          // preserve the managed reference tag
-    emitter.instruction("call __rt_hash_set");                                  // persist the retained reference cell
+    emitter.instruction("call __rt_hash_set_value");                            // persist the retained reference cell
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve any relocation
     emitter.instruction("jmp __rt_array_merge_boxed_loop");                     // copy the next live source entry
 
@@ -329,7 +327,7 @@ mod tests {
             for label in ["__rt_array_merge_boxed_bad_first", "__rt_array_merge_boxed_bad_second"] {
                 assert!(asm.find(label).unwrap() < allocate, "{name}: {label}");
             }
-            for symbol in ["__rt_incref", "__rt_mixed_from_value", "__rt_hash_set"] {
+            for symbol in ["__rt_incref", "__rt_mixed_from_value", "__rt_hash_set", "__rt_hash_set_value", "__rt_reference_cell_clone"] {
                 assert!(asm.contains(symbol), "{name}: {symbol}");
             }
             assert!(asm.contains("__rt_array_merge_boxed_hash:"), "{name}");
