@@ -469,3 +469,58 @@ fn test_posix_int_operands_reject_out_of_range_numeric_strings() {
         )
     );
 }
+
+/// Refuses every non-int `posix_*` operand inside an `eval()` that declares `strict_types`,
+/// while a weak-mode eval keeps coercing numeric strings and integral floats.
+///
+/// The eval adapters used to apply weak conversion regardless of the declaration, so a strict
+/// `posix_kill("0", 0)` probed the caller's process group instead of throwing. The sources are
+/// runtime-selected so the interpreter, not literal AOT lowering, runs them.
+#[test]
+fn test_posix_eval_int_operands_follow_strict_types() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$strict = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+declare(strict_types=1);
+$parts = [];
+foreach (["0", 1.0, true, null] as $pid) {
+    try { $parts[] = posix_kill($pid, 0) ? "true" : "false"; }
+    catch (TypeError $error) { $parts[] = $error->getMessage(); }
+}
+try { $parts[] = posix_kill(getmypid(), "0") ? "true" : "false"; }
+catch (TypeError $error) { $parts[] = $error->getMessage(); }
+foreach (["3", 3.0] as $code) {
+    try { $parts[] = posix_strerror($code); }
+    catch (TypeError $error) { $parts[] = $error->getMessage(); }
+    try { $parts[] = pcntl_strerror($code); }
+    catch (TypeError $error) { $parts[] = $error->getMessage(); }
+}
+$parts[] = posix_isatty("0") ? "true" : "false";
+$parts[] = posix_isatty(1.0) ? "true" : "false";
+return implode("\n", $parts);
+__ELEPHC_EVAL__ : '';
+$weak = $argc > 0 ? 'return (posix_kill((string) getmypid(), "0") ? "true" : "false") . "|" . posix_strerror("3") . "|" . pcntl_strerror(3.0);' : '';
+echo eval($strict), "\n", eval($weak), "\n";"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let pid = "posix_kill(): Argument #1 ($process_id) must be of type int";
+    let signal = "posix_kill(): Argument #2 ($signal) must be of type int, string given";
+    let posix = "posix_strerror(): Argument #1 ($error_code) must be of type int";
+    let pcntl = "pcntl_strerror(): Argument #1 ($error_code) must be of type int";
+    assert_eq!(
+        out.stdout,
+        format!(
+            "{pid}, string given\n{pid}, float given\n{pid}, true given\n{pid}, null given\n{signal}\n\
+             {posix}, string given\n{pcntl}, string given\n{posix}, float given\n{pcntl}, float given\n\
+             false\nfalse\ntrue|No such process|No such process\n"
+        )
+    );
+    let warning = "posix_isatty(): Argument #1 ($file_descriptor) must be of type int|resource";
+    for given in ["string given", "float given"] {
+        assert!(
+            out.stderr.contains(&format!("{warning}, {given}")),
+            "missing {given} warning, stderr: {}",
+            out.stderr
+        );
+    }
+}
