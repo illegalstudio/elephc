@@ -3,7 +3,7 @@
 //! projections, exercising their runtime helpers through compiled PHP programs.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the serialize codegen test module.
+//! - `cargo test --test codegen_tests_ext` through the serialize codegen test module.
 //!
 //! Key details:
 //! - Output must match PHP's serialize() wire format byte-for-byte for the scalar

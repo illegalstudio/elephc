@@ -3,7 +3,7 @@
 //! the right-hand side that produces the value.
 //!
 //! Called from:
-//! - `cargo test` through the `codegen_tests` harness via `crate::support`.
+//! - `cargo test` through the `codegen_tests_data` harness via `crate::support`.
 //!
 //! Key details:
 //! - PHP freezes an index *expression* into a temporary before the right-hand

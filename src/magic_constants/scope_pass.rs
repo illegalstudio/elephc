@@ -7,11 +7,14 @@
 //!
 //! Key details:
 //! - Trait-origin `__CLASS__` uses a placeholder so concrete class binding can happen after trait flattening.
+//! - Also widens implicitly nullable parameters (`T $p = null`) and queues their PHP 8.4
+//!   deprecation, since this is the pass that knows each parameter's php-src owner name.
 
+use std::collections::HashMap;
 use std::path::Path;
 
-use crate::names::Name;
-use crate::parser::ast::{ExprKind, MagicConstant, Program};
+use crate::names::{php_symbol_key, Name};
+use crate::parser::ast::{AttributeGroup, Expr, ExprKind, MagicConstant, Program, TypeExpr, UseItem, UseKind};
 use crate::span::Span;
 
 use super::walker::{walk_program, Pass};
@@ -33,8 +36,16 @@ fn substitute_scope_constants_with_file(program: Program, file: Option<String>) 
     let mut pass = ScopePass {
         scope: Scope::default(),
         file,
+        deprecations: Vec::new(),
     };
-    walk_program(program, &mut pass)
+    let program = walk_program(program, &mut pass);
+    // php-src raises these while compiling the file top to bottom. The walk visits hoisted
+    // anonymous classes after everything else, so restore source order before queueing.
+    pass.deprecations.sort_by_key(|warning| (warning.span.line, warning.span.col));
+    for warning in pass.deprecations {
+        crate::errors::defer_warning(warning);
+    }
+    program
 }
 
 /// Tracks the current lexical scope while walking a PHP file's AST.
@@ -51,12 +62,23 @@ struct Scope {
     function_stack: Vec<Option<String>>,
     closure_depth: usize,
     closure_names: Vec<String>,
+    /// The enclosing closures set aside while a named function or method declared inside one
+    /// is walked: that declaration is its own owner, not the closure.
+    closure_names_stack: Vec<Vec<String>>,
+    /// Class `use` imports in effect, keyed by lowercased alias, as the name resolver keys them.
+    class_imports: HashMap<String, Name>,
+    class_imports_stack: Vec<HashMap<String, Name>>,
+    /// php-src's display name for each anonymous class being walked (`class@anonymous`,
+    /// `Parent@anonymous`), keyed by its synthetic name.
+    anonymous_class_labels: HashMap<String, String>,
 }
 
 /// Holds the current scope state and the canonical file path being processed.
 struct ScopePass {
     scope: Scope,
     file: Option<String>,
+    /// Implicit nullable deprecations raised in this file, queued in source order at the end.
+    deprecations: Vec<crate::errors::CompileWarning>,
 }
 
 impl ScopePass {
@@ -107,9 +129,109 @@ impl ScopePass {
         };
         format!("{{closure:{}:{}}}", context, span.line)
     }
+
+    /// Returns `__METHOD__` for the current scope: the closure name inside a closure, otherwise
+    /// `Class::method` or the namespace-qualified function name.
+    fn method_name(&self) -> String {
+        let s = &self.scope;
+        if let Some(closure_name) = s.closure_names.last() {
+            return closure_name.clone();
+        }
+        match (self.fqn_class().or_else(|| self.fqn_trait()), &s.function) {
+            (Some(c), Some(f)) => format!("{}::{}", c, f),
+            (None, Some(f)) => qualify(s.namespace.as_deref(), f),
+            _ => String::new(),
+        }
+    }
+
+    /// Returns the function name php-src prints in a compile-time deprecation.
+    ///
+    /// That is `__METHOD__`, except inside an anonymous class: php-src's runtime name for one is
+    /// `class@anonymous` followed by a NUL byte and the declaring file and position, and the
+    /// message is formatted with `%s`, so it stops at the NUL. `m` in `new class { ... }` is
+    /// therefore `class@anonymous`, and a closure inside it `{closure:class@anonymous`.
+    fn deprecation_owner_name(&self) -> String {
+        let name = self.method_name();
+        let Some(label) = self.scope.class.as_ref().and_then(|class| {
+            let label = self.scope.anonymous_class_labels.get(class)?;
+            Some((qualify(self.scope.namespace.as_deref(), class), label))
+        }) else {
+            return name;
+        };
+        let (synthetic, label) = label;
+        match name.find(&synthetic) {
+            Some(at) => format!("{}{}", &name[..at], label),
+            None => name,
+        }
+    }
+
+    /// Resolves a class name written in this file the way php-src names it at compile time:
+    /// a fully qualified name as written, otherwise through the class imports and then the
+    /// current namespace.
+    fn resolve_class_name(&self, name: &Name) -> String {
+        if name.is_fully_qualified() {
+            return name.parts.join("\\");
+        }
+        let Some((first, rest)) = name.parts.split_first() else {
+            return name.as_canonical();
+        };
+        match self.scope.class_imports.get(&php_symbol_key(first)) {
+            Some(import) => import.parts.iter().chain(rest).cloned().collect::<Vec<_>>().join("\\"),
+            None => qualify(self.scope.namespace.as_deref(), name.as_str()),
+        }
+    }
 }
 
 impl Pass for ScopePass {
+    /// Widens `T $p = null` to the nullable type PHP gives it and, under a PHP 8.4 or newer
+    /// profile, queues PHP 8.4's compile-time deprecation, named the way php-src names the
+    /// function (`f`, `C::m`, `{closure:...}`).
+    ///
+    /// Done per physical file, where the lexical owner is still known; every later pass then
+    /// sees an ordinary `?T` parameter, so a passed or defaulted null arrives as null.
+    ///
+    /// A by-reference parameter keeps its declared type and only gets the deprecation: a `?T`
+    /// reference parameter needs nullable storage in every caller variable, so widening it
+    /// would refuse `int &$r = null` called with an `int` local, which compiles today.
+    ///
+    /// An `#[Export]` function also keeps its declared type: its signature is the host-visible
+    /// contract, so `--emit phpext` still rejects the implicit form and asks for an explicit `?T`.
+    fn transform_param_type(
+        &mut self,
+        name: &str,
+        ty: TypeExpr,
+        default: Option<&Expr>,
+        by_ref: bool,
+        exported: bool,
+        span: Span,
+    ) -> TypeExpr {
+        if !default.is_some_and(|default| matches!(default.kind, ExprKind::Null)) {
+            return ty;
+        }
+        let Some(widened) = ty.implicitly_nullable() else {
+            return ty;
+        };
+        // PHP 8.4 deprecated the implicit form; older `--php-version` profiles accept it silently.
+        if crate::codegen_support::compile_php_version().version_id() >= 80400 {
+            // Reported at the parameter, as php-src does, not at its function.
+            let span = default.map_or(span, |default| default.span);
+            self.deprecations.push(crate::errors::CompileWarning::deprecation(
+                span,
+                &format!(
+                    "{}(): Implicitly marking parameter ${} as nullable is deprecated, the \
+                     explicit nullable type must be used instead",
+                    self.deprecation_owner_name(),
+                    name
+                ),
+            ));
+        }
+        if by_ref || exported {
+            ty
+        } else {
+            widened
+        }
+    }
+
     /// Transforms a magic constant into a string literal based on current lexical scope.
     ///
     /// - `__NAMESPACE__`: current namespace or empty string.
@@ -143,18 +265,7 @@ impl Pass for ScopePass {
                 };
                 ExprKind::StringLiteral(name)
             }
-            MagicConstant::Method => {
-                if let Some(closure_name) = s.closure_names.last() {
-                    ExprKind::StringLiteral(closure_name.clone())
-                } else {
-                    let name = match (self.fqn_class().or_else(|| self.fqn_trait()), &s.function) {
-                        (Some(c), Some(f)) => format!("{}::{}", c, f),
-                        (None, Some(f)) => qualify(s.namespace.as_deref(), f),
-                        _ => String::new(),
-                    };
-                    ExprKind::StringLiteral(name)
-                }
-            }
+            MagicConstant::Method => ExprKind::StringLiteral(self.method_name()),
             // File/Dir are handled by the file pass; if they reach here it
             // means the file pass was skipped — substitute to empty rather
             // than panic, since this is best-effort.
@@ -165,12 +276,15 @@ impl Pass for ScopePass {
     /// Pushes the current namespace onto the stack and sets the new namespace declaration.
     fn enter_namespace_decl(&mut self, name: &Option<Name>) {
         self.scope.namespace = Some(namespace_string(name));
+        self.scope.class_imports.clear();
     }
 
     /// Saves the current namespace on the stack and enters a new namespace block.
     fn enter_namespace_block(&mut self, name: &Option<Name>) {
         self.scope.namespace_stack.push(self.scope.namespace.clone());
         self.scope.namespace = Some(namespace_string(name));
+        let outer = std::mem::take(&mut self.scope.class_imports);
+        self.scope.class_imports_stack.push(outer);
     }
 
     /// Restores the previous namespace from the stack after leaving a namespace block.
@@ -178,18 +292,55 @@ impl Pass for ScopePass {
         if let Some(prev) = self.scope.namespace_stack.pop() {
             self.scope.namespace = prev;
         }
+        if let Some(outer) = self.scope.class_imports_stack.pop() {
+            self.scope.class_imports = outer;
+        }
+    }
+
+    /// Records class imports, so [`Pass::marks_export`] sees an attribute's imported identity.
+    fn observe_use_decl(&mut self, imports: &[UseItem]) {
+        for item in imports.iter().filter(|item| matches!(item.kind, UseKind::Class)) {
+            self.scope.class_imports.insert(php_symbol_key(&item.alias), item.name.clone());
+        }
+    }
+
+    /// Recognizes `#[Export]` the way `exports` does after name resolution: by the last segment
+    /// of the resolved name. Only an unqualified name can change its last segment while
+    /// resolving, through a class import (`use Foo\Marker as Export;` is not the attribute, and
+    /// `use Elephc\Export as Ex;` makes `#[Ex]` it); a qualified or fully qualified name keeps
+    /// its last segment.
+    fn marks_export(&self, attributes: &[AttributeGroup]) -> bool {
+        attributes.iter().flat_map(|group| &group.attributes).any(|attr| {
+            let name = match attr.name.last_segment() {
+                Some(alias) if attr.name.is_unqualified() => self
+                    .scope
+                    .class_imports
+                    .get(&php_symbol_key(alias))
+                    .unwrap_or(&attr.name),
+                _ => &attr.name,
+            };
+            name.parts.last().is_some_and(|seg| crate::exports::is_export_attribute_segment(seg))
+        })
     }
 
     /// Saves the current function on the stack and enters a new function scope.
+    ///
+    /// A function or method declared inside a closure body is named on its own (`inner`, not
+    /// `{closure:...}`), so the enclosing closures are set aside until it ends.
     fn enter_function(&mut self, name: &str) {
         self.scope.function_stack.push(self.scope.function.clone());
         self.scope.function = Some(name.to_string());
+        let closures = std::mem::take(&mut self.scope.closure_names);
+        self.scope.closure_names_stack.push(closures);
     }
 
-    /// Restores the previous function from the stack after leaving a function scope.
+    /// Restores the previous function and its enclosing closures after leaving a function scope.
     fn leave_function(&mut self) {
         if let Some(prev) = self.scope.function_stack.pop() {
             self.scope.function = prev;
+        }
+        if let Some(closures) = self.scope.closure_names_stack.pop() {
+            self.scope.closure_names = closures;
         }
     }
 
@@ -197,6 +348,21 @@ impl Pass for ScopePass {
     fn enter_class(&mut self, name: &str) {
         self.scope.class_stack.push(self.scope.class.clone());
         self.scope.class = Some(name.to_string());
+    }
+
+    /// Records php-src's display name for an anonymous class: its parent's name, else its first
+    /// interface's, else `class`, followed by `@anonymous`.
+    fn observe_class_heritage(&mut self, extends: Option<&Name>, implements: &[Name]) {
+        let Some(class) = self.scope.class.clone() else {
+            return;
+        };
+        if !crate::parser::is_anonymous_class_name(&class) {
+            return;
+        }
+        let prefix = extends
+            .or(implements.first())
+            .map_or_else(|| "class".to_string(), |name| self.resolve_class_name(name));
+        self.scope.anonymous_class_labels.insert(class, format!("{}@anonymous", prefix));
     }
 
     /// Restores the previous class from the stack after leaving a class scope.
@@ -241,5 +407,166 @@ impl Pass for ScopePass {
     fn leave_closure(&mut self) {
         self.scope.closure_names.pop();
         self.scope.closure_depth -= 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::StmtKind;
+
+    /// Parses `source` and returns the declared parameter types of its first top-level function.
+    fn widened_param_types(source: &str) -> Vec<Option<TypeExpr>> {
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let program = substitute_scope_constants_with_file(program, Some("t.php".to_string()));
+        program
+            .iter()
+            .find_map(|stmt| match &stmt.kind {
+                StmtKind::FunctionDecl { params, .. } => {
+                    Some(params.iter().map(|(_, ty, _, _)| ty.clone()).collect())
+                }
+                _ => None,
+            })
+            .expect("a function declaration")
+    }
+
+    /// Verifies only a literal-null default on a type that rejects null is widened, a
+    /// by-reference parameter keeps its type, and each declaration deprecates exactly once.
+    #[test]
+    fn widens_implicitly_nullable_params_and_queues_one_deprecation_each() {
+        let _ = crate::errors::take_deferred_warnings();
+        let types = widened_param_types(
+            "<?php function f(string $a = null, ?int $b = null, mixed $c = null, int $d = 0, \
+             int|string $e = null, int &$g = null, $h = null) {}",
+        );
+        assert_eq!(
+            types,
+            vec![
+                Some(TypeExpr::Nullable(Box::new(TypeExpr::Str))),
+                Some(TypeExpr::Nullable(Box::new(TypeExpr::Int))),
+                Some(TypeExpr::Named(Name::unqualified("mixed"))),
+                Some(TypeExpr::Int),
+                Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Str, TypeExpr::Void])),
+                Some(TypeExpr::Int),
+                None,
+            ]
+        );
+        let messages: Vec<String> = crate::errors::take_deferred_warnings()
+            .into_iter()
+            .map(|warning| warning.message)
+            .collect();
+        let suffix = "as nullable is deprecated, the explicit nullable type must be used instead";
+        assert_eq!(
+            messages,
+            vec![
+                format!("f(): Implicitly marking parameter $a {suffix}"),
+                format!("f(): Implicitly marking parameter $e {suffix}"),
+                format!("f(): Implicitly marking parameter $g {suffix}"),
+            ]
+        );
+    }
+
+    /// Verifies a function or method declared inside a closure body names itself in the
+    /// deprecation, as php 8.5 does (`inner()`, `K::m()`), not the enclosing closure, and that
+    /// the closure's own name comes back after the declaration ends.
+    #[test]
+    fn deprecation_names_declarations_nested_in_a_closure() {
+        let _ = crate::errors::take_deferred_warnings();
+        let tokens = crate::lexer::tokenize(
+            "<?php $f = function () {\n\
+             function inner(int $x = null) {}\n\
+             class K { public function m(int $y = null) {} }\n\
+             $g = function (int $z = null) {};\n\
+             };",
+        )
+        .expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let _ = substitute_scope_constants_with_file(program, Some("t.php".to_string()));
+        let owners: Vec<String> = crate::errors::take_deferred_warnings()
+            .into_iter()
+            .map(|warning| warning.message.split("(): ").next().unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(owners, vec!["inner", "K::m", "{closure:{closure:t.php:1}:4}"]);
+    }
+
+    /// Verifies an `#[Export]` function keeps its declared type, so the PHP export validator
+    /// still rejects the implicit form, while the deprecation is still queued.
+    #[test]
+    fn keeps_declared_type_on_exported_function_params() {
+        let _ = crate::errors::take_deferred_warnings();
+        let types = widened_param_types("<?php #[Export] function f(int $a = null, ?int $b = null) {}");
+        assert_eq!(
+            types,
+            vec![Some(TypeExpr::Int), Some(TypeExpr::Nullable(Box::new(TypeExpr::Int)))]
+        );
+        assert_eq!(crate::errors::take_deferred_warnings().len(), 1);
+    }
+
+    /// Verifies the export check reads an attribute through the file's class imports, as name
+    /// resolution will: an alias of another class named `Export` is not the export attribute and
+    /// widens, while an alias of the export attribute keeps its declared type.
+    #[test]
+    fn export_check_resolves_attribute_class_imports() {
+        let _ = crate::errors::take_deferred_warnings();
+        let widened = Some(TypeExpr::Nullable(Box::new(TypeExpr::Str)));
+        let kept = Some(TypeExpr::Str);
+        for (source, expected) in [
+            ("<?php use Foo\\Marker as Export; #[Export] function f(string $x = null) {}", &widened),
+            ("<?php use Foo\\Marker as export; #[EXPORT] function f(string $x = null) {}", &widened),
+            ("<?php use Elephc\\Export as Ex; #[Ex] function f(string $x = null) {}", &kept),
+            ("<?php use Elephc\\Export; #[Export] function f(string $x = null) {}", &kept),
+            ("<?php use Foo\\Marker as Export; #[\\Export] function f(string $x = null) {}", &kept),
+            ("<?php use Foo\\Marker as Export; #[Elephc\\Export] function f(string $x = null) {}", &kept),
+            ("<?php use function Foo\\marker as Export; #[Export] function f(string $x = null) {}", &kept),
+        ] {
+            assert_eq!(&widened_param_types(source)[0], expected, "{source}");
+        }
+        let _ = crate::errors::take_deferred_warnings();
+    }
+
+    /// Verifies class imports end with their namespace: a later `namespace` statement or the end
+    /// of a namespace block forgets them, so `#[Export]` there is the attribute again.
+    #[test]
+    fn export_check_forgets_class_imports_with_their_namespace() {
+        let _ = crate::errors::take_deferred_warnings();
+        let function_param_types = |source: &str| -> Vec<Option<TypeExpr>> {
+            let tokens = crate::lexer::tokenize(source).expect("tokenize");
+            let program = crate::parser::parse(&tokens).expect("parse");
+            let mut types = Vec::new();
+            collect_function_param_types(
+                &substitute_scope_constants_with_file(program, Some("t.php".to_string())),
+                &mut types,
+            );
+            types
+        };
+        let widened = Some(TypeExpr::Nullable(Box::new(TypeExpr::Str)));
+        let kept = Some(TypeExpr::Str);
+        assert_eq!(
+            function_param_types(
+                "<?php namespace A; use Foo\\Marker as Export; #[Export] function f(string $x = null) {}\n\
+                 namespace B; #[Export] function g(string $x = null) {}"
+            ),
+            vec![widened.clone(), kept.clone()]
+        );
+        assert_eq!(
+            function_param_types(
+                "<?php namespace A { use Foo\\Marker as Export; #[Export] function f(string $x = null) {} }\n\
+                 namespace B { #[Export] function g(string $x = null) {} }"
+            ),
+            vec![widened, kept]
+        );
+        let _ = crate::errors::take_deferred_warnings();
+    }
+
+    /// Appends the first parameter type of every function declared in `program`, in order.
+    fn collect_function_param_types(program: &Program, types: &mut Vec<Option<TypeExpr>>) {
+        for stmt in program {
+            match &stmt.kind {
+                StmtKind::FunctionDecl { params, .. } => types.push(params[0].1.clone()),
+                StmtKind::NamespaceBlock { body, .. } => collect_function_param_types(body, types),
+                _ => {}
+            }
+        }
     }
 }

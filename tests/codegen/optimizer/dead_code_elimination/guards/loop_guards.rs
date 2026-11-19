@@ -2,7 +2,7 @@
 //! End-to-end coverage for AST DCE facts derived from pre-tested loop conditions.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests dead_code_elimination::guards`.
+//! - `cargo test --test codegen_tests_core dead_code_elimination::guards`.
 //!
 //! Key details:
 //! - The fixture proves typed-int pruning in `while` while retaining a float gap branch.

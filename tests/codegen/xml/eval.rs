@@ -4,7 +4,7 @@
 //! `extension_loaded()`, and the undefined-function error when the bridge is absent.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests xml::eval` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext xml::eval` through Rust's test harness.
 //!
 //! Key details:
 //! - Eval fragments run the compiled prelude through Magician's native-function bridge, so

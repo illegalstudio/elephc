@@ -60,7 +60,8 @@ Source (.php or .lfc)
 │              │  injection, src/autoload/prelude_probe.rs scans an autoloaded
 │              │  copy for PDO/mysqli/tz/image/hash/tokenizer/curl/xml/
 │              │  fileinfo/var_export/WeakMap/WeakReference usage, and for
-│              │  Random, BcMath, GMP, and DateTimeZone::listIdentifiers.
+│              │  Random, BcMath, GMP, DateTimeZone::listIdentifiers, and
+│              │  preg_grep.
 │              │  Includes finfo declarations and wrappers for hosted extensions.
 │              │  The same probe retains per-request web environment copies for
 │              │  autoloaded observers in both request and application lifecycles.
@@ -372,8 +373,9 @@ iOS device and Simulator, and Linux.
 
 ```
 src/
-├── lib.rs                     Public module exports
-├── main.rs                    CLI binary entry point
+├── lib.rs                     Module tree: the compiler API, plus the crate-private CLI modules
+├── main.rs                    CLI binary entry point: calls `entry::run`, declares no modules
+├── entry.rs                   Top-level command dispatch (compile, repl, native, monitor, test)
 ├── cli.rs                     Command-line option parsing
 ├── repl/                      Interactive `elephc repl` session: parsing, cached native host, and history
 ├── pipeline.rs                Frontend/backend compilation pipeline

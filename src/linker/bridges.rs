@@ -800,7 +800,7 @@ fn path_dependency_dirs(crate_dir: &Path) -> Vec<PathBuf> {
         }
     }
     // A wrapper target may point to a sibling crate's library source.
-    dirs.extend(elephc::bridge_sources::external_source_crates(&parsed, crate_dir));
+    dirs.extend(crate::bridge_sources::external_source_crates(&parsed, crate_dir));
     dirs
 }
 

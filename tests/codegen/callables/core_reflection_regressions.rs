@@ -2,7 +2,7 @@
 //! Pins metadata ordering, trait defaults, introspection visibility, and reflection value ownership.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests test_core_reflection_regression_`.
+//! - `cargo test --test codegen_tests_core test_core_reflection_regression_`.
 //!
 //! Key details:
 //! - Fixtures keep class-name and callable dispatch independent of reflection metadata order.

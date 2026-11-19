@@ -42,6 +42,8 @@ pub enum WarningKind {
     /// Ordinary compiler warning.
     #[default]
     Warning,
+    /// PHP deprecation notice raised at compile time.
+    Deprecation,
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +131,14 @@ impl CompileWarning {
         }
     }
 
+    /// Creates a compile-time deprecation diagnostic.
+    pub fn deprecation(span: Span, message: &str) -> Self {
+        Self {
+            span,
+            message: message.to_string(),
+            kind: WarningKind::Deprecation,
+        }
+    }
 }
 
 impl std::error::Error for CompileError {}

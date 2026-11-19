@@ -6,7 +6,7 @@
 //! and the multi error surface (`curl_multi_errno()`/`curl_multi_strerror()`).
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl` through Rust's test harness.
 //!
 //! Key details:
 //! - THE IDENTITY FIXTURE IS THE LOAD-BEARING ONE. `curl_multi_info_read()`'s `handle`

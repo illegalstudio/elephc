@@ -4,7 +4,7 @@
 //! `flush()` return shapes and URI output.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests xml::writer` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext xml::writer` through Rust's test harness.
 //!
 //! Key details:
 //! - Expected bytes are PHP 8.5.10 / libxml2 2.15.3 output.

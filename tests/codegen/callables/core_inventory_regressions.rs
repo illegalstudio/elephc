@@ -2,7 +2,7 @@
 //! Pins inventory visibility and snapshot ownership across native and opaque eval code.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests test_core_inventory_regression_`.
+//! - `cargo test --test codegen_tests_core test_core_inventory_regression_`.
 //!
 //! Key details:
 //! - Runtime-dependent eval source prevents compile-time declaration discovery.

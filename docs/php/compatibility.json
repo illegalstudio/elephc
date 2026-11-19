@@ -191,11 +191,11 @@
       "total": 329
     },
     "constants": {
-      "have": 1606,
+      "have": 1617,
       "total": 3181
     },
     "functions": {
-      "have": 1111,
+      "have": 1114,
       "total": 2169
     }
   },
@@ -1108,15 +1108,15 @@
     {
       "classes": null,
       "constants": {
-        "eval": 7,
-        "have": 7,
+        "eval": 18,
+        "have": 18,
         "total": 19
       },
       "docs": "docs/php/regex.md#functions",
       "extension": "pcre",
       "functions": {
-        "eval": 5,
-        "have": 5,
+        "eval": 8,
+        "have": 8,
         "total": 11
       },
       "name": "pcre",

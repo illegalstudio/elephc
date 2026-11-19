@@ -3,7 +3,7 @@
 //! Covers SPL declaration metadata, regex modes, key matching flags, and recursive child propagation.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the SPL test module.
+//! - `cargo test --test codegen_tests_oop` through the SPL test module.
 //!
 //! Key details:
 //! - Regex capture modes reuse the runtime preg_replace_callback capture array path.

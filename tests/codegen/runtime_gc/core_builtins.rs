@@ -2,7 +2,7 @@
 //! End-to-end tests for PHP Core cycle-collector builtins in the AOT backend.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the runtime GC suite.
+//! - `cargo test --test codegen_tests_runtime` through the runtime GC suite.
 //!
 //! Key details:
 //! - Cases cover direct, namespaced, first-class, and runtime string-callable dispatch.

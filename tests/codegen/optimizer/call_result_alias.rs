@@ -3,7 +3,7 @@
 //! optimization enabled and disabled.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::call_result_alias`.
+//! - `cargo test --test codegen_tests_core optimizer::call_result_alias`.
 //!
 //! Key details:
 //! - Fresh method and inlined function results release unrelated inline arrays.

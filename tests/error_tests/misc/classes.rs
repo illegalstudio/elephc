@@ -492,6 +492,29 @@ fn test_error_constructor_promotion_readonly_by_reference() {
     );
 }
 
+/// Verifies a promoted parameter with a `null` default on a non-nullable type is refused as
+/// php-src refuses it, while explicitly nullable and `mixed` promoted parameters stay valid.
+#[test]
+fn test_error_constructor_promotion_null_default_on_non_nullable_type() {
+    expect_error(
+        "<?php class Box { public function __construct(public string $label = null) {} }",
+        "Cannot use null as default value for parameter $label of type string",
+    );
+    expect_no_error(
+        "<?php class Box { public function __construct(public ?string $a = null, public mixed $b = null, public int|null $c = null) {} } new Box();",
+    );
+}
+
+/// Verifies a promoted intersection-typed parameter with a `null` default is refused with
+/// php-src's message, like any other promoted type that rejects null.
+#[test]
+fn test_error_constructor_promotion_null_default_on_intersection_type() {
+    expect_error(
+        "<?php interface A {} interface B {} class P { public function __construct(public A&B $x = null) {} }",
+        "Cannot use null as default value for parameter $x of type A&B",
+    );
+}
+
 /// Verifies the error diagnostic for readonly class constructor promotion by reference.
 #[test]
 fn test_error_readonly_class_constructor_promotion_by_reference() {

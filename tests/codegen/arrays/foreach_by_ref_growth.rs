@@ -3,7 +3,7 @@
 //! array grows, is copied, is overwritten through the referenced key, or is iterated twice.
 //!
 //! Called from:
-//! - `cargo test` through the `codegen_tests` harness via `crate::support`.
+//! - `cargo test` through the `codegen_tests_data` harness via `crate::support`.
 //!
 //! Key details:
 //! - A hash entry that joins a PHP reference set carries runtime value tag 11 and a managed

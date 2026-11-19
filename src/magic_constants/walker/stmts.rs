@@ -375,16 +375,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             body,
         } => {
             pass.enter_function(&name);
+            let exported = pass.marks_export(&attributes);
             let new_params = params
                 .into_iter()
-                .map(|(n, t, default, by_ref)| {
-                    (
-                        n,
-                        t.map(|ty| pass.transform_value_type(ty, span)),
-                        default.map(|d| walk_expr(d, pass)),
-                        by_ref,
-                    )
-                })
+                .map(|param| super::walk_param(param, pass, span, exported))
                 .collect();
             let walked_body = walk_program(body, pass);
             let new_body = pass.transform_scope_body(walked_body);
@@ -422,6 +416,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         constants,
         } => {
             pass.enter_class(&name);
+            pass.observe_class_heritage(extends.as_ref(), &implements);
             pass.enter_heritage();
             let (generics, extends, implements) =
                 walk_class_heritage(generics, extends, implements, pass, span);
@@ -604,11 +599,14 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             required,
         },
         // Statements with no Expr children or only simple data:
+        StmtKind::UseDecl { imports } => {
+            pass.observe_use_decl(&imports);
+            StmtKind::UseDecl { imports }
+        }
         other @ (StmtKind::Break(_)
         | StmtKind::Continue(_)
         | StmtKind::Goto(_)
         | StmtKind::GotoLabel(_)
-        | StmtKind::UseDecl { .. }
         | StmtKind::Global { .. }
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }

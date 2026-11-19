@@ -154,8 +154,8 @@ same canonical-name pipeline as user code.
 Before injection, `src/autoload/prelude_probe.rs` runs name resolution and
 autoloading on a disposable copy of the include-resolved program. Its PDO,
 mysqli, timezone, image, hash, tokenizer, curl, XML, fileinfo, `var_export`,
-web-environment, Random, BcMath, GMP, `DateTimeZone::listIdentifiers`, and Core
-`WeakMap`/`WeakReference` detectors find uses
+web-environment, Random, BcMath, GMP, `DateTimeZone::listIdentifiers`, `preg_grep()`,
+and Core `WeakMap`/`WeakReference` detectors find uses
 that occur only in autoloaded class files. The real pipeline then injects those
 preludes before resolving names. The probe restores thread-local source IDs and
 anonymous-class numbering while keeping process-global synthetic spans and

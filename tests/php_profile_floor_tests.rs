@@ -4,7 +4,7 @@
 //! still compiles.
 //!
 //! Called from:
-//! - `cargo test --test php_profile_floor_tests` through Rust's test harness.
+//! - `cargo test --test integration php_profile_floor_tests::` through Rust's test harness.
 //!
 //! Key details:
 //!
