@@ -2751,3 +2751,215 @@ var_dump(ini_set('session.cookie_path', '/ok'));
         assert!(stderr.contains(needle), "missing {needle:?} in {stderr}");
     }
 }
+
+/// Verifies PHP 8.6 returns an empty string from `session_encode()` for an
+/// empty session while PHP 8.5 keeps returning false.
+#[test]
+fn php86_session_encode_empty_session_returns_string() {
+    let source = "<?php session_start(); echo session_encode() === false ? 'false' : 'string'; session_abort();";
+    for (version, expected) in [("8.5", "false"), ("8.6", "string")] {
+        let dir = make_test_dir(&format!("sess_encode_empty_{}", version.replace('.', "_")));
+        let version_flag = format!("--php-version={version}");
+        let bin = compile_web_with_flags(&dir, source, "app", &[&version_flag]);
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut child = spawn_server(&bin, &addr, "1");
+        let response = http_get(&addr, "/");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            response.ends_with(expected),
+            "PHP {version} session_encode mismatch: {response:?}"
+        );
+    }
+}
+
+/// Verifies PHP 8.6 rejects NUL bytes in `session_module_name()` with a
+/// ValueError while PHP 8.5 accepts the call.
+#[test]
+fn php86_session_module_name_rejects_nul() {
+    let source = "<?php try { session_module_name(\"files\\0x\"); echo 'accepted'; } catch (ValueError $e) { echo 'ValueError'; }";
+    for (version, expected) in [("8.5", "accepted"), ("8.6", "ValueError")] {
+        let dir = make_test_dir(&format!("sess_module_nul_{}", version.replace('.', "_")));
+        let version_flag = format!("--php-version={version}");
+        let bin = compile_web_with_flags(&dir, source, "app", &[&version_flag]);
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut child = spawn_server(&bin, &addr, "1");
+        let response = http_get(&addr, "/");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            response.ends_with(expected),
+            "PHP {version} session_module_name mismatch: {response:?}"
+        );
+    }
+}
+
+/// Verifies PHP 8.6's built-in `SessionHandler::validateId()` makes strict mode
+/// replace an unknown supplied ID.
+#[test]
+fn php86_session_handler_validate_id_applies_strict_mode() {
+    let source = "<?php\n\
+        session_set_save_handler(new SessionHandler());\n\
+        ini_set('session.use_strict_mode', '1');\n\
+        session_id('abcdefabcdefabcdefabcdefabcdef12');\n\
+        session_start();\n\
+        echo session_id() === 'abcdefabcdefabcdefabcdefabcdef12' ? 'kept' : 'replaced';\n";
+    let dir = make_test_dir("sess_handler_validate_id");
+    let bin = compile_web_with_flags(&dir, source, "app", &["--php-version=8.6"]);
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        response.ends_with("replaced"),
+        "unknown ID must be rejected by SessionHandler::validateId: {response:?}"
+    );
+}
+
+/// Verifies PHP 8.6 deprecates a session handler object that defines neither
+/// `create_sid()` nor `validateId()`.
+#[test]
+fn php86_session_set_save_handler_missing_method_deprecations() {
+    let source = "<?php\n\
+        class LegacyHandler implements SessionHandlerInterface {\n\
+            public function open(string $path, string $name): bool { return true; }\n\
+            public function close(): bool { return true; }\n\
+            public function read(string $id): string|false { return ''; }\n\
+            public function write(string $id, string $data): bool { return true; }\n\
+            public function destroy(string $id): bool { return true; }\n\
+            public function gc(int $max_lifetime): int|false { return 0; }\n\
+        }\n\
+        session_set_save_handler(new LegacyHandler());\n\
+        echo 'ok';\n";
+    for (version, deprecated) in [("8.5", false), ("8.6", true)] {
+        let dir = make_test_dir(&format!("sess_handler_dep_{}", version.replace('.', "_")));
+        let version_flag = format!("--php-version={version}");
+        let bin = compile_web_with_flags(&dir, source, "app", &[&version_flag]);
+        let stderr_path = dir.join("server.stderr");
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut child = spawn_server_with_stderr(&bin, &addr, &stderr_path);
+        let response = http_get(&addr, "/");
+        let _ = child.kill();
+        let _ = child.wait();
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        assert!(response.ends_with("ok"), "PHP {version} response: {response:?}");
+        assert_eq!(
+            stderr.contains("which does not have the create_sid() method defined is deprecated"),
+            deprecated,
+            "PHP {version} create_sid deprecation mismatch: {stderr:?}"
+        );
+        assert_eq!(
+            stderr.contains("which does not have the validateId() method defined is deprecated"),
+            deprecated,
+            "PHP {version} validateId deprecation mismatch: {stderr:?}"
+        );
+    }
+}
+
+/// Verifies PHP 8.6 calls `updateTimestamp()` for a session that was read empty
+/// and stays empty, while PHP 8.5 still calls `write()`.
+#[test]
+fn php86_lazy_write_empty_session_calls_update_timestamp() {
+    let source = "<?php\n\
+        class TimestampHandler implements SessionHandlerInterface, SessionIdInterface, SessionUpdateTimestampHandlerInterface {\n\
+            public function open(string $path, string $name): bool { return true; }\n\
+            public function close(): bool { echo 'C'; return true; }\n\
+            public function read(string $id): string|false { return ''; }\n\
+            public function write(string $id, string $data): bool { echo 'W'; return true; }\n\
+            public function destroy(string $id): bool { return true; }\n\
+            public function gc(int $max_lifetime): int|false { return 0; }\n\
+            public function create_sid(): string { return 'abcdefabcdefabcdefabcdefabcdef12'; }\n\
+            public function validateId(string $id): bool { return false; }\n\
+            public function updateTimestamp(string $id, string $data): bool { echo 'U'; return true; }\n\
+        }\n\
+        session_set_save_handler(new TimestampHandler());\n\
+        session_start();\n\
+        session_write_close();\n";
+    for (version, expected) in [("8.5", "WC"), ("8.6", "UC")] {
+        let dir = make_test_dir(&format!("sess_empty_ts_{}", version.replace('.', "_")));
+        let version_flag = format!("--php-version={version}");
+        let bin = compile_web_with_flags(&dir, source, "app", &[&version_flag]);
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut child = spawn_server(&bin, &addr, "1");
+        let response = http_get(&addr, "/");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            response.ends_with(expected),
+            "PHP {version} empty-session lazy write mismatch: {response:?}"
+        );
+    }
+}
+
+/// Verifies PHP 8.6 closes an unencodable session without calling write().
+#[test]
+fn php86_session_write_close_skips_write_on_encode_failure() {
+    let source = "<?php\n\
+        class FailingEncodeHandler implements SessionHandlerInterface, SessionIdInterface {\n\
+            public function open(string $path, string $name): bool { return true; }\n\
+            public function close(): bool { echo 'C'; return true; }\n\
+            public function read(string $id): string|false { return ''; }\n\
+            public function write(string $id, string $data): bool { echo 'W'; return true; }\n\
+            public function destroy(string $id): bool { return true; }\n\
+            public function gc(int $max_lifetime): int|false { return 0; }\n\
+            public function create_sid(): string { return 'abcdefabcdefabcdefabcdefabcdef12'; }\n\
+        }\n\
+        session_set_save_handler(new FailingEncodeHandler());\n\
+        session_start();\n\
+        $_SESSION['bad|key'] = 1;\n\
+        session_write_close();\n";
+    for (version, expected) in [("8.5", "WC"), ("8.6", "C")] {
+        let dir = make_test_dir(&format!("sess_encode_fail_{}", version.replace('.', "_")));
+        let version_flag = format!("--php-version={version}");
+        let bin = compile_web_with_flags(&dir, source, "app", &[&version_flag]);
+        let stderr_path = dir.join("server.stderr");
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut child = spawn_server_with_stderr(&bin, &addr, &stderr_path);
+        let response = http_get(&addr, "/");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            response.ends_with(expected),
+            "PHP {version} encode-failure handler calls mismatch: {response:?}"
+        );
+    }
+}
+
+/// Verifies PHP 8.6 validates the whole supplied session ID instead of
+/// truncating at the first NUL byte like PHP 8.5.
+#[test]
+fn php86_session_id_with_nul_is_rejected_whole() {
+    let source = "<?php\n\
+        ini_set('session.use_strict_mode', '0');\n\
+        $_COOKIE[session_name()] = \"abc\\0def\";\n\
+        session_start();\n\
+        echo session_id();\n";
+    for (version, expected) in [("8.5", "abc"), ("8.6", "generated")] {
+        let dir = make_test_dir(&format!("sess_nul_id_{}", version.replace('.', "_")));
+        let version_flag = format!("--php-version={version}");
+        let bin = compile_web_with_flags(&dir, source, "app", &[&version_flag]);
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut child = spawn_server(&bin, &addr, "1");
+        let response = http_get(&addr, "/");
+        let _ = child.kill();
+        let _ = child.wait();
+        let body = response
+            .rsplit_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .unwrap_or(response.as_str());
+        if expected == "generated" {
+            assert_ne!(body, "abc", "PHP {version} kept the truncated ID: {response:?}");
+            assert_eq!(body.len(), 32, "PHP {version} did not generate a 32-char ID: {response:?}");
+        } else {
+            assert_eq!(body, expected, "PHP {version} response: {response:?}");
+        }
+    }
+}

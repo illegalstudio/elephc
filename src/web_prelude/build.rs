@@ -1650,6 +1650,14 @@ fn decl_class_sessionhandler() -> Stmt {
                     s_return(e_call("elephc_web_session_create_id", vec![e_str("")])),
                 ]),
         )
+        .method(
+            method("validateId")
+                .param("id", TypeExpr::Str)
+                .returns(TypeExpr::Bool)
+                .body(vec![
+                    s_return(e_binop(e_call("elephc_web_session_file_exists", vec![e_var("id"), e_call("elephc_web_session_get_save_path", vec![])]), BinOp::StrictEq, e_int(1))),
+                ]),
+        )
         .build()
 }
 
@@ -2720,6 +2728,17 @@ fn decl_fn_elephc_session_start_core() -> Stmt {
                 None,
             ),
             s_if(
+                e_binop(e_binop(e_var("id"), BinOp::StrictNotEq, e_str("")), BinOp::And, e_binop(e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80600)), BinOp::And, e_binop(e_call("strpos", vec![e_var("id"), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)))),
+                vec![
+                    s_assign("id", e_str("")),
+                    s_assign("__elephc_supplied_id", e_bool(false)),
+                    s_assign("__elephc_from_cookie", e_bool(false)),
+                    s_assign("__elephc_from_global", e_bool(false)),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
                 e_binop(e_binop(e_var("id"), BinOp::StrictNotEq, e_str("")), BinOp::And, e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_call("strpos", vec![e_var("id"), e_str("\r")]), BinOp::StrictNotEq, e_bool(false)), BinOp::Or, e_binop(e_call("strpos", vec![e_var("id"), e_str("\n")]), BinOp::StrictNotEq, e_bool(false))), BinOp::Or, e_binop(e_call("strpos", vec![e_var("id"), e_str("\t")]), BinOp::StrictNotEq, e_bool(false))), BinOp::Or, e_binop(e_call("strpos", vec![e_var("id"), e_str(" ")]), BinOp::StrictNotEq, e_bool(false))), BinOp::Or, e_binop(e_call("strpos", vec![e_var("id"), e_str("<")]), BinOp::StrictNotEq, e_bool(false))), BinOp::Or, e_binop(e_call("strpos", vec![e_var("id"), e_str(">")]), BinOp::StrictNotEq, e_bool(false))), BinOp::Or, e_binop(e_call("strpos", vec![e_var("id"), e_str("'")]), BinOp::StrictNotEq, e_bool(false))), BinOp::Or, e_binop(e_call("strpos", vec![e_var("id"), e_str("\"")]), BinOp::StrictNotEq, e_bool(false))), BinOp::Or, e_binop(e_call("strpos", vec![e_var("id"), e_str("\\")]), BinOp::StrictNotEq, e_bool(false)))),
                 vec![
                     s_assign("id", e_str("")),
@@ -2756,9 +2775,9 @@ fn decl_fn_elephc_session_start_core() -> Stmt {
                         vec![
                             s_assign("__elephc_id_ok", e_bool(true)),
                             s_if(
-                                e_instance_of(e_var("__elephc_h"), "SessionUpdateTimestampHandlerInterface"),
+                                e_call("is_callable", vec![e_array(vec![e_var("__elephc_h"), e_str("validateId")])]),
                                 vec![
-                                    s_assign("__elephc_id_ok", e_method_call(e_var("__elephc_h"), "validateId", vec![e_var("id")])),
+                                    s_assign("__elephc_id_ok", e_call("call_user_func", vec![e_array(vec![e_var("__elephc_h"), e_str("validateId")]), e_var("id")])),
                                 ],
                                 vec![],
                                 None,
@@ -2951,15 +2970,33 @@ fn decl_fn_session_write_close() -> Stmt {
                 e_binop(e_var("__elephc_encoded"), BinOp::StrictEq, e_bool(false)),
                 vec![
                     s_if(
-                        e_binop(e_binop(e_var("__elephc_h"), BinOp::StrictNotEq, e_null()), BinOp::And, e_instance_of(e_var("__elephc_h"), "SessionHandlerInterface")),
+                        e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80600)),
                         vec![
-                            s_expr(e_method_call(e_var("__elephc_h"), "write", vec![e_var("id"), e_str("")])),
-                            s_expr(e_method_call(e_var("__elephc_h"), "close", vec![])),
+                            s_if(
+                                e_binop(e_binop(e_var("__elephc_h"), BinOp::StrictNotEq, e_null()), BinOp::And, e_instance_of(e_var("__elephc_h"), "SessionHandlerInterface")),
+                                vec![
+                                    s_expr(e_method_call(e_var("__elephc_h"), "close", vec![])),
+                                ],
+                                vec![],
+                                Some(vec![
+                                s_expr(e_call("elephc_web_session_abort", vec![e_var("id"), e_var("save_path")])),
+                            ]),
+                            ),
                         ],
                         vec![],
                         Some(vec![
-                        s_expr(e_call("__elephc_session_write_file", vec![e_var("id"), e_var("save_path"), e_str("")])),
-                    ]),
+                            s_if(
+                                e_binop(e_binop(e_var("__elephc_h"), BinOp::StrictNotEq, e_null()), BinOp::And, e_instance_of(e_var("__elephc_h"), "SessionHandlerInterface")),
+                                vec![
+                                    s_expr(e_method_call(e_var("__elephc_h"), "write", vec![e_var("id"), e_str("")])),
+                                    s_expr(e_method_call(e_var("__elephc_h"), "close", vec![])),
+                                ],
+                                vec![],
+                                Some(vec![
+                                s_expr(e_call("__elephc_session_write_file", vec![e_var("id"), e_var("save_path"), e_str("")])),
+                            ]),
+                            ),
+                        ]),
                     ),
                     s_expr(e_call("elephc_web_session_set_status", vec![e_const("PHP_SESSION_NONE")])),
                     s_return(e_bool(true)),
@@ -2976,9 +3013,9 @@ fn decl_fn_session_write_close() -> Stmt {
                         e_binop(e_binop(e_binop(e_call("elephc_web_session_get_lazy_write", vec![]), BinOp::StrictEq, e_int(1)), BinOp::And, e_static_prop("__ElephcSessionState", "snapshotValid")), BinOp::And, e_binop(e_var("__elephc_data"), BinOp::StrictEq, e_static_prop("__ElephcSessionState", "snapshot"))),
                         vec![
                             s_if(
-                                e_instance_of(e_var("__elephc_h"), "SessionUpdateTimestampHandlerInterface"),
+                                e_call("is_callable", vec![e_array(vec![e_var("__elephc_h"), e_str("updateTimestamp")])]),
                                 vec![
-                                    s_expr(e_method_call(e_var("__elephc_h"), "updateTimestamp", vec![e_var("id"), e_var("__elephc_data")])),
+                                    s_expr(e_call("call_user_func", vec![e_array(vec![e_var("__elephc_h"), e_str("updateTimestamp")]), e_var("id"), e_var("__elephc_data")])),
                                     s_assign("__elephc_ts_done", e_bool(true)),
                                 ],
                                 vec![],
@@ -3003,7 +3040,14 @@ fn decl_fn_session_write_close() -> Stmt {
                 s_if(
                     e_binop(e_binop(e_call("elephc_web_session_get_lazy_write", vec![]), BinOp::StrictEq, e_int(1)), BinOp::And, e_binop(e_var("__elephc_data"), BinOp::StrictEq, e_call("__elephc_session_snapshot_bytes", vec![]))),
                     vec![
-                        s_expr(e_call("elephc_web_session_touch", vec![e_var("id"), e_var("save_path")])),
+                        s_if(
+                            e_not(e_call("elephc_web_session_touch", vec![e_var("id"), e_var("save_path")])),
+                            vec![
+                                s_expr(e_call("__elephc_session_write_file", vec![e_var("id"), e_var("save_path"), e_var("__elephc_data")])),
+                            ],
+                            vec![],
+                            None,
+                        ),
                     ],
                     vec![],
                     Some(vec![
@@ -3332,9 +3376,9 @@ fn decl_fn_session_regenerate_id() -> Stmt {
                     e_binop(e_var("__elephc_h"), BinOp::StrictNotEq, e_null()),
                     vec![
                         s_if(
-                            e_instance_of(e_var("__elephc_h"), "SessionUpdateTimestampHandlerInterface"),
+                            e_call("is_callable", vec![e_array(vec![e_var("__elephc_h"), e_str("validateId")])]),
                             vec![
-                                s_assign("__elephc_collision", e_method_call(e_var("__elephc_h"), "validateId", vec![e_var("new_id")])),
+                                s_assign("__elephc_collision", e_call("call_user_func", vec![e_array(vec![e_var("__elephc_h"), e_str("validateId")]), e_var("new_id")])),
                             ],
                             vec![],
                             None,
@@ -3817,6 +3861,14 @@ fn decl_fn_session_module_name() -> Stmt {
         .param_default("module", t_nullable(TypeExpr::Str), e_null())
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
+            s_if(
+                e_binop(e_binop(e_var("module"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80600)), BinOp::And, e_binop(e_call("strpos", vec![e_var("module"), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)))),
+                vec![
+                    s_throw(e_new("ValueError", vec![e_str("session_module_name(): Argument #1 ($module) must not contain any null bytes")])),
+                ],
+                vec![],
+                None,
+            ),
             s_assign("__elephc_old_module", e_ternary(e_binop(e_static_prop("__ElephcSessionState", "handler"), BinOp::StrictNotEq, e_null()), e_str("user"), e_str("files"))),
             s_if(
                 e_binop(e_var("module"), BinOp::StrictEq, e_null()),
@@ -3873,6 +3925,29 @@ fn decl_fn_session_set_save_handler() -> Stmt {
             s_if(
                 e_instance_of(e_var("handler_or_open"), "SessionHandlerInterface"),
                 vec![
+                    s_if(
+                        e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::GtEq, e_int(80600)),
+                        vec![
+                            s_if(
+                                e_not(e_call("is_callable", vec![e_array(vec![e_var("handler_or_open"), e_str("create_sid")])])),
+                                vec![
+                                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("Providing an object to argument #1 ($sessionhandler) which does not have the create_sid() method defined is deprecated"), e_const("E_DEPRECATED")])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_if(
+                                e_not(e_call("is_callable", vec![e_array(vec![e_var("handler_or_open"), e_str("validateId")])])),
+                                vec![
+                                    s_expr(e_call("__elephc_web_trigger_error", vec![e_str("Providing an object to argument #1 ($sessionhandler) which does not have the validateId() method defined is deprecated"), e_const("E_DEPRECATED")])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_static_prop_assign("__ElephcSessionState", "handler", e_var("handler_or_open")),
                     s_static_prop_assign("__ElephcSessionState", "shutdown", e_cast(CastType::Bool, e_var("register_or_close"))),
                     s_return(e_bool(true)),
@@ -3933,6 +4008,14 @@ fn decl_fn_elephc_session_encode() -> Stmt {
                         ),
                         s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_binop(e_binop(e_call("chr", vec![e_call("strlen", vec![e_var("ks")])]), BinOp::Concat, e_var("ks")), BinOp::Concat, e_call("serialize", vec![e_var("v")])))),
                     ]),
+                    s_if(
+                        e_binop(e_binop(e_var("out"), BinOp::StrictEq, e_str("")), BinOp::And, e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::Lt, e_int(80600))),
+                        vec![
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_return(e_var("out")),
                 ],
                 vec![],
@@ -3959,6 +4042,14 @@ fn decl_fn_elephc_session_encode() -> Stmt {
                 ),
                 s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_binop(e_binop(e_var("ks"), BinOp::Concat, e_str("|")), BinOp::Concat, e_call("serialize", vec![e_var("v")])))),
             ]),
+            s_if(
+                e_binop(e_binop(e_var("out"), BinOp::StrictEq, e_str("")), BinOp::And, e_binop(e_call("__elephc_php_version_id", vec![]), BinOp::Lt, e_int(80600))),
+                vec![
+                    s_return(e_bool(false)),
+                ],
+                vec![],
+                None,
+            ),
             s_return(e_var("out")),
         ])
         .build()
