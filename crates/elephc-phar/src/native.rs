@@ -247,6 +247,9 @@ pub(super) fn set_file_metadata_bytes(
     metadata: &[u8],
 ) -> Option<()> {
     let path = std::path::Path::new(std::str::from_utf8(archive_path).ok()?);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = parse_archive_path(path)?;
     let entry = archive.entries.iter_mut().find(|e| e.name == entry_name)?;
     entry.metadata.clear();

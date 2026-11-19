@@ -104,6 +104,11 @@ pub fn put_entry_bytes(
     }
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
+    // A `.pubkey` sidecar expects an OpenSSL signature; this implicit rebuild
+    // would replace it with SHA1 and leave the sidecar in place.
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = if path.exists() {
         parse_archive_path(path)?
     } else {
@@ -142,6 +147,9 @@ pub fn delete_entry_bytes(archive_path: &[u8], entry_name: &[u8]) -> Option<()> 
     }
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = parse_archive_path(path)?;
     remove_entry(&mut archive.entries, entry_name)?;
     let out = build_archive_value(&archive)?;
@@ -166,6 +174,9 @@ pub fn set_archive_compression(archive_path: &[u8], compression_code: usize) -> 
     let compression = compression_from_php_constant(compression_code)?;
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = parse_archive_path(path)?;
     if matches!(archive.format, ArchiveFormat::Tar) {
         return None;
@@ -201,6 +212,9 @@ pub(super) fn get_stub_bytes(archive_path: &[u8]) -> Option<Vec<u8>> {
 pub(super) fn set_metadata_bytes(archive_path: &[u8], metadata: &[u8]) -> Option<()> {
     let path_str = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(path_str);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = read_or_new_archive(path)?;
     archive.metadata = metadata.to_vec();
     std::fs::write(path, build_archive_value(&archive)?).ok()?;
@@ -217,6 +231,9 @@ pub(super) fn set_stub_bytes(archive_path: &[u8], stub: &[u8]) -> Option<()> {
     }
     let path_str = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(path_str);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = read_or_new_archive(path)?;
     archive.stub = stub.to_vec();
     std::fs::write(path, build_archive_value(&archive)?).ok()?;

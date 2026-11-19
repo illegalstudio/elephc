@@ -43,6 +43,16 @@ pub(super) fn read_archive_public_key(path: &std::path::Path) -> Option<rsa::Rsa
     rsa_public_key_from_pem(&std::fs::read(archive_public_key_path(path)).ok()?)
 }
 
+/// Returns true when an implicit archive rebuild may overwrite `path`.
+///
+/// An adjacent `<archive>.pubkey` sidecar marks the archive as OpenSSL-signed.
+/// Rebuilding it would replace that signature with the writer's SHA1 trailer
+/// while leaving the sidecar in place, so every later verified read would fail.
+/// Only the explicit signing APIs may change the signature algorithm.
+pub(super) fn implicit_rebuild_allowed(path: &std::path::Path) -> bool {
+    !archive_public_key_path(path).exists()
+}
+
 /// Copies an archive's public-key sidecar to a derived archive path when present.
 pub(super) fn copy_archive_public_key(
     source: &std::path::Path,
@@ -154,7 +164,9 @@ pub(super) fn compute_signature(flag: u32, key: Option<&[u8]>, data: &[u8]) -> O
 /// sidecar as the trust anchor for an OpenSSL signature, so a keyless hash
 /// signature must be rejected there: otherwise an attacker can replace the
 /// archive contents and downgrade the declared signature type to a digest
-/// anyone can recompute (CVE-2026-128090).
+/// anyone can recompute (CVE-2026-128090). The sidecar also requires an
+/// OpenSSL signature to be present at all, so stripping the manifest flag and
+/// trailer cannot turn a trusted archive into an accepted unsigned one.
 pub(super) fn verify_native_phar_signature(
     data: &[u8],
     signature_required: bool,
@@ -162,6 +174,9 @@ pub(super) fn verify_native_phar_signature(
     openssl_expected: bool,
 ) -> Option<()> {
     if !signature_required {
+        if openssl_expected {
+            return None;
+        }
         if data.ends_with(b"GBMB") {
             let flags = le32(data, data.len().checked_sub(8)?)?;
             if flags == PHAR_OPENSSL_SIGNATURE_TYPE || signature_digest_len(flags).is_some() {
@@ -367,12 +382,11 @@ pub(super) fn read_zip_signature(data: &[u8]) -> Option<Vec<u8>> {
 
 /// Authenticates a tar PHAR signature before any entry is exposed.
 ///
-/// Authenticates a tar PHAR signature before any entry is exposed.
-///
 /// Tar signatures cover every byte before the signature entry's header. OpenSSL
 /// signatures require the archive's external public key. `openssl_expected`
-/// mirrors the adjacent `<archive>.pubkey` sidecar: when it exists, only an
-/// OpenSSL signature is accepted (CVE-2026-128090).
+/// mirrors the adjacent `<archive>.pubkey` sidecar: when it exists, an OpenSSL
+/// signature must be present and only that signature type is accepted
+/// (CVE-2026-128090).
 pub(super) fn verify_tar_phar_signature(
     data: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
@@ -382,7 +396,7 @@ pub(super) fn verify_tar_phar_signature(
     while p.checked_add(512)? <= data.len() {
         let header = &data[p..p + 512];
         if header.iter().all(|&byte| byte == 0) {
-            return Some(());
+            break;
         }
         let size = parse_tar_octal(&header[124..136])?;
         let payload_start = p.checked_add(512)?;
@@ -407,7 +421,11 @@ pub(super) fn verify_tar_phar_signature(
         }
         p = payload_start.checked_add(round_up_to_512(size)?)?;
     }
-    Some(())
+    if openssl_expected {
+        None
+    } else {
+        Some(())
+    }
 }
 
 /// Authenticates a ZIP PHAR signature before any entry is exposed.
@@ -415,8 +433,8 @@ pub(super) fn verify_tar_phar_signature(
 /// The digest covers local records, central-directory records, and the ZIP
 /// comment while excluding the reserved signature entry and EOCD record. OpenSSL
 /// signatures require the archive's external public key. `openssl_expected`
-/// mirrors the adjacent `<archive>.pubkey` sidecar, so a keyless signature is
-/// rejected when the sidecar says OpenSSL verification is expected.
+/// mirrors the adjacent `<archive>.pubkey` sidecar: when it exists, an OpenSSL
+/// signature must be present and a keyless signature is rejected.
 pub(super) fn verify_zip_phar_signature(
     data: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
@@ -483,7 +501,9 @@ pub(super) fn verify_zip_phar_signature(
         p = central_end;
     }
     let Some((local_start, local_end, central_start, flag, expected)) = signature else {
-        return Some(());
+        // A sidecar requires an OpenSSL signature: an unsigned archive must not
+        // be accepted just because the signature entry was removed.
+        return if openssl_expected { None } else { Some(()) };
     };
     let central_end = p;
     if local_end > central_dir_offset || central_end > eocd {

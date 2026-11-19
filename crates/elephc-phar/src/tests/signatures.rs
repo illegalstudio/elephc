@@ -431,3 +431,150 @@ pub(super) fn openssl_signed_phars_reject_tampered_payloads() {
         remove_signed_fixture(&path);
     }
 }
+
+/// Removes a native PHAR's signature trailer and clears the manifest signature
+/// flag, reproducing an archive whose signature was stripped entirely.
+fn strip_native_signature(data: &[u8]) -> Vec<u8> {
+    let halt = b"__HALT_COMPILER();";
+    let halt_idx = find_subslice(data, halt).expect("native phar stub");
+    let mut manifest_start = halt_idx + halt.len();
+    for &ch in &[b' ', b'?', b'>', b'\r', b'\n'] {
+        if data.get(manifest_start) == Some(&ch) {
+            manifest_start += 1;
+        }
+    }
+    let mut out = strip_signature_trailer(data).to_vec();
+    let flags = le32(&out, manifest_start + 10).expect("global flags");
+    let cleared = flags & !PHAR_HDR_SIGNATURE;
+    out[manifest_start + 10..manifest_start + 14].copy_from_slice(&cleared.to_le_bytes());
+    out
+}
+
+/// Rebuilds a tar PHAR without its `.phar/signature.bin` entry.
+fn unsigned_tar(data: &[u8]) -> Vec<u8> {
+    let archive = parse_archive(data).expect("parse signed tar phar");
+    let mut out = Vec::new();
+    write_tar_body(&mut out, &archive.entries, &archive.metadata, &archive.stub)
+        .expect("rebuild unsigned tar phar");
+    out
+}
+
+/// Rebuilds a ZIP PHAR without its `.phar/signature.bin` entry.
+fn unsigned_zip(data: &[u8]) -> Vec<u8> {
+    let archive = parse_archive(data).expect("parse signed zip phar");
+    let mut out = Vec::new();
+    let mut central = Vec::new();
+    write_zip_body(&mut out, &mut central, &archive.entries, &archive.stub)
+        .expect("rebuild unsigned zip phar");
+    out.extend_from_slice(&central);
+    out.extend_from_slice(&archive.metadata);
+    out
+}
+
+/// A trusted `<archive>.pubkey` sidecar requires an OpenSSL signature to be
+/// present: stripping it from a native, tar or ZIP archive must not turn the
+/// archive into an accepted unsigned one.
+#[test]
+pub(super) fn stripped_signature_with_pubkey_sidecar_is_rejected() {
+    for extension in ["phar", "tar", "zip"] {
+        let path = std::env::temp_dir().join(format!(
+            "elephc-phar-stripped-signature-{}-{extension}.{extension}",
+            std::process::id()
+        ));
+        let path_bytes = path.to_string_lossy();
+        assert_eq!(
+            put_entry_bytes(path_bytes.as_bytes(), b"payload.txt", b"stripped payload"),
+            Some(16)
+        );
+        let signed = std::fs::read(&path).unwrap();
+        let unsigned = match extension {
+            "phar" => strip_native_signature(&signed),
+            "tar" => unsigned_tar(&signed),
+            "zip" => unsigned_zip(&signed),
+            _ => unreachable!(),
+        };
+        std::fs::write(&path, unsigned).unwrap();
+        write_test_public_key(&path);
+
+        assert!(
+            parse_archive_path(&path).is_none(),
+            "{extension}: an unsigned archive must be rejected when <archive>.pubkey exists"
+        );
+        let url = format!("phar://{}/payload.txt", path.display());
+        assert!(
+            extract_url_bytes(url.as_bytes()).is_none(),
+            "{extension}: entry extraction must reject the stripped signature"
+        );
+        assert!(
+            read_signature_info(path_bytes.as_bytes()).is_none(),
+            "{extension}: signature metadata must reject the stripped signature"
+        );
+        remove_signed_fixture(&path);
+    }
+}
+
+/// Implicit archive edits (entry add/delete, compression, metadata, stub) would
+/// replace an OpenSSL signature with the writer's SHA1 trailer while leaving the
+/// `<archive>.pubkey` sidecar in place. They must fail before touching the file.
+#[test]
+pub(super) fn implicit_edits_of_openssl_signed_archives_are_rejected() {
+    for extension in ["phar", "tar", "zip"] {
+        let path = std::env::temp_dir().join(format!(
+            "elephc-phar-implicit-edit-{}-{extension}.{extension}",
+            std::process::id()
+        ));
+        let path_bytes = path.to_string_lossy();
+        assert_eq!(
+            put_entry_bytes(path_bytes.as_bytes(), b"a.txt", b"alpha"),
+            Some(5)
+        );
+        assert_eq!(
+            sign_archive_openssl(path_bytes.as_bytes(), TEST_RSA_KEY_PEM.as_bytes()),
+            Some(())
+        );
+        write_test_public_key(&path);
+        let before = std::fs::read(&path).unwrap();
+
+        let add_url = format!("phar://{}/b.txt", path.display());
+        let delete_url = format!("phar://{}/a.txt", path.display());
+        assert!(
+            put_entry_bytes(path_bytes.as_bytes(), b"b.txt", b"beta").is_none(),
+            "{extension}: adding an entry must not silently downgrade the signature"
+        );
+        assert!(
+            put_url_bytes(add_url.as_bytes(), b"beta").is_none(),
+            "{extension}: adding an entry through a URL must be rejected"
+        );
+        assert!(
+            delete_entry_bytes(path_bytes.as_bytes(), b"a.txt").is_none(),
+            "{extension}: deleting an entry must not silently downgrade the signature"
+        );
+        assert!(
+            delete_url_bytes(delete_url.as_bytes()).is_none(),
+            "{extension}: deleting an entry through a URL must be rejected"
+        );
+        assert!(
+            set_archive_compression(path_bytes.as_bytes(), 4096).is_none(),
+            "{extension}: changing entry compression must be rejected"
+        );
+        assert!(
+            set_metadata_bytes(path_bytes.as_bytes(), b"meta").is_none(),
+            "{extension}: changing global metadata must be rejected"
+        );
+        assert!(
+            set_stub_bytes(path_bytes.as_bytes(), b"<?php __HALT_COMPILER();").is_none(),
+            "{extension}: changing the stub must be rejected"
+        );
+        assert!(
+            set_file_metadata_bytes(path_bytes.as_bytes(), b"a.txt", b"meta").is_none(),
+            "{extension}: changing per-file metadata must be rejected"
+        );
+
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "{extension}: rejected edits must leave the archive byte-identical"
+        );
+        remove_signed_fixture(&path);
+    }
+}
