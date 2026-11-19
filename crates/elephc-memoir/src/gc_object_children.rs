@@ -43,7 +43,7 @@ pub fn emit_gc_object_children(e: &mut impl Emitter) {
     generator_fields.extend([e.graph_layout().gen_last_key_offset, e.graph_layout().gen_last_value_offset, e.graph_layout().gen_return_value_offset]);
     fixed(e, "generator", &["_generator_class_id"], e.graph_layout().fiber_object_size, &generator_fields);
     fixed(e, "spl", &["_spl_dll_class_id", "_spl_stack_class_id", "_spl_queue_class_id", "_spl_fixed_array_class_id"], 16,
-        &[e.graph_layout().spl_dll_storage_offset as i32]);
+        &[crate::values::spl_storage::SPL_DLL_STORAGE_OFFSET as i32]);
     incomplete(e);
 }
 

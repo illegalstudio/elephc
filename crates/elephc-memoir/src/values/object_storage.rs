@@ -11,6 +11,11 @@
 use crate::layout::{OBJECT_HEAP_KIND, THROWABLE_HEAP_KIND, object_declared_slot_offset};
 use crate::{Emitter, HeapKind};
 
+/// Computes payload bytes from the declared slots and optional trailing owner and metadata words.
+pub const fn declared_object_bytes(properties: usize, dynamic_hash: bool, creation_line: bool) -> usize {
+    object_declared_slot_offset(properties) + (dynamic_hash as usize + creation_line as usize) * 8
+}
+
 /// Allocates an ordinary object with the requested size in the native integer-result register.
 pub fn emit_allocate_object(emitter: &mut impl Emitter) {
     emit_allocate_with_handle(emitter, OBJECT_HEAP_KIND);

@@ -143,7 +143,6 @@ impl elephc_memoir::MemoryContext for Emitter {
     /// Supplies the compiler graph layout contract.
     fn graph_layout(&self) -> GraphLayout { GraphLayout {
             fiber_stack_size_offset: super::fibers::FIBER_STACK_SIZE_OFFSET,
-            spl_fixed_storage_offset: super::spl::SPL_FIXED_STORAGE_OFFSET as i32,
             fiber_callable_offset: super::fibers::FIBER_CALLABLE_OFFSET,
             fiber_object_size: super::fibers::FIBER_OBJECT_SIZE,
             fiber_own_call_frame_offset: super::fibers::FIBER_OWN_CALL_FRAME_OFFSET,
@@ -157,7 +156,6 @@ impl elephc_memoir::MemoryContext for Emitter {
             gen_last_key_offset: super::generators::coro::GEN_LAST_KEY_OFFSET,
             gen_last_value_offset: super::generators::coro::GEN_LAST_VALUE_OFFSET,
             gen_return_value_offset: super::generators::coro::GEN_RETURN_VALUE_OFFSET,
-            spl_dll_storage_offset: super::spl::SPL_DLL_STORAGE_OFFSET as i32,
         } }
     /// Supplies the compiler gc status selectors contract.
     fn gc_status_selectors(&self) -> GcStatusSelectors { GcStatusSelectors {
