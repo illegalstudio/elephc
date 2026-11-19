@@ -28,7 +28,13 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
                 if saw_named {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                let spread = eval_expr(arg.value(), context, caller_scope, values)?;
+                let source = local_binding_origins::source_view(arg.value(), context, caller_scope);
+                let (spread, entry_sources) = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+                    if let EvalExpr::Array(elements) = arg.value() {
+                        let (spread, sources) = array_literals::evaluate_argument_literal(elements, context, caller_scope, values)?;
+                        (spread, Some(sources))
+                    } else { (eval_expr(arg.value(), context, caller_scope, values)?, None) }
+                } else { (eval_expr(arg.value(), context, caller_scope, values)?, None) };
                 let unpacked = (|| {
                     if !values.is_array_like(spread)? {
                         return Err(EvalStatus::RuntimeFatal);
@@ -37,10 +43,21 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
                     append_unpacked_call_arg_values(
                         spread, &mut evaluated_args, &mut saw_named, context, values,
                     )?;
-                    for argument in &mut evaluated_args[first_unpacked..] {
+                    let element_source = source.as_ref().map(|ty| local_binding_origins::element_source_type(
+                        crate::eval_ir::generic_type(ty), true)).map(|ty| crate::eval_ir::parameter_type(&ty));
+                    let element_source = element_source.as_ref().map(|ty| crate::eval_ir::parameter_type(
+                        &local_binding_origins::replacement_element_source(Some(ty))));
+                    for (position, argument) in evaluated_args[first_unpacked..].iter_mut().enumerate() {
                         if argument.value.is_borrowed() {
                             argument.value = values.retain(argument.value)?;
                         }
+                        argument.source_type = if let Some(sources) = &entry_sources {
+                            let key = values.array_iter_key(spread, position)?;
+                            let normalized = eval_array_reference_key(key, context.semantic_profile(), values);
+                            let released = release_expr_result(key, context, values);
+                            let key = normalized.and_then(|key| released.map(|()| key))?;
+                            key.and_then(|key| sources.iter().find(|(source, _)| source == &key).map(|(_, ty)| ty.clone()))
+                        } else { element_source.clone() };
                     }
                     Ok(())
                 })();

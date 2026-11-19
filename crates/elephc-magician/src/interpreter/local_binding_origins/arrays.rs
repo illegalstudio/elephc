@@ -99,6 +99,11 @@ fn infer_schema(value: RuntimeCellHandle, context: &mut ElephcEvalContext,
     Ok(Type::Apply("array".to_string(), vec![key, element.unwrap_or_else(|| Type::atom("mixed"))]))
 }
 
+/// Projects internal content metadata only for an actual array, retaining explicit mixed alternatives.
+pub(in crate::interpreter) fn element_source_type(ty: Type, array: bool) -> Type {
+    if array && contains_contents(&ty) { source_schema(&ty).unwrap_or(ty) } else { ty }
+}
+
 /// Recognizes internal content metadata inside a compound producer without using value tags.
 pub(in crate::interpreter) fn contains_contents(ty: &Type) -> bool {
     array_contents_schema(ty).is_some() || match ty {
@@ -127,9 +132,7 @@ pub(in crate::interpreter) fn prepare_write(scope: &ElephcEvalScope, name: &str,
     let element = match producer {
         Some(producer) => {
             let ty = generic_type(producer);
-            if matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) && contains_contents(&ty) {
-                source_schema(&ty).unwrap_or(ty)
-            } else { ty }
+            element_source_type(ty, matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC))
         }
         None => infer_schema(value, context, values, 0)?,
     };

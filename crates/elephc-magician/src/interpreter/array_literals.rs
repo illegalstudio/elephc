@@ -12,7 +12,7 @@
 use super::*;
 
 mod source_contracts;
-pub(in crate::interpreter) use source_contracts::evaluate_literal;
+pub(in crate::interpreter) use source_contracts::{evaluate_literal, evaluate_argument_literal};
 
 /// Recognizes only normalized native-default metadata, not PHP-visible function calls.
 pub(super) fn native_default_array_spread(element: &EvalArrayElement) -> Option<&EvalExpr> {

@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step239 (this commit). Remaining feature integration is active. Issue:
+Verified through step240 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2922,3 +2922,9 @@ Push/unshift use one rooted replacement builder instead of four leaking copy loo
 Thirty-five exact focused tests plus seven generated-builtin workflow gates pass in jobd1e161a3 (46 total gates including build/hygiene/source stability). New mutation cases cover closed direct/dynamic paths, first push/unshift/splice, declared mixed/union and named replacement sources, complete effects before rejected first writes, copies, sparse keys, append history and exhaustion with balanced owners. Prior array/source/VM/generic/nullability tests and native argument owner/array staging regressions remain green. The full update-builtin-docs workflow produces no generated diff.
 
 Probe239 separately confirmed a remaining reverse reference-element bug: supported literal references plus a reference function printed A instead of required VA. Knowledgeb17793a4 and pending-array-reference-regression240.txt retain it; no reverse-guard fix or feature admission is claimed. Shared nested content argument projection, spread source metadata, reference lifetimes and native/runtime Mixed obligations remain pending.
+
+### Verified240: shared nested and unpacked source arguments
+
+One reusable element-source adapter projects internal conditional array metadata for actual arrays while preserving ordinary mixed/union alternatives. Direct writes, literal observation and mutating builtin insertions consume it. Literal argument unpacking carries each final normalized key's producer separately, avoiding an invented homogeneous argument tuple. Variable spreads derive their element view from the retained source contract. Push/unshift keep the count result rooted while replacement construction can allocate or fail.
+
+Thirty-nine exact tests and the complete seven-gate generated-builtin workflow pass in joba68ad380 (50 total gates with build/hygiene/source stability). New regressions cover nested arrays through shared aliases, positional and named literal argument unpacking with references, declared mixed versus inferred homogeneous variable spreads with independent ArrayKeys, and alias visibility after copying/reindexing. Existing mutation/source/native argument owner controls remain green with balanced owners. The generated docs are unchanged. Reverse reference-element source guards remain pending as recorded in knowledgeb17793a4; this step preserves references but does not claim that missing validation or public admission is complete.

@@ -208,13 +208,25 @@ fn eval_dynamic_array_push_unshift_call(
         return Err(EvalStatus::RuntimeFatal);
     }
     let inserted_values = inserted.iter().map(|arg| arg.value).collect::<Vec<_>>();
-    let replacement =
-        eval_array_push_unshift_replacement(name, array.value, &inserted_values, context, values)?;
-    let result = eval_array_push_unshift_count_result(array.value, inserted_values.len(), values)?;
-    let element = inserted.iter().map(|arg| arg.source_type.as_ref()
-        .map(crate::eval_ir::generic_type).unwrap_or_else(|| elephc_generics::Type::atom("mixed")))
-        .reduce(crate::eval_ir::merge_array_element_sources).unwrap_or_else(|| elephc_generics::Type::atom("never"));
-    local_binding_origins::finish_array_mutation(target, array.value, replacement, result, element, context, values).map(Some)
+    let mut element = None;
+    for argument in &inserted {
+        let ty = argument.source_type.as_ref().map(crate::eval_ir::generic_type)
+            .unwrap_or_else(|| elephc_generics::Type::atom("mixed"));
+        let ty = local_binding_origins::element_source_type(ty,
+            matches!(values.type_tag(argument.value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC));
+        element = Some(match element { None => ty,
+            Some(previous) => crate::eval_ir::merge_array_element_sources(previous, ty) });
+    }
+    let element = element.unwrap_or_else(|| elephc_generics::Type::atom("never"));
+    let result = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(
+        eval_array_push_unshift_count_result(array.value, inserted_values.len(), values)?);
+    crate::runtime_hooks::owner_frames::with_runtime_owners(&result, || {
+        let outcome = (|| {
+            let replacement = eval_array_push_unshift_replacement(name, array.value, &inserted_values, context, values)?;
+            local_binding_origins::finish_array_mutation(target, array.value, replacement, result.take(), element, context, values)
+        })();
+        finish_eval_argument_values(outcome, [result.take()], context, values).map(Some)
+    })
 }
 
 /// Evaluates a dynamic `array_splice()` call against a writable array.

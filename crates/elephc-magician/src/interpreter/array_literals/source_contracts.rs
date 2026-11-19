@@ -26,10 +26,8 @@ impl LiteralSource {
         let Some(key) = eval_array_reference_key(key, context.semantic_profile(), values)? else { return Ok(()); };
         let ty = if let Some(source) = source { generic_type(&source) }
             else { runtime_generic_type(value, context, values, 0)? };
-        let ty = if matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
-            && local_binding_origins::contains_array_contents(&ty) {
-            local_binding_origins::array_source_schema(&ty).unwrap_or(ty)
-        } else { ty };
+        let ty = local_binding_origins::element_source_type(ty,
+            matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC));
         if let Some((_, previous)) = self.entries.iter_mut().find(|(previous, _)| previous == &key) {
             *previous = ty;
         } else { self.entries.push((key, ty)); }
@@ -54,12 +52,28 @@ impl LiteralSource {
 pub(in crate::interpreter) fn evaluate_literal(elements: &[EvalArrayElement],
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, EvalParameterType), EvalStatus> {
+    let (value, source) = evaluate_literal_source(elements, context, scope, values)?;
+    Ok((value, parameter_type(&source.finish())))
+}
+
+/// Returns each final argument entry's own producer instead of inferring a homogeneous tuple.
+pub(in crate::interpreter) fn evaluate_argument_literal(elements: &[EvalArrayElement],
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Vec<(EvalArrayReferenceKey, EvalParameterType)>), EvalStatus> {
+    let (value, source) = evaluate_literal_source(elements, context, scope, values)?;
+    Ok((value, source.entries.into_iter().map(|(key, ty)| (key, parameter_type(&ty))).collect()))
+}
+
+/// Shares source-aware construction without imposing a data-array contract on argument tuples.
+fn evaluate_literal_source(elements: &[EvalArrayElement], context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, LiteralSource), EvalStatus> {
     let mut source = LiteralSource::default();
     let associative = elements.iter().any(|element| native_default_array_spread(element).is_some()
         || matches!(element, EvalArrayElement::KeyValue { .. } | EvalArrayElement::KeyReference { .. }));
     let value = if associative { eval_assoc_array(elements, context, scope, values, Some(&mut source))? }
         else { eval_indexed_array(elements, context, scope, values, Some(&mut source))? };
-    Ok((value, parameter_type(&source.finish())))
+    Ok((value, source))
 }
 
 /// Captures a producer after earlier operands, recursively retaining nested literal alternatives.

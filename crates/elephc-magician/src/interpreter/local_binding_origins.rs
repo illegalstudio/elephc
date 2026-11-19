@@ -19,7 +19,7 @@ mod source_views;
 
 pub(super) use source_views::{LocalAssignmentProducer, prepare_assignment, source_view, evaluate_assignment};
 
-pub(super) use arrays::{source_schema as array_source_schema, contains_contents as contains_array_contents};
+pub(super) use arrays::element_source_type;
 pub(super) use arrays::{prepare_write as prepare_array_local_write, publish_write as publish_array_local_write};
 
 /// Captures a producer's declared alternatives without executing PHP or borrowing live maps.
