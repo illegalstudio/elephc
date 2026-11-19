@@ -358,6 +358,12 @@ pub(in crate::ir_lower) fn lower_conditional_non_local_null_coalesce_assignment(
     // `return $box->name ??= 'fallback';` on a `?Box` receiver returned eight poison bytes
     // (`codegen::objects::property_access::mutations::test_null_coalesce_assignment_on_nullable_object_receiver`),
     // and removing it makes that test pass with the `runtime_gc` coalesce heap tests still clean.
+    //
+    // The exception is a read that IS an owned temporary (the boxed null a quiet element-property
+    // probe hands back, `$rows[$k]->p ??= 1`): nothing else owns it, so this path frees it.
+    if ctx.value_is_owning_temporary(current) {
+        crate::ir_lower::ownership::release_if_owned(ctx, current, Some(expr.span));
+    }
     super::lazy_branches::store_branch_expr_into_temp(
         ctx,
         &temp_name,
