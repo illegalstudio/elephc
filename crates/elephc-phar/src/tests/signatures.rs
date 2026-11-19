@@ -453,22 +453,16 @@ fn strip_native_signature(data: &[u8]) -> Vec<u8> {
 /// Rebuilds a tar PHAR without its `.phar/signature.bin` entry.
 fn unsigned_tar(data: &[u8]) -> Vec<u8> {
     let archive = parse_archive(data).expect("parse signed tar phar");
-    let mut out = Vec::new();
-    write_tar_body(&mut out, &archive.entries, &archive.metadata, &archive.stub)
-        .expect("rebuild unsigned tar phar");
-    out
+    build_tar_archive(&archive.entries, &archive.metadata, &archive.stub)
+        .expect("rebuild unsigned tar phar")
 }
 
-/// Rebuilds a ZIP PHAR without its `.phar/signature.bin` entry.
+/// Rebuilds a ZIP PHAR without its `.phar/signature.bin` entry, including the
+/// end-of-central-directory record so the result is a readable archive.
 fn unsigned_zip(data: &[u8]) -> Vec<u8> {
     let archive = parse_archive(data).expect("parse signed zip phar");
-    let mut out = Vec::new();
-    let mut central = Vec::new();
-    write_zip_body(&mut out, &mut central, &archive.entries, &archive.stub)
-        .expect("rebuild unsigned zip phar");
-    out.extend_from_slice(&central);
-    out.extend_from_slice(&archive.metadata);
-    out
+    build_zip_archive(&archive.entries, &archive.metadata, &archive.stub)
+        .expect("rebuild unsigned zip phar")
 }
 
 /// A trusted `<archive>.pubkey` sidecar requires an OpenSSL signature to be
@@ -494,6 +488,10 @@ pub(super) fn stripped_signature_with_pubkey_sidecar_is_rejected() {
             _ => unreachable!(),
         };
         std::fs::write(&path, unsigned).unwrap();
+        assert!(
+            parse_archive_path(&path).is_some(),
+            "{extension}: the unsigned fixture must be a valid readable archive before adding the sidecar"
+        );
         write_test_public_key(&path);
 
         assert!(
