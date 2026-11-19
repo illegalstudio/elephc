@@ -95,19 +95,13 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, x10");                                     // include the copied chunk in the total
     emitter.instruction("str x9, [sp, #24]");                                   // store the updated result length
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload the chunk pointer
-    emitter.instruction("mov x2, #0");                                          // release the whole chunk window
-    emitter.instruction("bl __rt_concat_publish");                              // hand this chunk's scratch window back for the next read
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the chunk pointer
-    emitter.instruction("bl __rt_decref_any");                                  // release owned wrapper/filter chunks; concat slices are ignored
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, Some(32));
     emitter.instruction("b __rt_stream_get_contents_loop");                     // read the next chunk
 
     // -- release the terminal empty chunk and return the accumulated string --
     emitter.label("__rt_stream_get_contents_release_done");
     emitter.instruction("str x1, [sp, #32]");                                   // save the final empty chunk pointer
-    emitter.instruction("mov x2, #0");                                          // release the whole chunk window
-    emitter.instruction("bl __rt_concat_publish");                              // hand the terminal chunk's scratch window back
-    emitter.instruction("ldr x0, [sp, #32]");                                   // final empty chunk pointer
-    emitter.instruction("bl __rt_decref_any");                                  // release it if it is heap-backed
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, Some(32));
     emitter.label("__rt_stream_get_contents_done");
     emitter.instruction("ldr x1, [sp, #16]");                                   // return the accumulation buffer pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // return the accumulated result length
@@ -200,18 +194,12 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, x10");                                     // include the copied chunk in the total
     emitter.instruction("str x9, [sp, #32]");                                   // store the updated result length
     emitter.instruction("ldr x1, [sp, #40]");                                   // reload the chunk pointer
-    emitter.instruction("mov x2, #0");                                          // release the whole chunk window
-    emitter.instruction("bl __rt_concat_publish");                              // hand this chunk's scratch window back for the next read
-    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the chunk pointer
-    emitter.instruction("bl __rt_decref_any");                                  // release owned wrapper/filter chunks; concat slices are ignored
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, Some(40));
     emitter.instruction("b __rt_stream_get_contents_bounded_loop");             // read the next bounded chunk
 
     emitter.label("__rt_stream_get_contents_bounded_release_done");
     emitter.instruction("str x1, [sp, #40]");                                   // save the final empty chunk pointer
-    emitter.instruction("mov x2, #0");                                          // release the whole chunk window
-    emitter.instruction("bl __rt_concat_publish");                              // hand the terminal chunk's scratch window back
-    emitter.instruction("ldr x0, [sp, #40]");                                   // final empty chunk pointer
-    emitter.instruction("bl __rt_decref_any");                                  // release it if it is heap-backed
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, Some(40));
     emitter.label("__rt_stream_get_contents_bounded_done");
     emitter.instruction("ldr x1, [sp, #24]");                                   // return the accumulation buffer pointer
     emitter.instruction("ldr x2, [sp, #32]");                                   // return the accumulated result length
@@ -280,18 +268,12 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, QWORD PTR [rbp - 48]");                        // include the copied chunk in the total
     emitter.instruction("mov QWORD PTR [rbp - 32], r8");                        // store the updated result length
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the chunk pointer
-    emitter.instruction("xor edx, edx");                                        // release the whole chunk window
-    emitter.instruction("call __rt_concat_publish");                            // hand this chunk's scratch window back for the next read
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the chunk pointer
-    emitter.instruction("call __rt_decref_any");                                // release owned wrapper/filter chunks; concat slices are ignored
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, Some(40));
     emitter.instruction("jmp __rt_stream_get_contents_loop_x86");               // read the next chunk
 
     emitter.label("__rt_stream_get_contents_release_done_x86");
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the final empty chunk pointer
-    emitter.instruction("xor edx, edx");                                        // release the whole chunk window
-    emitter.instruction("call __rt_concat_publish");                            // hand the terminal chunk's scratch window back
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // final empty chunk pointer
-    emitter.instruction("call __rt_decref_any");                                // release the empty chunk if it is heap-backed
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, Some(40));
     emitter.label("__rt_stream_get_contents_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the accumulation buffer pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // return the accumulated result length
@@ -384,18 +366,12 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, QWORD PTR [rbp - 56]");                        // include the copied chunk in the total
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // store the updated result length
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the chunk pointer
-    emitter.instruction("xor edx, edx");                                        // release the whole chunk window
-    emitter.instruction("call __rt_concat_publish");                            // hand this chunk's scratch window back for the next read
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the chunk pointer
-    emitter.instruction("call __rt_decref_any");                                // release owned wrapper/filter chunks; concat slices are ignored
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, Some(48));
     emitter.instruction("jmp __rt_stream_get_contents_bounded_loop_x86");       // read the next bounded chunk
 
     emitter.label("__rt_stream_get_contents_bounded_release_done_x86");
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the final empty chunk pointer
-    emitter.instruction("xor edx, edx");                                        // release the whole chunk window
-    emitter.instruction("call __rt_concat_publish");                            // hand the terminal chunk's scratch window back
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // final empty chunk pointer
-    emitter.instruction("call __rt_decref_any");                                // release the empty chunk if it is heap-backed
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, Some(48));
     emitter.label("__rt_stream_get_contents_bounded_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return the accumulation buffer pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // return the accumulated result length

@@ -143,10 +143,7 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, #1");                                    // advance the line length
     emitter.instruction("str x10, [sp, #8]");                                   // store the updated line length
     emitter.instruction("strb w13, [sp, #32]");                                 // remember the byte across the chunk-release calls
-    emitter.instruction("mov x2, #0");                                          // release the whole chunk window
-    emitter.instruction("bl __rt_concat_publish");                              // hand this chunk's scratch window back before the next read
-    emitter.instruction("mov x0, x1");                                          // chunk ptr for release
-    emitter.instruction("bl __rt_decref_any");                                  // release the chunk before continuing or finishing the line
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, None);
     emitter.instruction("ldrb w13, [sp, #32]");                                 // reload the byte the wrapper produced
     emitter.instruction("cmp w13, #0x0A");                                      // is the byte a newline?
     emitter.instruction("b.eq __rt_fgets_wrapper_done");                        // newline: finish the line
@@ -286,10 +283,7 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, 1");                                          // advance the line length
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // store the updated line length
     emitter.instruction("mov BYTE PTR [rbp - 48], cl");                         // remember the byte across the chunk-release calls
-    emitter.instruction("xor edx, edx");                                        // release the whole chunk window
-    emitter.instruction("call __rt_concat_publish");                            // hand this chunk's scratch window back before the next read
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // chunk ptr for release
-    emitter.instruction("call __rt_decref_any");                                // release the chunk before continuing or finishing the line
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, Some(32));
     emitter.instruction("movzx ecx, BYTE PTR [rbp - 48]");                      // reload the byte the wrapper produced
     emitter.instruction("cmp cl, 0x0A");                                        // is the byte a newline?
     emitter.instruction("je __rt_fgets_wrapper_done_x86");                      // newline: finish the line

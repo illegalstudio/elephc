@@ -161,6 +161,33 @@ fn emit_concat_reserve_aarch64(emitter: &mut impl Emitter) {
     emitter.instruction("b __rt_alloc_overflow");                               // unconditional branch keeps the fatal trampoline cross-atom safe
 }
 
+/// Publishes a completed window, persists the result, and retires the original reservation.
+/// The current string result supplies the initialized length and the frame retains both owners.
+pub fn emit_finish_owned(emitter: &mut impl Emitter, reservation: usize, result: usize) {
+    let length = result + 8;
+    // -- preserve the owned result while retiring the original reservation --
+    abi::emit_call_label(emitter, "__rt_concat_publish");
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("str x1, [sp, #{result}]"));           // save the owned pointer across release
+            emitter.instruction(&format!("str x2, [sp, #{length}]"));           // save the returned length
+            emitter.instruction(&format!("ldr x0, [sp, #{reservation}]"));      // load the original reservation
+            emitter.instruction("bl __rt_heap_free_safe");                      // release only a heap-backed reservation
+            emitter.instruction(&format!("ldr x1, [sp, #{result}]"));           // return the independent string owner
+            emitter.instruction(&format!("ldr x2, [sp, #{length}]"));           // restore its byte length
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov QWORD PTR [rbp - {result}], rax")); // save the owned pointer across release
+            emitter.instruction(&format!("mov QWORD PTR [rbp - {length}], rdx")); // save the returned length
+            emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {reservation}]")); // load the original reservation
+            emitter.instruction("call __rt_heap_free_safe");                    // release only a heap-backed reservation
+            emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {result}]")); // return the independent string owner
+            emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {length}]")); // restore its byte length
+        }
+    }
+}
+
 /// Emits the AArch64 `__rt_concat_publish` helper.
 ///
 /// Classifies the result by address instead of by a caller-supplied flag: only a pointer

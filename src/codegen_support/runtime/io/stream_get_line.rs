@@ -138,10 +138,7 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("strb w13, [x12, x10]");                                // append the byte to the line buffer
     emitter.instruction("add x10, x10, #1");                                    // advance the running total
     emitter.instruction("str x10, [sp, #56]");                                  // store the updated total
-    emitter.instruction("mov x2, #0");                                          // release the whole chunk window
-    emitter.instruction("bl __rt_concat_publish");                              // hand this chunk's scratch window back before the next read
-    emitter.instruction("mov x0, x1");                                          // chunk ptr (byte already copied)
-    emitter.instruction("bl __rt_decref_any");                                  // release the owned chunk
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, None);
     emitter.instruction("ldr x3, [sp, #40]");                                   // ending-delimiter length
     emitter.instruction("cbz x3, __rt_sgl_wrapper_loop");                       // no delimiter: keep reading
     emitter.instruction("ldr x10, [sp, #56]");                                  // running total
@@ -289,9 +286,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11 + r10], cl");                        // append the byte to the line buffer
     emitter.instruction("inc r10");                                             // advance the running total
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // store the updated total
-    emitter.instruction("xor edx, edx");                                        // release the whole chunk window
-    emitter.instruction("call __rt_concat_publish");                            // hand this chunk's scratch window back before the next read
-    emitter.instruction("call __rt_decref_any");                                // release the owned chunk (rax = chunk ptr)
+    elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, None);
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // ending-delimiter length
     emitter.instruction("test rcx, rcx");                                       // no delimiter configured?
     emitter.instruction("jz __rt_sgl_wrapper_loop_x86");                        // keep reading without a delimiter
