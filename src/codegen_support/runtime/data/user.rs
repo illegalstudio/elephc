@@ -211,6 +211,28 @@ pub(crate) fn emit_runtime_data_user(
         })
         .collect();
     emit_class_name_lookup_data(&mut out, max_class_id, &class_display_name_by_id);
+    // The marker interface (`interface id + 1`, `0` for none) a monomorphized PHPDoc template
+    // answers `instanceof` for: `$b instanceof $a` across two instantiations tests the class
+    // php knows, not the instantiation.
+    let marker_by_class_id: HashMap<u64, u64> = sorted_classes
+        .iter()
+        .filter_map(|(_, class_info)| {
+            let written = class_info.written_name.as_deref()?;
+            let marker = interfaces.get(written)?;
+            Some((class_info.class_id, marker.interface_id + 1))
+        })
+        .collect();
+    out.push_str(".p2align 3\n.globl _class_template_marker_entries\n_class_template_marker_entries:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            out.push_str(&format!(
+                "    .quad {}\n",
+                marker_by_class_id.get(&class_id).copied().unwrap_or(0)
+            ));
+        }
+    } else {
+        out.push_str("    .quad 0\n");
+    }
     super::throwable_previous::emit_previous_slots(&mut out, max_class_id, &class_info_by_id);
     emit_class_native_xml_table(&mut out, max_class_id, &class_name_by_id, classes);
     let weak_map_retire = classes.get("WeakMap")
@@ -3630,6 +3652,20 @@ fn emit_classes_by_name_table(
     sorted_classes: &[(&String, &ClassInfo)],
     _classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) {
+    // A monomorphized PHPDoc template (`Box<int>`) is the class php knows as `Box`: its written
+    // name resolves to the first instantiation, so `new $name`, `get_class_methods('Box')` and
+    // `ReflectionClass('Box')` find the class the program wrote.
+    let mut written_aliases: Vec<(&String, &ClassInfo, &str)> = Vec::new();
+    for (class_name, class_info) in sorted_classes {
+        let Some(written) = class_info.written_name.as_deref() else {
+            continue;
+        };
+        let taken = sorted_classes.iter().any(|(name, _)| name.eq_ignore_ascii_case(written))
+            || written_aliases.iter().any(|(_, _, seen)| seen.eq_ignore_ascii_case(written));
+        if !taken {
+            written_aliases.push((class_name, class_info, written));
+        }
+    }
     for (class_name, class_info) in sorted_classes {
         out.push_str(&format!(
             ".globl _class_by_name_str_{0}\n_class_by_name_str_{0}:\n    .ascii \"{1}\"\n",
@@ -3637,9 +3673,16 @@ fn emit_classes_by_name_table(
             escaped_ascii(class_name)
         ));
     }
+    for (_, class_info, written) in &written_aliases {
+        out.push_str(&format!(
+            ".globl _class_by_name_written_{0}\n_class_by_name_written_{0}:\n    .ascii \"{1}\"\n",
+            class_info.class_id,
+            escaped_ascii(written)
+        ));
+    }
     out.push_str(".p2align 3\n");
     out.push_str(".globl _classes_by_name_count\n_classes_by_name_count:\n");
-    out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
+    out.push_str(&format!("    .quad {}\n", sorted_classes.len() + written_aliases.len()));
     out.push_str(".globl _classes_by_name\n_classes_by_name:\n");
     for (class_name, class_info) in sorted_classes {
         let obj_size = class_by_name_allocation_size(class_name, class_info);
@@ -3648,6 +3691,16 @@ fn emit_classes_by_name_table(
             class_info.class_id
         ));
         out.push_str(&format!("    .quad {}\n", class_name.len()));
+        out.push_str(&format!("    .quad {}\n", class_info.class_id));
+        out.push_str(&format!("    .quad {}\n", obj_size));
+    }
+    for (class_name, class_info, written) in &written_aliases {
+        let obj_size = class_by_name_allocation_size(class_name, class_info);
+        out.push_str(&format!(
+            "    .quad _class_by_name_written_{}\n",
+            class_info.class_id
+        ));
+        out.push_str(&format!("    .quad {}\n", written.len()));
         out.push_str(&format!("    .quad {}\n", class_info.class_id));
         out.push_str(&format!("    .quad {}\n", obj_size));
     }

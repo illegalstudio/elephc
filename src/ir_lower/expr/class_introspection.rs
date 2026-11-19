@@ -36,6 +36,7 @@ pub(super) fn lower_class_introspection(
     if let Some(class_name) = class_introspection_argument(args, kind)
         .and_then(literal_class_argument)
         .and_then(|requested| resolved_class_name(ctx, &requested))
+        .map(|resolved| template_instantiation_for_marker(ctx, resolved))
     {
         if kind == ClassIntrospectionKind::Variables {
             return Some(materialize_class_introspection(ctx, kind, &class_name, expr));
@@ -88,6 +89,20 @@ fn lower_class_methods_value(
         }
         _ => lower_class_methods_by_name(ctx, argument, expr),
     }
+}
+
+/// A PHPDoc class template's marker interface (`Box`) is the class php knows by that name; its
+/// first instantiation (`Box<int>`) carries the members every instantiation shares.
+fn template_instantiation_for_marker(ctx: &LoweringContext<'_, '_>, name: String) -> String {
+    if !ctx.interfaces.get(&name).is_some_and(|info| info.reflection_hidden) {
+        return name;
+    }
+    ctx.classes
+        .iter()
+        .filter(|(_, info)| info.written_name.as_deref() == Some(name.as_str()))
+        .min_by_key(|(_, info)| info.class_id)
+        .map(|(class, _)| class.clone())
+        .unwrap_or(name)
 }
 
 /// Returns whether `class_name` is answered by the static projection rather than the runtime
@@ -378,7 +393,14 @@ fn class_introspection_candidates(ctx: &LoweringContext<'_, '_>) -> Vec<String> 
     let mut candidates = ctx
         .classes
         .keys()
-        .chain(ctx.interfaces.keys())
+        .chain(
+            // A PHPDoc class template's marker interface is the class php knows by that name:
+            // the runtime registry answers it through an instantiation.
+            ctx.interfaces
+                .iter()
+                .filter(|(_, info)| !info.reflection_hidden)
+                .map(|(name, _)| name),
+        )
         .chain(ctx.enums.keys())
         .chain(ctx.declared_trait_names.iter())
         .cloned()

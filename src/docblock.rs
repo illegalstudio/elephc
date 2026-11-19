@@ -601,6 +601,10 @@ fn parse_type(text: &str) -> Option<TypeExpr> {
     if text.is_empty() {
         return None;
     }
+    // `array-key` is PHPStan's spelling of `int|string`, the one pseudo-type a template bound
+    // meets everywhere (`@template TKey of array-key`). Left alone it lexes as a subtraction and
+    // the whole template would be refused for a bound the reader cannot parse.
+    let text = text.replace("array-key", "int|string");
     let source = format!("<?php {};", text);
     let tokens = crate::lexer::tokenize(&source).ok()?;
     let mut pos = 1usize;

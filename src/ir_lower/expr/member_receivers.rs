@@ -80,6 +80,44 @@ fn checked_member_receiver_type_at_span(
     else {
         return None;
     };
-    (ctx.classes.contains_key(class) || ctx.interfaces.contains_key(class))
-        .then(|| PhpType::Object(class.clone()))
+    if !(ctx.classes.contains_key(class) || ctx.interfaces.contains_key(class)) {
+        return None;
+    }
+    // An interface-typed receiver the checker narrowed to ONE class is only that class when
+    // nothing else implements the interface. The checker types an untyped parameter by the first
+    // class a call site passes, so `function d($x) { $x instanceof Coll && $x->first(); }` called
+    // with `IntColl` and then `Sq` records `IntColl` for the call: retyping the receiver to it
+    // dispatched `Sq`'s object through `IntColl`'s method slot.
+    if original != class
+        && ctx.interfaces.contains_key(original)
+        && !ctx.interfaces.contains_key(class)
+        && interface_has_implementer_outside(ctx, original, class)
+    {
+        return None;
+    }
+    Some(PhpType::Object(class.clone()))
+}
+
+/// Whether some declared class implements `interface` without being `class` or one of its
+/// descendants.
+fn interface_has_implementer_outside(
+    ctx: &LoweringContext<'_, '_>,
+    interface: &str,
+    class: &str,
+) -> bool {
+    ctx.classes.keys().any(|name| {
+        name != class
+            && crate::types::instanceof_intersection::object_type_satisfies(
+                ctx.classes,
+                ctx.interfaces,
+                name,
+                interface,
+            )
+            && !crate::types::instanceof_intersection::object_type_satisfies(
+                ctx.classes,
+                ctx.interfaces,
+                name,
+                class,
+            )
+    })
 }

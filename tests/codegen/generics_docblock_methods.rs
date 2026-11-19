@@ -1175,11 +1175,11 @@ function through(Sink $sink): string { return get_class($sink->accept(new User()
         "{declarations}echo get_class((new Repo())->accept(new User(), 7)), \"|\", through(new Repo());\n"
     );
     assert_eq!(compile_and_run(&valid), "User|User");
-    let error = compile_cli_file_with_flags_expect_failure(
-        &format!("{declarations}(new Repo())->accept(new Other(), 1);\n"),
-        &[],
+    // php enforces the restored `Model` hint at run time: the call compiles and throws.
+    let mismatch = format!(
+        "{declarations}try {{ (new Repo())->accept(new Other(), 1); }} catch (TypeError $e) {{ echo \"TypeError\"; }}\n"
     );
-    assert!(error.contains("expects Model, got Other"), "{error}");
+    assert_eq!(compile_cli_file_and_run_with_flags(&mismatch, &[]), "TypeError");
 }
 
 /// Every php-visible spelling of a PHPDoc-template class is the written name: the instantiation
@@ -1209,4 +1209,80 @@ var_dump($a instanceof Box, is_a($a, 'Box'));
     for flags in [&[][..], &["--strict-php"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), expected, "{flags:?}");
     }
+}
+
+/// Every php-visible relation of a PHPDoc-template class is the written class's: `class_exists`
+/// (the generic marker is an interface internally), `get_parent_class`, `instanceof` and `is_a`
+/// across two instantiations, `class_implements`, `class_parents` and the declared-class lists.
+/// The expected output is what `php -n` prints for the same program.
+#[test]
+fn test_docblock_template_instantiation_relations_equal_the_written_class() {
+    let source = r#"<?php
+/** @template T */
+class Box {
+    /** @param T $v */
+    public function __construct(public $v) {}
+}
+/** @extends Box<string> */
+class SBox extends Box {}
+/** @template T */
+interface Coll {}
+/** @implements Coll<int> */
+class IC implements Coll {}
+$a = new Box(1);
+$b = new Box("s");
+$s = new SBox("x");
+$i = new IC();
+echo implode(",", array_map('intval', [class_exists('Box'), interface_exists('Box'), class_exists('Coll'), interface_exists('Coll')])), "\n";
+echo var_export((bool) get_parent_class($a), true), "|", get_parent_class($s), "\n";
+echo implode(",", array_map('intval', [$b instanceof $a, $a instanceof Box, $s instanceof $a, $a instanceof $s, $i instanceof Coll])), "\n";
+echo implode(",", array_map('intval', [is_a($a, 'Box'), is_a($s, 'Box'), is_subclass_of($s, 'Box'), is_subclass_of($a, 'Box'), is_a('SBox', 'Box', true), is_subclass_of('SBox', 'Box')])), "\n";
+echo count(class_implements($a)), count(class_implements($s)), count(class_parents($a)), implode(",", class_parents($s)), implode(",", class_implements($i)), "\n";
+echo implode(",", array_map('intval', [in_array('Box', get_declared_classes(), true), in_array('Coll', get_declared_interfaces(), true), in_array('Coll', get_declared_classes(), true)])), "\n";
+echo implode(",", array_map('intval', [method_exists('Box', '__construct'), property_exists('Box', 'v')])), implode(",", get_class_methods('Box')), implode(",", array_keys(get_object_vars($a))), "\n";
+"#;
+    let expected = "1,0,0,1\nfalse|Box\n1,1,1,0,1\n1,1,1,0,1,1\n000BoxColl\n1,1,0\n1,1__constructv\n";
+    assert_eq!(compile_and_run(source), expected);
+    // A bare `Box` parameter accepting a subclass is refused as a template reading, so the file is
+    // compiled with its written types: the same program, the same answers.
+    let with_parameter = format!(
+        "{source}function take(Box $x): string {{ return get_class($x); }}\necho take($b), take($s), \"\\n\";\n"
+    );
+    assert_eq!(
+        compile_cli_file_and_run_with_managed_pcre2(&with_parameter, &[]),
+        format!("{expected}BoxSBox\n")
+    );
+}
+
+/// Reflection and a runtime class name see the written class too, not the instantiation.
+#[test]
+fn test_docblock_template_instantiation_reflection_equals_the_written_class() {
+    let source = r#"<?php
+/** @template T */
+class Box {
+    /** @param T $v */
+    public function __construct(public $v) {}
+}
+/** @extends Box<string> */
+class SBox extends Box {}
+/** @template T */
+interface Coll {}
+/** @implements Coll<int> */
+class IC implements Coll {}
+$a = new Box(1);
+$b = new Box("s");
+$s = new SBox("x");
+$i = new IC();
+$r = new ReflectionClass($a);
+echo $r->getName(), "|", var_export($r->isInterface(), true), "|", var_export($r->getParentClass(), true), "|", count($r->getInterfaceNames()), "\n";
+$r = new ReflectionClass($s);
+echo $r->getName(), "|", $r->getParentClass()->getName(), "|", count($r->getInterfaceNames()), "|", var_export($r->isSubclassOf('Box'), true), "\n";
+$r = new ReflectionClass('Box');
+echo $r->getName(), "|", var_export($r->isInterface(), true), "|", var_export($r->isInstantiable(), true), "|", $r->newInstance(5)->v, "\n";
+$name = 'Box';
+$c = new $name(3);
+echo get_class($c), (int) ($c instanceof Box), (int) ($c instanceof $b), (int) is_a($c, $name), (int) is_subclass_of($s, $name), "\n";
+"#;
+    let expected = "Box|false|false|0\nSBox|Box|0|true\nBox|false|true|5\nBox1111\n";
+    assert_eq!(compile_and_run(source), expected);
 }

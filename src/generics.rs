@@ -1007,6 +1007,8 @@ fn record_written_class_names(check_result: &mut crate::types::CheckResult) {
         };
         if let Some(info) = check_result.classes.get_mut(&name) {
             info.written_name = Some(name[..cut].to_string());
+        } else if let Some(info) = check_result.interfaces.get_mut(&name) {
+            info.written_name = Some(name[..cut].to_string());
         }
     }
 }

@@ -219,7 +219,17 @@ pub(super) fn emit_object_target_metadata(ctx: &mut FunctionContext<'_>) {
             emit_invalid_dynamic_target_error(ctx);
             ctx.emitter.label(&ok_label);
             ctx.emitter.instruction("ldr x0, [x0]");                            // load the runtime class id from the target object header
-            ctx.emitter.instruction("mov x1, #0");                              // object targets always resolve to class target kind
+            abi::emit_symbol_address(ctx.emitter, "x10", "_class_template_marker_entries");
+            ctx.emitter.instruction("ldr x10, [x10, x0, lsl #3]");              // a PHPDoc template instantiation tests the class php knows: its marker interface id + 1
+            let class_target = ctx.next_label("instanceof_dynamic_object_target_class");
+            ctx.emitter.instruction(&format!("cbz x10, {}", class_target));     // an ordinary class tests its own class id
+            ctx.emitter.instruction("sub x0, x10, #1");                         // marker interface id becomes the matcher target id
+            ctx.emitter.instruction("mov x1, #1");                              // markers resolve to interface target kind
+            let target_done = ctx.next_label("instanceof_dynamic_object_target_done");
+            ctx.emitter.instruction(&format!("b {}", target_done));
+            ctx.emitter.label(&class_target);
+            ctx.emitter.instruction("mov x1, #0");                              // object targets otherwise resolve to class target kind
+            ctx.emitter.label(&target_done);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // null object targets are not valid dynamic instanceof targets
@@ -227,7 +237,18 @@ pub(super) fn emit_object_target_metadata(ctx: &mut FunctionContext<'_>) {
             emit_invalid_dynamic_target_error(ctx);
             ctx.emitter.label(&ok_label);
             ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // load the runtime class id from the target object header
-            ctx.emitter.instruction("xor edx, edx");                            // object targets always resolve to class target kind
+            abi::emit_symbol_address(ctx.emitter, "r10", "_class_template_marker_entries");
+            ctx.emitter.instruction("mov r10, QWORD PTR [r10 + rax * 8]");      // a PHPDoc template instantiation tests the class php knows: its marker interface id + 1
+            let class_target = ctx.next_label("instanceof_dynamic_object_target_class");
+            let target_done = ctx.next_label("instanceof_dynamic_object_target_done");
+            ctx.emitter.instruction("test r10, r10");                           // an ordinary class tests its own class id
+            ctx.emitter.instruction(&format!("je {}", class_target));
+            ctx.emitter.instruction("lea rax, [r10 - 1]");                      // marker interface id becomes the matcher target id
+            ctx.emitter.instruction("mov edx, 1");                              // markers resolve to interface target kind
+            ctx.emitter.instruction(&format!("jmp {}", target_done));
+            ctx.emitter.label(&class_target);
+            ctx.emitter.instruction("xor edx, edx");                            // object targets otherwise resolve to class target kind
+            ctx.emitter.label(&target_done);
         }
     }
 }

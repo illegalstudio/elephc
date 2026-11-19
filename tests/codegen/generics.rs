@@ -3868,16 +3868,21 @@ class Items {
     let warnings = compile_cli_file_with_flags_capturing_stderr(&valid, &[]);
     assert!(warnings.contains("<T> to Other, which does not satisfy its bound Model"), "{warnings}");
     assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "hi|Other|2");
+    // php runs both of these (the hint is checked at run time, the unread `@extends` is a
+    // comment), so the file compiles with its written types and behaves as php does.
+    let runtime = format!(
+        "{declarations}try {{ new Items(\"x\"); }} catch (TypeError $e) {{ echo \"TypeError\"; }}\n"
+    );
+    assert_eq!(compile_cli_file_and_run_with_flags(&runtime, &[]), "TypeError");
+    let extended = format!(
+        "{declarations}/** @extends Box<string> */\nclass Bad extends Box {{}}\necho get_parent_class(new Bad(new User())), \"|\", get_class((new Bad(new User()))->get()), \"\\n\";\n"
+    );
+    assert_eq!(compile_cli_file_and_run_with_flags(&extended, &[]), "Box|User\n");
     for (code, expected) in [
         ("new Box(\"x\");", "expects object, got string"),
-        ("new Items(\"x\");", "expects array, got string"),
-        (
-            "/** @extends Box<string> */\nclass Bad extends Box {}",
-            "<T> to string, which is not accepted by the native type object",
-        ),
         (
             "/** @template T of Model */\nclass Holder {\n    /** @var T */\n    public object $value;\n    public function __construct() { $this->value = \"x\"; }\n}\nnew Holder();",
-            "expects object, got string",
+            "expects Model, got string",
         ),
         (
             "/** @template T */\nclass Maybe {\n    /** @var ?T */\n    public object $value;\n    public function __construct() { $this->value = null; }\n}\nnew Maybe();",

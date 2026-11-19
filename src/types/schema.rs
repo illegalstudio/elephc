@@ -374,6 +374,9 @@ pub struct InterfaceInfo {
     /// answers `instanceof` and nothing else: reflection (`interface_exists`,
     /// `get_declared_interfaces`, `class_implements`, `is_subclass_of`) does not see it.
     pub reflection_hidden: bool,
+    /// The name php shows for a monomorphized PHPDoc interface template (`Coll<int>` is `Coll`),
+    /// `None` for every other interface (see [`ClassInfo::written_name`]).
+    pub written_name: Option<String>,
 }
 
 /// Class metadata for resolved declarations. Tracks inheritance, properties,

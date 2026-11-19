@@ -323,6 +323,14 @@ fn class_like_exists_candidates(ctx: &FunctionContext<'_>, name: &str) -> Vec<St
                     .filter(|class_name| !is_internal_synthetic_class_name(class_name))
                     .cloned(),
             );
+            // A class template's marker interface is the class php-src declares under that name.
+            candidates.extend(
+                ctx.module
+                    .interface_infos
+                    .iter()
+                    .filter(|(_, info)| info.reflection_hidden)
+                    .map(|(name, _)| name.clone()),
+            );
         }
         // A class template's marker interface is not an interface php-src would report.
         "interface_exists" => candidates.extend(
@@ -680,6 +688,19 @@ pub(in crate::codegen::lower_inst) fn lookup_class_info<'a>(
         .class_infos
         .iter()
         .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
+        .or_else(|| {
+            // A PHPDoc template is the class php knows by its written name: its first
+            // instantiation answers for the members, which every instantiation shares.
+            ctx.module
+                .class_infos
+                .iter()
+                .filter(|(_, info)| {
+                    info.written_name
+                        .as_deref()
+                        .is_some_and(|written| php_symbol_key(written) == class_key)
+                })
+                .min_by_key(|(_, info)| info.class_id)
+        })
         .map(|(candidate, class_info)| (candidate.clone(), class_info))
 }
 

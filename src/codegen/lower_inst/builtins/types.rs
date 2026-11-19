@@ -1868,6 +1868,15 @@ fn declared_names(ctx: &FunctionContext<'_>, name: &str) -> Result<Vec<String>> 
             _ => unreachable!(),
         };
     }
+    if name == "get_declared_classes" {
+        // A monomorphized PHPDoc template is the class php declares under its written name.
+        let mut seen = std::collections::HashSet::new();
+        names = names
+            .into_iter()
+            .map(|class| super::class_relations::written_class_like_name(ctx, &class))
+            .filter(|class| seen.insert(class.clone()))
+            .collect();
+    }
     if name == "get_declared_interfaces" {
         // A class template's marker interface is not an interface php-src would declare.
         names.retain(|interface| !super::class_relations::reflection_hidden_interface(ctx, interface));

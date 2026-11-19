@@ -298,7 +298,32 @@ fn class_implements(ctx: &FunctionContext<'_>, target: &ClassLikeTarget) -> Vec<
         ClassLikeTarget::Trait(_) | ClassLikeTarget::Unknown => Vec::new(),
     };
     names.retain(|name| !reflection_hidden_interface(ctx, name));
-    names
+    written_class_like_names(ctx, names)
+}
+
+/// The name php shows for `name`: a monomorphized PHPDoc template (`Box<int>`, `Coll<int>`) is
+/// the class or interface php knows as `Box` / `Coll`.
+pub(in crate::codegen::lower_inst) fn written_class_like_name(
+    ctx: &FunctionContext<'_>,
+    name: &str,
+) -> String {
+    lookup_class(ctx, name)
+        .and_then(|info| info.written_name.clone())
+        .or_else(|| lookup_interface(ctx, name).and_then(|info| info.written_name.clone()))
+        .unwrap_or_else(|| name.to_string())
+}
+
+/// Maps relation names to their written spelling, keeping the first of any duplicates (an
+/// instantiation and the template marker it implements are one interface to php).
+fn written_class_like_names(ctx: &FunctionContext<'_>, names: Vec<String>) -> Vec<String> {
+    let mut written: Vec<String> = Vec::with_capacity(names.len());
+    for name in names {
+        let name = written_class_like_name(ctx, &name);
+        if !written.contains(&name) {
+            written.push(name);
+        }
+    }
+    written
 }
 
 /// Whether `name` is a generic class template's marker interface, which answers `instanceof`
@@ -326,7 +351,7 @@ fn class_parents(ctx: &FunctionContext<'_>, target: &ClassLikeTarget) -> Vec<Str
         names.push(parent_name.clone());
         current = parent_name;
     }
-    names
+    written_class_like_names(ctx, names)
 }
 
 /// Computes direct trait uses for classes or trait declarations.
