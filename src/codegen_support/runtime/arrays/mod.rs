@@ -639,7 +639,7 @@ pub use float_compare_slots::emit_float_compare_slots;
 /// Emit PHP-compatible sorting for raw float arrays.
 pub use float_sort::emit_float_sort;
 /// Emit user-defined sort helper.
-pub use php_compare_slots::emit_php_compare_slots;
+pub use php_compare_slots::{emit_hash_sort_require_scalars, emit_php_compare_slots};
 pub use usort::emit_usort;
 /// Emit user-defined string-array sort helper.
 pub use usort_str::emit_usort_str;

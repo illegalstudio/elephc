@@ -244,7 +244,13 @@ fn lower_hash_relink_reindex(
     abi::emit_push_reg(ctx.emitter, result);
     ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
     match relink_helper {
-        Some(helper) => abi::emit_call_label(ctx.emitter, helper),
+        Some(helper) => {
+            // The value sorter compares every live entry; refuse containers before the
+            // merge mutates the chain, exactly like the packed Mixed sorter does.
+            abi::emit_call_label(ctx.emitter, "__rt_hash_sort_require_scalars");
+            ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+            abi::emit_call_label(ctx.emitter, helper);
+        }
         None => {
             crate::codegen::random::publish_elephc_random_function_pointers(ctx.emitter);
             abi::emit_call_label(ctx.emitter, "__rt_hash_shuffle_links");

@@ -192,6 +192,7 @@ arrays::emit_hash_reindex_dense(emitter);
     arrays::emit_array_walk_recursive(emitter);
     arrays::emit_array_udiff_uintersect(emitter);
     arrays::emit_php_compare_slots(emitter);
+arrays::emit_hash_sort_require_scalars(emitter);
     arrays::emit_float_compare_slots(emitter);
     arrays::emit_float_sort(emitter);
     arrays::emit_usort(emitter);
