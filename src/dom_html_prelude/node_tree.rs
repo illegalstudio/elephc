@@ -168,6 +168,15 @@ fn tree() -> ClassBuilder {
                                 None,
                             ),
                             s_assign("name", e_this_prop("nodeName")),
+                            s_assign("htmlOwner", e_this_prop("ownerDocument")),
+                            s_if(
+                                e_binop(e_instance_of(e_var("htmlOwner"), "DOMDocument"), BinOp::And, e_prop(e_var("htmlOwner"), "__elephc_dom_html")),
+                                vec![
+                                    s_return(e_var("name")),
+                                ],
+                                vec![],
+                                None,
+                            ),
                             s_assign("colon", e_call("strpos", vec![e_var("name"), e_str(":")])),
                             s_if(
                                 e_binop(e_var("colon"), BinOp::StrictEq, e_bool(false)),
@@ -194,6 +203,15 @@ fn tree() -> ClassBuilder {
                                 None,
                             ),
                             s_assign("name", e_this_prop("nodeName")),
+                            s_assign("htmlOwner", e_this_prop("ownerDocument")),
+                            s_if(
+                                e_binop(e_instance_of(e_var("htmlOwner"), "DOMDocument"), BinOp::And, e_prop(e_var("htmlOwner"), "__elephc_dom_html")),
+                                vec![
+                                    s_return(e_str("")),
+                                ],
+                                vec![],
+                                None,
+                            ),
                             s_assign("colon", e_call("strpos", vec![e_var("name"), e_str(":")])),
                             s_if(
                                 e_binop(e_var("colon"), BinOp::StrictEq, e_bool(false)),

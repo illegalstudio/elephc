@@ -379,7 +379,7 @@ if ($argc === 1) {
     } catch (Error $error) { echo 'E'; }
 }
 "###, &argvs);
-    let expected = ["0", "111", "html", "old:before|html", "html|html", "html", "html", "0", "html", "1", "0", "0", "0", "#text", "1", "caught", "1:1:{\"p\":\"urn:p\"}", "01caught", "1E:D:TypeErrorEE", "10ET", "0", "1", "caught", "E", "E"];
+    let expected = ["0", "111", "html", "old:before|html", "html|html", "html", "html", "2", "html", "1", "0", "0", "0", "#text", "1", "caught", "1:1:{\"p\":\"urn:p\"}", "01caught", "1E:D:TypeErrorEE", "10ET", "0", "1", "caught", "E", "E"];
     assert_eq!(runs.len(), expected.len());
     let mut failures = Vec::new();
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {

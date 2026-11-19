@@ -69,7 +69,11 @@ unsafe fn lookup(doc: Node, node: Node, name: &[u8]) -> Option<Found> {
     if let Some((prefix, local)) = split_qname(name) {
         if prefix == b"xmlns" { return declaration(node, Some(local)).map(Found::Declaration); }
         let ns = search_ns(doc, node, cstring(prefix).as_ptr());
-        if ns.is_null() { return None; }
+        if ns.is_null() {
+            // HTML documents keep `x:y` as the literal name of a no-namespace attribute
+            let literal = has_ns_prop(node, cstring(name).as_ptr(), std::ptr::null());
+            return (!literal.is_null()).then_some(Found::Attribute(literal));
+        }
         let found = has_ns_prop(node, cstring(local).as_ptr(), ffi::ns_value(ns, 0));
         return (!found.is_null()).then_some(Found::Attribute(found));
     }

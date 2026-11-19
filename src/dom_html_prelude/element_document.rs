@@ -103,6 +103,16 @@ fn node_members() -> ClassBuilder {
                                 s_assign("local", e_ternary(e_binop(e_var("colon"), BinOp::StrictEq, e_bool(false)), e_var("name"), e_call("substr", vec![e_var("name"), e_binop(e_var("colon"), BinOp::Add, e_int(1))]))),
                                 s_assign("prefix", e_ternary(e_binop(e_var("colon"), BinOp::StrictEq, e_bool(false)), e_str(""), e_call("substr", vec![e_var("name"), e_int(0), e_var("colon")]))),
                                 s_assign("uri", e_ternary(e_binop(e_call("array_key_exists", vec![e_int(2), e_var("pair")]), BinOp::And, e_call("is_string", vec![e_index(e_var("pair"), e_int(2))])), e_cast(CastType::String, e_index(e_var("pair"), e_int(2))), e_str(""))),
+                                s_if(
+                                    e_binop(e_binop(e_var("uri"), BinOp::StrictEq, e_str("")), BinOp::And, e_binop(e_var("prefix"), BinOp::StrictNotEq, e_str("xml"))),
+                                    vec![
+                                        // no namespace: a name with a colon is a literal name (HTML, undeclared prefix)
+                                        s_assign("local", e_var("name")),
+                                        s_assign("prefix", e_str("")),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
                                 s_array_push("out", e_array(vec![e_str("a"), e_var("name"), e_var("local"), e_var("prefix"), e_var("uri"), e_cast(CastType::String, e_index(e_var("pair"), e_int(1)))])),
                             ]),
                             s_return(e_var("out")),
