@@ -1329,7 +1329,7 @@ fn push_loaded_indexed_array_ref_arg(
         }
     }
     emit_branch_if_invoker_ref_cell_tag(tag_reg, &by_value_marker_label, emitter);
-    abi::emit_call_label(emitter, "__rt_mixed_deref");                          // read a PHP reference cell for the by-value copy
+    abi::emit_call_label(emitter, "__rt_mixed_deref_reference");                // read a PHP reference cell for the by-value copy
     abi::emit_call_label(emitter, "__rt_mixed_clone");                          // detach the copy from the caller's shared cell
     abi::emit_jump(emitter, &by_value_owned_label);                             // wrap the independent copy in a temporary cell
     emitter.label(&by_value_marker_label);
