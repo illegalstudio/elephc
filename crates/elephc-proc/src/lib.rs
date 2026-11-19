@@ -344,10 +344,12 @@ pub extern "C" fn elephc_proc_status_field(process: i64, field: i64) -> i64 {
     with_process(process, -1, |process| process.field(field))
 }
 
-/// Sends `signal` to the child; returns 1 when `kill()` succeeded.
+/// Sends `signal` to the child; returns 1 when `kill()` succeeded. php-src hands its
+/// `zend_long` straight to `kill(pid_t, int)`, so an out-of-range signal keeps only its
+/// low 32 bits (`4294967311` sends 15), the same narrowing as `elephc_proc_nice`.
 #[no_mangle]
 pub extern "C" fn elephc_proc_terminate(process: i64, signal: i64) -> i64 {
-    let signal = std::os::raw::c_int::try_from(signal).unwrap_or(-1);
+    let signal = signal as std::os::raw::c_int;
     with_process(process, 0, |process| {
         i64::from(unsafe { libc::kill(process.pid, signal) } == 0)
     })

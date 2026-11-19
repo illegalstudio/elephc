@@ -135,6 +135,31 @@ echo proc_close($process);
     assert_eq!(out, "bool(true)\nbool(true)\nint(15)\nbool(false)\n-1");
 }
 
+/// An out-of-range signal keeps only its low 32 bits, as php-src's `kill(pid, (int) $signal)`
+/// does: `4294967311` and `PHP_INT_MIN + 15` send SIGTERM, `-4294967287` sends SIGKILL.
+#[test]
+fn test_proc_terminate_narrows_out_of_range_signals_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([4294967311, -4294967287, PHP_INT_MIN + 15] as $signal) {
+    $process = proc_open(['sleep', '5'], [], $pipes);
+    var_dump(proc_terminate($process, $signal));
+    $status = proc_get_status($process);
+    for ($i = 0; $status['running'] && $i < 200; $i++) {
+        usleep(10000);
+        $status = proc_get_status($process);
+    }
+    echo $status['running'] ? 'running' : $status['termsig'], "\n";
+    if ($status['running']) {
+        proc_terminate($process, 9);
+    }
+    proc_close($process);
+}
+"#,
+    );
+    assert_eq!(out, "bool(true)\n15\nbool(true)\n9\nbool(true)\n15\n");
+}
+
 /// File, null and existing-stream descriptors, plus a case-insensitive namespaced call.
 #[test]
 fn test_proc_open_file_null_and_stream_descriptors() {
