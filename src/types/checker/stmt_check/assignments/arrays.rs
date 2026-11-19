@@ -67,6 +67,8 @@ pub(super) fn check_array_assign(
     let nullable = nullable_array_write_view(&current);
     let had_nullable_read = nullable.is_some();
     let arr_ty = nullable.unwrap_or(current);
+    checker.require_array_write_contract(&arr_ty,
+        &normalized_array_key_type(index, idx_ty.clone(), checker.semantic_profile), &val_ty, span)?;
     crate::semantics::array_keys::validate_write_receiver(checker.semantic_profile, &arr_ty, &idx_ty, index.span)?;
     if matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() { env.insert(array.to_string(), arr_ty.clone()); }
     if arr_ty == PhpType::Str {
@@ -537,8 +539,12 @@ pub(super) fn check_array_push(
     // empty array and stores the value. Mirror that here instead of rejecting the write;
     // the generic Mixed element keeps subsequent pushes of other types representable.
     if !env.contains_key(array) {
-        let _ = checker.infer_type_with_assignment_effects(value, env)?;
-        env.insert(array.to_string(), PhpType::Array(Box::new(PhpType::Mixed)));
+        let candidate = checker.infer_type_with_assignment_effects(value, env)?;
+        let element = if checker.semantic_source_mode != crate::source::SourceMode::Internal
+            && checker.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayTypes) {
+            candidate
+        } else { PhpType::Mixed };
+        env.insert(array.to_string(), PhpType::Array(Box::new(element)));
         return Ok(());
     }
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
@@ -550,6 +556,7 @@ pub(super) fn check_array_push(
     let nullable = nullable_array_write_view(&current);
     let had_nullable_read = nullable.is_some();
     let arr_ty = nullable.unwrap_or(current);
+    checker.require_array_write_contract(&arr_ty, &PhpType::Int, &val_ty, span)?;
     if matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() { env.insert(array.to_string(), arr_ty.clone()); }
     // Nested appends retain their catchable runtime Error through the generated temporary.
     if arr_ty == PhpType::Str && !array.starts_with(NESTED_APPEND_TEMP_PREFIX) {

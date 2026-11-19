@@ -107,23 +107,16 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         _ => None,
     };
     for index in 1..cx.args.len() {
-        let value_ty = if matches!(cx.args[index].kind, ExprKind::Spread(_)) {
-            let (_, element) = cx
-                .checker
-                .infer_runtime_iterated_call_arg_types(&cx.args[index], cx.env)?;
-            if is_boxed_argument_source(cx, &cx.args[index]) {
-                PhpType::Mixed
-            } else {
-                element
-            }
+        let original_value_ty = if matches!(cx.args[index].kind, ExprKind::Spread(_)) {
+            let (_, element) = cx.checker.infer_runtime_iterated_call_arg_types(&cx.args[index], cx.env)?;
+            element
         } else {
-            let inferred = cx.checker.infer_type(&cx.args[index], cx.env)?;
-            if is_boxed_argument_source(cx, &cx.args[index]) {
-                PhpType::Mixed
-            } else {
-                inferred
-            }
+            cx.checker.infer_type(&cx.args[index], cx.env)?
         };
+        cx.checker.require_array_write_contract(&arr_ty, &PhpType::Int, &original_value_ty, cx.args[index].span)?;
+        let value_ty = if is_boxed_argument_source(cx, &cx.args[index]) {
+            PhpType::Mixed
+        } else { original_value_ty };
         if is_runtime_spread_argument(&cx.args[index]) && !runtime_spread_supported {
             return Err(CompileError::new(
                 cx.args[index].span,

@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step228 (this commit). Remaining feature integration is active. Issue:
+Verified through step229 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2850,3 +2850,9 @@ Runtime descriptor variadics reuse the same adapter to recover array, iterable a
 Kind-dependent arithmetic, calls, declared values, ordinary receivers, PHP keys, dynamic property names, callable shapes, updates and foreach now validate every logical alternative through existing checker capabilities. Unknown mixed storage requires narrowing; nested mixed array elements remain open until consumed. Numeric results retain their closed int|float alternatives, and checked integer operations retain proven Int results when Overflow applies. A successful is_array guard preserves the packed-or-hash array family instead of erasing its proof to Mixed. Successful nullsafe declaration views remain distinct from upstream non-execution.
 
 Nine exact compiler/EIR regressions pass, including all-five target emission, both native optimizer modes, clean heaps, independent profiles, closed numeric chains and nullsafe/array guard controls. The shared builtin exporter and documentation workflow, default build, assembly/diff hygiene and unchanged Rust source digest also pass. Mixed remains gated while writable, builtin, reference, interpreted and host contracts are completed. Public Nullability remains pending its actual Reflection invocation fix; the complete umbrella is still gated.
+
+### Verified229: stable array write contracts
+
+Indexed/append stores, whole-array replacements, direct instance/static property writers and array_push/unshift/splice now check normalized keys and original element types before widening storage. A shared recursive adapter preserves explicit mixed/union elements, first informative empty-array writes and integer-key layout changes. Valid union writes keep their original union instead of erasing it to Mixed. Builtin mutations check the logical candidate before projecting boxed transport.
+
+Seven exact checker/EIR regressions pass, including all-five emission and native optimized/unoptimized clean-heap execution. The complete shared builtin exporter/docs workflow, default build, diff/assembly hygiene and unchanged Rust source digest pass. ArrayTypes remains gated while original producers, nested/alias/reference publication, interpreted and host paths are completed. The tagless LFC example is adapted with an opening tag only for the internal parser test helper. No full feature admission or complete umbrella is claimed.

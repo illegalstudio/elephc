@@ -45,6 +45,7 @@ mod method_pass;
 mod member_receivers;
 mod local_values;
 mod local_binding_contracts;
+mod array_contracts;
 mod binding_flow;
 mod entry_bindings;
 pub(crate) use entry_bindings::{PreBoundLocal, PreBoundLocals};

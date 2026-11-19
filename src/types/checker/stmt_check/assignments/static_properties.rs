@@ -100,6 +100,7 @@ pub(super) fn check_static_property_array_push(
     {
         return Ok(());
     }
+    checker.require_array_write_contract(&target.prop_ty, &PhpType::Int, &val_ty, span)?;
     let updated_prop_ty = match target.prop_ty {
         PhpType::Array(elem_ty) => {
             if target.property_has_declared_type {

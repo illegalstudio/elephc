@@ -34,8 +34,11 @@ builtin! {
 /// concrete arrays retain their type, and non-array arguments are rejected.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    for arg in &cx.args[1..] {
-        cx.checker.infer_type(arg, cx.env)?;
+    for (index, arg) in cx.args.iter().enumerate().skip(1) {
+        let candidate = cx.checker.infer_type(arg, cx.env)?;
+        if index == 3 {
+            cx.checker.require_array_splice_contract(&ty, &candidate, arg.span)?;
+        }
     }
     if ty.is_php_array() {
         return Ok(ty);

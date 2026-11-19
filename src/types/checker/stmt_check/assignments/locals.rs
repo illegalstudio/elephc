@@ -292,6 +292,9 @@ fn check_assign_value_type(
             });
         }
     }
+    if let Some(previous) = checker.typed_local_names.get(name).or_else(|| env.get(name)) {
+        checker.require_array_replacement_contract(previous, &ty, span)?;
+    }
     ty = checker.check_local_binding_store(name, &ty, span, env, Some(value))?;
     let stored_non_null = checker.stored_value_is_non_null(value, &ty, env);
     // An array element or other unproved read can carry null even when its checker

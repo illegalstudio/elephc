@@ -1018,6 +1018,7 @@ fn updated_array_property_push_type(
             return Ok(prop_ty.clone());
         }
     }
+    checker.require_array_write_contract(prop_ty, &PhpType::Int, val_ty, span)?;
     if prop_ty.is_php_array() || matches!(prop_ty, PhpType::Mixed | PhpType::Iterable) {
         return Ok(prop_ty.clone());
     }
@@ -1137,6 +1138,7 @@ pub(super) fn updated_array_property_assign_type(
             return Ok(prop_ty.clone());
         }
     }
+    checker.require_array_write_contract(prop_ty, normalized_idx_ty, val_ty, span)?;
     if prop_ty.is_php_array() || matches!(prop_ty, PhpType::Mixed | PhpType::Iterable) {
         return Ok(prop_ty.clone());
     }
