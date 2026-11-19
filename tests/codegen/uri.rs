@@ -2053,3 +2053,33 @@ foreach ([0, 1, 2, 3] as $i) {
          pick(): Return value must be of type ?Uri\\Rfc3986\\Uri, string returned\n"
     );
 }
+
+/// Verifies `is_a()` and `is_subclass_of()` answer for the injected URI classes and exception
+/// hierarchy when the target class name is only known at run time, for object and class-name
+/// subjects alike.
+#[test]
+fn test_uri_classes_with_runtime_is_a_target() {
+    let out = compile_and_run(
+        r#"<?php
+$u = new Uri\Rfc3986\Uri("https://example.com/a");
+$w = Uri\WhatWg\Url::parse("https://example.com/");
+$names = [$argv[1] ?? "Uri\\Rfc3986\\Uri", "uri\\whatwg\\url", "Uri\\UriException",
+          "Uri\\WhatWg\\InvalidUrlException", "Uri\\InvalidUriException", "Uri\\UriError", "Throwable", "Nope"];
+foreach ($names as $n) {
+    echo json_encode([is_a($u, $n), is_a($w, $n), is_subclass_of("Uri\\WhatWg\\InvalidUrlException", $n),
+        is_a("Uri\\WhatWg\\InvalidUrlException", $n, true), is_subclass_of($w, $n), is_a($n, "Uri\\UriException", true)]), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "[true,false,false,false,false,false]\n\
+         [false,true,false,false,false,false]\n\
+         [false,false,true,true,false,true]\n\
+         [false,false,false,true,false,true]\n\
+         [false,false,true,true,false,true]\n\
+         [false,false,false,false,false,false]\n\
+         [false,false,true,true,false,false]\n\
+         [false,false,false,false,false,false]\n"
+    );
+}
