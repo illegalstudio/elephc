@@ -2975,8 +2975,8 @@ fn direct_closure_return_array_type(
     params: &[(String, PhpType)],
     ctx: &LoweringContext<'_, '_>,
 ) -> PhpType {
-    let mut elem_ty = PhpType::Never;
     let mut has_hash_spread = false;
+    let mut item_types = Vec::with_capacity(items.len());
     for item in items {
         if let ExprKind::Spread(inner) = &item.kind {
             has_hash_spread |= matches!(
@@ -2990,16 +2990,22 @@ fn direct_closure_return_array_type(
                 PhpType::AssocArray { .. } | PhpType::Mixed
             );
         }
-        elem_ty = crate::ir_lower::expr::merge_ir_indexed_element_type(
-            elem_ty,
-            direct_closure_return_array_item_type(
-                item,
-                captures,
-                params,
-                ctx,
-            ),
-        );
+        item_types.push(direct_closure_return_array_item_type(
+            item,
+            captures,
+            params,
+            ctx,
+        ));
     }
+    // Only the indexed form joins related classes to their common ancestor, like
+    // `array_literal_type_for_ir`; a hash built from a spread keeps the representation widening.
+    let elem_ty = item_types.into_iter().fold(PhpType::Never, |elem_ty, item_ty| {
+        if has_hash_spread {
+            crate::ir_lower::expr::merge_ir_indexed_element_type(elem_ty, item_ty)
+        } else {
+            crate::ir_lower::expr::merge_ir_literal_element_type(ctx, elem_ty, item_ty)
+        }
+    });
     if has_hash_spread {
         PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(elem_ty) }
     } else {

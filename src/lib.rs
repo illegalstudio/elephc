@@ -152,6 +152,8 @@ pub mod locale_prelude;
 pub mod tokenizer_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
+/// Conditionally-injected `preg_grep()` prelude.
+pub mod pcre_prelude;
 /// Conditionally-injected PHP version-surface prelude (`zend_version`, `php_sapi_name`,
 /// `ini_restore`).
 pub mod version_prelude;

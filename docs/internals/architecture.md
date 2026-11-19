@@ -60,7 +60,8 @@ Source (.php or .lfc)
 │              │  injection, src/autoload/prelude_probe.rs scans an autoloaded
 │              │  copy for PDO/mysqli/tz/image/hash/tokenizer/curl/xml/
 │              │  fileinfo/var_export/WeakMap/WeakReference usage, and for
-│              │  Random, BcMath, GMP, and DateTimeZone::listIdentifiers.
+│              │  Random, BcMath, GMP, DateTimeZone::listIdentifiers, and
+│              │  preg_grep.
 │              │  Includes finfo declarations and wrappers for hosted extensions.
 │              │  The same probe retains per-request web environment copies for
 │              │  autoloaded observers in both request and application lifecycles.

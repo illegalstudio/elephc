@@ -529,7 +529,9 @@ pub(super) fn resolve_expr(
                         if name.last_segment().is_some_and(|segment| segment.eq_ignore_ascii_case("Closure"))
                             && !symbols.declares_class_like(&name.as_canonical())
                 )
-                && matches!(&resolved_args[0].kind, ExprKind::StringLiteral(_))
+                // A literal `"Class::method"` names no function: it stays a factory call, which
+                // resolves the method (and its visibility) like a runtime-selected string.
+                && matches!(&resolved_args[0].kind, ExprKind::StringLiteral(name) if !name.contains("::"))
             {
                 let ExprKind::StringLiteral(candidate) = &resolved_args[0].kind else {
                     unreachable!("Closure::fromCallable literal guard must hold")

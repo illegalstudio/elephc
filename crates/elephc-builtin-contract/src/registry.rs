@@ -188,7 +188,8 @@ mod tests {
         // +2: PHP 8.6 `pack`/`unpack` endianness surface.
         // +1: PHP 8.6 `stream_context_set_options`.
         // +1: PHP 8.6 `url_percent_encode`.
-        assert_eq!(contracts().len(), 1321 + curl_surface);
+        // +3: `preg_grep`, `preg_last_error`, and `preg_last_error_msg`.
+        assert_eq!(contracts().len(), 1324 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

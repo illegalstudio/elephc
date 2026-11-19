@@ -12,6 +12,9 @@
 
 mod captures;
 mod engine;
+mod preg_grep;
+mod preg_last_error;
+mod preg_last_error_msg;
 mod preg_match;
 mod preg_match_all;
 mod pattern;
@@ -24,6 +27,9 @@ mod targets;
 
 pub(in crate::interpreter) use captures::*;
 pub(in crate::interpreter) use engine::*;
+pub(in crate::interpreter) use preg_grep::*;
+pub(in crate::interpreter) use preg_last_error::*;
+pub(in crate::interpreter) use preg_last_error_msg::*;
 pub(in crate::interpreter) use preg_match::*;
 pub(in crate::interpreter) use preg_match_all::*;
 pub(in crate::interpreter) use pattern::*;

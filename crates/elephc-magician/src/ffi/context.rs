@@ -269,8 +269,13 @@ pub extern "C" fn __elephc_eval_opcache_schedule_restart() -> u64 {
 /// A CLI program is a single request and never emits this call, which is also right —
 /// reference PHP would restart at a next request that a CLI process does not have, so the
 /// cache correctly keeps answering for that program's whole life, and its overrides with it.
+///
+/// Being that once-per-request entry, it also clears the eval `preg_last_error()` slot, which
+/// would otherwise carry one request's eval regex error into the next request on the same
+/// worker thread.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_opcache_apply_restart() {
+    crate::interpreter::reset_request_regex_state();
     crate::script_cache::clear_directive_overrides();
     crate::script_cache::apply_pending_restart();
 }

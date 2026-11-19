@@ -881,6 +881,18 @@ The checker's loop-storage fixed point joins element writes with the same
 nominal rule, so a loop does not widen the builder before its header either.
 Wider, sibling and unrelated classes still widen to boxed `mixed` slots.
 
+An indexed array literal joins the classes of its items instead. Items of
+related classes allocate object slots typed as their nearest common class: one
+item's class when the others extend or implement it, otherwise the nearest
+class they all extend, so `[new First(), new Second()]` is `array<Base>` when
+both extend `Base`. This is the element the checker infers for the literal
+(`Checker::common_object_type`), which `merge_ir_literal_element_type`
+(`ir_lower::expr::object_element_join`) and the loop-storage literal inference
+both mirror. The three must agree: a literal built with boxed `mixed` slots and
+bound to a declared `array<Base>` local would be read as object pointers.
+Classes with no common class, including two that only share an interface, keep
+boxed `mixed` slots in every layer.
+
 ### Strings
 
 | Op | Operands | Result | Effects |

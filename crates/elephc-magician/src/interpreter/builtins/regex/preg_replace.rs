@@ -54,6 +54,9 @@ pub(in crate::interpreter) fn eval_preg_replace_result(
         eval_preg_expand_replacement(&replacement, &subject, &captures, &mut result);
         cursor = matched.end();
     }
+    if eval_preg_failed() {
+        return values.null();
+    }
     result.extend_from_slice(&subject[cursor..]);
     values.string_bytes_value(&result)
 }

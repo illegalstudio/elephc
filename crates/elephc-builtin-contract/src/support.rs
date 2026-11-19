@@ -172,7 +172,7 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 
 /// Prelude-provided surfaces outside `ext/curl` that Magician binds with its own eval homes.
 const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] =
-    &["hash_copy", "hash_final", "hash_init", "hash_update", "token_get_all", "token_name", "zend_version", "finfo_open", "finfo_close", "finfo_set_flags", "finfo_file", "finfo_buffer", "mime_content_type", "setlocale", "nl_langinfo"];
+    &["hash_copy", "hash_final", "hash_init", "hash_update", "token_get_all", "token_name", "zend_version", "preg_grep", "finfo_open", "finfo_close", "finfo_set_flags", "finfo_file", "finfo_buffer", "mime_content_type", "setlocale", "nl_langinfo"];
 
 /// Returns the documented execution route for an eval-supported contract.
 pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
@@ -378,10 +378,11 @@ mod tests {
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
         // The tokenizer location helper also uses the shared runtime registry.
         // Five native heap metric bindings share the boxed runtime dispatcher.
-        // The seven additional ctype contracts join the eval registry, and the locale
-        // prelude exposes setlocale/nl_langinfo through forwarding eval homes. So do the
-        // PHP 8.6 pack/unpack endianness surface and `url_percent_encode`.
-        assert_eq!(eval_registry, 794 + curl_surface);
+        // The seven additional ctype contracts join the eval registry, the locale
+        // prelude exposes setlocale/nl_langinfo through forwarding eval homes, and
+        // `preg_grep`, `preg_last_error`, and `preg_last_error_msg` have eval homes. So do
+        // the PHP 8.6 pack/unpack endianness surface and `url_percent_encode`.
+        assert_eq!(eval_registry, 797 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -421,14 +422,15 @@ mod tests {
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries, and the
         // compiled and eval `ReflectionClass` builder calls two more. The seven ctype
         // contracts, two internal setlocale helpers, the internal nl_langinfo helper, and
-        // the random prelude's `__elephc_call_strict_types` reader join the AOT registry, as
-        // do `get_debug_type` and the PHP 8.6 pack/stream_context_set_options/url_percent_encode
+        // the random prelude's `__elephc_call_strict_types` reader join the AOT registry,
+        // and `preg_last_error` and `preg_last_error_msg` add two more. So do
+        // `get_debug_type` and the PHP 8.6 pack/stream_context_set_options/url_percent_encode
         // contracts.
-        assert_eq!(aot_registry, 842);
-        // Compiler transforms, constructs, dedicated syntax, preludes, and
-        // name-resolver rewrites remain outside the ordinary AOT registry. The two
-        // PHP-visible locale functions are prelude-provided.
-        assert_eq!(aot_external, 479 + curl_surface);
+        assert_eq!(aot_registry, 844);
+        // Compiler transforms, constructs, dedicated syntax, preludes (now including
+        // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
+        // The two PHP-visible locale functions are prelude-provided.
+        assert_eq!(aot_external, 480 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -480,8 +482,9 @@ mod tests {
         assert_eq!(hybrid_adapter, 4);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters, plus the GMP, SimpleXML, tidy, ctype, and locale
-        // forwarding homes, and the PHP 8.6 pack and url_percent_encode adapters.
-        assert_eq!(interpreter_adapter, 699 + curl_surface);
+        // forwarding homes, the PHP 8.6 pack and url_percent_encode adapters, plus the
+        // `preg_grep` / `preg_last_error*` eval homes.
+        assert_eq!(interpreter_adapter, 702 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,

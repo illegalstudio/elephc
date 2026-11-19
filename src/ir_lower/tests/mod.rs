@@ -72,6 +72,7 @@ mod settype_foreach;
 mod string_offset_lifetime;
 mod string_offset_writes;
 mod arrays;
+mod object_literal_storage;
 mod unset_collection;
 mod typed_element_refs;
 mod list_hash_param_binding;
@@ -316,6 +317,7 @@ fn try_lower_source_at_for_target_with_reachability(
         crate::php_version::PhpVersion::default(),
         &mut prelude_inventory,
     );
+    let ast = crate::pcre_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
     let (ast, _) = crate::autoload::run_collecting_included_with_defines(
         ast,

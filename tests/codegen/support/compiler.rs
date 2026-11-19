@@ -489,6 +489,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let locale_used = elephc::locale_prelude::program_uses_locale(&resolved);
     let resolved = elephc::locale_prelude::inject_if_used(resolved, locale_used, target().platform);
     let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::pcre_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
@@ -970,10 +971,25 @@ pub(crate) fn compile_and_run_capture_with_regex(source: &str) -> ProgramOutput 
     compile_and_run_capture_with_optional_regex(source, true)
 }
 
+/// Compiles and runs a heap-debug fixture with `--with-regex`, so eval'd code reaches the
+/// regex provider while the leak summary still covers its allocations.
+pub(crate) fn compile_and_run_with_heap_debug_and_regex(source: &str) -> ProgramOutput {
+    compile_and_run_capture_with_regex_options(source, true, true)
+}
+
 /// Compiles and captures one fixture while optionally enabling managed regex support.
 fn compile_and_run_capture_with_optional_regex(
     source: &str,
     with_regex: bool,
+) -> ProgramOutput {
+    compile_and_run_capture_with_regex_options(source, with_regex, false)
+}
+
+/// Compiles and captures one fixture with the given regex and heap-debug options.
+fn compile_and_run_capture_with_regex_options(
+    source: &str,
+    with_regex: bool,
+    heap_debug: bool,
 ) -> ProgramOutput {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -983,7 +999,7 @@ fn compile_and_run_capture_with_optional_regex(
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options_and_regex(
-            source, &dir, 8_388_608, false, false, false, with_regex,
+            source, &dir, 8_388_608, false, false, heap_debug, with_regex,
         );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture(
@@ -1360,6 +1376,46 @@ pub(crate) fn compile_and_run_capture_merged_with_php_version(
     );
     let _ = fs::remove_dir_all(&dir);
     output.stdout
+}
+
+/// Compiles and runs a fixture for `php_version` with `--with-regex`, so eval'd regex calls
+/// reach the provider under that version profile.
+pub(crate) fn compile_and_run_with_regex_and_php_version(
+    source: &str,
+    php_version: elephc::php_version::PhpVersion,
+) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_test_regex_php_version_{}_{:?}_{}",
+        pid, tid, id
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let (user_asm, runtime_asm, requirements) =
+        compile_source_to_asm_with_defines_repr_regex_and_php_version(
+            source,
+            &dir,
+            &HashSet::new(),
+            8_388_608,
+            false,
+            false,
+            false,
+            default_null_repr(),
+            true,
+            php_version,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &requirements,
+        &default_link_paths(),
+        &[],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output
 }
 
 /// Compiles and runs PHP source with an explicit PHP compatibility version.

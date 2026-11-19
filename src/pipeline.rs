@@ -272,6 +272,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         }
     };
     timings.record_since("resolve", phase_started);
+    // Compile-time deprecations raised while each physical file was prepared, reported where
+    // php-src reports them: before the program runs, ahead of the checker's own diagnostics.
+    for warning in errors::take_deferred_warnings() {
+        errors::report_warning(&warning);
+    }
 
     // Report how the PHP profile is observable in THIS program, while `ast` is still the
     // user's own code: after include resolution, but before any compiler prelude is injected.
@@ -738,6 +743,13 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     );
     timings.record_since("version-prelude", phase_started);
 
+    // Inject `preg_grep()`, a PHP function over `preg_match()`, when the program or a file of
+    // its autoload closure references it.
+    crate::progress::phase("pcre-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::pcre_prelude::inject_if_used(ast, autoloaded("pcre"), &mut prelude_inventory);
+    timings.record_since("pcre-prelude", phase_started);
+
     // Declare the real PHP extensions the project hosts (`[extension]` in
     // elephc.toml): each registered function becomes a PHP function calling it
     // through the Zend engine archive. Injected whenever the project declares
@@ -993,6 +1005,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         Ok(pair) => pair,
         Err(e) => {
             crate::progress::clear();
+            // A file autoloaded while checking compiled before the error, as in php.
+            for warning in errors::take_deferred_warnings() {
+                errors::report_warning(&warning);
+            }
             errors::report(&e);
             process::exit(1);
         }
@@ -1003,7 +1019,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
         process::exit(1);
     }
-    for warning in &check_result.warnings {
+    // A file autoloaded while checking was prepared after the drain above.
+    for warning in errors::take_deferred_warnings().iter().chain(&check_result.warnings) {
         errors::report_warning(warning);
     }
     // The instantiation report is printed here, before declaration pruning and codegen: every
