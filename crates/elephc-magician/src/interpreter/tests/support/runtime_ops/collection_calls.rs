@@ -71,6 +71,12 @@ macro_rules! impl_fake_collection_call_ops {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_array_get(array, index)
     }
+    /// Performs one fake lookup and preserves an owned null hit separately from absence.
+    fn array_get_checked(&mut self, array: RuntimeCellHandle, index: RuntimeCellHandle,
+        preserve_reference: bool,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        self.runtime_array_get_checked(array, index, preserve_reference)
+    }
     /// Retains a fake raw slot for reference-preserving argument expansion.
     fn array_get_preserving_references(
         &mut self,

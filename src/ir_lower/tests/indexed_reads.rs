@@ -108,3 +108,22 @@ fn indexed_native_reads_without_named_exception() {
     assert!(report.contains("OutOfBoundsException") && report.contains(elephc_semantics::indexing::MISSING_ARRAY_KEY),
         "status={:?}; stdout={report}; stderr={}", output.status, String::from_utf8_lossy(&output.stderr));
 }
+
+/// Eval presence callbacks report absence without throwing across Rust on every supported ABI.
+#[test]
+fn indexed_eval_presence_callbacks_emit_on_every_target() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Indexing, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut features = crate::codegen_support::RuntimeFeatures::none();
+        features.eval_bridge = true;
+        let runtime = crate::codegen_support::generate_runtime_with_semantics(8_388_608, target, features, false, false, profile);
+        assert!(runtime.contains("__elephc_eval_value_array_get_checked:"), "{name}");
+        assert!(runtime.contains("__rt_mixed_array_get_absent:"), "{name}");
+        assert!(runtime.contains("__rt_array_get_mixed_key_empty_slot:"), "{name}");
+        let bridge = runtime.split("__elephc_eval_value_array_get_checked:").nth(1).unwrap()
+            .split("__elephc_eval_value_array_key_exists:").next().unwrap();
+        assert!(bridge.contains("__rt_mixed_array_get"));
+        assert!(!bridge.contains("__rt_throw_missing"), "{name}: Rust receives a presence result");
+    }
+}

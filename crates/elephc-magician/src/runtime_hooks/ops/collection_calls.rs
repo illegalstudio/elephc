@@ -72,6 +72,20 @@ macro_rules! impl_collection_call_ops {
         }
     }
 
+    /// Receives the runtime's missing marker without unwinding through a Rust frame.
+    fn array_get_checked(&mut self, array: RuntimeCellHandle, index: RuntimeCellHandle,
+        preserve_reference: bool,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let pointer = unsafe { __elephc_eval_value_array_get_checked(array.as_ptr(), index.as_ptr()) };
+        if pointer.is_null() { return Ok(None); }
+        let value = Self::handle(pointer)?;
+        if !preserve_reference && self.is_reference(value)? {
+            let result = self.copy_value(value);
+            self.release(value)?;
+            result.map(Some)
+        } else { Ok(Some(value)) }
+    }
+
     /// Retains the stored boxed slot for argument binding without detaching its reference identity.
     fn array_get_preserving_references(
         &mut self,

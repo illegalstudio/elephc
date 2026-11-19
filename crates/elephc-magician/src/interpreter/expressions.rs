@@ -25,7 +25,7 @@ use owned::*;
 pub(in crate::interpreter) use owned::{copy_scope_value, eval_output_expr, eval_output_value};
 
 pub(in crate::interpreter) use evaluation::{
-    eval_array_access_object_matches, eval_array_get_result, eval_array_get_reference_result, eval_binary_result, eval_cast_value,
+    eval_array_access_object_matches, eval_array_get_result, eval_array_get_reference_result, eval_array_get_quiet_result, eval_binary_result, eval_cast_value,
     eval_dynamic_class_name, eval_dynamic_member_name, eval_match_expr,
 };
 use evaluation::*;
@@ -85,7 +85,7 @@ pub(super) fn eval_null_coalesce_value(
                 eval_property_get_with_result_ownership(object, &property, context, values, true)
             })
         }
-        EvalExpr::ArrayGet { .. } if context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization) =>
+        EvalExpr::ArrayGet { .. } if probe_reads::uses_quiet_roots(context) =>
             probe_reads::eval_owned(expr, context, scope, values),
         _ => eval_expr_with_result_ownership(expr, context, scope, values, own_result),
     }

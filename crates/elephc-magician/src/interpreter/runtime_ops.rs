@@ -393,6 +393,12 @@ pub trait RuntimeValueOps {
         index: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Reads once, distinguishing an absent element from an owned present null cell.
+    /// Providers preserve original-key conversion and return no lease for absence.
+    fn array_get_checked(
+        &mut self, array: RuntimeCellHandle, index: RuntimeCellHandle, preserve_reference: bool,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus>;
+
     /// Returns an owned argument read, preserving a stored PHP reference when supported.
     fn array_get_preserving_references(
         &mut self,

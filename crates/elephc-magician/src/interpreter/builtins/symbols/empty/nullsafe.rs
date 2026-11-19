@@ -86,7 +86,7 @@ fn evaluate_receiver(
             }
             EvalExpr::ArrayGet { index, .. } => {
                 let index = eval_owned_expr(index, context, scope, values)?;
-                let result = eval_array_get_result(object, index, context, values);
+                let result = eval_array_get_quiet_result(object, index, context, values);
                 finish_eval_argument_values(result, [index], context, values)
             }
             EvalExpr::MethodCall { method, args, .. } | EvalExpr::NullsafeMethodCall { method, args, .. } =>

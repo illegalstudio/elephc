@@ -118,7 +118,7 @@ pub(in crate::interpreter) fn eval_array_get_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_array_get_with_reference(array, index, false, context, values)
+    eval_array_get_with_reference(array, index, false, true, context, values)
 }
 
 /// Selects an array argument without separating an already stored PHP reference cell.
@@ -126,12 +126,20 @@ pub(in crate::interpreter) fn eval_array_get_reference_result(
     array: RuntimeCellHandle, index: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_array_get_with_reference(array, index, true, context, values)
+    eval_array_get_with_reference(array, index, true, false, context, values)
+}
+
+/// Reads an intentional probe or slot-creation receiver without a missing-element exception.
+pub(in crate::interpreter) fn eval_array_get_quiet_result(
+    array: RuntimeCellHandle, index: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_array_get_with_reference(array, index, false, false, context, values)
 }
 
 /// Shares original-key guards and alias resolution before choosing value or reference storage.
 fn eval_array_get_with_reference(
-    array: RuntimeCellHandle, index: RuntimeCellHandle, preserve: bool,
+    array: RuntimeCellHandle, index: RuntimeCellHandle, preserve: bool, checked: bool,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let tag = values.type_tag(array)?;
@@ -141,6 +149,13 @@ fn eval_array_get_with_reference(
             .and_then(|key| context.array_element_alias(array, &key).cloned())
         {
             return eval_reference_target_value(&target, context, values);
+        }
+        if checked && context.semantic_profile().contains(elephc_semantics::StrictFeature::Indexing)
+            && matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_STRING) {
+            if let Some(value) = values.array_get_checked(array, index, preserve)? { return Ok(value); }
+            let message = if tag == EVAL_TAG_STRING { elephc_semantics::indexing::MISSING_STRING_OFFSET }
+                else { elephc_semantics::indexing::MISSING_ARRAY_KEY };
+            return super::super::throwables::eval_throw_builtin_exception("OutOfBoundsException", message, context, values);
         }
         return if preserve && matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
             values.array_get_preserving_references(array, index)

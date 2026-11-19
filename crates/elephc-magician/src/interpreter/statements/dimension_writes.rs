@@ -217,11 +217,11 @@ fn quiet_child(
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match values.type_tag(array)? {
-        EVAL_TAG_OBJECT => eval_array_get_result(array, index, context, values),
+        EVAL_TAG_OBJECT => eval_array_get_quiet_result(array, index, context, values),
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
             let exists = values.array_key_exists(index, array)?;
             owners.push(exists);
-            if values.truthy(exists)? { eval_array_get_result(array, index, context, values) }
+            if values.truthy(exists)? { eval_array_get_quiet_result(array, index, context, values) }
             else { values.null() }
         }
         EVAL_TAG_NULL => values.null(),

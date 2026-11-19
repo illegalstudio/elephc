@@ -146,7 +146,7 @@ fn finish_receiver(
                 values, parent.borrowed(), elephc_builtin_contract::ObjectDimension::WriteSelect, vec![index.borrowed()],
             )? {
                 Some(value) => value,
-                None => eval_array_get_result(parent, index, context, values)?,
+                None => eval_array_get_quiet_result(parent, index, context, values)?,
             }
         }
     };
@@ -169,14 +169,14 @@ fn unset_dimension(
     match values.type_tag(parent)? {
         EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
             require_unset_array_access(parent, context, values)?;
-            eval_array_get_result(parent, index, context, values)
+            eval_array_get_quiet_result(parent, index, context, values)
         }
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
             let exists = values.array_key_exists(index, parent)?;
             let present = values.truthy(exists);
             let released = values.release(exists);
             if !present.and_then(|present| released.map(|()| present))? { return values.null(); }
-            eval_array_get_result(parent, index, context, values)
+            eval_array_get_quiet_result(parent, index, context, values)
         }
         EVAL_TAG_NULL => values.null(),
         EVAL_TAG_BOOL if !values.truthy(parent)? => {

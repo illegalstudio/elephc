@@ -36,7 +36,7 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     //   [sp, #0]  = array_ptr
     //   [sp, #8]  = key_lo
     //   [sp, #16] = key_hi
-    //   [sp, #24] = flags (bit 0: warn_on_missing, bit 1: fetch_for_write)
+    //   [sp, #24] = flags (bit 0: warn_on_missing, bit 1: fetch_for_write, bit 2: checked)
     //   [sp, #32] = saved x29
     //   [sp, #40] = saved x30
     emitter.instruction("sub sp, sp, #64");                                     // reserve frame: 4 inputs + saved fp/lr (16-byte aligned)
@@ -96,7 +96,7 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_get_mixed_key_indexed_boxed");
     emitter.instruction("ldr x0, [x10, x12, lsl #3]");                          // load the boxed Mixed pointer from the indexed slot
-    emitter.instruction("cbz x0, __rt_array_get_mixed_key_null");               // empty slot → null Mixed
+    emitter.instruction("cbz x0, __rt_array_get_mixed_key_empty_slot");         // distinguish an absent boxed slot from present null
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the warning/fetch mode flags
     emitter.instruction("tbnz x9, #1, __rt_array_get_mixed_key_detach_indexed"); // split the selected zval after outer-array COW
     emitter.label("__rt_array_get_mixed_key_clone_boxed");
@@ -176,6 +176,11 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
+
+    emitter.label("__rt_array_get_mixed_key_empty_slot");
+    emitter.instruction("ldr x9, [sp, #24]");                                   // inspect checked policy for an empty boxed slot
+    emitter.instruction("tbz x9, #2, __rt_array_get_mixed_key_null");           // preserve the previous unchecked empty-slot result
+    emitter.instruction("bl __rt_throw_missing_array_key");                     // throw only for a proven missing checked slot
 
     emitter.label("__rt_array_get_mixed_key_int_missing");
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the warn-on-missing flag
@@ -325,7 +330,7 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_get_mixed_key_indexed_boxed");
     emitter.instruction("mov rax, QWORD PTR [r10 + r8 * 8]");                   // load the boxed Mixed pointer from the indexed slot
     emitter.instruction("test rax, rax");                                       // empty slot → null Mixed
-    emitter.instruction("je __rt_array_get_mixed_key_null");                    // return null for an empty boxed slot
+    emitter.instruction("je __rt_array_get_mixed_key_empty_slot");              // distinguish an absent boxed slot from present null
     emitter.instruction("test QWORD PTR [rbp - 32], 2");                        // does this read feed an imminent nested write?
     emitter.instruction("jnz __rt_array_get_mixed_key_detach_indexed");         // split the selected zval after outer-array COW
     emitter.label("__rt_array_get_mixed_key_clone_boxed");
@@ -408,6 +413,11 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
+
+    emitter.label("__rt_array_get_mixed_key_empty_slot");
+    emitter.instruction("test QWORD PTR [rbp - 32], 4");                        // inspect checked policy for an empty boxed slot
+    emitter.instruction("jz __rt_array_get_mixed_key_null");                    // preserve the previous unchecked empty-slot result
+    emitter.instruction("call __rt_throw_missing_array_key");                   // throw only for a proven missing checked slot
 
     emitter.label("__rt_array_get_mixed_key_int_missing");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the warn-on-missing flag

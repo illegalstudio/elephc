@@ -127,6 +127,36 @@ impl FakeOps {
             None => self.null(),
         }
     }
+    /// Resolves a checked read once without confusing present null with a missing cell.
+    pub(super) fn runtime_array_get_checked(&mut self, array: RuntimeCellHandle,
+        index: RuntimeCellHandle, preserve_reference: bool,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        if self.type_tag(array)? == EVAL_TAG_STRING {
+            let bytes = self.string_bytes(array)?;
+            let key = self.key(index)?;
+            let offset = match key { FakeKey::Int(value) => value,
+                FakeKey::String(value) => match std::str::from_utf8(&value).ok().and_then(|value| value.trim().parse::<i64>().ok()) {
+                    Some(value) => value, None => return self.null().map(Some),
+                },
+            };
+            let offset = if offset < 0 { (bytes.len() as i128) + i128::from(offset) } else { i128::from(offset) };
+            return match usize::try_from(offset).ok().and_then(|offset| bytes.get(offset)).copied() {
+                Some(byte) => self.string_bytes_value(&[byte]).map(Some), None => Ok(None),
+            };
+        }
+        let key = self.key(index)?;
+        let result = match self.get(array) {
+            FakeValue::Array(elements) => match key {
+                FakeKey::Int(index) => usize::try_from(index).ok().and_then(|index| elements.get(index)).copied(),
+                _ => None,
+            },
+            FakeValue::Assoc(entries) => entries.iter().find_map(|(entry, value)| (entry == &key).then_some(*value)),
+            _ => return self.array_get(array, index).map(Some),
+        };
+        let Some(value) = result else { return Ok(None); };
+        if !preserve_reference && self.is_reference(value)? { self.copy_value(value).map(Some) }
+        else { self.retain(value).map(Some) }
+    }
     /// Checks whether a fake array has the requested key without reading its value.
     pub(super) fn runtime_array_key_exists(
         &mut self,

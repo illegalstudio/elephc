@@ -13,6 +13,8 @@ pub const WARN_ON_MISSING: i64 = 1;
 pub const FOR_WRITE: i64 = 2;
 /// Throws only after a lookup proves an ordinary element absent.
 pub const CHECKED: i64 = 4;
+/// Reports absence to a Rust caller without unwinding across its stack.
+pub const REPORT_MISSING: i64 = 8;
 /// Stable diagnostic for an absent array or hash entry.
 pub const MISSING_ARRAY_KEY: &str = "--strict-indexing: missing array key";
 /// Stable diagnostic for an invalid string byte offset.

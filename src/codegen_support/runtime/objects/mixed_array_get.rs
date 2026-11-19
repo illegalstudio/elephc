@@ -7,7 +7,8 @@
 //!
 //! Key details:
 //! - Key pairs use high word -1 for integers, nonnegative lengths for strings, or -2 for an original cell.
-//! - Mode bit zero enables read warnings; bit one selects attached internal SPL storage.
+//! - Mode bits select warnings (1), attached internal SPL storage (2), checked failure (4),
+//!   or a nonthrowing missing marker for the Rust interpreter (8).
 //! - Callers pass an explicit warning flag so normal reads diagnose missing/null
 //!   offsets while `isset()`/`??` keep the same helper quiet.
 //! - Boxed strings share PHP's negative-index, numeric-string, missing-offset, and TypeError rules.
@@ -109,7 +110,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     //   [sp, #16] = key_hi
     //   [sp, #24] = saved x29
     //   [sp, #32] = saved x30
-    //   [sp, #40] = warn_on_missing
+    //   [sp, #40] = read mode flags
     emitter.instruction("sub sp, sp, #48");                                     // reserve frame: 3 inputs + saved fp/lr (16-byte aligned)
     emitter.instruction("stp x29, x30, [sp, #24]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #24");                                    // set new frame pointer
@@ -167,6 +168,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return the owned Mixed string in x0
     emitter.label("__rt_mixed_array_get_string_missing");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect the nonthrowing caller presence mode
+    emitter.instruction("tbnz x9, #3, __rt_mixed_array_get_absent");            // return a missing marker without crossing a Rust frame
     emitter.instruction("ldr x9, [sp, #40]");                                   // inspect checked absence independently of warning mode
     emitter.instruction("tbz x9, #2, __rt_mixed_array_get_string_missing_unchecked");// preserve ordinary PHP behavior without the checked flag
     emitter.instruction("bl __rt_throw_missing_string_offset");                 // raise the catchable checked-read exception
@@ -184,7 +187,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the owned Mixed empty string in x0
     emitter.label("__rt_mixed_array_get_string_key_error");
     emitter.instruction("ldr x9, [sp, #40]");                                   // recover the read or write-fetch mode before diagnosing the key
-    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // existence and coalescing probes treat nonnumeric string keys as absent
+    emitter.instruction("tst x9, #3");                                          // report-only callbacks retain quiet string-key conversion
+    emitter.instruction("b.eq __rt_mixed_array_get_null");                      // probes and report-only callbacks keep their null result
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address before throwing
     emitter.instruction("add sp, sp, #48");                                     // release the local frame before the non-returning throw
     crate::codegen_support::runtime::arrays::value_error::emit_throw_static_message_aarch64(
@@ -255,6 +259,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
     emitter.label("__rt_mixed_array_get_indexed_missing");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect the nonthrowing caller presence mode
+    emitter.instruction("tbnz x9, #3, __rt_mixed_array_get_absent");            // return a missing marker without crossing a Rust frame
     emitter.instruction("ldr x9, [sp, #40]");                                   // inspect checked absence independently of warning mode
     emitter.instruction("tbz x9, #2, __rt_mixed_array_get_indexed_missing_unchecked");// preserve ordinary PHP behavior without the checked flag
     emitter.instruction("bl __rt_throw_missing_array_key");                     // raise the catchable checked-read exception
@@ -265,6 +271,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_warn_undefined_array_key_int");                // emit or suppress the undefined-array-key warning
     emitter.instruction("b __rt_mixed_array_get_null");                         // return boxed Mixed(null) after the warning
     emitter.label("__rt_mixed_array_get_indexed_missing_string");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect the nonthrowing caller presence mode
+    emitter.instruction("tbnz x9, #3, __rt_mixed_array_get_absent");            // return a missing marker without crossing a Rust frame
     emitter.instruction("ldr x9, [sp, #40]");                                   // inspect checked absence independently of warning mode
     emitter.instruction("tbz x9, #2, __rt_mixed_array_get_indexed_missing_string_unchecked");// preserve ordinary PHP behavior without the checked flag
     emitter.instruction("bl __rt_throw_missing_array_key");                     // raise the catchable checked-read exception
@@ -305,6 +313,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in x0
 
     emitter.label("__rt_mixed_array_get_assoc_missing");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // inspect the nonthrowing caller presence mode
+    emitter.instruction("tbnz x9, #3, __rt_mixed_array_get_absent");            // return a missing marker without crossing a Rust frame
     emitter.instruction("ldr x9, [sp, #40]");                                   // inspect checked absence independently of warning mode
     emitter.instruction("tbz x9, #2, __rt_mixed_array_get_assoc_missing_unchecked");// preserve ordinary PHP behavior without the checked flag
     emitter.instruction("bl __rt_throw_missing_array_key");                     // raise the catchable checked-read exception
@@ -463,6 +473,12 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame before the tail-call
     emitter.instruction("b __rt_throw_object_not_array");                       // never returns
 
+    emitter.label("__rt_mixed_array_get_absent");
+    emitter.instruction("mov x0, xzr");                                         // return no cell for a genuinely absent element
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore the lookup caller frame
+    emitter.instruction("add sp, sp, #48");                                     // release the lookup frame
+    emitter.instruction("ret");                                                 // return the absence marker to the caller
+
     emitter.label("__rt_mixed_array_get_null_container");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
     emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // quiet read contexts suppress the null-offset warning
@@ -480,7 +496,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
 /// Emits `__rt_mixed_array_get` for x86_64 (SysV ABI).
 ///
 /// Inputs arrive in `rdi` = mixed_ptr, `rsi` = key_lo, `rdx` = key_hi,
-/// `rcx` = nonzero when missing/null-offset warnings are enabled.
+/// `rcx` carries independent warning, write-fetch, checked-read and presence-report flags.
 /// Returns an owned pointer to a boxed `Mixed` cell in `rax`.
 ///
 /// Same dispatch and return semantics as `emit_mixed_array_get_aarch64`:
@@ -558,6 +574,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the owned Mixed string in rax
     emitter.label("__rt_mixed_array_get_string_missing");
+    emitter.instruction("test QWORD PTR [rbp - 32], 8");                        // inspect the nonthrowing caller presence mode
+    emitter.instruction("jnz __rt_mixed_array_get_absent");                     // return a missing marker without crossing a Rust frame
     emitter.instruction("test QWORD PTR [rbp - 32], 4");                        // inspect checked absence independently of warning mode
     emitter.instruction("jz __rt_mixed_array_get_string_missing_unchecked");    // preserve ordinary PHP behavior without the checked flag
     emitter.instruction("call __rt_throw_missing_string_offset");               // raise the catchable checked-read exception
@@ -574,7 +592,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the owned Mixed empty string in rax
     emitter.label("__rt_mixed_array_get_string_key_error");
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // distinguish a quiet probe from ordinary reads and write fetches
+    emitter.instruction("test QWORD PTR [rbp - 32], 3");                        // report-only callbacks retain quiet string-key conversion
     emitter.instruction("je __rt_mixed_array_get_null");                        // quiet string-key probes return an absent value
     emitter.instruction("mov rsp, rbp");                                        // release the local frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
@@ -648,6 +666,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_indexed_missing");
+    emitter.instruction("test QWORD PTR [rbp - 32], 8");                        // inspect the nonthrowing caller presence mode
+    emitter.instruction("jnz __rt_mixed_array_get_absent");                     // return a missing marker without crossing a Rust frame
     emitter.instruction("test QWORD PTR [rbp - 32], 4");                        // inspect checked absence independently of warning mode
     emitter.instruction("jz __rt_mixed_array_get_indexed_missing_unchecked");   // preserve ordinary PHP behavior without the checked flag
     emitter.instruction("call __rt_throw_missing_array_key");                   // raise the catchable checked-read exception
@@ -658,6 +678,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_warn_undefined_array_key_int");              // emit or suppress the undefined-array-key warning
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // return boxed Mixed(null) after the warning
     emitter.label("__rt_mixed_array_get_indexed_missing_string");
+    emitter.instruction("test QWORD PTR [rbp - 32], 8");                        // inspect the nonthrowing caller presence mode
+    emitter.instruction("jnz __rt_mixed_array_get_absent");                     // return a missing marker without crossing a Rust frame
     emitter.instruction("test QWORD PTR [rbp - 32], 4");                        // inspect checked absence independently of warning mode
     emitter.instruction("jz __rt_mixed_array_get_indexed_missing_string_unchecked");// preserve ordinary PHP behavior without the checked flag
     emitter.instruction("call __rt_throw_missing_array_key");                   // raise the catchable checked-read exception
@@ -698,6 +720,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
     emitter.label("__rt_mixed_array_get_assoc_missing");
+    emitter.instruction("test QWORD PTR [rbp - 32], 8");                        // inspect the nonthrowing caller presence mode
+    emitter.instruction("jnz __rt_mixed_array_get_absent");                     // return a missing marker without crossing a Rust frame
     emitter.instruction("test QWORD PTR [rbp - 32], 4");                        // inspect checked absence independently of warning mode
     emitter.instruction("jz __rt_mixed_array_get_assoc_missing_unchecked");     // preserve ordinary PHP behavior without the checked flag
     emitter.instruction("call __rt_throw_missing_array_key");                   // raise the catchable checked-read exception
@@ -844,6 +868,12 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before the tail-call
     emitter.instruction("jmp __rt_throw_object_not_array");                     // never returns
 
+    emitter.label("__rt_mixed_array_get_absent");
+    emitter.instruction("xor eax, eax");                                        // return no cell for a genuinely absent element
+    emitter.instruction("mov rsp, rbp");                                        // restore the lookup caller frame
+    emitter.instruction("pop rbp");                                             // release the lookup frame
+    emitter.instruction("ret");                                                 // return the absence marker to the caller
+
     emitter.label("__rt_mixed_array_get_null_container");
     emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // quiet read contexts suppress the null-offset warning
@@ -873,8 +903,8 @@ mod tests {
             let invalid = assembly.split_once("__rt_mixed_array_get_string_key_error:\n").unwrap().1;
             let invalid = invalid.split_once("__rt_mixed_array_get_indexed:\n").unwrap().0;
             let (mode, absent) = if target == "linux-x86_64" {
-                ("cmp QWORD PTR [rbp - 32], 0", "je __rt_mixed_array_get_null")
-            } else { ("ldr x9, [sp, #40]", "cbz x9, __rt_mixed_array_get_null") };
+                ("test QWORD PTR [rbp - 32], 3", "je __rt_mixed_array_get_null")
+            } else { ("tst x9, #3", "b.eq __rt_mixed_array_get_null") };
             assert!(invalid.find(mode).unwrap() < invalid.find(absent).unwrap(), "{target}: {invalid}");
             assert!(invalid.contains("_string_offset_type_error_msg"), "{target}: {invalid}");
         }
@@ -916,4 +946,22 @@ mod tests {
             assert!(getter[..call].contains("__rt_cleanup_call_operand_owner"), "{target}");
         }
     }
+    /// All concrete miss paths can report absence while leaving exception creation to Rust.
+    #[test]
+    fn mixed_array_presence_reports_are_nonthrowing_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_mixed_array_get(&mut emitter);
+            let assembly = emitter.output();
+            let report = if target == "linux-x86_64" { "jnz __rt_mixed_array_get_absent" }
+                else { "tbnz x9, #3, __rt_mixed_array_get_absent" };
+            assert_eq!(assembly.matches(report).count(), 4, "{target}");
+            let absent = assembly.split_once("__rt_mixed_array_get_absent:\n").unwrap().1
+                .split_once("__rt_mixed_array_get_null_container:\n").unwrap().0;
+            assert!(absent.contains("ret"), "{target}: {absent}");
+            assert!(!absent.contains("__rt_throw"), "{target}: {absent}");
+            assert!(!absent.contains("__rt_mixed_from_value"), "{target}: absence owns no cell");
+        }
+    }
+
 }

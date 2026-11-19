@@ -137,3 +137,5 @@ mod false_parent_completion;
 mod escaped_reference_sources;
 
 mod fresh_reference_sources;
+
+mod strict_indexing;

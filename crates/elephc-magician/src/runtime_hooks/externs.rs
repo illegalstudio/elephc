@@ -143,6 +143,10 @@ unsafe extern "C" {
         array: *mut RuntimeCell,
         index: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    /// Returns no cell only for a proven missing element, without throwing across Rust.
+    pub(super) fn __elephc_eval_value_array_get_checked(
+        array: *mut RuntimeCell, index: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
     /// Boxes whether the supplied key exists in the array.
     pub(super) fn __elephc_eval_value_array_key_exists(
         key: *mut RuntimeCell,

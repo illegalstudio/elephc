@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step214 (this commit). Remaining feature integration is active. Issue:
+Verified through step215 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2578,3 +2578,34 @@ Indexing admission remains gated until interpreter and entry-point parity.
 The final compiler/Magician archive build, diff hygiene and assembly-comment
 checks pass in jobb1740f4a. No new compiler warnings were introduced; the
 existing Magician fetch_update deprecation remains.
+
+### Verified215: interpreter presence results and explicit quiet reads
+
+RuntimeValueOps now exposes a required one-lookup checked read that returns an
+owned present cell, including null, or no cell for absence. Native and fake
+providers implement it. The generated C callbacks normalize a key once and use
+report mode8, distinct from native checked-throw mode4 and existing warning/write
+modes1/2. Real misses return a null pointer without allocating or throwing through
+Rust; the interpreter creates OutOfBoundsException in its normal pending-throw
+channel. Invalid-string-key quiet behavior stays separate from the new mode.
+
+Ordinary eval array/hash/string reads consume presence results. A shared quiet
+helper serves intentional coalescing/probe and writable-root/unset reads, while
+key expressions retain their ordinary errors. Initialization is not implicitly
+enabled. Reference argument slot selection retains its prior creation protocol;
+ArrayAccess and native object dimension hooks retain their own dispatch. Native
+boxed-array empty slots now honor checked absence while unchecked behavior and
+present boxed null remain distinct. Internal runtime docs describe this ABI.
+
+Ten focused gates pass: three staged interpreter read/probe/creation and owner
+families in jobd3624f0b; all-five callback emission, all-five nonthrowing report
+paths, native source/optimizer/owner controls and two existing string/write-fetch
+mode regressions in job70bceff0; independent exact-key/initialization policy pairs
+and the existing initialized-frame owner fixture in jobfaa7abda. ArrayGet and
+array construction are still bytecode CompileGap cases, so tests explicitly
+verify dispatcher fallback to the walker instead of claiming a new VM opcode.
+Public Indexing admission remains gated pending native opaque eval, public CLI,
+REPL, source/cache/boundary checks and its example.
+
+Default compiler/Magician archive build, diff hygiene and assembly-comment
+checks pass in jobb3f7bebb. The existing warning baseline is unchanged.
