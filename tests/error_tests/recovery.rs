@@ -691,3 +691,20 @@ fn test_class_member_recovery_reports_each_member_error_once() {
         ],
     );
 }
+
+/// An unbalanced `(` or `[` inside a method body does not stretch the skip past that body's `}`:
+/// the next member is still parsed, so its own error is reported too.
+#[test]
+fn test_class_member_recovery_stops_at_body_with_unclosed_delimiter() {
+    for opener in ["(", "["] {
+        let src = format!(
+            "<?php class A {{ function one() {{ echo {opener}; }} function two(public int $x) {{}} }}"
+        );
+        let messages = parse_error_messages(&src);
+        assert_eq!(messages.len(), 2, "source: {src}, got {messages:?}");
+        assert_eq!(
+            messages[1], "Cannot declare promoted property outside a constructor",
+            "source: {src}, got {messages:?}"
+        );
+    }
+}
