@@ -690,13 +690,17 @@ pub(super) fn emit_marker_source_tag(
     source_ty: &PhpType,
     source_tag_reg: &str,
 ) -> Result<()> {
-    // An `int|float`-style tagged scalar has no static tag: its runtime tag is word 1 of the
-    // local's storage, beside the payload (the layout every tagged load and store uses). Asking
-    // `runtime_value_tag` for it panicked the compiler on a by-reference descriptor argument.
+    // An inline nullable integer advertises the dedicated shape-12 source layout (the
+    // tagged-property metadata), never its runtime PHP tag: the invoker and the marker writers
+    // dispatch on shape 12 to validate the replacement (`int|null` only) and to demand a matching
+    // two-word parameter slot. Loading the runtime tag here made a ref-bound `?int` property look
+    // like an ordinary int/null cell and let the callee store through it without any refusal.
     if matches!(source_ty, PhpType::TaggedScalar) {
-        let pointer = abi::int_result_reg(ctx.emitter);
-        ctx.materialize_local_storage_address(slot, pointer)?;
-        abi::emit_load_from_address(ctx.emitter, source_tag_reg, pointer, 8);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            source_tag_reg,
+            callable_invoker_args::INVOKER_ARG_TAGGED_SCALAR_SOURCE,
+        );
         return Ok(());
     }
     if !matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
