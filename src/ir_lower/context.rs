@@ -3498,8 +3498,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ) -> LoweredValue {
         let previous = self.binding_state_suppressed;
         let ends_origin = self.local_store_contracts.has_runtime_origin(&self.loop_storage_scope, name);
+        let ends_presence = self.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization);
+        if ends_presence {
+            if let Some(slot) = self.local_slots.get(name).copied() {
+                super::local_binding_state::emit(self, slot, false);
+            }
+        }
         super::local_binding_origins::end(self, name, span);
-        self.binding_state_suppressed = previous || ends_origin;
+        self.binding_state_suppressed = previous || ends_origin || ends_presence;
         let result = self.unset_local_storage(name, null, span);
         self.binding_state_suppressed = previous;
         result

@@ -75,6 +75,9 @@ pub(super) fn lower_lazy_isset_operand(
     ctx: &mut LoweringContext<'_, '_>,
     arg: &Expr,
 ) -> Option<LoweredValue> {
+    if let Some(value) = initialization_probes::boolean(ctx, arg, initialization_probes::Probe::Isset, arg) {
+        return Some(value);
+    }
     match &arg.kind {
         ExprKind::ArrayAccess { array, index } => {
             if array_access_expr_satisfies_array_access(ctx, array) {
@@ -179,6 +182,9 @@ pub(super) fn lower_lazy_empty(
         || args.iter().any(is_spread_arg)
     {
         return None;
+    }
+    if let Some(value) = initialization_probes::boolean(ctx, &args[0], initialization_probes::Probe::Empty, expr) {
+        return Some(value);
     }
     if ctx.classes.contains_key("SimpleXMLElement") {
         if let Some(value) = nullsafe_chain::lower_empty(ctx, &args[0]) {

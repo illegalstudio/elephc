@@ -56,6 +56,12 @@ impl Checker {
                     // PHP 8 reads an undefined variable as `null` and raises E_WARNING. The
                     // warning is emitted by EIR lowering at the read site so it carries the
                     // caller's file/line and participates in `@` suppression and handlers.
+                    Err(error) if self.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization)
+                        && self.semantic_source_mode != crate::source::SourceMode::Internal
+                        && error.message.starts_with("Undefined variable: $") => {
+                        return Err(CompileError::new(expr.span,
+                            &elephc_semantics::initialization::variable_message(name)));
+                    }
                     Err(error) if !self.strict_locals
                         && error.message.starts_with("Undefined variable: $") => PhpType::Void,
                     Err(error) => return Err(error),

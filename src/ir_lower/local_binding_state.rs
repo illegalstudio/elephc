@@ -64,7 +64,7 @@ pub(super) fn when_bound(ctx: &mut LoweringContext<'_, '_>, slot: LocalSlotId,
 }
 
 /// Combines the existing provenance bits without conflating an allocated slot with a binding.
-fn binding_is_present(ctx: &mut LoweringContext<'_, '_>, slot: LocalSlotId,
+pub(super) fn binding_is_present(ctx: &mut LoweringContext<'_, '_>, slot: LocalSlotId,
     span: crate::span::Span,
 ) -> super::context::LoweredValue {
     let native = ctx.emit_value(Op::GetNativeBindingState, Vec::new(),

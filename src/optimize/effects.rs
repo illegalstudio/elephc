@@ -289,7 +289,8 @@ pub(super) fn expr_is_observable(expr: &Expr) -> bool {
 /// For `MagicConstant`, returns `unreachable!` because they must be lowered before optimizer passes.
 pub(super) fn expr_effect(expr: &Expr) -> Effect {
     let effect = expression_effect_without_binding(expr);
-    if super::semantic_context::implicit_value_boundary_may_throw(expr)
+    if super::semantic_context::initialization_read_may_throw(expr)
+        || super::semantic_context::implicit_value_boundary_may_throw(expr)
         || super::semantic_context::comparison_boundary_may_throw(expr)
         || super::semantic_context::string_boundary_may_throw(expr)
         || super::semantic_context::array_key_boundary_may_throw(expr)

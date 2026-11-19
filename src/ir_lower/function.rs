@@ -78,7 +78,8 @@ pub(crate) fn lower_main(
     let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
     function.flags.is_main = true;
     function.flags.tracks_local_binding_state = check_result.semantic_profile.contains(
-        elephc_semantics::StrictFeature::Locals);
+        elephc_semantics::StrictFeature::Locals) || check_result.semantic_profile.contains(
+        elephc_semantics::StrictFeature::Initialization);
     let all_global_var_names = collect_global_var_names(program);
     let mut function_global_names =
         crate::ir_lower::program::collect_function_global_names(program);
@@ -1931,6 +1932,7 @@ fn lower_body_into_function(
         signature.ref_params.get(index).copied().unwrap_or(false).then(|| name.clone())
     });
     function.flags.tracks_local_binding_state = super::scope_introspection::body_needs_binding_presence(body)
+        || (semantic_profile.contains(elephc_semantics::StrictFeature::Initialization) && !function.flags.is_internal)
         || (semantic_profile.contains(
         elephc_semantics::StrictFeature::Locals) && !function.flags.is_internal
         && (crate::ir_lower::body_contains_eval_call(body)

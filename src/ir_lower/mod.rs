@@ -27,6 +27,7 @@ mod expr;
 mod fibers;
 mod function;
 mod integer_local_contracts;
+mod initialization;
 mod local_binding_state;
 mod local_binding_origins;
 mod scope_introspection;

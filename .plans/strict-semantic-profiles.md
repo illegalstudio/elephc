@@ -2380,3 +2380,13 @@ Regression coverage verifies existing original program contracts after earlier r
 All seven acceptance gates passed in job df72e7c2: incremental compiler/archive build, all five emitters under both profiles, four native optimizer/profile runs, both interpreter entries/profiles with zero retained owners, four real opaque-eval executions, diff hygiene, eight public PHP/LFC combinations and the complete example. All native/public runs report clean heaps. The preceding eight isolated executable probes1c15ffe2 also passed. No production origin map, global sidecar, registry or ABI change was necessary for these measured boundaries.
 
 The remaining implementation now proceeds to Nullability, Mixed, Initialization, ArrayTypes and Indexing, then complete umbrella/host/cache/optimizer/docs/example acceptance. Eleven features remain integrated; the full umbrella remains gated.
+
+### Verified203: initialized native frame reads and quiet probes
+
+User frame reads now test the existing native/eval binding-presence words before observing storage. Parameters, value captures and loop-carried slots share the guard; statically absent ordinary reads receive the shared strict-initialization diagnostic. Initialized null remains present. The optimizer conservatively retains potentially throwing ordinary reads even when their values are discarded.
+
+Simple-variable isset, empty and coalescing test presence before payload. Coalesce snapshots preserve the original value type plus null, including typed integer returns, bool, float, string and array values. Native pointer, buffer and packed storage retain their dedicated paths. Physical unset cleanup cannot recreate binding presence, independently of whether strict-locals recorded a producer origin. Conditional detachment of raw-reference parameters and value captures preserves caller/outer values.
+
+Eight acceptance gates cover the refreshed compiler/archive, all five target emitters, PHP and LFC native runs under both optimizer settings, clean heaps, known-missing diagnostics, uncaught Error metadata, existing conditional-parameter and raw-reference ABI controls, and diff hygiene. The earlier expanded regression failed on detached parameter/capture reads before the presence retirement fix; the corrected runs pass. No runtime layout or new opcode was introduced.
+
+Initialization remains staged and publicly rejected while interpreter, eval/global scopes, nested quiet roots and property read integration continue. No additional family is admitted. Nullability, Mixed, ArrayTypes, Indexing and complete umbrella acceptance remain active.

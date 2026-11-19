@@ -123,6 +123,7 @@ fn assigns_through_kept_type_slot(ctx: &LoweringContext<'_, '_>, mut expr: &Expr
 /// Lowers the value side of `??`, suppressing undefined-offset warnings from
 /// native array reads while preserving nullsafe-chain lazy evaluation.
 pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value: &Expr) -> LoweredValue {
+    if let Some(value) = initialization_probes::coalesce_value(ctx, value) { return value; }
     if let Some(value) = nullsafe_chain::lower_with_missing_warning(ctx, value, false) {
         return value;
     }

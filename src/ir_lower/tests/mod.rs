@@ -878,3 +878,5 @@ mod reached_global_producers;
 mod conditional_global_origins;
 
 mod global_producer_boundaries;
+
+mod initialized_frame_reads;

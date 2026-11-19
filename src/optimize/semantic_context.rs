@@ -249,3 +249,8 @@ pub(super) fn unary_numeric_conversion_may_dispatch(expr: &crate::parser::ast::E
         _ => true,
     }
 }
+
+/// An ordinary binding read may fail even when its loaded value would otherwise be unused.
+pub(super) fn initialization_read_may_throw(expr: &crate::parser::ast::Expr) -> bool {
+    enabled(StrictFeature::Initialization) && matches!(expr.kind, crate::parser::ast::ExprKind::Variable(_))
+}
