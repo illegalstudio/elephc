@@ -17,11 +17,9 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::abi;
 use crate::ir::Module;
+use elephc_memoir::callables::storage::{self, CaptureSlot};
 
 const EXCEPTION_HANDLER_NODE_BYTES: i64 = 40;
-const EVAL_DYNAMIC_CONTEXT_CAPTURE: usize = 0;
-const EVAL_DYNAMIC_CALLBACK_CAPTURE: usize = 1;
-const EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES: usize = 32;
 
 /// Emits eval-facing exception-handler install and restore wrappers.
 pub(super) fn emit_eval_exception_handler_helpers(
@@ -45,11 +43,6 @@ pub(super) fn emit_eval_exception_handler_helpers(
         }
     }
     emit_get_exception_handler(module, emitter);
-}
-
-/// Returns the byte offset for one capture in an eval dynamic callable descriptor.
-const fn dynamic_capture_offset(index: usize) -> usize {
-    callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + index * 16
 }
 
 /// Emits the ARM64 C wrapper for installing an eval exception handler.
@@ -93,30 +86,12 @@ fn emit_set_exception_handler_aarch64(
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the callback for descriptor capture ownership
     emitter.instruction("bl __rt_incref");                                      // retain the callback owned by the runtime descriptor capture
     emitter.instruction("str x0, [sp, #32]");                                   // keep the capture owner while allocating the descriptor
-    emitter.instruction(&format!(                                               // allocate the fixed descriptor plus two capture slots
-        "mov x0, #{}",
-        callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET
-            + EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES
-    ));
-    emitter.instruction("bl __rt_heap_alloc");                                  // create the runtime descriptor block
-    callable_descriptor::emit_copy_static_descriptor_to_runtime(
+    storage::emit_callback_adapter(
         emitter,
-        "x0",
         descriptor_label,
-    );
-    emitter.instruction("ldr x9, [sp, #0]");                                    // load the eval context capture
-    abi::emit_store_to_address(
-        emitter,
         "x9",
-        "x0",
-        dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE),
-    );
-    emitter.instruction("ldr x9, [sp, #32]");                                   // load the retained boxed callback capture
-    abi::emit_store_to_address(
-        emitter,
-        "x9",
-        "x0",
-        dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE),
+        CaptureSlot::Stack(0),
+        CaptureSlot::Stack(32),
     );
     abi::emit_store_reg_to_symbol(emitter, "x0", "_php_exception_handler_callable", 0);
     emitter.instruction("ldr x0, [sp, #0]");                                    // retain the eval context for the persistent handler descriptor
@@ -195,30 +170,12 @@ fn emit_set_exception_handler_x86_64(
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the callback for descriptor capture ownership
     emitter.instruction("call __rt_incref");                                    // retain the callback owned by the runtime descriptor capture
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // keep the capture owner while allocating the descriptor
-    emitter.instruction(&format!(                                               // allocate the fixed descriptor plus two capture slots
-        "mov rax, {}",
-        callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET
-            + EVAL_DYNAMIC_CALLABLE_CAPTURE_BYTES
-    ));
-    emitter.instruction("call __rt_heap_alloc");                                // create the runtime descriptor block
-    callable_descriptor::emit_copy_static_descriptor_to_runtime(
+    storage::emit_callback_adapter(
         emitter,
-        "rax",
         descriptor_label,
-    );
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // load the eval context capture
-    abi::emit_store_to_address(
-        emitter,
         "r10",
-        "rax",
-        dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE),
-    );
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // load the retained boxed callback capture
-    abi::emit_store_to_address(
-        emitter,
-        "r10",
-        "rax",
-        dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE),
+        CaptureSlot::Frame(8),
+        CaptureSlot::Frame(40),
     );
     abi::emit_store_reg_to_symbol(emitter, "rax", "_php_exception_handler_callable", 0);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // retain the eval context for the persistent handler descriptor

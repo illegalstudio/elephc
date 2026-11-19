@@ -28,6 +28,7 @@
 //!   slot's high word holds `UNINITIALIZED_TYPED_PROPERTY_SENTINEL`) and counts only the rest,
 //!   as PHP does; an unset `Closure` property therefore serializes instead of throwing.
 
+use elephc_memoir::values::incomplete_object::{CLASS_ID, NAME_LEN, NAME_PTR, PROPERTY_HASH};
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -662,7 +663,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("ldr x1, [x0]");                                        // load the class id from the object header
     emitter.instruction("str x1, [sp, #8]");                                    // save the class id
-    emitter.instruction("mov x10, #-2");                                        // synthetic __PHP_Incomplete_Class id
+    emitter.instruction(&format!("mov x10, #{CLASS_ID}"));                      // synthetic __PHP_Incomplete_Class id
     emitter.instruction("cmp x1, x10");                                         // is this a semantic __PHP_Incomplete_Class payload?
     emitter.instruction("b.eq __rt_serialize_object_incomplete");               // serialize its retained class name and property hash
     custom::emit_probe(emitter);
@@ -704,16 +705,16 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload incomplete-object payload
     emit_append_literal_aarch64(emitter, &[b'O', b':'], "the incomplete-object prefix");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload incomplete-object payload after literal append
-    emitter.instruction("ldr x0, [x10, #16]");                                  // persisted original class-name length
+    emitter.instruction(&format!("ldr x0, [x10, #{NAME_LEN}]"));                // persisted original class-name length
     emitter.instruction("bl __rt_serialize_uint");                              // append the original class-name length digits
     emit_append_literal_aarch64(emitter, &[b':', b'"'], "the incomplete class-name open quote");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload incomplete-object payload
-    emitter.instruction("ldr x0, [x10, #8]");                                   // persisted original class-name pointer
-    emitter.instruction("ldr x1, [x10, #16]");                                  // persisted original class-name length
+    emitter.instruction(&format!("ldr x0, [x10, #{NAME_PTR}]"));                // persisted original class-name pointer
+    emitter.instruction(&format!("ldr x1, [x10, #{NAME_LEN}]"));                // persisted original class-name length
     emitter.instruction("bl __rt_ser_append");                                  // append original class-name bytes
     emit_append_literal_aarch64(emitter, &[b'"', b':'], "the incomplete class-name close");
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload incomplete-object payload
-    emitter.instruction("ldr x0, [x10, #24]");                                  // semantic property hash with boxed Mixed values
+    emitter.instruction(&format!("ldr x0, [x10, #{PROPERTY_HASH}]"));           // semantic property hash with boxed Mixed values
     emitter.instruction("bl __rt_serialize_hash_body");                         // emit count/body while rebasing nested references
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // deallocate the object frame
@@ -1640,7 +1641,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the class id from the object header
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the class id
-    emitter.instruction("cmp rax, -2");                                         // synthetic __PHP_Incomplete_Class id
+    emitter.instruction(&format!("cmp rax, {CLASS_ID}"));                       // synthetic __PHP_Incomplete_Class id
     emitter.instruction("je __rt_serialize_object_incomplete_x");               // serialize its retained class name and property hash
     custom::emit_probe(emitter);
     emit_symbol_address(emitter, "r10", "_class_name_entries");
@@ -1683,16 +1684,16 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload incomplete-object payload
     emit_append_literal_x86_64(emitter, &[b'O', b':'], "the incomplete-object prefix");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload incomplete-object payload after literal append
-    emitter.instruction("mov rax, QWORD PTR [r10 + 16]");                       // persisted original class-name length
+    emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {NAME_LEN}]"));     // persisted original class-name length
     emitter.instruction("call __rt_serialize_uint");                            // append the original class-name length digits
     emit_append_literal_x86_64(emitter, &[b':', b'"'], "the incomplete class-name open quote");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload incomplete-object payload
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // persisted original class-name pointer
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // persisted original class-name length
+    emitter.instruction(&format!("mov rdi, QWORD PTR [r10 + {NAME_PTR}]"));     // persisted original class-name pointer
+    emitter.instruction(&format!("mov rsi, QWORD PTR [r10 + {NAME_LEN}]"));     // persisted original class-name length
     emitter.instruction("call __rt_ser_append");                                // append original class-name bytes
     emit_append_literal_x86_64(emitter, &[b'"', b':'], "the incomplete class-name close");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload incomplete-object payload
-    emitter.instruction("mov rax, QWORD PTR [r10 + 24]");                       // semantic property hash with boxed Mixed values
+    emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {PROPERTY_HASH}]")); // semantic property hash with boxed Mixed values
     emitter.instruction("call __rt_serialize_hash_body");                       // emit count/body while rebasing nested references
     emitter.instruction("add rsp, 64");                                         // deallocate the object frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

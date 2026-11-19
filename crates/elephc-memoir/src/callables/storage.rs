@@ -78,3 +78,53 @@ pub fn emit_initialize_runtime_descriptor(emitter: &mut impl Emitter, dest: &str
         }
     }
 }
+
+/// Offset of the non-owning foreign context capture in a callback adapter.
+pub const FOREIGN_CONTEXT_CAPTURE_OFFSET: usize = HEADER_BYTES;
+/// Offset of the independently retained callback capture in a callback adapter.
+pub const CALLBACK_CAPTURE_OFFSET: usize = FOREIGN_CONTEXT_CAPTURE_OFFSET + 16;
+
+/// Native spill location for a staged callback-adapter capture.
+#[derive(Clone, Copy)]
+pub enum CaptureSlot {
+    /// Fixed offset below the frame pointer.
+    Frame(usize),
+    /// Fixed offset from the current stack pointer.
+    Stack(usize),
+    /// First word of a temporary stack lease.
+    Top,
+}
+
+impl CaptureSlot {
+    /// Reloads a staged capture without changing its ownership.
+    fn emit_load(self, emitter: &mut impl Emitter, scratch: &str) {
+        match self {
+            Self::Frame(offset) => abi::load_at_offset(emitter, scratch, offset),
+            Self::Stack(offset) => match emitter.arch() {
+                Arch::AArch64 => emitter.instruction(&format!("ldr {scratch}, [sp, #{offset}]")), // reload the staged capture with its explicit stack displacement
+                Arch::X86_64 => emitter.emit_load_temporary_stack_slot(scratch, offset),
+            },
+            Self::Top => emitter.emit_load_temporary_stack_slot(scratch, 0),
+        }
+    }
+}
+
+/// Allocates a fresh callback adapter and installs its two staged captures.
+///
+/// The caller keeps the foreign context valid and supplies an owned callback to transfer.
+pub fn emit_callback_adapter(
+    emitter: &mut impl Emitter,
+    template: &str,
+    scratch: &str,
+    context: CaptureSlot,
+    callback: CaptureSlot,
+) {
+    let result = emitter.int_result_reg();
+    abi::emit_load_int_immediate(emitter, result, (CALLBACK_CAPTURE_OFFSET + 16) as i64);
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    emit_copy_static_descriptor_to_runtime(emitter, result, template);
+    context.emit_load(emitter, scratch);
+    abi::emit_store_to_address(emitter, scratch, result, FOREIGN_CONTEXT_CAPTURE_OFFSET);
+    callback.emit_load(emitter, scratch);
+    abi::emit_store_to_address(emitter, scratch, result, CALLBACK_CAPTURE_OFFSET);
+}
