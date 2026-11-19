@@ -76,8 +76,8 @@ validators. On failure it returns `false`, `null` with
 `FILTER_SANITIZE_NUMBER_FLOAT`, `FILTER_SANITIZE_ADD_SLASHES` and
 `FILTER_UNSAFE_RAW` are implemented with php-src's byte maps and tag stripping.
 `FILTER_SANITIZE_FULL_SPECIAL_CHARS` escapes the HTML metacharacters, preserves
-existing HTML 4.01 entities, and validates the input against the configured
-`default_charset`.
+existing HTML 4.01 and numeric entities, and maps non-ASCII code points to named
+entities for UTF-8, ISO-8859-1, ISO-8859-15 and Windows-1252.
 
 ## Arrays, options and callbacks
 
@@ -160,13 +160,6 @@ sanitized string; nested arrays are walked recursively.
   constant directly (or pass `--with-regex`) when PCRE2-only syntax must match.
 - `Uri\Rfc3986\Uri` and `Uri\WhatWg\Url` are accepted by `uri_parser_class` for URL
   validation. The URI objects' component methods are not exposed outside the filter surface.
-- `FILTER_SANITIZE_FULL_SPECIAL_CHARS` escapes ASCII HTML metacharacters and keeps
-  existing entities intact, but non-ASCII code points are left as their source bytes
-  instead of being converted to named entities. `default_charset` selects the accepted
-  encoding, not a full charset conversion.
-- `filter_var()` and the array-walking `filter_var_array()` forms rebuild their result
-  arrays. Reference bindings on input elements are therefore not preserved; the scalar
-  `filter_var_array($input, <int filter>)` form shares the input array and keeps them.
 
 <!-- elephc:generated:symbols:begin -->
 

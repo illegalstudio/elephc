@@ -42,7 +42,7 @@ const HTML4_NAMED_ENTITIES: &str = concat!(
 /// Returns the scalar dispatcher and its validation helpers.
 pub(super) fn declarations(charset: &str) -> Program {
     vec![
-        bridge_decl(),
+        bridge_decl(charset),
         validation_failed_decl(),
         apply_decl(),
         walk_decl(),
@@ -101,7 +101,7 @@ fn bridge_plain(filter: Expr) -> Expr {
 
 /// Builds `__elephc_filter_bridge(...): mixed`, dispatching to the typed bridge entry point
 /// and decoding its outcome.
-fn bridge_decl() -> Stmt {
+fn bridge_decl(charset: &str) -> Stmt {
     let mut cases = Vec::new();
     cases.push((vec![e_int(257)], vec![s_assign("kind", e_call(
         "elephc_filter_apply_int",
@@ -131,6 +131,14 @@ fn bridge_decl() -> Stmt {
         "elephc_filter_apply_mac",
         vec![e_var("flags"), e_call("bin2hex", vec![e_var("value")]),
              e_call("bin2hex", vec![e_var("option")])],
+    )), s_break(1)]));
+    cases.push((vec![e_int(522)], vec![s_assign("kind", e_call(
+        "elephc_filter_apply_full_special_chars",
+        vec![
+            e_var("flags"),
+            e_call("bin2hex", vec![e_var("value")]),
+            e_call("bin2hex", vec![e_str(charset)]),
+        ],
     )), s_break(1)]));
     function("__elephc_filter_bridge")
         .param("filter", t_int())
@@ -385,16 +393,7 @@ fn filter_switch() -> Stmt {
     for id in [513, 514, 515, 516, 517, 518, 519, 520] {
         cases.push((vec![e_int(id)], vec![s_assign("result", bridge_plain(e_int(id))), s_break(1)]));
     }
-    cases.push((
-        vec![e_int(522)],
-        vec![
-            s_assign(
-                "result",
-                e_call("__elephc_filter_full_special_chars", vec![e_var("string"), e_var("flags")]),
-            ),
-            s_break(1),
-        ],
-    ));
+    cases.push((vec![e_int(522)], vec![s_assign("result", bridge_plain(e_int(522))), s_break(1)]));
     cases.push((vec![e_int(523)], vec![s_assign("result", e_call("addslashes", vec![e_var("string")])), s_break(1)]));
     crate::synthetic_class::s_switch(
         e_var("filter"),
@@ -579,7 +578,10 @@ fn walk_decl() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_assign("out", e_array(vec![])),
+                    // Start from a copy of the input so reference cells survive; overwriting
+                    // each key below writes through those cells exactly as php-src's
+                    // duplicate-then-filter walk does.
+                    s_assign("out", e_var("value")),
                     s_foreach(
                         e_var("value"),
                         Some("key"),

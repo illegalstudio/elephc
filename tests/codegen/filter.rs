@@ -385,6 +385,29 @@ var_dump(filter_var("foo/bar/", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" 
     );
 }
 
+/// `filter_var()` array walks preserve and write through reference elements.
+#[test]
+fn test_filter_var_array_walk_preserves_reference_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$x = "42";
+$input = ["a" => &$x];
+$out = filter_var($input, FILTER_VALIDATE_INT, FILTER_REQUIRE_ARRAY);
+var_dump($x, $out);
+$out["a"] = 17;
+var_dump($x);
+$nested = ["outer" => ["value" => &$x]];
+$filtered = filter_var($nested, FILTER_VALIDATE_INT, FILTER_REQUIRE_ARRAY);
+$filtered["outer"]["value"] = 23;
+var_dump($x);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(42)\narray(1) {\n  [\"a\"]=>\n  &int(42)\n}\nint(17)\nint(23)\n"
+    );
+}
+
 /// `FILTER_VALIDATE_REGEXP` matches through the shared PCRE2 runtime, not a Rust engine.
 #[test]
 fn test_filter_regexp_uses_pcre2_matching() {
@@ -999,8 +1022,7 @@ fn test_filter_default_ini_get_uses_fixture_overrides() {
     );
     assert_eq!(output.stdout, "special_chars|4");
 }
-/// `FULL_SPECIAL_CHARS` validates against `default_charset`: Latin-1 keeps its bytes while the
-/// same input is malformed under UTF-8.
+/// `FULL_SPECIAL_CHARS` decodes against `default_charset` and entity-encodes non-ASCII.
 #[test]
 fn test_filter_sanitize_honors_default_charset() {
     let source = r#"<?php echo bin2hex(filter_var("caf\xE9", FILTER_SANITIZE_FULL_SPECIAL_CHARS));"#;
@@ -1009,13 +1031,19 @@ fn test_filter_sanitize_honors_default_charset() {
         &[("default_charset".to_string(), "ISO-8859-1".to_string())],
     );
     assert!(latin.success, "stderr: {}", latin.stderr);
-    assert_eq!(latin.stdout, "636166e9");
+    assert_eq!(latin.stdout, "636166266561637574653b");
     let utf8 = compile_and_run_capture_with_ini(
         source,
         &[("default_charset".to_string(), "UTF-8".to_string())],
     );
     assert!(utf8.success, "stderr: {}", utf8.stderr);
     assert_eq!(utf8.stdout, "");
+    let valid_utf8 = compile_and_run_capture_with_ini(
+        r#"<?php echo bin2hex(filter_var("caf\xC3\xA9 <b>", FILTER_SANITIZE_FULL_SPECIAL_CHARS));"#,
+        &[("default_charset".to_string(), "UTF-8".to_string())],
+    );
+    assert!(valid_utf8.success, "stderr: {}", valid_utf8.stderr);
+    assert_eq!(valid_utf8.stdout, "636166266561637574653b20266c743b622667743b");
 }
 
 /// `FULL_SPECIAL_CHARS` rejects invalid UTF-8 and null string names raise PHP's deprecation.
