@@ -130,6 +130,7 @@ mod gmp_eval;
 mod gmp_class;
 mod gmp_math;
 mod gmp_php86;
+mod php86_argument_validation;
 mod random;
 mod misc;
 mod pointers;

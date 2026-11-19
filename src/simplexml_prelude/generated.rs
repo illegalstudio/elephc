@@ -679,6 +679,22 @@ fn decl_class_simplexmlelement() -> Stmt {
                 .param_default("isPrefix", TypeExpr::Bool, e_bool(false))
                 .body(vec![
                     s_if(
+                        e_binop(
+                            e_bool(crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86),
+                            BinOp::And,
+                            e_binop(
+                                e_call("strpos", vec![e_var("data"), e_str("\0")]),
+                                BinOp::StrictNotEq,
+                                e_bool(false),
+                            ),
+                        ),
+                        vec![
+                            s_throw(e_new("ValueError", vec![e_str("SimpleXMLElement::__construct(): Argument #1 ($data) must not contain any null bytes")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
                         e_binop(e_call("strlen", vec![e_var("data")]), BinOp::Gt, e_int(2147483647)),
                         vec![
                             s_throw(e_new("Exception", vec![e_str("SimpleXMLElement::__construct(): Argument #1 ($data) is too long")])),
