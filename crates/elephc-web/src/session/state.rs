@@ -122,8 +122,9 @@ pub(super) static mut TRANS_SID_TAGS: Option<CString> = None;
 /// target. Default: `""`.
 pub(super) static mut TRANS_SID_HOSTS: Option<CString> = None;
 /// `session.upload_progress.enabled`: whether upload progress tracking is on.
-/// Config storage only; the tracker lands later. Default: 1.
-pub(super) static mut UPLOAD_PROGRESS_ENABLED: i64 = 1;
+/// Default: 0 (PHP 8.5.13 disabled it by default after the serializer-mismatch
+/// advisory, CVE-2026-115560).
+pub(super) static mut UPLOAD_PROGRESS_ENABLED: i64 = 0;
 /// `session.upload_progress.cleanup`: whether the progress entry is removed
 /// once the upload completes. Default: 1.
 pub(super) static mut UPLOAD_PROGRESS_CLEANUP: i64 = 1;
@@ -163,7 +164,7 @@ struct SessionDeploymentConfig {
     serializer: Option<CString>,
     /// `session.use_only_cookies` (defaults to on).
     use_only_cookies: bool,
-    /// `session.upload_progress.enabled` (defaults to on).
+    /// `session.upload_progress.enabled` (defaults to off).
     upload_progress_enabled: bool,
     /// `session.upload_progress.cleanup` (defaults to on).
     upload_progress_cleanup: bool,
@@ -223,7 +224,7 @@ fn deployment_config() -> &'static SessionDeploymentConfig {
                     "1" | "on" | "true"
                 )
             })
-            .unwrap_or(true);
+            .unwrap_or(false);
         let upload_progress_cleanup = std::env::var("ELEPHC_SESSION_UPLOAD_PROGRESS_CLEANUP")
             .map(|value| {
                 matches!(
@@ -371,6 +372,15 @@ pub unsafe extern "C" fn elephc_web_session_set_id(ptr: *const c_char) -> i64 {
         return 0;
     }
     set_cstr(core::ptr::addr_of_mut!(SESSION_ID), &id);
+    1
+}
+
+/// Clears the current session ID. Used when a caller supplies an ID that cannot
+/// cross the C-string session ABI intact (an embedded NUL), so the next
+/// `session_start()` generates a fresh ID instead of reusing a truncated prefix.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_session_clear_id() -> i64 {
+    reset_cstr(core::ptr::addr_of_mut!(SESSION_ID), None);
     1
 }
 
@@ -792,7 +802,7 @@ pub unsafe extern "C" fn elephc_web_session_set_trans_sid_hosts(ptr: *const c_ch
     );
 }
 
-/// Returns the `session.upload_progress.enabled` flag (default: 1).
+/// Returns the `session.upload_progress.enabled` flag (default: 0).
 #[no_mangle]
 pub unsafe extern "C" fn elephc_web_session_get_upload_progress_enabled() -> i64 {
     *core::ptr::addr_of!(UPLOAD_PROGRESS_ENABLED)
@@ -1113,6 +1123,22 @@ mod tests {
         }
     }
 
+    /// Verifies `clear_id` resets the stored ID after a trusted value, so a
+    /// caller-supplied ID that cannot cross the C-string ABI (an embedded NUL)
+    /// cannot fall back to the previously set ID.
+    #[test]
+    fn clear_session_id_resets_stored_id() {
+        let _g = lock();
+        unsafe {
+            elephc_web_session_reset();
+            let trusted = std::ffi::CString::new("trusted-session-id").unwrap();
+            assert_eq!(elephc_web_session_set_id(trusted.as_ptr()), 1);
+            assert_eq!(elephc_web_session_clear_id(), 1);
+            let current = std::ffi::CStr::from_ptr(elephc_web_session_get_id());
+            assert_eq!(current.to_str().unwrap(), "");
+        }
+    }
+
     /// Verifies status get/set.
     #[test]
     fn session_status_set_get() {
@@ -1246,7 +1272,7 @@ mod tests {
             assert_eq!(tags.to_str().unwrap(), "a=href,area=href,frame=src,form=");
             let hosts = std::ffi::CStr::from_ptr(elephc_web_session_get_trans_sid_hosts());
             assert_eq!(hosts.to_str().unwrap(), "");
-            assert_eq!(elephc_web_session_get_upload_progress_enabled(), 1);
+            assert_eq!(elephc_web_session_get_upload_progress_enabled(), 0);
             assert_eq!(elephc_web_session_get_upload_progress_cleanup(), 1);
             let pfx = std::ffi::CStr::from_ptr(elephc_web_session_get_upload_progress_prefix());
             assert_eq!(pfx.to_str().unwrap(), "upload_progress_");

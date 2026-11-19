@@ -5,7 +5,9 @@
 //! - mb_detect_order, mb_detect_encoding, mb_convert_encoding, and mb_convert_variables.
 //!
 //! Key details:
-//! - Comma-separated lists accept abbreviated auto tokens, whereas arrays require auto.
+//! - Comma-separated lists accept the exact `auto` token only (PHP 8.5.13
+//!   rejects truncated names such as `aut` or an empty list element), whereas
+//!   arrays require `auto` too.
 //! - Only the first auto token expands; other duplicate encoding entries remain intact.
 //! - Adapters convert and append one array element at a time, stopping at the first failure.
 //! - Each auto token receives the language defaults active after that element's callback.
@@ -46,9 +48,7 @@ impl<'a> EncodingListBuilder<'a> {
     /// Resolves one name under array or comma-list rules without repeating auto expansion.
     fn push(&mut self, name: &[u8], defaults: &[Encoding], comma_separated: bool) -> MbResult<()> {
         if let Some(error) = &self.error { return Err(error.clone()); }
-        let is_auto = if comma_separated {
-            name.len() <= 4 && b"auto"[..name.len()].eq_ignore_ascii_case(name)
-        } else { name.eq_ignore_ascii_case(b"auto") };
+        let is_auto = name.eq_ignore_ascii_case(b"auto");
         if is_auto {
             if !self.auto { self.output.extend_from_slice(defaults); self.auto = true; }
         } else {

@@ -271,6 +271,14 @@ fn decl_extern_elephc_web_session_set_id() -> Stmt {
         .build()
 }
 
+/// `elephc_web_session_clear_id` — clears the stored session ID before a new
+/// `session_start()` generates one.
+fn decl_extern_elephc_web_session_clear_id() -> Stmt {
+    extern_fn("elephc_web_session_clear_id", "elephc_web")
+        .returns(CType::Int)
+        .build()
+}
+
 /// `elephc_web_session_get_status` — transcribed from the PHP form.
 fn decl_extern_elephc_web_session_get_status() -> Stmt {
     extern_fn("elephc_web_session_get_status", "elephc_web")
@@ -2053,6 +2061,20 @@ fn decl_fn_session_start() -> Stmt {
                     vec![],
                     None,
                 ),
+                // PHP 8.5.13 (CVE-2026-115560): applying a session ini setting
+                // at runtime is rejected while upload progress is enabled.
+                s_if(
+                    e_binop(
+                        e_binop(e_var("__elephc_ok"), BinOp::StrictNotEq, e_str("read_and_close")),
+                        BinOp::And,
+                        e_binop(e_call("elephc_web_session_get_upload_progress_enabled", vec![]), BinOp::StrictEq, e_int(1)),
+                    ),
+                    vec![
+                        s_throw(e_new("Error", vec![e_str("Session ini settings cannot be changed at runtime when session.upload_progress.enabled is On")])),
+                    ],
+                    vec![],
+                    None,
+                ),
                 s_if(
                     e_binop(e_var("__elephc_ok"), BinOp::StrictEq, e_str("name")),
                     vec![
@@ -2701,6 +2723,25 @@ fn decl_fn_elephc_session_start_core() -> Stmt {
                 vec![],
                 None,
             ),
+            // PHP 8.5.13: validate the whole ID, including embedded NUL bytes.
+            // The bridge receives IDs as C strings, so without this check an ID
+            // like "validprefix\0junk" would be truncated and accepted as the
+            // valid prefix instead of being rejected.
+            s_if(
+                e_binop(
+                    e_binop(e_var("id"), BinOp::StrictNotEq, e_str("")),
+                    BinOp::And,
+                    e_binop(e_call("strpos", vec![e_var("id"), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)),
+                ),
+                vec![
+                    s_assign("id", e_str("")),
+                    s_assign("__elephc_supplied_id", e_bool(false)),
+                    s_assign("__elephc_from_cookie", e_bool(false)),
+                    s_assign("__elephc_from_global", e_bool(false)),
+                ],
+                vec![],
+                None,
+            ),
             s_expr(e_call("elephc_web_session_set_status", vec![e_const("PHP_SESSION_ACTIVE")])),
             s_if(
                 e_binop(e_binop(e_var("__elephc_h"), BinOp::StrictNotEq, e_null()), BinOp::And, e_instance_of(e_var("__elephc_h"), "SessionHandlerInterface")),
@@ -3044,7 +3085,20 @@ fn decl_fn_session_id() -> Stmt {
             s_if(
                 e_binop(e_var("id"), BinOp::StrictNotEq, e_null()),
                 vec![
-                    s_expr(e_call("elephc_web_session_set_id", vec![e_cast(CastType::String, e_var("id"))])),
+                    // PHP 8.5.13 validates the whole ID. The bridge stores IDs as
+                    // C strings, so an embedded NUL would otherwise become a
+                    // truncated but "valid" prefix; clear the ID instead so the
+                    // next session_start() generates a fresh one.
+                    s_if(
+                        e_binop(e_call("strpos", vec![e_cast(CastType::String, e_var("id")), e_str("\0")]), BinOp::StrictNotEq, e_bool(false)),
+                        vec![
+                            s_expr(e_call("elephc_web_session_clear_id", vec![])),
+                        ],
+                        vec![],
+                        Some(vec![
+                            s_expr(e_call("elephc_web_session_set_id", vec![e_cast(CastType::String, e_var("id"))])),
+                        ]),
+                    ),
                 ],
                 vec![],
                 None,
@@ -4570,6 +4624,17 @@ fn decl_fn_ini_set() -> Stmt {
                 vec![],
                 None,
             ),
+            // PHP 8.5.13 (CVE-2026-115560): while upload progress is enabled, a
+            // runtime session setting change could make the progress record be
+            // read back with a different serializer. Reject every such change.
+            s_if(
+                e_binop(e_call("elephc_web_session_get_upload_progress_enabled", vec![]), BinOp::StrictEq, e_int(1)),
+                vec![
+                    s_throw(e_new("Error", vec![e_str("Session ini settings cannot be changed at runtime when session.upload_progress.enabled is On")])),
+                ],
+                vec![],
+                None,
+            ),
             s_if(
                 e_binop(e_call("elephc_web_session_get_status", vec![]), BinOp::StrictEq, e_const("PHP_SESSION_ACTIVE")),
                 vec![
@@ -5224,6 +5289,7 @@ pub(crate) fn web_declarations_with_environment(
             decl_extern_elephc_web_session_set_name(),
             decl_extern_elephc_web_session_get_id(),
             decl_extern_elephc_web_session_set_id(),
+            decl_extern_elephc_web_session_clear_id(),
             decl_extern_elephc_web_session_get_status(),
             decl_extern_elephc_web_session_set_status(),
             decl_extern_elephc_web_session_get_save_path(),

@@ -17,8 +17,9 @@ use super::*;
 pub(super) fn parse_tar_archive_with_public_key(
     data: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
 ) -> Option<Archive> {
-    verify_tar_phar_signature(data, public_key)?;
+    verify_tar_phar_signature(data, public_key, openssl_expected)?;
     let mut p = 0usize;
     let mut entries = Vec::new();
     let mut metadata = Vec::new();
@@ -87,8 +88,9 @@ pub(super) fn parse_tar_entry_with_public_key(
     data: &[u8],
     entry: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
 ) -> Option<Vec<u8>> {
-    verify_tar_phar_signature(data, public_key)?;
+    verify_tar_phar_signature(data, public_key, openssl_expected)?;
     let mut p = 0usize;
     let mut first_header = true;
     let mut selected: Option<&[u8]> = None;

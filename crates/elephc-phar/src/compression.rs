@@ -18,31 +18,42 @@ use super::*;
 /// else (a `<?php` stub) is a native PHAR.
 #[cfg(test)]
 pub(super) fn parse_archive(data: &[u8]) -> Option<Archive> {
-    parse_archive_with_public_key(data, None)
+    parse_archive_with_public_key(data, None, false)
 }
 
 /// Parses archive bytes while authenticating an OpenSSL signature with `public_key`.
 ///
 /// The key is threaded through whole-archive compression so a `.tar.gz` or
 /// `.tar.bz2` archive authenticates the inner PHAR before exposing entries.
+/// `openssl_expected` reports an adjacent `<archive>.pubkey` sidecar: when set,
+/// a keyless hash signature is rejected instead of trusted (CVE-2026-128090).
 pub(super) fn parse_archive_with_public_key(
     data: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
 ) -> Option<Archive> {
     // A whole-archive gzip/bzip2 wrapper (e.g. `.tar.gz` / `.tar.bz2`) is decoded
     // transparently, then the inner archive is parsed normally.
     if data.starts_with(b"\x1f\x8b") {
-        return parse_archive_with_public_key(&decompress_gzip_stream(data)?, public_key);
+        return parse_archive_with_public_key(
+            &decompress_gzip_stream(data)?,
+            public_key,
+            openssl_expected,
+        );
     }
     if data.starts_with(b"BZh") {
-        return parse_archive_with_public_key(&decompress_bzip2_stream(data)?, public_key);
+        return parse_archive_with_public_key(
+            &decompress_bzip2_stream(data)?,
+            public_key,
+            openssl_expected,
+        );
     }
     if data.starts_with(b"PK\x03\x04") || data.starts_with(b"PK\x05\x06") {
-        parse_zip_archive_with_public_key(data, public_key)
+        parse_zip_archive_with_public_key(data, public_key, openssl_expected)
     } else if data.get(257..262) == Some(b"ustar") {
-        parse_tar_archive_with_public_key(data, public_key)
+        parse_tar_archive_with_public_key(data, public_key, openssl_expected)
     } else {
-        parse_native_phar_archive_with_public_key(data, public_key)
+        parse_native_phar_archive_with_public_key(data, public_key, openssl_expected)
     }
 }
 
@@ -58,8 +69,12 @@ pub(super) fn parse_archive_path(path: &std::path::Path) -> Option<Archive> {
 /// need both forms from validating one file snapshot and then consuming another.
 pub(super) fn read_verified_archive(path: &std::path::Path) -> Option<(Vec<u8>, Archive)> {
     let data = std::fs::read(path).ok()?;
+    // PHP checks for the sidecar's existence, not whether it parses: a stray or
+    // malformed `<archive>.pubkey` still means OpenSSL verification is expected.
+    let openssl_expected = archive_public_key_path(path).exists();
     let public_key = read_archive_public_key(path);
-    let archive = parse_archive_with_public_key(&data, public_key.as_ref())?;
+    let archive =
+        parse_archive_with_public_key(&data, public_key.as_ref(), openssl_expected)?;
     Some((data, archive))
 }
 

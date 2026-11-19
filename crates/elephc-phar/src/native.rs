@@ -15,13 +15,17 @@ use super::*;
 /// (and any trailing ` ?>\r\n`); the global metadata is the manifest's metadata field.
 #[cfg(test)]
 pub(super) fn parse_native_phar_archive(data: &[u8]) -> Option<Archive> {
-    parse_native_phar_archive_with_public_key(data, None)
+    parse_native_phar_archive_with_public_key(data, None, false)
 }
 
 /// Parses a native PHAR and authenticates an OpenSSL trailer with `public_key`.
+///
+/// `openssl_expected` reports the adjacent `<archive>.pubkey` sidecar; when set,
+/// a keyless hash signature is rejected instead of trusted.
 pub(super) fn parse_native_phar_archive_with_public_key(
     data: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
 ) -> Option<Archive> {
     let halt = b"__HALT_COMPILER();";
     let halt_idx = find_subslice(data, halt)?;
@@ -43,6 +47,7 @@ pub(super) fn parse_native_phar_archive_with_public_key(
         data,
         global_flags & PHAR_HDR_SIGNATURE != 0,
         public_key,
+        openssl_expected,
     )?;
     let mut q = manifest_start + 8 + 2 + 4;
     let alias_len = le32(data, q)? as usize;
@@ -105,6 +110,7 @@ pub(super) fn parse_native_phar_entry_with_public_key(
     data: &[u8],
     entry: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
 ) -> Option<Vec<u8>> {
     let halt = b"__HALT_COMPILER();";
     let halt_idx = find_subslice(data, halt)?;
@@ -125,6 +131,7 @@ pub(super) fn parse_native_phar_entry_with_public_key(
         data,
         global_flags & PHAR_HDR_SIGNATURE != 0,
         public_key,
+        openssl_expected,
     )?;
     let mut q = manifest_start.checked_add(8 + 2 + 4)?;
     let alias_len = le32(data, q)? as usize;

@@ -149,10 +149,17 @@ pub(super) fn compute_signature(flag: u32, key: Option<&[u8]>, data: &[u8]) -> O
 
 /// Authenticates the signature required by a native PHAR manifest before payloads
 /// are decoded. OpenSSL signatures require a verified external public key.
+///
+/// `openssl_expected` is true when `<archive>.pubkey` exists. PHP treats that
+/// sidecar as the trust anchor for an OpenSSL signature, so a keyless hash
+/// signature must be rejected there: otherwise an attacker can replace the
+/// archive contents and downgrade the declared signature type to a digest
+/// anyone can recompute (CVE-2026-128090).
 pub(super) fn verify_native_phar_signature(
     data: &[u8],
     signature_required: bool,
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
 ) -> Option<()> {
     if !signature_required {
         if data.ends_with(b"GBMB") {
@@ -174,6 +181,9 @@ pub(super) fn verify_native_phar_signature(
         let signed_len = data.len().checked_sub(trailer_len)?;
         let signature = data.get(signed_len..signed_len.checked_add(signature_len)?)?;
         return rsa_sha1_verify(data.get(..signed_len)?, signature, public_key?);
+    }
+    if openssl_expected {
+        return None;
     }
 
     let digest_len = signature_digest_len(flags)?;
@@ -224,7 +234,7 @@ pub(super) fn sign_archive_openssl(path: &[u8], key_pem: &[u8]) -> Option<()> {
         .unwrap_or(&signing_public_key);
     match signing_format(&data)? {
         ArchiveFormat::Zip => {
-            let archive = parse_zip_archive_with_public_key(&data, Some(verification_key))?;
+            let archive = parse_zip_archive_with_public_key(&data, Some(verification_key), false)?;
             let signed = sign_zip_archive(
                 &archive,
                 PHAR_OPENSSL_SIGNATURE_TYPE,
@@ -233,7 +243,7 @@ pub(super) fn sign_archive_openssl(path: &[u8], key_pem: &[u8]) -> Option<()> {
             write_path(path, &signed)
         }
         ArchiveFormat::Tar => {
-            let archive = parse_tar_archive_with_public_key(&data, Some(verification_key))?;
+            let archive = parse_tar_archive_with_public_key(&data, Some(verification_key), false)?;
             let signed = sign_tar_archive(
                 &archive,
                 PHAR_OPENSSL_SIGNATURE_TYPE,
@@ -242,7 +252,7 @@ pub(super) fn sign_archive_openssl(path: &[u8], key_pem: &[u8]) -> Option<()> {
             write_path(path, &signed)
         }
         ArchiveFormat::NativePhar => {
-            parse_native_phar_archive_with_public_key(&data, Some(verification_key))?;
+            parse_native_phar_archive_with_public_key(&data, Some(verification_key), false)?;
             let mut out = strip_signature_trailer(&data).to_vec();
             let sig = rsa_sha1_sign(&out, key_pem)?;
             out.extend_from_slice(&sig);
@@ -357,11 +367,16 @@ pub(super) fn read_zip_signature(data: &[u8]) -> Option<Vec<u8>> {
 
 /// Authenticates a tar PHAR signature before any entry is exposed.
 ///
+/// Authenticates a tar PHAR signature before any entry is exposed.
+///
 /// Tar signatures cover every byte before the signature entry's header. OpenSSL
-/// signatures require the archive's external public key.
+/// signatures require the archive's external public key. `openssl_expected`
+/// mirrors the adjacent `<archive>.pubkey` sidecar: when it exists, only an
+/// OpenSSL signature is accepted (CVE-2026-128090).
 pub(super) fn verify_tar_phar_signature(
     data: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
 ) -> Option<()> {
     let mut p = 0usize;
     while p.checked_add(512)? <= data.len() {
@@ -383,6 +398,9 @@ pub(super) fn verify_tar_phar_signature(
             if flag == PHAR_OPENSSL_SIGNATURE_TYPE {
                 return rsa_sha1_verify(data.get(..p)?, &expected, public_key?);
             }
+            if openssl_expected {
+                return None;
+            }
             signature_digest_len(flag)?;
             let actual = compute_signature(flag, None, data.get(..p)?)?;
             return (actual == expected).then_some(());
@@ -396,10 +414,13 @@ pub(super) fn verify_tar_phar_signature(
 ///
 /// The digest covers local records, central-directory records, and the ZIP
 /// comment while excluding the reserved signature entry and EOCD record. OpenSSL
-/// signatures require the archive's external public key.
+/// signatures require the archive's external public key. `openssl_expected`
+/// mirrors the adjacent `<archive>.pubkey` sidecar, so a keyless signature is
+/// rejected when the sidecar says OpenSSL verification is expected.
 pub(super) fn verify_zip_phar_signature(
     data: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
 ) -> Option<()> {
     let eocd = find_zip_eocd(data)?;
     let (entry_count, central_dir_offset) = zip_eocd_info(data)?;
@@ -486,6 +507,8 @@ pub(super) fn verify_zip_phar_signature(
     signed.extend_from_slice(comment);
     if flag == PHAR_OPENSSL_SIGNATURE_TYPE {
         rsa_sha1_verify(&signed, &expected, public_key?)
+    } else if openssl_expected {
+        None
     } else {
         (compute_signature(flag, None, &signed)? == expected).then_some(())
     }

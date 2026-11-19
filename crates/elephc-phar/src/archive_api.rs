@@ -21,8 +21,9 @@ pub fn extract_url_bytes(url: &[u8]) -> Option<Vec<u8>> {
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
     let data = std::fs::read(path).ok()?;
+    let openssl_expected = archive_public_key_path(path).exists();
     let public_key = read_archive_public_key(path);
-    extract_archive_entry(&data, entry, public_key.as_ref())
+    extract_archive_entry(&data, entry, public_key.as_ref(), openssl_expected)
 }
 
 /// Extracts `entry` from already-loaded archive bytes.
@@ -32,7 +33,7 @@ pub fn extract_url_bytes(url: &[u8]) -> Option<Vec<u8>> {
 /// filesystem path from which to load `<archive>.pubkey`; use [`extract_url_bytes`]
 /// when signature authentication is required.
 pub fn extract_entry_bytes(archive: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
-    extract_archive_entry(archive, entry, None)
+    extract_archive_entry(archive, entry, None, false)
 }
 
 /// Extracts one entry after authenticating and dispatching the archive family.
@@ -43,20 +44,31 @@ fn extract_archive_entry(
     archive: &[u8],
     entry: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
 ) -> Option<Vec<u8>> {
     // Whole-archive gzip/bzip2 wrappers are decoded transparently before extraction.
     if archive.starts_with(b"\x1f\x8b") {
-        return extract_archive_entry(&decompress_gzip_stream(archive)?, entry, public_key);
+        return extract_archive_entry(
+            &decompress_gzip_stream(archive)?,
+            entry,
+            public_key,
+            openssl_expected,
+        );
     }
     if archive.starts_with(b"BZh") {
-        return extract_archive_entry(&decompress_bzip2_stream(archive)?, entry, public_key);
+        return extract_archive_entry(
+            &decompress_bzip2_stream(archive)?,
+            entry,
+            public_key,
+            openssl_expected,
+        );
     }
     if archive.starts_with(b"PK\x03\x04") || archive.starts_with(b"PK\x05\x06") {
-        parse_zip_entry_with_public_key(archive, entry, public_key)
+        parse_zip_entry_with_public_key(archive, entry, public_key, openssl_expected)
     } else if archive.get(257..262) == Some(b"ustar") {
-        parse_tar_entry_with_public_key(archive, entry, public_key)
+        parse_tar_entry_with_public_key(archive, entry, public_key, openssl_expected)
     } else {
-        parse_native_phar_entry_with_public_key(archive, entry, public_key)
+        parse_native_phar_entry_with_public_key(archive, entry, public_key, openssl_expected)
     }
 }
 

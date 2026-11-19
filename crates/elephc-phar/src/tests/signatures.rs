@@ -275,6 +275,60 @@ pub(super) fn zip_phar_hash_signature_round_trip() {
     check_tar_zip_hash_signature("zip");
 }
 
+/// CVE-2026-128090: an adjacent `<archive>.pubkey` means OpenSSL verification
+/// is expected, so an archive that declares a keyless hash signature must be
+/// rejected instead of trusted. Without the sidecar the hash signature keeps
+/// PHP's existing behaviour.
+#[test]
+pub(super) fn hash_signed_phars_reject_pubkey_sidecar_downgrade() {
+    const PAYLOAD: &[u8] = b"downgrade-guard payload";
+    for extension in ["phar", "tar", "zip"] {
+        let path = std::env::temp_dir().join(format!(
+            "elephc-phar-sidecar-downgrade-{}-{extension}.{extension}",
+            std::process::id()
+        ));
+        let path_bytes = path.to_string_lossy();
+        assert_eq!(
+            put_entry_bytes(path_bytes.as_bytes(), b"payload.txt", PAYLOAD),
+            Some(PAYLOAD.len())
+        );
+        assert_eq!(sign_archive_hash(path_bytes.as_bytes(), 3), Some(()));
+        let url = format!("phar://{}/payload.txt", path.display());
+
+        // No sidecar: the archive-declared SHA-256 digest is the trust decision.
+        assert!(
+            parse_archive_path(&path).is_some(),
+            "{extension}: hash signature must remain usable without a sidecar"
+        );
+        assert_eq!(
+            extract_url_bytes(url.as_bytes()).as_deref(),
+            Some(PAYLOAD),
+            "{extension}: entry must remain readable without a sidecar"
+        );
+        assert!(
+            read_signature_info(path_bytes.as_bytes()).is_some(),
+            "{extension}: signature metadata must remain readable without a sidecar"
+        );
+
+        // Trusted channel installs the public key: now only OpenSSL is accepted.
+        write_test_public_key(&path);
+        assert!(
+            parse_archive_path(&path).is_none(),
+            "{extension}: a hash signature must be rejected when <archive>.pubkey exists"
+        );
+        assert!(
+            extract_url_bytes(url.as_bytes()).is_none(),
+            "{extension}: entry extraction must reject the downgraded signature"
+        );
+        assert!(
+            read_signature_info(path_bytes.as_bytes()).is_none(),
+            "{extension}: signature metadata must reject the downgraded signature"
+        );
+
+        remove_signed_fixture(&path);
+    }
+}
+
 /// OpenSSL signing a tar/zip phar writes an RSA-SHA1 `.phar/signature.bin` that
 /// verifies against the derived public key over the archive's signed range.
 pub(super) fn check_tar_zip_openssl_signature(ext: &str) {
@@ -308,7 +362,7 @@ pub(super) fn check_tar_zip_openssl_signature(ext: &str) {
     assert_eq!(sig.len(), 128, "1024-bit RSA signature is 128 bytes");
     assert_eq!(signature_type_name(pb.as_bytes()).as_deref(), Some(&b"OpenSSL"[..]));
     // The signature verifies against the public key over the signed range.
-    let arch = parse_archive_with_public_key(&data, Some(&test_rsa_public_key())).unwrap();
+    let arch = parse_archive_with_public_key(&data, Some(&test_rsa_public_key()), true).unwrap();
     let key = RsaPrivateKey::from_pkcs8_pem(TEST_RSA_KEY_PEM).unwrap();
     let pubkey = RsaPublicKey::from(&key);
     let hashed = Sha1::digest(tar_zip_signed_range(&arch));
