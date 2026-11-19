@@ -1983,6 +1983,24 @@ fn merge_local_assignment_type(
             && !checker.active_globals.contains(name)
             && !checker.static_local_names.contains(name);
         if narrows_a_union_in_straight_line || narrows_an_iterable_in_a_guard {
+            // A numeric union a counter left behind (`int|float` after `$i++`) that a raw
+            // number replaces starts a fresh binding for storage, exactly as the compatible
+            // merge below does: the later loop must not widen the slot the earlier one keeps
+            // as an integer.
+            if narrows_a_union_in_straight_line
+                && stmt_form
+                && span.identifies_a_node()
+                && splits_numeric_binding(existing, ty, value)
+                && checker.local_binding_is_killable(name)
+                && !checker.local_parameter_names.contains(name)
+                && !checker.top_level_binding_is_program_global(name)
+            {
+                checker
+                    .local_retype_sites
+                    .entry(span)
+                    .or_default()
+                    .insert(name.to_string());
+            }
             env.insert(name.to_string(), ty.clone());
         } else if let Some(merged_ty) = merged_ty {
             // A storage-only re-bind (see `splits_numeric_binding`), at the eligibility the

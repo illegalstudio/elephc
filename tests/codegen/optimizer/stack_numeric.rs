@@ -236,7 +236,11 @@ sum_echo($argc + 1000);
         .split("@block name=while.exit")
         .next()
         .unwrap();
-    assert!(body.contains("__rt_mixed_numeric_add"), "{body}");
+    // The boxed add is either the runtime helper or its inlined integer fast path.
+    assert!(
+        body.contains("__rt_mixed_numeric_add") || body.contains("op=mixed_numeric_binop"),
+        "{body}"
+    );
     assert!(
         !body.contains("__rt_mixed_from_value"),
         "the scalar rhs must not be boxed:\n{body}"
@@ -297,8 +301,12 @@ sum_tagged_rhs($argc + 9);
         body.contains("stack_numeric_integer"),
         "the accumulator must keep its frame cell:\n{body}"
     );
+    // The loop's `(int)$sum` condition may box its frame cell on an out-of-line slow path, so only
+    // the accumulation itself (up to that cast) is held to the no-helper rule.
+    let accumulation = body.split("op=cast").next().unwrap();
     assert!(
-        !body.contains("__rt_mixed_from_value") && !body.contains("__rt_mixed_numeric_add"),
+        !accumulation.contains("__rt_mixed_from_value")
+            && !accumulation.contains("__rt_mixed_numeric_add"),
         "the narrowed element must stay out of the boxed numeric helper:\n{body}"
     );
     assert!(
