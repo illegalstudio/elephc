@@ -227,19 +227,41 @@ fn test_proc_nice_zero_succeeds() {
 
 /// An increment outside the C `int` range keeps only its low 32 bits, as php-src's
 /// `nice((int) $priority)` does: large negatives never flip to the lowest priority.
-/// Only unprivileged-safe increments, so the result is the same under root.
+/// Only unprivileged-safe increments, so the result is the same under root. The level is
+/// read from field 19 of `/proc/self/stat` on Linux (the Alpine test images ship BusyBox
+/// `ps`, which has no `-p`; `fgets()` because `file_get_contents()` still reads procfs as
+/// empty, #2190) and from `ps` elsewhere; an unreadable level, or a starting
+/// level without room for the +2 the fixture expects, prints a line the assertion rejects.
 #[test]
 fn test_proc_nice_narrows_out_of_range_increments_like_php() {
     let out = compile_and_run(
         r#"<?php
 function nice_level() {
-    $process = proc_open(['sh', '-c', 'ps -o nice= -p $$'], [1 => ['pipe', 'w']], $pipes);
-    $level = (int) trim(stream_get_contents($pipes[1]));
-    fclose($pipes[1]);
-    proc_close($process);
-    return $level;
+    if (file_exists('/proc/self/stat')) {
+        $handle = fopen('/proc/self/stat', 'r');
+        $stat = (string) fgets($handle);
+        fclose($handle);
+        $close = strrpos($stat, ')');
+        $fields = $close === false ? [] : explode(' ', trim(substr($stat, $close + 1)));
+        $raw = $fields[16] ?? '';
+    } else {
+        $process = proc_open(['sh', '-c', 'ps -o nice= -p $$'], [1 => ['pipe', 'w']], $pipes);
+        $raw = (string) stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        proc_close($process);
+    }
+    $raw = trim($raw);
+    if (!is_numeric($raw)) {
+        echo "unreadable nice level: '", $raw, "'\n";
+        exit(1);
+    }
+    return (int) $raw;
 }
 $base = nice_level();
+if ($base > 17) {
+    echo "starting nice level ", $base, " leaves no room for +2\n";
+    exit(1);
+}
 foreach ([PHP_INT_MIN, -4294967296, 4294967296, -4294967295, 4294967297] as $increment) {
     var_dump(proc_nice($increment));
     echo nice_level() - $base, "\n";
