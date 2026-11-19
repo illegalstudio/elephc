@@ -403,7 +403,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
         None
     } else {
         Some((
-            super::dynamic_new_table::build_table(ctx, &table_candidates, true)?,
+            super::dynamic_new_table::build_table(ctx, &table_candidates, true, false)?,
             table_candidates.len(),
         ))
     };
@@ -656,6 +656,8 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_without_construct
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
 
     let fallback_label = ctx.next_label("dynamic_new_no_ctor_mixed_fallback");
+    // native SimpleXML factories (immediate true) may allocate abstract subclasses
+    let allow_abstract = matches!(inst.immediate, Some(Immediate::Bool(true)));
     super::constructorless_refusals::emit_constructorless_abstract_refusals(ctx, inst);
     let candidates = dynamic_new_without_constructor_mixed_candidates(ctx, inst)?;
     let (table_candidates, candidates) =
@@ -664,7 +666,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_without_construct
         None
     } else {
         Some((
-            super::dynamic_new_table::build_table(ctx, &table_candidates, false)?,
+            super::dynamic_new_table::build_table(ctx, &table_candidates, false, allow_abstract)?,
             table_candidates.len(),
         ))
     };

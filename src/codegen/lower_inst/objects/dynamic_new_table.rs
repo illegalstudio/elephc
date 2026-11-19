@@ -92,6 +92,7 @@ pub(super) fn build_table(
     ctx: &mut FunctionContext<'_>,
     table_candidates: &[DynamicNewCandidate],
     with_constructor: bool,
+    allow_abstract: bool,
 ) -> Result<String> {
     let mut words = Vec::with_capacity(table_candidates.len() * 8);
     for candidate in table_candidates {
@@ -129,7 +130,7 @@ pub(super) fn build_table(
                         ctx.module
                             .class_infos
                             .get(&candidate.class_name)
-                            .is_some_and(|info| info.is_abstract),
+                            .is_some_and(|info| info.is_abstract && !allow_abstract),
                     ) << 1)
                     | (u64::from(ctx.module.enum_infos.contains_key(&candidate.class_name)) << 2)
                     | (u64::from(super::super::is_throwable_like_class(ctx, &candidate.class_name)) << 3),
