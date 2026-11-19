@@ -237,7 +237,7 @@ pub(super) fn source_load_local_slot(
     let Some(inst_ref) = ctx.function.instruction(inst) else {
         return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
     };
-    if inst_ref.op == Op::LoadLocal {
+    if matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
         if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
             return Ok(Some(slot));
         }
