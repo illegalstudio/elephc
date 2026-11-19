@@ -64,6 +64,7 @@ pub mod array_splice_remove;
 pub mod array_unshift;
 pub mod hash_iter;
 pub mod hash_bucket;
+pub mod hash_payload;
 pub mod hash_fnv1a;
 pub mod hash_get;
 pub mod hash_key_eq;

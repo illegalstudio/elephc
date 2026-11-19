@@ -14,6 +14,7 @@
 //! - `__rt_hash_project_spread` preserves integer keys and normalizes numeric
 //!   string property names to the integer keys produced by PHP array casts.
 
+use elephc_memoir::values::hash_payload::HashPayloadSlots;
 use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -137,9 +138,8 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_spread_value_ref");                     // refcounted children need a reference bump
     emitter.instruction("cmp x5, #7");                                          // is the source value a boxed mixed cell?
     emitter.instruction("b.eq __rt_hash_spread_value_ref");                     // refcounted children need a reference bump
-    emitter.instruction("ldr x3, [sp, #48]");                                   // reload the scalar value low word
-    emitter.instruction("ldr x4, [sp, #56]");                                   // reload the scalar value high word
-    emitter.instruction("ldr x5, [sp, #64]");                                   // reload the scalar value runtime tag
+    let payload = HashPayloadSlots { low: 48, reload_later: true };
+    payload.emit_reload(emitter);
     emitter.instruction("b __rt_hash_spread_insert");                           // scalars are ready to insert
 
     emitter.label("__rt_hash_spread_value_reference");
@@ -152,23 +152,11 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_spread_insert");                           // insert the retained reference cell
 
     emitter.label("__rt_hash_spread_value_str");
-    emitter.instruction("ldr x1, [sp, #48]");                                   // load the borrowed source string pointer
-    emitter.instruction("ldr x2, [sp, #56]");                                   // load the borrowed source string length
-    emitter.instruction("bl __rt_str_persist");                                 // duplicate the string payload for the destination owner
-    emitter.instruction("str x1, [sp, #48]");                                   // save the owned string pointer
-    emitter.instruction("str x2, [sp, #56]");                                   // save the owned string length
-    emitter.instruction("ldr x3, [sp, #48]");                                   // reload the owned string value low word
-    emitter.instruction("ldr x4, [sp, #56]");                                   // reload the owned string value high word
-    emitter.instruction("ldr x5, [sp, #64]");                                   // reload the string value runtime tag
+    payload.emit_persist_string(emitter);
     emitter.instruction("b __rt_hash_spread_insert");                           // insert the owned string payload
 
     emitter.label("__rt_hash_spread_value_ref");
-    emitter.instruction("ldr x0, [sp, #48]");                                   // load the borrowed refcounted child pointer
-    emitter.instruction("bl __rt_incref");                                      // retain the child for the destination owner
-    emitter.instruction("str xzr, [sp, #56]");                                  // canonicalize the retained reference's unused high payload word
-    emitter.instruction("ldr x3, [sp, #48]");                                   // reload the retained child value low word
-    emitter.instruction("mov x4, xzr");                                         // refcounted hash values store only the low payload word
-    emitter.instruction("ldr x5, [sp, #64]");                                   // reload the refcounted value runtime tag
+    payload.emit_retain_pointer(emitter);
 
     // -- select the destination key: reindex integer keys, preserve string keys --
     emitter.label("__rt_hash_spread_insert");
@@ -316,9 +304,8 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_spread_x86_value_ref");                   // refcounted children need a reference bump
     emitter.instruction("cmp r9, 7");                                           // is the source value a boxed mixed cell?
     emitter.instruction("je __rt_hash_spread_x86_value_ref");                   // refcounted children need a reference bump
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the scalar value low word
-    emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // reload the scalar value high word
-    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the scalar value runtime tag
+    let payload = HashPayloadSlots { low: 56, reload_later: true };
+    payload.emit_reload(emitter);
     emitter.instruction("jmp __rt_hash_spread_x86_insert");                     // scalars are ready to insert
 
     emitter.label("__rt_hash_spread_x86_value_reference");
@@ -331,23 +318,11 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_spread_x86_insert");                     // insert the retained reference cell
 
     emitter.label("__rt_hash_spread_x86_value_str");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the borrowed source string pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // load the borrowed source string length
-    emitter.instruction("call __rt_str_persist");                               // duplicate the string payload for the destination owner
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the owned string pointer
-    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save the owned string length
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the owned string value low word
-    emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // reload the owned string value high word
-    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the string value runtime tag
+    payload.emit_persist_string(emitter);
     emitter.instruction("jmp __rt_hash_spread_x86_insert");                     // insert the owned string payload
 
     emitter.label("__rt_hash_spread_x86_value_ref");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the borrowed refcounted child pointer
-    emitter.instruction("call __rt_incref");                                    // retain the child for the destination owner
-    emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // canonicalize the retained reference's unused high payload word
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the retained child value low word
-    emitter.instruction("xor r8d, r8d");                                        // refcounted hash values store only the low payload word
-    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the refcounted value runtime tag
+    payload.emit_retain_pointer(emitter);
 
     // -- select the destination key: reindex integer keys, preserve string keys --
     emitter.label("__rt_hash_spread_x86_insert");
