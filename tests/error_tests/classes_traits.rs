@@ -603,14 +603,15 @@ fn test_error_override_attribute_on_static_with_no_parent() {
     );
 }
 
-/// Verifies that `#[AllowDynamicProperties]` inside a namespace is treated as a
-/// user-defined attribute (not the built-in), so dynamic properties are rejected
-/// with "Undefined property".
+/// Verifies that `#[AllowDynamicProperties]` inside a namespace stays a user-defined attribute
+/// (not the built-in) and therefore does not suppress PHP 8.5's creation deprecation.
+///
+/// The write itself is legal on an ordinary class; `tests/codegen/objects/property_access/`
+/// pins the emitted `Creation of dynamic property N\Bag::$x is deprecated` notice.
 #[test]
-fn test_allow_dynamic_properties_namespaced_unqualified_lookalike_is_not_builtin() {
-    expect_error(
+fn test_allow_dynamic_properties_namespaced_lookalike_does_not_grant_the_exemption() {
+    expect_no_error(
         "<?php namespace N; #[AllowDynamicProperties] class Bag {} $b = new Bag(); $b->x = 1;",
-        "Undefined property: N\\Bag::x",
     );
 }
 

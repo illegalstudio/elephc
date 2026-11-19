@@ -78,6 +78,11 @@ def run(family, target, shard, count, root, env):
                        EVAL_SHARD_NEXTEST_ARCHIVE=str(root / "nextest-archive.tar.zst"),
                        EVAL_SHARD_NEXTEST_EXTRACT_DIR=str(extracted),
                        EVAL_SHARD_JUNIT_FILE="target/nextest/ci/junit-pass1.xml")
+            if macos:
+                # The heaviest `codegen::eval*` cases lower the catalog for 324-430s here.
+                # Let the single-process pass finish them instead of forcing a duplicate
+                # nextest pass that hits the same per-test budget.
+                env.setdefault("EVAL_SHARD_STALL_TIMEOUT", "720")
         execute(["bash", f"scripts/ci/run_{family}_codegen_shard.sh", binaries[0], shard, count], env)
         return
     workers = {"non-codegen": 3 if macos else 4, "cli": 2, "web": 1,

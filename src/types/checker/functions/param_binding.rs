@@ -58,6 +58,7 @@ impl Checker {
         context: &str,
         owner: Option<(&str, &str)>,
         by_ref: bool,
+        position: usize,
     ) -> Result<(), CompileError> {
         self.require_strict_types_param_binding(expected, actual, arg.span, context)?;
         // Null-only promoted parameters are checked before constructor ABI materialization.
@@ -73,6 +74,82 @@ impl Checker {
             // `?callable`, `callable|false` and the other callable unions keep a literal name as
             // the string too, so the runtime dispatch must know it like an exact `callable`.
             self.record_declared_callable_literal_name(arg, env);
+        }
+
+        // A property reference cannot be coerced into the parameter's type the way a plain
+        // value can, so PHP checks the property's CURRENT type at the call boundary and raises
+        // its argument `TypeError` before the callee body runs. Record the guard whenever the
+        // declared storage is not exactly the parameter representation, including a union that
+        // may hold a compatible member (`int|string` for `int &$x`) and a boxed `mixed` slot.
+        let mut property_place = arg;
+        while let crate::parser::ast::ExprKind::NamedArg { value, .. }
+        | crate::parser::ast::ExprKind::ErrorSuppress(value) = &property_place.kind
+        {
+            property_place = value;
+        }
+        if by_ref
+            && matches!(
+                property_place.kind,
+                crate::parser::ast::ExprKind::PropertyAccess { .. }
+            )
+            && !matches!(expected, PhpType::Mixed)
+            && crate::types::param_binding::by_ref_property_writeback_supported(expected)
+            && crate::types::param_binding::by_ref_property_writeback_supported(actual)
+            && (matches!(actual, PhpType::Union(_) | PhpType::Mixed)
+                || !Self::types_compatible(expected, actual)
+                || !self.type_accepts(expected, actual))
+        {
+            let display = context
+                .split(" parameter $")
+                .next()
+                .unwrap_or(context)
+                .trim();
+            let display = display
+                .strip_prefix("Function '")
+                .or_else(|| display.strip_prefix("Method '"))
+                .or_else(|| display.strip_prefix("Static method "))
+                .unwrap_or(display)
+                .trim_end_matches('\'');
+            let display = if display.starts_with("Closure") {
+                "{closure}"
+            } else {
+                display
+            };
+            let param_name = context.rsplit(" parameter $").next().unwrap_or("arg");
+            // The current value decides the `given` type when the storage can hold a compatible
+            // member; a concrete disjoint type always throws and reports its declared type.
+            let coerces_weakly = self.by_ref_property_slot_is_untyped(property_place, env)?;
+            // An untyped slot's current value decides the weak acceptance, even when its
+            // flow-inferred type is one concrete member.
+            let conditional = coerces_weakly
+                || matches!(actual, PhpType::Union(_) | PhpType::Mixed)
+                || actual.codegen_repr() == PhpType::Mixed
+                // A declared object may hold a subclass (or the parameter may name a
+                // subclass of the property's type): PHP checks the CURRENT class at the
+                // call boundary instead of refusing statically.
+                || matches!((expected, actual), (PhpType::Object(_), PhpType::Object(_)));
+            let given = crate::types::diagnostic_names::php_type_name(actual);
+            let prefix = format!(
+                "{display}(): Argument #{position} (${param_name}) must be of type {}, ",
+                crate::types::diagnostic_names::php_type_name(expected),
+            );
+            let scope = self.current_loop_storage_scope.clone();
+            crate::types::checker::record_throw_access_site(
+                &mut self.throw_access_sites,
+                &scope,
+                property_place.span,
+                crate::types::ThrowAccessInfo {
+                    span: property_place.span,
+                    kind: crate::types::ThrowAccessKind::ReferenceArgumentType {
+                        prefix,
+                        expected: expected.clone(),
+                        conditional,
+                        coerces_weakly,
+                        given,
+                    },
+                },
+            );
+            return Ok(());
         }
 
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
@@ -152,6 +229,31 @@ impl Checker {
                 self.require_compatible_arg_type(expected, actual, arg.span, context)
             }
         }
+    }
+
+    /// Returns whether a by-reference property argument addresses an UNTYPED declaration.
+    ///
+    /// PHP coerces an untyped property's current value to a declared scalar by-reference
+    /// parameter in weak mode; a declared property, including `mixed`, is checked against its
+    /// current value without coercion.
+    fn by_ref_property_slot_is_untyped(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        let crate::parser::ast::ExprKind::PropertyAccess { object, property } = &arg.kind else {
+            return Ok(false);
+        };
+        let Some((class_name, addressable)) =
+            self.ref_property_slot_addressability(object, property, env)?
+        else {
+            return Ok(false);
+        };
+        Ok(addressable
+            && self
+                .classes
+                .get(class_name.trim_start_matches('\\'))
+                .is_some_and(|info| !info.visible_property_is_declared(property)))
     }
 
     /// Rejects a declared-parameter argument that `declare(strict_types=1)` forbids at this

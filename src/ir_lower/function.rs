@@ -1866,7 +1866,10 @@ fn lower_body_into_function(
     declared_trait_properties: &std::collections::HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
     extern_classes: &std::collections::HashMap<String, crate::types::ExternClassInfo>,
-    throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
+    throw_access_sites: &std::collections::HashMap<
+        (String, Span),
+        crate::types::ThrowAccessInfo,
+    >,
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
     closure_generator_spans: &std::collections::HashSet<Span>,
     array_push_property_plans: &std::collections::HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,

@@ -400,13 +400,13 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
-        // Also includes the SimpleXML allocation and diagnostic adapters, and
+        // Also includes the SimpleXML allocation and diagnostic adapters,
         // `__elephc_reflection_class_build` / `__elephc_eval_reflection_class_build`, which
         // only compiled reflector getters call. The two internal libc setlocale helpers and
         // the internal nl_langinfo helper join the internal eval inventory, as does the
         // random prelude's `__elephc_call_strict_types` reader and the tokenizer prelude's
-        // two line-aware diagnostic helpers.
-        assert_eq!(eval_internal, 144);
+        // two line-aware diagnostic helpers and the internal memory limit setter.
+        assert_eq!(eval_internal, 145);
         // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 381);
@@ -422,8 +422,9 @@ mod tests {
         // compiled and eval `ReflectionClass` builder calls two more. The seven ctype
         // contracts, two internal setlocale helpers, the internal nl_langinfo helper, and
         // the random prelude's `__elephc_call_strict_types` reader join the AOT registry,
-        // with two line-aware tokenizer helpers and two PCRE error readers.
-        assert_eq!(aot_registry, 843);
+        // with two line-aware tokenizer helpers, two PCRE error readers, and
+        // `__elephc_set_memory_limit`.
+        assert_eq!(aot_registry, 844);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
         // The two PHP-visible locale functions are prelude-provided.
@@ -486,8 +487,8 @@ mod tests {
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
         // the internal nl_langinfo helper, the random prelude's
         // `__elephc_call_strict_types` reader, and the tokenizer prelude's two line-aware
-        // diagnostic helpers.
-        assert_eq!(unsupported, 525);
+        // diagnostic helpers, and `__elephc_set_memory_limit`.
+        assert_eq!(unsupported, 526);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

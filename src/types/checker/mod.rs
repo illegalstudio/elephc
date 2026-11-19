@@ -475,6 +475,13 @@ pub(crate) struct Checker {
     /// Physical instance slots refined during the current method fixed-point pass.
     /// A first constructor integer initialization may replay a placeholder from an older pass.
     pub method_property_refinements: Option<HashSet<(String, usize)>>,
+    /// Untyped properties that a by-reference call argument needs in boxed `Mixed` storage.
+    ///
+    /// PHP treats an untyped property as `mixed`; elephc infers a narrow storage type from its
+    /// default. Passing it to an untyped by-reference parameter would otherwise write a boxed
+    /// temporary back into that narrow slot. Recorded while checking and applied to `classes`
+    /// before lowering by `apply_reference_property_promotions`.
+    pub reference_property_storage_widenings: HashSet<(String, String)>,
     /// Classes a two-argument `clone()` in this program can hand an override array to.
     ///
     /// Recorded by the `clone` builtin's check hook, and applied to `classes` after checking by
@@ -496,6 +503,11 @@ pub(crate) struct Checker {
     /// every declared slot, while a strict ancestor's private name becomes a distinct dynamic
     /// property outside its declaring scope. Both need per-instance hash storage.
     pub scope_dynamic_mutation_targets: scope_dynamic_storage::ScopeDynamicMutationTargets,
+    /// Exact `(class, property)` names an ordinary PHP 8.5 write creates on a class without
+    /// `#[\AllowDynamicProperties]`. A later read of that name must type-check because the
+    /// per-instance hash holds it, even though no declared slot exists. Entries keep the
+    /// receiver class the site named; the read query accepts its ancestors and descendants.
+    pub dynamic_property_creations: std::collections::BTreeSet<(String, String)>,
     /// Statically-decided access violations that must lower to a catchable
     /// `Error` throw instead of a compile-time error, keyed by source span.
     ///
@@ -503,7 +515,7 @@ pub(crate) struct Checker {
     /// one: lowering looks entries up by the span of the node it is lowering, so a key shared
     /// by many nodes makes all of them throw. See that method for why the preludes make this
     /// reachable rather than theoretical.
-    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
+    pub throw_access_sites: HashMap<(String, Span), ThrowAccessInfo>,
     /// Authoritative result type of each checked builtin call, keyed by call span.
     /// EIR lowering consumes this instead of reimplementing builtin return inference.
     pub builtin_call_types: HashMap<Span, PhpType>,
@@ -1507,7 +1519,8 @@ pub(crate) fn is_unset_call(name: &str) -> bool {
 /// Takes the map rather than the `Checker` so a caller already holding a borrow of another field
 /// — `self.classes`, at both current call sites — can still record.
 pub(crate) fn record_throw_access_site(
-    sites: &mut HashMap<Span, ThrowAccessInfo>,
+    sites: &mut HashMap<(String, Span), ThrowAccessInfo>,
+    scope: &str,
     span: Span,
     info: ThrowAccessInfo,
 ) {
@@ -1520,7 +1533,7 @@ pub(crate) fn record_throw_access_site(
     if span.line == 0 {
         return;
     }
-    sites.insert(span, info);
+    sites.insert((scope.to_string(), span), info);
 }
 
 #[derive(Clone)]
@@ -1790,6 +1803,90 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
         }).collect::<Vec<_>>();
         checker.reference_property_promotions.extend(candidates);
     }
+    let widenings = std::mem::take(&mut checker.reference_property_storage_widenings);
+    for (access_class, prop) in widenings {
+        let mut declaring = checker
+            .classes
+            .get(&access_class)
+            .and_then(|info| info.property_declaring_classes.get(&prop).cloned())
+            .unwrap_or_else(|| access_class.clone());
+        // A subclass may redeclare the untyped property (with its own default). PHP keeps
+        // one property for the whole hierarchy, so widening only the class the access names
+        // desynchronises every redeclaration below it: an inherited method would read a
+        // slot whose representation no longer matches the method's lowering. Start from the
+        // topmost declaration and widen every untyped slot in that subtree.
+        // A PRIVATE declaration is a property of its own: a child that redeclares the same
+        // name gets a separate slot, so widening one must not cross into the other.
+        let declares_private = |name: &str| {
+            checker
+                .classes
+                .get(name)
+                .and_then(|info| info.property_visibilities.get(&prop))
+                .is_some_and(|visibility| *visibility == crate::parser::ast::Visibility::Private)
+        };
+        if !declares_private(&declaring) {
+            while let Some(parent) = checker
+                .classes
+                .get(&declaring)
+                .and_then(|info| info.parent.clone())
+            {
+                // A parent that only INHERITS the property still shares the slot: jump through
+                // it to the ancestor that declares it instead of stopping the walk at the
+                // immediate parent.
+                let Some(owner) = checker
+                    .classes
+                    .get(&parent)
+                    .and_then(|info| info.property_declaring_classes.get(&prop).cloned())
+                else {
+                    break;
+                };
+                if owner == declaring || declares_private(&owner) {
+                    break;
+                }
+                declaring = owner;
+            }
+        }
+        let hierarchy: HashSet<String> = checker
+            .classes
+            .keys()
+            .filter(|name| {
+                let mut current = Some(name.as_str());
+                let mut seen = HashSet::new();
+                while let Some(name) = current {
+                    if name == declaring {
+                        return true;
+                    }
+                    if !seen.insert(name) {
+                        break;
+                    }
+                    current = checker
+                        .classes
+                        .get(name)
+                        .and_then(|info| info.parent.as_deref());
+                }
+                false
+            })
+            .cloned()
+            .collect();
+        for (name, info) in checker.classes.iter_mut() {
+            if !hierarchy.contains(name) {
+                continue;
+            }
+            let Some(slot) = info.visible_property_index(&prop) else {
+                continue;
+            };
+            if info.property_slot_is_declared(slot, &prop)
+                || info.property_slot_is_reference(slot, &prop)
+                || !info
+                    .property_declaring_classes
+                    .get(&prop)
+                    .is_some_and(|decl| hierarchy.contains(decl))
+            {
+                continue;
+            }
+            info.properties[slot].1 = PhpType::Mixed;
+        }
+    }
     let promotions = std::mem::take(&mut checker.reference_property_promotions);
     for (access_class, prop) in promotions {
         let declaring = checker
@@ -1854,9 +1951,9 @@ mod throw_access_site_tests {
     fn a_located_violation_is_recorded() {
         let mut sites = HashMap::new();
         let span = Span::new(7, 3);
-        record_throw_access_site(&mut sites, span, readonly_violation(span));
+        record_throw_access_site(&mut sites, "Base::run", span, readonly_violation(span));
         assert_eq!(sites.len(), 1);
-        assert!(sites.contains_key(&span));
+        assert!(sites.contains_key(&("Base::run".to_string(), span)));
     }
 
     /// A violation the checker CANNOT locate never becomes a key.
@@ -1868,7 +1965,12 @@ mod throw_access_site_tests {
     #[test]
     fn an_unlocatable_violation_never_becomes_a_key() {
         let mut sites = HashMap::new();
-        record_throw_access_site(&mut sites, Span::dummy(), readonly_violation(Span::dummy()));
+        record_throw_access_site(
+            &mut sites,
+            "Base::run",
+            Span::dummy(),
+            readonly_violation(Span::dummy()),
+        );
         assert!(sites.is_empty());
     }
 }

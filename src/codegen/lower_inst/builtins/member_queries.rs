@@ -372,6 +372,14 @@ pub(in crate::codegen::lower_inst) fn static_method_exists_on_class_info(
     target_is_object: bool,
 ) -> bool {
     let method_key = php_symbol_key(method_name);
+    // Compiler-owned helpers are never part of the PHP surface, and php-src's internal URI
+    // classes hide their native destructor from `method_exists()` too.
+    let uri_internal = crate::uri_prelude::is_internal_uri_class(resolved_class);
+    if (method_key.starts_with("__elephc_") && uri_internal)
+        || (matches!(method_key.as_str(), "__destruct" | "__clone") && uri_internal)
+    {
+        return false;
+    }
     // A builtin's reviewed surface hides its implementation methods (mysqli's `__destruct`,
     // `__elephc*` helpers) — also when they are inherited by a user subclass.
     let declaring_class = class_info
@@ -461,6 +469,7 @@ pub(in crate::codegen::lower_inst) fn static_property_exists_on_class_info(
 ) -> bool {
     if elephc_builtin_contract::lookup_class(resolved_class)
         .is_some_and(|class| class.property_is_hidden(property_name))
+        || crate::codegen_support::runtime::data::is_uri_opaque_handle(resolved_class, property_name)
     {
         return false;
     }

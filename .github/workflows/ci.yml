@@ -41,6 +41,7 @@ env:
     -p elephc-bcmath
     -p elephc-gmp
     -p elephc-random
+    -p elephc-uri
     -p elephc-mbstring
     -p elephc-iconv
     -p elephc-phar
@@ -1612,14 +1613,60 @@ jobs:
             "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
             "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
 
-  # Eval integration tests compile, link, and run full programs while exercising
-  # eval/magician paths, so keep them out of the ordinary codegen shards. Run each
-  # deterministic shard in one libtest process so runtime-object and bridge caches
-  # survive between cases, with two workers preserving bounded parallelism.
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
+  uri-ios-compile-link:
+    name: URI iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: [plan, build-archive-macos-aarch64, build-ios]
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    env:
+      ELEPHC_CI_PREBUILT_COMPILER: "1"
+      ELEPHC_CI_PREBUILT_IOS_BRIDGES: "1"
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v7
+      - name: Restore the shared macOS compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: macos-aarch64
+          kind: compiler
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
+
+      - name: Restore shared iOS bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: ${{ matrix.elephc_target }}
+          kind: ios
+          attempt: ${{ fromJSON(needs.build-ios.outputs.artifact-attempts)[matrix.elephc_target] }}
+      - name: Compile and link the URI bridge
+        run: |
+          bash scripts/ci/test_ios_uri_link.sh \
+            "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
 
       - name: Audit consumer compilation
         if: always()
         uses: ./.github/actions/assert-consumer-builds
+
+  # Eval integration tests compile, link, and run full programs while exercising
+  # eval/magician paths, so keep them out of the ordinary codegen shards. Run each
+  # deterministic shard in one libtest process so runtime-object and bridge caches
+  # survive between cases, with two workers preserving bounded parallelism.
 
   eval-codegen-tests-macos-aarch64:
     name: Eval Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
@@ -2170,6 +2217,7 @@ jobs:
       - gmp-ios-compile-link
       - tidy-ios-compile-link
       - gmp-phpt-corpus
+      - uri-ios-compile-link
       - eval-codegen-tests-macos-aarch64
       - eval-codegen-tests-linux-x86_64
       - eval-codegen-tests-linux-aarch64
@@ -2228,7 +2276,7 @@ jobs:
           extended_tier="non-codegen-tests-macos-aarch64 cli-tests-macos-aarch64
             web-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
             curl-native-macos-aarch64 curl-codegen-tests-macos-aarch64
-            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link gmp-ios-compile-link tidy-ios-compile-link"
+            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link gmp-ios-compile-link tidy-ios-compile-link uri-ios-compile-link"
           in_list() { case " $(echo $2) " in *" $1 "*) return 0 ;; esac; return 1; }
           echo "tiers: run=$RUN_TIER extended=$EXTENDED_TIER"
           status=0

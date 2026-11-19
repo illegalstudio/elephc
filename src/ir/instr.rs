@@ -1383,6 +1383,11 @@ pub enum Op {
     /// Immediate: `PropertyFetchMode`, php's read-vs-probe distinction; absent means `Read`.
     DynamicPropGet,
     DynamicPropSet,
+    /// Raises PHP's call-site `TypeError` for a property argument whose declared storage cannot
+    /// satisfy a typed by-reference parameter. Immediate: data id of the complete message.
+    /// The runtime unwinder transfers control, so the callee call emitted after this in the
+    /// same EIR block is unreachable but still well-formed.
+    ReferenceArgumentTypeError,
     NullsafePropGet,
     NullsafeMethodCall,
     /// Rejects an abstract instance target before evaluating call arguments.
@@ -1802,6 +1807,7 @@ impl Op {
             // `TypeError` for a value a declared slot refuses, which is `MAY_THROW`. Advertising
             // `DynamicPropSet` as a bare heap write let the optimizer reorder or drop a store
             // that now diagnoses and can unwind.
+            ReferenceArgumentTypeError => E::all(),
             PropSet | DynamicPropSet => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_FATAL
                 | E::REFCOUNT_OP,
@@ -2185,6 +2191,7 @@ impl Op {
             AcquireRefCell => "acquire_ref_cell",
             DynamicPropGet => "dynamic_prop_get",
             DynamicPropSet => "dynamic_prop_set",
+            ReferenceArgumentTypeError => "reference_argument_type_error",
             DynamicPropUnset => "dynamic_prop_unset",
             NullsafePropGet => "nullsafe_prop_get",
             NullsafeMethodCall => "nullsafe_method_call",

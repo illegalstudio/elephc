@@ -1361,3 +1361,151 @@ compoundNamedFailure(null); compoundDynamicFailure(null, 'value');
         assert!(!out.stderr.contains("Warning:"), "xml={xml}: {}", out.stderr);
     }
 }
+
+/// An undeclared write on an ordinary PHP 8.5 class creates a per-instance dynamic property with
+/// PHP's deprecation notice; the entry then participates in reads, `isset()`, `unset()` and the
+/// warning a later read reports once the entry is gone.
+#[test]
+fn test_undeclared_property_write_creates_a_deprecated_dynamic_property() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class PlainDynamic { public int $x = 1; }
+$b = new PlainDynamic();
+$b->y = 3;
+echo $b->y, "\n";
+// The documented declared-class JSON contract keeps dynamic entries out of `json_encode()`;
+// `var_dump()`, `print_r()` and `var_export()` list them.
+echo json_encode($b), "\n";
+var_dump(isset($b->y), isset($b->z));
+unset($b->y);
+var_dump(isset($b->y));
+var_dump($b->y);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "3\n{\"x\":1}\nbool(true)\nbool(false)\nbool(false)\nNULL\n",
+        "{}",
+        out.stderr
+    );
+    assert_eq!(
+        out.stderr
+            .matches("Deprecated: Creation of dynamic property PlainDynamic::$y is deprecated")
+            .count(),
+        1,
+        "{}",
+        out.stderr
+    );
+    assert_eq!(
+        out.stderr
+            .matches("Warning: Undefined property: PlainDynamic::$y")
+            .count(),
+        1,
+        "{}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("PlainDynamic::$z"),
+        "isset() of a missing dynamic name must stay silent: {}",
+        out.stderr
+    );
+}
+
+/// `#[\AllowDynamicProperties]` keeps its exemption: the same write stores the value without the
+/// creation notice.
+#[test]
+fn test_allow_dynamic_properties_class_still_creates_without_a_notice() {
+    let out = compile_and_run_capture(
+        r#"<?php
+#[\AllowDynamicProperties]
+class OpenDynamic { public int $x = 1; }
+$b = new OpenDynamic();
+$b->y = 3;
+echo $b->y, "\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "3\n", "{}", out.stderr);
+    assert!(
+        !out.stderr.contains("Creation of dynamic property"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// A user `readonly` class compiles the write but raises php-src's exact catchable `Error` at
+/// runtime, leaving the object unchanged.
+#[test]
+fn test_readonly_class_dynamic_property_write_raises_runtime_error() {
+    let out = compile_and_run_capture(
+        r#"<?php
+readonly class ReadonlyDynamic {
+    public function __construct(public int $x) {}
+}
+$b = new ReadonlyDynamic(1);
+try {
+    $b->y = 3;
+    echo "stored\n";
+} catch (Error $error) {
+    echo $error->getMessage(), "\n";
+}
+echo $b->x, "\n";
+var_dump(isset($b->y));
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "Cannot create dynamic property ReadonlyDynamic::$y\n1\nbool(false)\n",
+        "{}",
+        out.stderr
+    );
+}
+
+/// A dynamic-property write through an untyped parameter must reserve the hash on every class
+/// the runtime receiver can be. Call-site specialization used to record only the first observed
+/// class, so a later instance crashed in the mixed write ladder.
+#[test]
+fn test_untyped_parameter_dynamic_write_reserves_every_receiver_class() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class UntypedWriteA { }
+class UntypedWriteB { }
+function untypedWrite($object) { $object->stored = 5; return $object; }
+$a = untypedWrite(new UntypedWriteA());
+$b = untypedWrite(new UntypedWriteB());
+echo "written\n";
+var_dump($a->stored, $b->stored);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "written\nint(5)\nint(5)\n", "{}", out.stderr);
+    assert_eq!(
+        out.stderr
+            .matches("Deprecated: Creation of dynamic property")
+            .count(),
+        2,
+        "{}",
+        out.stderr
+    );
+}
+
+/// A declared public property on a class that also declares `__set` keeps its direct slot
+/// write through an untyped parameter: php only consults the accessor for a name it cannot
+/// resolve to a visible slot.
+#[test]
+fn test_untyped_parameter_public_property_write_bypasses_magic_set() {
+    let out = compile_and_run(
+        r#"<?php
+class UntypedPublicMagic {
+    public int $value = 0;
+    public function __set($name, $value) { echo "set:$name\n"; }
+}
+function untypedPublicWrite($box) { $box->value = 7; return $box; }
+$box = untypedPublicWrite(new UntypedPublicMagic());
+echo $box->value, "\n";
+"#,
+    );
+    assert_eq!(out, "7\n");
+}

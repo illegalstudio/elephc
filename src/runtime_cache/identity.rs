@@ -69,8 +69,12 @@ pub(super) fn runtime_cache_key_with_build_identity_and_boundary(
     let feature_bits = features.cache_key_bits()
         | ((library_boundary as u64) << 62)
         | ((pic as u64) << 63);
+    // `_heap_limit` is emitted into the cached object, so a different memory_limit must
+    // select a different runtime object even when the reservation is unchanged.
+    let memory_limit = crate::codegen_support::memory_limit_bytes()
+        .map_or(heap_size, |limit| limit.min(heap_size));
     let mut identity = format!(
-        "{}:{php_version_id}:{heap_size}:{feature_bits}:",
+        "{}:{php_version_id}:{heap_size}:{memory_limit}:{feature_bits}:",
         target.as_str()
     )
     .into_bytes();
