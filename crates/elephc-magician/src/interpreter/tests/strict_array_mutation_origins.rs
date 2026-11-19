@@ -233,3 +233,29 @@ fn strict_array_reference_explicit_mixed_cycles_remain_open() {
         assert!(output.is_empty()); assert_eq!(returned, FakeValue::Int(1));
     }
 }
+
+
+/// Splice keeps surviving, extracted and inserted element references under their final keys.
+#[test]
+fn strict_array_splice_preserves_references_across_all_result_ranges() {
+    let source = "$first=1;$middle=2;$last=3;$insert=4;array<mixed> $items=[&$first,&$middle,&$last]; \
+        array<mixed> $replacements=[&$insert];$removed=array_splice($items,1,1,$replacements); \
+        $first=10;$middle=20;$last=30;$insert=40; \
+        echo $items[0],':',$removed[0],':',$items[2],':',$items[1];return count($items)+count($removed);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "10:20:30:40"); assert_eq!(returned, FakeValue::Int(4));
+    }
+}
+
+/// Splice retains string alias keys while reindexing sparse integer aliases in both outputs.
+#[test]
+fn strict_array_splice_preserves_string_and_reindexed_aliases() {
+    let source = "$first=1;$middle=2;$last=3;$items=['first'=>&$first,8=>&$middle,20=>&$last]; \
+        $removed=array_splice($items,1,1);$first=10;$middle=20;$last=30; \
+        echo $items['first'],':',$removed[0],':',$items[0];return count($items)+count($removed);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "10:20:30"); assert_eq!(returned, FakeValue::Int(3));
+    }
+}

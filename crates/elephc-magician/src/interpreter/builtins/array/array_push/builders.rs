@@ -64,30 +64,15 @@ fn copy_entry(source: RuntimeCellHandle, position: usize, output: RuntimeCellHan
     let key = RuntimeOwnerSlot::new(values.array_iter_key(source, position)?);
     with_runtime_owners(&key, || {
         let result = (|| {
-            let value = RuntimeOwnerSlot::new(values.array_get_preserving_references(source, key.borrowed())?);
-            with_runtime_owners(&value, || {
-                let result = (|| {
-                    let target_key = if reindex && values.type_tag(key.borrowed())? == EVAL_TAG_INT {
-                        let index = *next_int; *next_int = next_int.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
-                        values.int(index)?
-                    } else { values.retain(key.borrowed())? };
-                    let target_key = RuntimeOwnerSlot::new(target_key);
-                    with_runtime_owners(&target_key, || {
-                        let result = (|| {
-                            values.array_set(output, target_key.borrowed(), value.borrowed())?;
-                            let old_key = eval_array_reference_key(key.borrowed(), context.semantic_profile(), values)?;
-                            let target = old_key.and_then(|key| context.array_element_alias(source, &key).cloned());
-                            if let Some(target) = target {
-                                if let Some(key) = eval_array_reference_key(target_key.borrowed(), context.semantic_profile(), values)? {
-                                    context.bind_array_element_alias(output, key, target);
-                                }
-                            }
-                            Ok(())
-                        })();
-                        finish_read(result, [target_key.take()], context, values)
-                    })
-                })();
-                finish_read(result, [value.take()], context, values)
+            let target_key = if reindex && values.type_tag(key.borrowed())? == EVAL_TAG_INT {
+                let index = *next_int; *next_int = next_int.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+                values.int(index)?
+            } else { values.retain(key.borrowed())? };
+            let target_key = RuntimeOwnerSlot::new(target_key);
+            with_runtime_owners(&target_key, || {
+                let result = array_entry_copies::copy_entry(source, key.borrowed(), output,
+                    target_key.borrowed(), context, values);
+                finish_read(result, [target_key.take()], context, values)
             })
         })();
         finish_read(result, [key.take()], context, values)
