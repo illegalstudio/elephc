@@ -516,29 +516,8 @@ pub(super) fn emit_factory_callable_descriptor(
 /// conversion, so the factory surfaces copy that header into an owned allocation with its own
 /// object handle, like `name(...)` does.
 fn emit_fresh_closure_from_persistent_descriptor(ctx: &mut FunctionContext<'_>) {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let descriptor_reg = abi::nested_call_reg(ctx.emitter);
-    let source_reg = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        result_reg,
-        callable_descriptor::CALLABLE_DESC_STATIC_SIZE as i64,
-    );
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter);   // the conversion result is a Closure object with its own handle
-    ctx.emitter
-        .instruction(&format!("mov {}, {}", descriptor_reg, result_reg));       // keep the new closure descriptor while copying the persistent header
-    abi::emit_pop_reg(ctx.emitter, source_reg);
-    callable_descriptor::emit_copy_descriptor_header_to_runtime(
-        ctx.emitter,
-        descriptor_reg,
-        source_reg,
-    );
-    if descriptor_reg != result_reg {
-        ctx.emitter
-            .instruction(&format!("mov {}, {}", result_reg, descriptor_reg));   // return the new closure descriptor
-    }
+    let descriptor = abi::nested_call_reg(ctx.emitter);
+    elephc_memoir::callables::storage::emit_new_from_result(ctx.emitter, descriptor);
 }
 
 /// Materializes a descriptor pointer for any callable shape boxed in `Mixed`.
@@ -3078,17 +3057,17 @@ fn emit_runtime_receiver_descriptor(
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, receiver_payload_offset);
     abi::emit_incref_if_refcounted(ctx.emitter, receiver_ty);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    if closure {
-        crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // a PHP Closure is an object: draw its handle from the object pool
-    }
-    ctx.emitter
-        .instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the receiver-bound descriptor while copying its static header
-    callable_descriptor::emit_copy_static_descriptor_to_runtime(
+    let handle = if closure {
+        elephc_memoir::callables::storage::ObjectHandle::Public
+    } else {
+        elephc_memoir::callables::storage::ObjectHandle::Internal
+    };
+    elephc_memoir::callables::storage::emit_new_from_static(
         ctx.emitter,
+        total_bytes,
         descriptor_reg,
         descriptor_label,
+        handle,
     );
     abi::emit_pop_reg(ctx.emitter, result_reg);
     callable_descriptor::emit_store_current_result_to_runtime_capture(

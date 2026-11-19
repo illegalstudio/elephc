@@ -140,34 +140,7 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
 
     // -- allocate a complete runtime descriptor copy --
     emitter.label("__rt_closure_bind_shape_valid");
-    emitter.instruction("mov x0, #80");                                         // default to header plus the $this capture
-    emitter.instruction("cmp x10, #2");                                         // does the descriptor carry called-class id too?
-    emitter.instruction("b.ne __rt_closure_bind_allocate");                     // keep the 80-byte allocation for top-level closures
-    emitter.instruction("mov x0, #96");                                         // include the hidden 16-byte called-class capture
-    emitter.label("__rt_closure_bind_allocate");
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = fresh descriptor block
-    elephc_memoir::callables::storage::emit_initialize_runtime_descriptor(emitter, "x0");
-    emitter.instruction("bl __rt_object_handle_acquire");                       // Closure::bind creates a NEW Closure in PHP, so it takes a new object handle
-    emitter.instruction("str x0, [sp, #16]");                                   // save the new descriptor pointer
-
-    // -- copy the descriptor payload --
-    emitter.instruction("ldr x1, [sp, #0]");                                    // x1 = source descriptor
-    emitter.instruction("ldp x2, x3, [x1, #0]");                                // copy header words 0-1 (kind, entry)
-    emitter.instruction("stp x2, x3, [x0, #0]");                                // store header words 0-1
-    emitter.instruction("ldp x2, x3, [x1, #16]");                               // copy header words 2-3 (name, name_len)
-    emitter.instruction("stp x2, x3, [x0, #16]");                               // store header words 2-3
-    emitter.instruction("ldp x2, x3, [x1, #32]");                               // copy header words 4-5 (signature, environment)
-    emitter.instruction("stp x2, x3, [x0, #32]");                               // store header words 4-5
-    emitter.instruction("ldp x2, x3, [x1, #48]");                               // copy header words 6-7 (invocation, invoker)
-    emitter.instruction("stp x2, x3, [x0, #48]");                               // store header words 6-7
-    emitter.instruction("ldp x2, x3, [x1, #64]");                               // copy the single capture slot (value, tag/len)
-    emitter.instruction("stp x2, x3, [x0, #64]");                               // store the capture slot into the copy
-    emitter.instruction("ldr x10, [sp, #32]");                                  // reload the capture count for the optional slot
-    emitter.instruction("cmp x10, #2");                                         // is called-class id present?
-    emitter.instruction("b.ne __rt_closure_bind_captures_copied");              // the $this-only descriptor is complete
-    emitter.instruction("ldp x2, x3, [x1, #80]");                               // copy called-class id and its unused high word
-    emitter.instruction("stp x2, x3, [x0, #80]");                               // preserve late-static dispatch in the bound closure
-    emitter.label("__rt_closure_bind_captures_copied");
+    elephc_memoir::callables::storage::emit_clone_bound_descriptor(emitter);
 
     // -- overwrite the captured $this, matching the capture representation --
     emitter.instruction("ldr x14, [sp, #24]");                                  // x14 = capture type tag
@@ -310,26 +283,7 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
 
     // -- allocate a complete runtime descriptor copy --
     emitter.label("__rt_closure_bind_shape_valid");
-    emitter.instruction("mov rax, 80");                                         // default to header plus the $this capture
-    emitter.instruction("cmp QWORD PTR [rsp+32], 2");                           // does the descriptor carry called-class id too?
-    emitter.instruction("jne __rt_closure_bind_allocate");                      // keep the 80-byte allocation for top-level closures
-    emitter.instruction("mov rax, 96");                                         // include the hidden 16-byte called-class capture
-    emitter.label("__rt_closure_bind_allocate");
-    emitter.instruction("call __rt_heap_alloc");                                // rax = fresh descriptor block
-    elephc_memoir::callables::storage::emit_initialize_runtime_descriptor(emitter, "rax");
-    emitter.instruction("call __rt_object_handle_acquire");                     // Closure::bind creates a NEW Closure in PHP, so it takes a new object handle
-    emitter.instruction("mov [rsp+16], rax");                                   // save the new descriptor pointer
-
-    // -- copy the descriptor payload --
-    emitter.instruction("mov rsi, [rsp+0]");                                    // rsi = source descriptor
-    emitter.instruction("mov rdi, rax");                                        // rdi = destination descriptor
-    emitter.instruction("mov rcx, 10");                                         // $this-only descriptor is ten 8-byte words
-    emitter.instruction("cmp QWORD PTR [rsp+32], 2");                           // is called-class id present?
-    emitter.instruction("jne __rt_closure_bind_copy");                          // copy the 80-byte descriptor
-    emitter.instruction("mov rcx, 12");                                         // 96 bytes = twelve words with called-class id
-    emitter.label("__rt_closure_bind_copy");
-    emitter.instruction("cld");                                                 // copy forward
-    emitter.instruction("rep movsq");                                           // copy the descriptor payload word by word
+    elephc_memoir::callables::storage::emit_clone_bound_descriptor(emitter);
 
     // -- overwrite the captured $this, matching the capture representation --
     emitter.instruction("mov rax, [rsp+24]");                                   // rax = capture type tag

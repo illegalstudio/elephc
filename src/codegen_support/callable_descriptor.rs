@@ -328,17 +328,7 @@ pub(crate) fn emit_branch_if_missing_descriptor(emitter: &mut Emitter, descripto
 /// The origin flags sit above the 8-bit kind, which runtime readers mask with
 /// `CALLABLE_DESC_KIND_MASK`; `gettype()`, `get_class()` and `::class` read them.
 pub(crate) fn emit_mark_runtime_descriptor_origin(emitter: &mut Emitter, descriptor_reg: &str, origin: u64) {
-    use crate::codegen_support::platform::Arch;
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x9, [{descriptor_reg}]"));        // load the descriptor kind word
-            emitter.instruction(&format!("orr x9, x9, #{origin}"));             // record which PHP value the callable stands for
-            emitter.instruction(&format!("str x9, [{descriptor_reg}]"));        // store the tagged kind word
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("or QWORD PTR [{descriptor_reg}], {origin}")); // record which PHP value the callable stands for
-        }
-    }
+    elephc_memoir::callables::storage::emit_or_kind_flags(emitter, descriptor_reg, origin);
 }
 
 /// Branches to `string_label` or `array_label` when the descriptor in `descriptor_reg` stands for
@@ -347,20 +337,12 @@ pub(crate) fn emit_mark_runtime_descriptor_origin(emitter: &mut Emitter, descrip
 pub(crate) fn emit_branch_on_descriptor_origin(
     emitter: &mut Emitter, descriptor_reg: &str, string_label: &str, array_label: &str,
 ) {
-    use crate::codegen_support::platform::Arch;
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x9, [{descriptor_reg}]"));        // load the descriptor kind word
-            emitter.instruction(&format!("tbnz x9, #8, {string_label}"));       // the callable stands for a PHP string
-            emitter.instruction(&format!("tbnz x9, #9, {array_label}"));        // the callable stands for a PHP array
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("test QWORD PTR [{descriptor_reg}], {CALLABLE_DESC_ORIGIN_STRING}")); // does the callable stand for a PHP string?
-            emitter.instruction(&format!("jnz {string_label}"));                // report the string it came from
-            emitter.instruction(&format!("test QWORD PTR [{descriptor_reg}], {CALLABLE_DESC_ORIGIN_ARRAY}")); // does the callable stand for a PHP array?
-            emitter.instruction(&format!("jnz {array_label}"));                 // report the array it came from
-        }
-    }
+    elephc_memoir::callables::storage::emit_branch_on_kind_flags(
+        emitter,
+        descriptor_reg,
+        (CALLABLE_DESC_ORIGIN_STRING, string_label),
+        (CALLABLE_DESC_ORIGIN_ARRAY, array_label),
+    );
 }
 
 /// Returns a second static descriptor equal to the one at `label` but recording, in its kind word,
@@ -375,92 +357,57 @@ pub(crate) fn static_descriptor_with_origin(data: &mut DataSection, label: &str,
 /// that records the PHP value it stands for. Only for a descriptor that
 /// [`static_descriptor_with_origin`] cannot duplicate at compile time.
 pub(crate) fn emit_runtime_copy_with_origin(emitter: &mut Emitter, origin: u64) {
-    use crate::codegen_support::platform::Arch;
     let result = abi::int_result_reg(emitter);
-    abi::emit_push_reg(emitter, result);
-    abi::emit_load_int_immediate(emitter, result, CALLABLE_DESC_STATIC_SIZE as i64);
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    let (source, word) = match emitter.target.arch {
-        Arch::AArch64 => ("x12", "x13"),
-        Arch::X86_64 => ("rcx", "rdx"),
-    };
-    abi::emit_pop_reg(emitter, source);
-    for offset in (0..CALLABLE_DESC_STATIC_SIZE).step_by(8) {
-        abi::emit_load_from_address(emitter, word, source, offset);
-        abi::emit_store_to_address(emitter, word, result, offset);
-    }
-    emit_initialize_runtime_descriptor(emitter, result);
+    elephc_memoir::callables::storage::emit_new_from_result_with_handle(
+        emitter,
+        result,
+        elephc_memoir::callables::storage::ObjectHandle::Internal,
+    );
     emit_mark_runtime_descriptor_origin(emitter, result, origin);
 }
 
-/// Stores the current result registers into a runtime descriptor capture slot.
+/// Selects which ABI result registers are stored for the caller's typed capture.
+fn capture_result_registers(emitter: &Emitter, capture_ty: &PhpType) -> Option<(&'static str, Option<&'static str>)> {
+    match capture_ty.codegen_repr() {
+        PhpType::TaggedScalar => Some((abi::int_result_reg(emitter), Some(
+            crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter),
+        ))),
+        PhpType::Float => Some((abi::float_result_reg(emitter), None)),
+        PhpType::Str => {
+            let (pointer, length) = abi::string_result_regs(emitter);
+            Some((pointer, Some(length)))
+        }
+        PhpType::Void | PhpType::Never => None,
+        _ => Some((abi::int_result_reg(emitter), None)),
+    }
+}
+
+/// Stores the selected result registers into one initialized native capture slot.
 pub(crate) fn emit_store_current_result_to_runtime_capture(
     emitter: &mut Emitter,
     descriptor_reg: &str,
     capture_index: usize,
     capture_ty: &PhpType,
 ) {
-    let offset = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + capture_index * 16;
-    match capture_ty.codegen_repr() {
-        PhpType::TaggedScalar => {
-            abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
-            abi::emit_store_to_address(emitter,
-                crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter), descriptor_reg, offset + 8);
-        }
-        PhpType::Float => {
-            abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), descriptor_reg, offset);
-        }
-        PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-            abi::emit_store_to_address(emitter, ptr_reg, descriptor_reg, offset);
-            abi::emit_store_to_address(emitter, len_reg, descriptor_reg, offset + 8);
-        }
-        PhpType::Void | PhpType::Never => {}
-        _ => {
-            abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
-        }
+    if let Some((low, high)) = capture_result_registers(emitter, capture_ty) {
+        elephc_memoir::callables::storage::emit_store_capture(emitter, descriptor_reg, capture_index, low, high);
     }
 }
 
 /// Overwrites the kind word of a runtime (heap) descriptor copy held in `descriptor_reg`.
 pub(crate) fn emit_store_kind_to_runtime_descriptor(emitter: &mut Emitter, descriptor_reg: &str, kind: u64) {
-    match emitter.target.arch {
-        crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("mov x9, #{kind}"));                   // materialize the descriptor kind
-            emitter.instruction(&format!("str x9, [{descriptor_reg}]"));        // record the kind in the runtime descriptor header
-        }
-        crate::codegen_support::platform::Arch::X86_64 => {
-            emitter.instruction(&format!("mov QWORD PTR [{descriptor_reg}], {kind}")); // record the kind in the runtime descriptor header
-        }
-    }
+    elephc_memoir::callables::storage::emit_store_kind(emitter, descriptor_reg, kind);
 }
 
-/// Loads a runtime descriptor capture slot into the ABI result registers.
+/// Loads a runtime descriptor capture into the result registers chosen by the caller's type.
 pub(crate) fn emit_load_runtime_capture_to_result(
     emitter: &mut Emitter,
     descriptor_reg: &str,
     capture_index: usize,
     capture_ty: &PhpType,
 ) {
-    let offset = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + capture_index * 16;
-    match capture_ty.codegen_repr() {
-        PhpType::TaggedScalar => {
-            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
-            abi::emit_load_from_address(emitter,
-                crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter), descriptor_reg, offset + 8);
-        }
-        PhpType::Float => {
-            abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), descriptor_reg, offset);
-        }
-        PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-            abi::emit_load_from_address(emitter, ptr_reg, descriptor_reg, offset);
-            abi::emit_load_from_address(emitter, len_reg, descriptor_reg, offset + 8);
-        }
-        PhpType::Void | PhpType::Never => {}
-        _ => {
-            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
-        }
+    if let Some((low, high)) = capture_result_registers(emitter, capture_ty) {
+        elephc_memoir::callables::storage::emit_load_capture(emitter, descriptor_reg, capture_index, low, high);
     }
 }
 

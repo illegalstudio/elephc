@@ -41,14 +41,8 @@ pub(in crate::codegen) fn emit_runtime_descriptor_with_receiver_capture(
         abi::emit_incref_if_refcounted(ctx.emitter, receiver_ty);
     }
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter
-        .instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the runtime callable descriptor while copying its static header
-    callable_descriptor::emit_copy_static_descriptor_to_runtime(
-        ctx.emitter,
-        descriptor_reg,
-        descriptor_label,
+    elephc_memoir::callables::storage::emit_new_from_static(
+        ctx.emitter, total_bytes, descriptor_reg, descriptor_label, elephc_memoir::callables::storage::ObjectHandle::Internal,
     );
     abi::emit_pop_reg(ctx.emitter, result_reg);
     callable_descriptor::emit_store_current_result_to_runtime_capture(
@@ -75,14 +69,8 @@ pub(super) fn emit_runtime_descriptor_with_called_class_capture(
     let total_bytes = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16;
     materialize_called_class_id(ctx, called_class_id)?;
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter
-        .instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the runtime callable descriptor while copying its static header
-    callable_descriptor::emit_copy_static_descriptor_to_runtime(
-        ctx.emitter,
-        descriptor_reg,
-        descriptor_label,
+    elephc_memoir::callables::storage::emit_new_from_static(
+        ctx.emitter, total_bytes, descriptor_reg, descriptor_label, elephc_memoir::callables::storage::ObjectHandle::Internal,
     );
     abi::emit_pop_reg(ctx.emitter, result_reg);
     callable_descriptor::emit_store_current_result_to_runtime_capture(

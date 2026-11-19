@@ -1787,55 +1787,9 @@ fn emit_runtime_descriptor_with_saved_receiver_capture(
     receiver_offset: usize,
     result_reg: &str,
 ) {
-    let total_bytes = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16;
-    match emitter.target.arch {
-        crate::codegen::platform::Arch::AArch64 => {
-            abi::emit_load_temporary_stack_slot(emitter, "x0", receiver_offset);
-            emitter.instruction("bl __rt_incref");                              // retain the receiver for the runtime callable descriptor
-            abi::emit_push_reg(emitter, "x0");
-            abi::emit_load_int_immediate(emitter, "x0", total_bytes as i64);
-            emitter.instruction("bl __rt_heap_alloc");                          // allocate receiver-bound callable descriptor storage
-            callable_descriptor::emit_copy_static_descriptor_to_runtime(
-                emitter,
-                "x0",
-                descriptor_label,
-            );
-            abi::emit_push_reg(emitter, "x0");
-            abi::emit_load_temporary_stack_slot(emitter, "x11", 0);
-            abi::emit_load_temporary_stack_slot(emitter, "x0", 16);
-            callable_descriptor::emit_store_current_result_to_runtime_capture(
-                emitter,
-                "x11",
-                0,
-                &PhpType::Object(String::new()),
-            );
-            abi::emit_pop_reg(emitter, result_reg);
-            abi::emit_release_temporary_stack(emitter, 16);
-        }
-        crate::codegen::platform::Arch::X86_64 => {
-            abi::emit_load_temporary_stack_slot(emitter, "rax", receiver_offset);
-            emitter.instruction("call __rt_incref");                            // retain the receiver for the runtime callable descriptor
-            abi::emit_push_reg(emitter, "rax");
-            abi::emit_load_int_immediate(emitter, "rax", total_bytes as i64);
-            emitter.instruction("call __rt_heap_alloc");                        // allocate receiver-bound callable descriptor storage
-            callable_descriptor::emit_copy_static_descriptor_to_runtime(
-                emitter,
-                "rax",
-                descriptor_label,
-            );
-            abi::emit_push_reg(emitter, "rax");
-            abi::emit_load_temporary_stack_slot(emitter, "rcx", 0);
-            abi::emit_load_temporary_stack_slot(emitter, "rax", 16);
-            callable_descriptor::emit_store_current_result_to_runtime_capture(
-                emitter,
-                "rcx",
-                0,
-                &PhpType::Object(String::new()),
-            );
-            abi::emit_pop_reg(emitter, result_reg);
-            abi::emit_release_temporary_stack(emitter, 16);
-        }
-    }
+    elephc_memoir::callables::storage::emit_new_with_staged_receiver(
+        emitter, descriptor_label, receiver_offset, result_reg,
+    );
 }
 
 /// Branches when a saved Mixed tag stack slot does not equal `expected_tag`.
