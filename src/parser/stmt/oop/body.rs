@@ -980,28 +980,43 @@ fn parse_members_recovering<T>(
 /// block), whichever comes first outside parentheses and brackets. Stops on the body's own
 /// closing `}` or at the end of input without consuming it, so the caller's `}` check still
 /// sees it.
+///
+/// Open delimiters are kept on a stack. A `}` closes the nearest `{` and drops any `(` or `[`
+/// left open after it, so an unbalanced `echo (;` inside a method body still ends the skip at
+/// that body's `}` instead of swallowing the next member. A `)` or `]` only closes its own
+/// kind, and a `{` opened inside parentheses (a `match` in a parameter default) does not end
+/// the member when it closes.
 fn skip_class_member(tokens: &[SpannedToken], start: usize) -> usize {
-    let mut paren_depth = 0usize;
-    let mut bracket_depth = 0usize;
-    let mut brace_depth = 0usize;
+    let mut open: Vec<&Token> = Vec::new();
     let mut index = start;
     while let Some((token, _)) = tokens.get(index) {
-        let nested = paren_depth > 0 || bracket_depth > 0;
         match token {
             Token::Eof => return index,
-            Token::RBrace if brace_depth == 0 => return index,
-            Token::LParen => paren_depth += 1,
-            Token::RParen => paren_depth = paren_depth.saturating_sub(1),
-            Token::LBracket => bracket_depth += 1,
-            Token::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
-            Token::LBrace => brace_depth += 1,
+            // No `{` of this member is open: this is the enclosing body's `}`, even when a `(`
+            // or `[` was left unclosed before it.
+            Token::RBrace if !open.contains(&&Token::LBrace) => return index,
+            Token::LParen | Token::LBracket | Token::LBrace => open.push(token),
+            Token::RParen | Token::RBracket => {
+                let opener = if matches!(token, Token::RParen) {
+                    Token::LParen
+                } else {
+                    Token::LBracket
+                };
+                if open.last() == Some(&&opener) {
+                    open.pop();
+                }
+            }
             Token::RBrace => {
-                brace_depth -= 1;
-                if brace_depth == 0 && !nested {
+                while let Some(opener) = open.pop() {
+                    if matches!(opener, Token::LBrace) {
+                        break;
+                    }
+                }
+                if open.is_empty() {
                     return index + 1;
                 }
             }
-            Token::Semicolon if brace_depth == 0 && !nested => return index + 1,
+            Token::Semicolon if open.is_empty() => return index + 1,
             _ => {}
         }
         index += 1;
