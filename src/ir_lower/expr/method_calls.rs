@@ -530,7 +530,14 @@ pub(super) fn promote_eval_bridge_method_argument_locals(
     }
     // The context belongs to the interpreter's by-reference binding; a closed-world build links
     // none, so the arguments are promoted (below) without one.
-    if !crate::closed_world::is_enabled() {
+    //
+    // Only a program that can load PHP at run time (an `eval()`, an unexpanded include, class
+    // files handed to the runtime autoloader) has an interpreter-owned callee to bind: in any
+    // other, every class is compiled and a call on a `mixed` receiver reaches by-reference
+    // parameters only through the signatures lowering already read. Declaring the context for
+    // every such call linked the interpreter into any program holding the WeakMap prelude
+    // (`WeakMap::__elephc_retire` calls `__elephc_forget($__id)` on a `mixed` receiver).
+    if !crate::closed_world::is_enabled() && ctx.program_loads_code_at_run_time() {
         ctx.declare_eval_context_local();
     }
     for argument in bridge_args {

@@ -120,7 +120,10 @@ mod tests {
             let string_miss = helper.lines().skip_while(|line|
                 !(line.contains("_mixed_string_descriptor_missing_") && line.ends_with(':')))
                 .skip(1).take_while(|line| !line.ends_with(':')).collect::<Vec<_>>().join("\n");
-            assert!(string_miss.contains("mixed_callable_value_not_callable"),
+            // The miss reaches the eval probe through the closure fallback's fatal label or, when
+            // the bridge can also declare plain functions, through the by-name eval adapter label.
+            assert!(string_miss.contains("mixed_callable_value_not_callable")
+                || string_miss.contains("mixed_callable_value_string_eval"),
                 "{name}: an unknown native name must reach the eval callback probe: {string_miss}");
     }
 

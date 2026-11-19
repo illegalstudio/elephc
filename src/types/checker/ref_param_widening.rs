@@ -172,15 +172,23 @@ impl Checker {
         // the type tag -- "Value must be of type array, int given" on every `lint:container`.
         let mut boxed_by_declaration: crate::fast_hash::FastSet<(String, String)> =
             crate::fast_hash::FastSet::default();
+        // By-reference parameters declared with a concrete, non-gradual type (`int &`,
+        // `array<int> &`). Their cell keeps that physical layout whatever captures it, so a
+        // `use (&$param)` closure must not widen them: the callers, which bind the declared
+        // type, would then hand a concrete slot to a boxed parameter (or be refused for the
+        // boxed storage of an `array<int>` argument).
+        let mut concrete_by_declaration: crate::fast_hash::FastSet<(String, String)> =
+            crate::fast_hash::FastSet::default();
         let mut note_boxed = |scope: &str, param: &str, type_expr: Option<&TypeExpr>| {
             let Some(type_expr) = type_expr else {
                 return;
             };
-            if self
-                .resolve_type_expr(type_expr, Span::dummy())
-                .is_ok_and(|declared| declared.codegen_repr() == PhpType::Mixed)
-            {
-                boxed_by_declaration.insert((scope.to_string(), param.to_string()));
+            if let Ok(declared) = self.resolve_type_expr(type_expr, Span::dummy()) {
+                if declared.codegen_repr() == PhpType::Mixed {
+                    boxed_by_declaration.insert((scope.to_string(), param.to_string()));
+                } else {
+                    concrete_by_declaration.insert((scope.to_string(), param.to_string()));
+                }
             }
         };
         for stmt in program {
@@ -401,6 +409,8 @@ impl Checker {
         // it and runs long after `doGet` returned -- reading freed stack as the container.
         let mut captured: crate::fast_hash::FastSet<(String, String)> =
             crate::fast_hash::FastSet::default();
+        let mut captured_concrete: crate::fast_hash::FastSet<(String, String)> =
+            crate::fast_hash::FastSet::default();
         let mut property_bound: crate::fast_hash::FastSet<(String, String)> =
             crate::fast_hash::FastSet::default();
         for body in &bodies {
@@ -423,6 +433,9 @@ impl Checker {
                 });
                 if is_captured {
                     captured.insert((body.scope.clone(), param.clone()));
+                    if concrete_by_declaration.contains(&(body.scope.clone(), param.clone())) {
+                        captured_concrete.insert((body.scope.clone(), param.clone()));
+                    }
                 }
             }
         }
@@ -430,6 +443,9 @@ impl Checker {
         let mut widened_set: crate::fast_hash::FastSet<(String, String)> =
             widened.iter().cloned().collect();
         for entry in &captured {
+            if captured_concrete.contains(entry) {
+                continue;
+            }
             if widened_set.insert(entry.clone()) {
                 widened.push(entry.clone());
             }

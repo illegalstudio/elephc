@@ -1258,6 +1258,16 @@ fn class_exists_sites_share_one_candidate_list() {
     assert_eq!(builds, 1, "class_exists candidates built {builds} times for sixty sites");
 }
 
+/// A computed `class_exists()` name keeps the WeakMap prelude; its `mixed`-receiver calls
+/// (`__elephc_retire`) must not declare an eval context, which would link the interpreter into a
+/// program with no way to load PHP at run time.
+#[test]
+fn weak_map_prelude_does_not_link_the_eval_bridge() {
+    let module = lower_source("<?php\nclass K {}\n$n = class_exists($argv[0] . 'K') ? 1 : 0;\necho $n, \"\\n\";\n");
+    assert!(!module.required_runtime_features.eval_bridge,
+        "a program that cannot load PHP at run time must not require the eval bridge");
+}
+
 /// Property plans over a receiver class with subclasses read the subclasses from one index,
 /// built once, instead of asking every class of the module whether it inherits.
 #[test]
