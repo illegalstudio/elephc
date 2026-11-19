@@ -202,7 +202,14 @@ impl ElephcEvalScope {
 
     /// Records array contents independently from the whole binding's producer kind.
     pub(crate) fn infer_array_local_type(&mut self, name: String, ty: crate::eval_ir::EvalParameterType) {
-        self.array_local_types.entry(name).or_insert(ty);
+        match self.array_local_types.entry(name) {
+            std::collections::hash_map::Entry::Vacant(entry) => { entry.insert(ty); }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if crate::eval_ir::pending_array_contents(&crate::eval_ir::generic_type(entry.get())) {
+                    entry.insert(ty);
+                }
+            }
+        }
     }
 
     /// Borrows the retained array-content contract of a successful producer.

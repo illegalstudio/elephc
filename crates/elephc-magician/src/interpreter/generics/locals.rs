@@ -74,6 +74,7 @@ pub(in crate::interpreter) fn validate_generic_local_element(declared: Option<&E
 
 /// Checks non-null array arms and requires integer keys for indexed array contracts.
 fn array_write_accepts(ty: &Type, array: RuntimeCellHandle, index: RuntimeCellHandle, value: RuntimeCellHandle, context: &ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
+    if crate::eval_ir::pending_array_contents(ty) { return Ok(true); }
     if let Some(schema) = crate::eval_ir::array_contents_schema(ty) {
         return array_write_accepts(schema, array, index, value, context, values);
     }

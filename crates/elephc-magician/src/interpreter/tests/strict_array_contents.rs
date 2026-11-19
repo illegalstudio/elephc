@@ -157,3 +157,49 @@ fn strict_array_origins_vm_copy_replacement_and_owners() {
     for value in context.take_persistent_cell_owners() { values.release(value).unwrap(); }
     for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "owner{id}"); }
 }
+
+/// Empty arrays acquire one content contract only after a successful append or indexed write.
+#[test]
+fn strict_array_origins_empty_first_writes_and_aliases() {
+    for dispatch in [false, true] {
+        for features in [vec![StrictFeature::ArrayTypes], vec![StrictFeature::ArrayTypes, StrictFeature::Locals]] {
+            let source = "$items=[];$before=$items;$alias=&$items;$alias[]=1; \
+                try{$items[]='bad';}catch(TypeError $error){echo 'A';} \
+                $before[]='allowed';try{$before[]=2;}catch(TypeError $error){echo 'C';} \
+                $after=$alias;try{$after[]=false;}catch(TypeError $error){echo 'B';}return $items[0];";
+            let (output, returned) = run_source(source, None, &features, dispatch);
+            assert_eq!(output, "ACB"); assert_eq!(returned, FakeValue::Int(1));
+        }
+        let source = "$items=[];$items['key']=1;$items['other']=2; \
+            try{$items[0]=3;}catch(TypeError $error){echo 'K';} \
+            try{$items['bad']='bad';}catch(TypeError $error){echo 'V';}return count($items);";
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "KV"); assert_eq!(returned, FakeValue::Int(2));
+    }
+}
+
+/// Failed keys and nested candidates leave inference pending and permit a later valid first write.
+#[test]
+fn strict_array_origins_empty_failed_candidates_do_not_publish() {
+    let source = "$items=[];try{$items[false]=1;}catch(TypeError $error){echo 'K';} \
+        try{$items[]=[1,'bad'];}catch(TypeError $error){echo 'H';} \
+        $items[]='valid';try{$items[]=2;}catch(TypeError $error){echo 'T';}return $items[0];";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None,
+            &[StrictFeature::ArrayTypes, StrictFeature::ArrayKeys], dispatch);
+        assert_eq!(output, "KHT"); assert_eq!(returned, FakeValue::String("valid".to_string()));
+    }
+}
+
+/// Whole-array replacement refines an empty origin while explicit mixed first values remain open.
+#[test]
+fn strict_array_origins_empty_replacements_and_explicit_mixed_values() {
+    let source = "function open_value():mixed{return 1;} \
+        $items=[];$items[]=open_value();$items[]='allowed'; \
+        $other=[];$other=[1];try{$other[]='bad';}catch(TypeError $error){echo 'R';} \
+        return count($items)+count($other);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "R"); assert_eq!(returned, FakeValue::Int(3));
+    }
+}

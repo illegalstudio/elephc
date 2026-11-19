@@ -35,6 +35,7 @@ fn eval_local_offset_write(
     let mut result = (|| {
         let index = index.map(|index| eval_owned_expr(index, context, scope, values)).transpose()?;
         if let Some(index) = index { operands.push(index); }
+        let producer = local_producer_contract(value, context, scope);
         let value = eval_owned_expr(value, context, scope, values)?;
         operands.push(value);
         let current = visible_scope_cell(context, scope, name).map(|cell| values.retain(cell)).transpose()?;
@@ -105,12 +106,15 @@ fn eval_local_offset_write(
         };
         super::false_array_completion::with_completion(captured_parent, index, context, values, |context, values| {
             let declared = generic_local_contracts(scope, name, context);
+            let origin;
             let replacement = if let Some(index) = index {
                 checked_array_keys::for_receiver(array, index, context, values)?;
                 let index = match normalized_array_string_index(index, context.semantic_profile(), values)? {
                     Some(normalized) => { operands.push(normalized); normalized }
                     None => index,
                 };
+                origin = local_binding_origins::prepare_array_local_write(scope, name, array, Some(index),
+                    value, producer.as_ref(), context, values)?;
                 for ty in &declared { validate_generic_local_element(Some(ty), array, index, value, context, values)?; }
                 let replacement = if captured_parent { array }
                     else { eval_array_set_target_for_index(array, index, values)? };
@@ -122,6 +126,8 @@ fn eval_local_offset_write(
                 values.array_set(replacement, index, value)?;
                 replacement
             } else {
+                origin = local_binding_origins::prepare_array_local_write(scope, name, array, None,
+                    value, producer.as_ref(), context, values)?;
                 eval_array_append_owned_value_with_type(array, value, &declared, context, values)?
             };
             if captured_parent { return Ok(()); }
@@ -131,9 +137,10 @@ fn eval_local_offset_write(
             }
             if visible_scope_cell(context, scope, name) == Some(replacement) {
                 mark_scope_binding_changed(context, scope, name)?;
-                return Ok(());
+            } else {
+                write_back_owned_variable_ref_target(scope, name, replacement, context, values)?;
             }
-            write_back_owned_variable_ref_target(scope, name, replacement, context, values)
+            local_binding_origins::publish_array_local_write(scope, name, origin, context, values)
         })
     })();
     for operand in operands.into_iter().rev() {

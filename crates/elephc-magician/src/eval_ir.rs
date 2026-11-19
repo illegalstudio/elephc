@@ -26,7 +26,7 @@ mod statements;
 mod traits;
 
 pub use attributes::*;
-pub(crate) use array_contracts::{array_contents_type, array_contents_schema};
+pub(crate) use array_contracts::{array_contents_type, array_contents_schema, pending_array_contents, pending_array_contents_type};
 pub(crate) use bytecode::{CompiledBody, CompiledCall, CompiledModule, Op};
 pub use callable::*;
 pub use classes::*;

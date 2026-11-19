@@ -9,14 +9,14 @@
 //! - Inference checks every recursive element instead of silently widening to mixed.
 
 use super::*;
-use crate::eval_ir::{array_contents_schema, array_contents_type};
+use crate::eval_ir::{array_contents_schema, array_contents_type, pending_array_contents, pending_array_contents_type};
 
 /// Prepares a new content origin without publishing metadata or consuming the candidate owner.
 pub(super) fn prepare(scope: &ElephcEvalScope, name: &str, producer: Option<&EvalParameterType>,
     value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalParameterType>, EvalStatus> {
     if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
-        || scope.array_local_type(name).is_some()
+        || scope.array_local_type(name).is_some_and(|ty| !pending_array_contents(&generic_type(ty)))
         || !matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
         return Ok(None);
     }
@@ -27,7 +27,7 @@ pub(super) fn prepare(scope: &ElephcEvalScope, name: &str, producer: Option<&Eva
     else if let Some(producer) = producer {
         source_schema(&generic_type(producer)).unwrap_or_else(|| Type::atom("array"))
     } else {
-        if values.array_len(value)? == 0 { return Ok(None); }
+        if values.array_len(value)? == 0 { return Ok(Some(parameter_type(&pending_array_contents_type()))); }
         infer_schema(value, context, values, 0)?
     };
     let contract = array_contents_type(schema).ok_or(EvalStatus::RuntimeFatal)?;
@@ -43,7 +43,20 @@ fn source_schema(ty: &Type) -> Option<Type> {
         Type::Atom(name) if matches!(name.as_str(), "array" | "mixed") => Some(Type::atom("array")),
         Type::Apply(name, _) if name == "array" => Some(ty.clone()),
         Type::Nullable(inner) => source_schema(inner),
-        Type::Intersection(members) => members.iter().rev().find_map(source_schema),
+        Type::Intersection(members) => {
+            let mut schemas = Vec::new();
+            let mut pending = false;
+            for member in members {
+                if let Some(schema) = source_schema(member) {
+                    if pending_array_contents(&array_contents_type(schema.clone())?) { pending = true; }
+                    else if schema != Type::atom("array") && !schemas.contains(&schema) { schemas.push(schema); }
+                }
+            }
+            match schemas.len() {
+                0 if pending => array_contents_schema(&pending_array_contents_type()).cloned(),
+                0 => Some(Type::atom("array")), 1 => schemas.pop(), _ => Some(Type::Intersection(schemas)),
+            }
+        },
         Type::Union(members) => {
             let schemas = members.iter().filter_map(source_schema).collect::<Vec<_>>();
             match schemas.len() { 0 => None, 1 => schemas.into_iter().next(), _ => Some(Type::Union(schemas)) }
@@ -92,4 +105,47 @@ pub(super) fn contains_contents(ty: &Type) -> bool {
         Type::Nullable(inner) => contains_contents(inner),
         _ => false,
     }
+}
+
+/// Prepares the first informative local write while operands and shared storage remain unchanged.
+pub(in crate::interpreter) fn prepare_write(scope: &ElephcEvalScope, name: &str,
+    array: RuntimeCellHandle, index: Option<RuntimeCellHandle>, value: RuntimeCellHandle, producer: Option<&EvalParameterType>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalParameterType>, EvalStatus> {
+    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
+        || scope.local_type(name).is_some() || values.array_len(array)? != 0
+        || generic_local_contracts(scope, name, context).iter().any(|ty| {
+            let ty = generic_type(ty);
+            contains_contents(&ty) && !pending_array_contents(&ty)
+        }) { return Ok(None); }
+    let key = match index.map(|key| values.type_tag(key)).transpose()? {
+        None | Some(EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL) => Type::atom("int"),
+        Some(EVAL_TAG_STRING | EVAL_TAG_NULL) => Type::atom("string"),
+        _ => return Ok(None),
+    };
+    let element = match producer {
+        Some(producer) => {
+            let ty = generic_type(producer);
+            if matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+                source_schema(&ty).unwrap_or(ty)
+            } else { ty }
+        }
+        None => infer_schema(value, context, values, 0)?,
+    };
+    let schema = Type::Apply("array".to_string(), vec![key, element]);
+    Ok(array_contents_type(schema).map(|ty| parameter_type(&ty)))
+}
+
+/// Publishes an established schema after successful storage write-back and refreshes shared guards.
+pub(in crate::interpreter) fn publish_write(scope: &mut ElephcEvalScope, name: &str,
+    origin: Option<EvalParameterType>, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if let Some(origin) = origin {
+        scope.infer_array_local_type(name.to_string(), origin.clone());
+        if let Some(cell) = visible_scope_cell(context, scope, name) {
+            if values.is_reference(cell)? { context.bind_local_reference_types(cell, &[origin]); }
+        }
+    }
+    Ok(())
 }

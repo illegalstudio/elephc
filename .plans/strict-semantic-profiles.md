@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step234 (this commit). Remaining feature integration is active. Issue:
+Verified through step235 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2888,3 +2888,9 @@ The shared generic and alias validators consume the same schema. Focused tests c
 Successful nonempty literal assignments establish independent content metadata in the existing scope and generic reference validators. Recursive inference rejects heterogeneous candidates before replacing storage and releases all candidate owners. Producer declarations remain authoritative: bare array and mixed returns stay open. Copies, including reads through aliases, carry source contracts without deriving a proof from a shared cell handle. The Locals kind contract remains separate from array contents; ordinary generic union/intersection validation preserves compound content metadata.
 
 Eleven exact focused tests pass, including automatic literals/copies/aliases, atomic heterogeneous initializers, declared open producers, the prior explicit conditional schemas, nullability aliases and generic unions. An actual bytecode-only copy/replacement test rejects before publication and keeps the previous value with balanced owners. Append/array-literal fixtures use the existing walker fallback, not newly added VM array opcodes. Default build, diff/assembly hygiene and source stability pass in jobe4f148cd. Empty-array first writes, other producers, properties/statics and native source publication remain pending; ArrayTypes and Mixed remain gated.
+
+### Verified235: empty array first-write contracts
+
+A generated pending conditional schema distinguishes empty inferred arrays from explicit open element contracts and from ordinary declared array<never>. Indexed/append writes compute a prospective key/element schema before mutation and publish it only after successful storage write-back. Copies made before the first write infer independently; aliases retain the shared established contract. Whole-array replacement also refines a pending empty origin. Source intersections retain every closed constraint while pending/open members remain neutral.
+
+Fourteen exact focused tests pass. New cases cover first indexed/append writes, alias and pre/post-write copies, Locals composition, invalid exact keys, rejected nested heterogeneous candidates, whole-array refinement and an explicitly mixed first value. Candidate failures preserve pending inference and owners. Previous runtime origins, actual bytecode copy stores, generic union controls and nullability aliases remain green. Default build, diff/assembly hygiene and source stability passed in jobba6e577c. Other producer/declaration contexts, builtin mutations, property/static/native origin lifetimes and runtime Mixed remain unfinished, so public admission is unchanged.

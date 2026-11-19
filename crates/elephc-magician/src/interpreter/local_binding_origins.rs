@@ -14,6 +14,8 @@ use elephc_generics::Type;
 
 mod arrays;
 
+pub(super) use arrays::{prepare_write as prepare_array_local_write, publish_write as publish_array_local_write};
+
 /// Captures a producer's declared alternatives without executing PHP or borrowing live maps.
 pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
     context: &ElephcEvalContext, scope: &ElephcEvalScope,

@@ -26,6 +26,18 @@ pub(crate) fn array_contents_schema(ty: &Type) -> Option<&Type> {
     }
 }
 
+/// Marks an inferred empty array whose first successful informative write supplies its schema.
+pub(crate) fn pending_array_contents_type() -> Type {
+    Type::Apply(ARRAY_CONTENTS_TYPE_NAME.to_string(), vec![Type::Apply("array".to_string(),
+        vec![Type::atom("never"), Type::atom("never")])])
+}
+
+/// Distinguishes pending inferred contents from ordinary declared array<never> contracts.
+pub(crate) fn pending_array_contents(ty: &Type) -> bool {
+    array_contents_schema(ty).is_some_and(|schema| matches!(schema, Type::Apply(name, args)
+        if name == "array" && args.as_slice() == [Type::atom("never"), Type::atom("never")]))
+}
+
 /// Accepts only array alternatives, preserving explicitly open schemas and closed unions.
 fn normalize_schema(schema: Type) -> Option<Type> {
     match schema {
@@ -35,6 +47,8 @@ fn normalize_schema(schema: Type) -> Option<Type> {
         Type::Nullable(inner) => normalize_schema(*inner),
         Type::Union(members) if !members.is_empty() => members.into_iter()
             .map(normalize_schema).collect::<Option<Vec<_>>>().map(Type::Union),
+        Type::Intersection(members) if !members.is_empty() => members.into_iter()
+            .map(normalize_schema).collect::<Option<Vec<_>>>().map(Type::Intersection),
         _ => None,
     }
 }
