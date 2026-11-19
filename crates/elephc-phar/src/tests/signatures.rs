@@ -9,7 +9,7 @@
 
 use super::*;
 
-const TEST_RSA_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\n\
+pub(super) const TEST_RSA_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\n\
 MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBAOuAP7xZaVfhwn9l\n\
 BaMgxKPU1ODBpuT7Ybu6Fav03TJp1BKc1wUMiXnUPraUUI2R2JxoattDe7R/LcGk\n\
 jVoPiBGGPoxxTaByd5LJZJk6MJAiGBhzQT7bkK3OMDHLQqhziefqDFfnDLt/TN7+\n\
@@ -35,7 +35,7 @@ fn test_rsa_public_key() -> rsa::RsaPublicKey {
 }
 
 /// Writes the static test public key to PHP's `<archive>.pubkey` sidecar path.
-fn write_test_public_key(path: &std::path::Path) {
+pub(super) fn write_test_public_key(path: &std::path::Path) {
     use rsa::pkcs8::{EncodePublicKey, LineEnding};
 
     let pem = test_rsa_public_key()
@@ -45,7 +45,7 @@ fn write_test_public_key(path: &std::path::Path) {
 }
 
 /// Removes an archive fixture and its optional public-key sidecar.
-fn remove_signed_fixture(path: &std::path::Path) {
+pub(super) fn remove_signed_fixture(path: &std::path::Path) {
     std::fs::remove_file(path).ok();
     std::fs::remove_file(archive_public_key_path(path)).ok();
 }
@@ -362,7 +362,7 @@ pub(super) fn check_tar_zip_openssl_signature(ext: &str) {
     assert_eq!(sig.len(), 128, "1024-bit RSA signature is 128 bytes");
     assert_eq!(signature_type_name(pb.as_bytes()).as_deref(), Some(&b"OpenSSL"[..]));
     // The signature verifies against the public key over the signed range.
-    let arch = parse_archive_with_public_key(&data, Some(&test_rsa_public_key()), true).unwrap();
+    let arch = parse_archive_with_public_key(&data, Some(&test_rsa_public_key()), true, true).unwrap();
     let key = RsaPrivateKey::from_pkcs8_pem(TEST_RSA_KEY_PEM).unwrap();
     let pubkey = RsaPublicKey::from(&key);
     let hashed = Sha1::digest(tar_zip_signed_range(&arch));
@@ -470,6 +470,7 @@ fn unsigned_zip(data: &[u8]) -> Vec<u8> {
 /// archive into an accepted unsigned one.
 #[test]
 pub(super) fn stripped_signature_with_pubkey_sidecar_is_rejected() {
+    let _policy = RequireHashGuard::relaxed();
     for extension in ["phar", "tar", "zip"] {
         let path = std::env::temp_dir().join(format!(
             "elephc-phar-stripped-signature-{}-{extension}.{extension}",
@@ -625,6 +626,7 @@ pub(super) fn implicit_edits_preserve_a_hash_signature() {
 /// not invent a SHA1 signature that the source never had.
 #[test]
 pub(super) fn implicit_edits_keep_unsigned_archives_unsigned() {
+    let _policy = RequireHashGuard::relaxed();
     for extension in ["phar", "tar", "zip"] {
         let path = std::env::temp_dir().join(format!(
             "elephc-phar-keep-unsigned-{}-{extension}.{extension}",
@@ -636,9 +638,18 @@ pub(super) fn implicit_edits_keep_unsigned_archives_unsigned() {
             Some(5)
         );
         if extension == "phar" {
-            // New native phars start SHA1-signed; strip it to exercise the unsigned path.
+            // New native phars start SHA-256-signed; strip it to exercise the unsigned path.
             let signed = std::fs::read(&path).unwrap();
             std::fs::write(&path, strip_native_signature(&signed)).unwrap();
+        } else {
+            // New tar/zip phars start SHA-256-signed; rebuild them without a signature.
+            let signed = std::fs::read(&path).unwrap();
+            let unsigned = if extension == "tar" {
+                unsigned_tar(&signed)
+            } else {
+                unsigned_zip(&signed)
+            };
+            std::fs::write(&path, unsigned).unwrap();
         }
         assert!(
             read_signature_info(path_bytes.as_bytes()).is_none(),

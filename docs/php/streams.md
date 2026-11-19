@@ -81,7 +81,9 @@ streams are unbuffered, so the accepted buffer size does not change behavior.
 
 `phar://` write streams buffer one uncompressed entry in memory. `fclose()` and
 `file_put_contents("phar://archive.phar/entry", $data)` insert or replace that
-entry in a SHA1-signed PHAR archive while preserving existing entries.
+entry in a signed PHAR archive while preserving existing entries. New archives
+default to SHA-256, and an implicit rebuild preserves the archive's existing
+hash algorithm (or its unsigned state) instead of downgrading it.
 `file_put_contents()` and write-mode `fopen()` also accept runtime-built
 `phar://` URLs. Native PHAR, tar-based PHAR, and zip-based PHAR containers are
 writable; ZIP writes preserve stored/deflated entries and compression controls
@@ -155,6 +157,16 @@ the archive. PEM public keys may use SubjectPublicKeyInfo (`BEGIN PUBLIC KEY`) o
 path cannot locate a sidecar and therefore reject OpenSSL-signed input.
 `getSignature()` returns `['hash' => <uppercase hex>,
 'hash_type' => 'MD5'|'SHA-1'|'SHA-256'|'SHA-512'|'OpenSSL']`.
+
+By default elephc enforces PHP's `phar.require_hash=1`: opening an executable
+phar without a signature fails. This applies to native PHARs and to tar/zip
+archives that contain `.phar/stub.php`; a plain tar/zip data archive without a
+stub remains readable, matching PHP's `PharData` behavior. Set
+`ELEPHC_PHAR_REQUIRE_HASH=0` before compiling for literal `phar://` reads and
+before starting the program for runtime reads; the variable is read once per
+process. New archives are still written SHA-256-signed, and an
+archive with an adjacent `<archive>.pubkey` requires an OpenSSL signature even
+under the relaxed policy.
 
 > **Security note on OpenSSL signing.** The RSA implementation behind
 > `setSignatureAlgorithm(Phar::OPENSSL, …)` carries a known timing side-channel on

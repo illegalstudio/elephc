@@ -168,14 +168,17 @@ pub(super) fn compute_signature(flag: u32, key: Option<&[u8]>, data: &[u8]) -> O
 /// anyone can recompute (CVE-2026-128090). The sidecar also requires an
 /// OpenSSL signature to be present at all, so stripping the manifest flag and
 /// trailer cannot turn a trusted archive into an accepted unsigned one.
+/// `require_hash` mirrors `phar.require_hash`: when true, a phar without any
+/// signature is rejected, matching PHP's default.
 pub(super) fn verify_native_phar_signature(
     data: &[u8],
     signature_required: bool,
     public_key: Option<&rsa::RsaPublicKey>,
     openssl_expected: bool,
+    require_hash: bool,
 ) -> Option<()> {
     if !signature_required {
-        if openssl_expected {
+        if openssl_expected || require_hash {
             return None;
         }
         if data.ends_with(b"GBMB") {
@@ -250,7 +253,7 @@ pub(super) fn sign_archive_openssl(path: &[u8], key_pem: &[u8]) -> Option<()> {
         .unwrap_or(&signing_public_key);
     match signing_format(&data)? {
         ArchiveFormat::Zip => {
-            let archive = parse_zip_archive_with_public_key(&data, Some(verification_key), false)?;
+            let archive = parse_zip_archive_with_public_key(&data, Some(verification_key), false, false)?;
             let signed = sign_zip_archive(
                 &archive.entries,
                 &archive.metadata,
@@ -261,7 +264,7 @@ pub(super) fn sign_archive_openssl(path: &[u8], key_pem: &[u8]) -> Option<()> {
             write_path(path, &signed)
         }
         ArchiveFormat::Tar => {
-            let archive = parse_tar_archive_with_public_key(&data, Some(verification_key), false)?;
+            let archive = parse_tar_archive_with_public_key(&data, Some(verification_key), false, false)?;
             let signed = sign_tar_archive(
                 &archive.entries,
                 &archive.metadata,
@@ -272,8 +275,9 @@ pub(super) fn sign_archive_openssl(path: &[u8], key_pem: &[u8]) -> Option<()> {
             write_path(path, &signed)
         }
         ArchiveFormat::NativePhar => {
-            parse_native_phar_archive_with_public_key(&data, Some(verification_key), false)?;
+            parse_native_phar_archive_with_public_key(&data, Some(verification_key), false, false)?;
             let mut out = strip_signature_trailer(&data).to_vec();
+            set_native_signature_flag(&mut out)?;
             let sig = rsa_sha1_sign(&out, key_pem)?;
             out.extend_from_slice(&sig);
             out.extend_from_slice(&u32::try_from(sig.len()).ok()?.to_le_bytes());
@@ -293,7 +297,7 @@ pub(super) fn sign_archive_openssl(path: &[u8], key_pem: &[u8]) -> Option<()> {
 /// while it exists, verified reads reject the resulting hash-signed archive.
 pub(super) fn sign_archive_hash(path: &[u8], algo: u32) -> Option<()> {
     let fs_path = std::path::Path::new(std::str::from_utf8(path).ok()?);
-    let (data, archive) = read_verified_archive(fs_path)?;
+    let (data, archive) = read_verified_archive_with_policy(fs_path, false)?;
     match signing_format(&data)? {
         ArchiveFormat::Zip => {
             let signed = sign_zip_archive(
@@ -317,6 +321,7 @@ pub(super) fn sign_archive_hash(path: &[u8], algo: u32) -> Option<()> {
         }
         ArchiveFormat::NativePhar => {
             let mut out = strip_signature_trailer(&data).to_vec();
+            set_native_signature_flag(&mut out)?;
             let digest = compute_signature(algo, None, &out)?;
             out.extend_from_slice(&digest);
             out.extend_from_slice(&algo.to_le_bytes());
@@ -324,6 +329,27 @@ pub(super) fn sign_archive_hash(path: &[u8], algo: u32) -> Option<()> {
             write_path(path, &out)
         }
     }
+}
+
+/// Marks a native PHAR manifest as signed before a new trailer is computed.
+///
+/// Archives built without a signature start with `PHAR_HDR_SIGNATURE` clear; an
+/// explicit signing operation must set it or the verifier treats the archive as
+/// unsigned even though a trailer is present.
+fn set_native_signature_flag(data: &mut [u8]) -> Option<()> {
+    let halt = b"__HALT_COMPILER();";
+    let halt_idx = find_subslice(data, halt)?;
+    let mut manifest_start = halt_idx.checked_add(halt.len())?;
+    for &ch in &[b' ', b'?', b'>', b'\r', b'\n'] {
+        if data.get(manifest_start) == Some(&ch) {
+            manifest_start = manifest_start.checked_add(1)?;
+        }
+    }
+    let flags_pos = manifest_start.checked_add(10)?;
+    let flags = le32(data, flags_pos)? | PHAR_HDR_SIGNATURE;
+    data.get_mut(flags_pos..flags_pos.checked_add(4)?)?
+        .copy_from_slice(&flags.to_le_bytes());
+    Some(())
 }
 
 /// Decodes a tar/zip `.phar/signature.bin` payload into its flag and signature
@@ -407,13 +433,18 @@ pub(super) fn read_zip_signature(data: &[u8]) -> Option<Vec<u8>> {
 /// signatures require the archive's external public key. `openssl_expected`
 /// mirrors the adjacent `<archive>.pubkey` sidecar: when it exists, an OpenSSL
 /// signature must be present and only that signature type is accepted
-/// (CVE-2026-128090).
+/// (CVE-2026-128090). `require_hash` mirrors `phar.require_hash`: an unsigned
+/// archive is rejected when true.
 pub(super) fn verify_tar_phar_signature(
     data: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
     openssl_expected: bool,
+    require_hash: bool,
 ) -> Option<()> {
     let mut p = 0usize;
+    // `phar.require_hash` applies to executable phars; a plain tar data archive
+    // without `.phar/stub.php` is a PharData container and stays readable.
+    let mut has_stub = false;
     while p.checked_add(512)? <= data.len() {
         let header = &data[p..p + 512];
         if header.iter().all(|&byte| byte == 0) {
@@ -421,28 +452,32 @@ pub(super) fn verify_tar_phar_signature(
         }
         let size = parse_tar_octal(&header[124..136])?;
         let payload_start = p.checked_add(512)?;
-        if (header[156] == 0 || header[156] == b'0')
-            && tar_entry_name(header)? == PHAR_SIGNATURE_ENTRY
-        {
-            let payload = data.get(payload_start..payload_start.checked_add(size)?)?;
-            let (flag, expected) = parse_signature_bin(payload)?;
-            let trailing = payload_start.checked_add(round_up_to_512(size)?)?;
-            if data.get(trailing..)?.iter().any(|&byte| byte != 0) {
-                return None;
+        if header[156] == 0 || header[156] == b'0' {
+            let name = tar_entry_name(header)?;
+            if name == PHAR_STUB_ENTRY {
+                has_stub = true;
             }
-            if flag == PHAR_OPENSSL_SIGNATURE_TYPE {
-                return rsa_sha1_verify(data.get(..p)?, &expected, public_key?);
+            if name == PHAR_SIGNATURE_ENTRY {
+                let payload = data.get(payload_start..payload_start.checked_add(size)?)?;
+                let (flag, expected) = parse_signature_bin(payload)?;
+                let trailing = payload_start.checked_add(round_up_to_512(size)?)?;
+                if data.get(trailing..)?.iter().any(|&byte| byte != 0) {
+                    return None;
+                }
+                if flag == PHAR_OPENSSL_SIGNATURE_TYPE {
+                    return rsa_sha1_verify(data.get(..p)?, &expected, public_key?);
+                }
+                if openssl_expected {
+                    return None;
+                }
+                signature_digest_len(flag)?;
+                let actual = compute_signature(flag, None, data.get(..p)?)?;
+                return (actual == expected).then_some(());
             }
-            if openssl_expected {
-                return None;
-            }
-            signature_digest_len(flag)?;
-            let actual = compute_signature(flag, None, data.get(..p)?)?;
-            return (actual == expected).then_some(());
         }
         p = payload_start.checked_add(round_up_to_512(size)?)?;
     }
-    if openssl_expected {
+    if openssl_expected || (require_hash && has_stub) {
         None
     } else {
         Some(())
@@ -456,10 +491,13 @@ pub(super) fn verify_tar_phar_signature(
 /// signatures require the archive's external public key. `openssl_expected`
 /// mirrors the adjacent `<archive>.pubkey` sidecar: when it exists, an OpenSSL
 /// signature must be present and a keyless signature is rejected.
+/// `require_hash` mirrors `phar.require_hash`: an unsigned archive is rejected
+/// when true.
 pub(super) fn verify_zip_phar_signature(
     data: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
     openssl_expected: bool,
+    require_hash: bool,
 ) -> Option<()> {
     let eocd = find_zip_eocd(data)?;
     let (entry_count, central_dir_offset) = zip_eocd_info(data)?;
@@ -468,6 +506,9 @@ pub(super) fn verify_zip_phar_signature(
     let comment = data.get(comment_start..comment_start.checked_add(comment_len)?)?;
     let mut p = central_dir_offset;
     let mut signature: Option<(usize, usize, usize, u32, Vec<u8>)> = None;
+    // `phar.require_hash` applies to executable phars; a plain zip data archive
+    // without `.phar/stub.php` is a PharData container and stays readable.
+    let mut has_stub = false;
     for _ in 0..entry_count {
         if le32(data, p)? != 0x0201_4b50 {
             return None;
@@ -493,6 +534,9 @@ pub(super) fn verify_zip_phar_signature(
             .checked_add(name_len)?
             .checked_add(extra_len)?
             .checked_add(entry_comment_len)?;
+        if name == PHAR_STUB_ENTRY {
+            has_stub = true;
+        }
         if name == PHAR_SIGNATURE_ENTRY {
             if method != ZIP_METHOD_STORE || signature.is_some() {
                 return None;
@@ -523,8 +567,13 @@ pub(super) fn verify_zip_phar_signature(
     }
     let Some((local_start, local_end, central_start, flag, expected)) = signature else {
         // A sidecar requires an OpenSSL signature: an unsigned archive must not
-        // be accepted just because the signature entry was removed.
-        return if openssl_expected { None } else { Some(()) };
+        // be accepted just because the signature entry was removed. The same
+        // applies to phar.require_hash.
+        return if openssl_expected || (require_hash && has_stub) {
+            None
+        } else {
+            Some(())
+        };
     };
     let central_end = p;
     if local_end > central_dir_offset || central_end > eocd {

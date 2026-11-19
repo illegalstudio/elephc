@@ -23,7 +23,7 @@ pub fn extract_url_bytes(url: &[u8]) -> Option<Vec<u8>> {
     let data = std::fs::read(path).ok()?;
     let openssl_expected = archive_public_key_path(path).exists();
     let public_key = read_archive_public_key(path);
-    extract_archive_entry(&data, entry, public_key.as_ref(), openssl_expected)
+    extract_archive_entry(&data, entry, public_key.as_ref(), openssl_expected, require_hash())
 }
 
 /// Extracts `entry` from already-loaded archive bytes.
@@ -33,7 +33,7 @@ pub fn extract_url_bytes(url: &[u8]) -> Option<Vec<u8>> {
 /// filesystem path from which to load `<archive>.pubkey`; use [`extract_url_bytes`]
 /// when signature authentication is required.
 pub fn extract_entry_bytes(archive: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
-    extract_archive_entry(archive, entry, None, false)
+    extract_archive_entry(archive, entry, None, false, false)
 }
 
 /// Extracts one entry after authenticating and dispatching the archive family.
@@ -45,6 +45,7 @@ fn extract_archive_entry(
     entry: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
     openssl_expected: bool,
+    require_hash: bool,
 ) -> Option<Vec<u8>> {
     // Whole-archive gzip/bzip2 wrappers are decoded transparently before extraction.
     if archive.starts_with(b"\x1f\x8b") {
@@ -53,6 +54,7 @@ fn extract_archive_entry(
             entry,
             public_key,
             openssl_expected,
+            require_hash,
         );
     }
     if archive.starts_with(b"BZh") {
@@ -61,14 +63,15 @@ fn extract_archive_entry(
             entry,
             public_key,
             openssl_expected,
+            require_hash,
         );
     }
     if archive.starts_with(b"PK\x03\x04") || archive.starts_with(b"PK\x05\x06") {
-        parse_zip_entry_with_public_key(archive, entry, public_key, openssl_expected)
+        parse_zip_entry_with_public_key(archive, entry, public_key, openssl_expected, require_hash)
     } else if archive.get(257..262) == Some(b"ustar") {
-        parse_tar_entry_with_public_key(archive, entry, public_key, openssl_expected)
+        parse_tar_entry_with_public_key(archive, entry, public_key, openssl_expected, require_hash)
     } else {
-        parse_native_phar_entry_with_public_key(archive, entry, public_key, openssl_expected)
+        parse_native_phar_entry_with_public_key(archive, entry, public_key, openssl_expected, require_hash)
     }
 }
 
@@ -246,16 +249,16 @@ pub(super) fn read_or_new_archive(path: &std::path::Path) -> Option<Archive> {
 
 /// Builds the empty archive a missing path would create.
 ///
-/// New native phars keep their historical SHA1 signature; tar and zip start
-/// unsigned, matching the family defaults used by `put_entry_bytes`.
+/// New archives are SHA-256-signed in every family, matching PHP's default
+/// signature algorithm, so they remain readable while the default
+/// `phar.require_hash=1` policy is in effect. Unsigned legacy archives are
+/// accepted only when the policy is explicitly relaxed.
 pub(super) fn empty_archive_for_path(path: &std::path::Path) -> Archive {
-    let format = format_for_new_archive_path(path);
     Archive {
         entries: Vec::new(),
-        format,
+        format: format_for_new_archive_path(path),
         metadata: Vec::new(),
         stub: Vec::new(),
-        signature_flag: matches!(format, ArchiveFormat::NativePhar)
-            .then_some(PHAR_SHA1_SIGNATURE_TYPE),
+        signature_flag: Some(PHAR_SHA256_SIGNATURE_TYPE),
     }
 }
