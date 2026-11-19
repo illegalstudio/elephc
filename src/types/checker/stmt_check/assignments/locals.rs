@@ -284,6 +284,12 @@ fn check_assign_value_type(
             checker.local_store_contracts.insert(contract_key, crate::types::LocalStoreContract {
                 ty: declared, feature: elephc_semantics::StrictFeature::Coercions,
             });
+        } else if checker.semantic_source_mode != crate::source::SourceMode::Internal
+            && checker.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability)
+            && crate::semantics::nullability::non_null_contract(&declared) {
+            checker.local_store_contracts.insert(contract_key, crate::types::LocalStoreContract {
+                ty: declared, feature: elephc_semantics::StrictFeature::Nullability,
+            });
         }
     }
     ty = checker.check_local_binding_store(name, &ty, span, env, Some(value))?;

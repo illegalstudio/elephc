@@ -12,6 +12,14 @@ use super::{context::{LoweredValue, LoweringContext}, semantic_guards};
 use crate::{ir::{IrType, Op}, span::Span, types::PhpType};
 use elephc_semantics::StrictFeature;
 
+/// Checks a declaration's null obligation without changing its independently selected conversion.
+pub(super) fn require_declared_value(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
+    destination: &PhpType, span: Span) {
+    if crate::semantics::nullability::non_null_contract(destination) {
+        require_non_null(ctx, value, &[], &[], span);
+    }
+}
+
 /// Checks a value without converting it or taking responsibility for earlier operand leases.
 pub(super) fn require_non_null(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
     pending: &[LoweredValue], previous: &[super::expr::PinnedInFlightOwner], span: Span) -> LoweredValue {

@@ -85,11 +85,13 @@ pub(super) fn string_boundary_may_throw(expr: &crate::parser::ast::Expr) -> bool
 /// A declared store can reject its source independently of operand effects or retirement.
 pub(super) fn implicit_store_may_throw(stmt: &crate::parser::ast::Stmt) -> bool {
     if matches!(stmt.kind, crate::parser::ast::StmtKind::Assign { .. }) {
-        return enabled(StrictFeature::Coercions) || enabled(StrictFeature::Locals);
+        return enabled(StrictFeature::Coercions) || enabled(StrictFeature::Locals)
+            || enabled(StrictFeature::Nullability);
     }
     let crate::parser::ast::StmtKind::TypedAssign { type_expr, .. } = &stmt.kind else { return false; };
-    enabled(StrictFeature::Coercions) && crate::semantics::conversions::implicit_contract(
-        &super::return_boundaries::parameter_type(Some(type_expr))).is_some()
+    let declared = super::return_boundaries::parameter_type(Some(type_expr));
+    (enabled(StrictFeature::Coercions) && crate::semantics::conversions::implicit_contract(&declared).is_some())
+        || (enabled(StrictFeature::Nullability) && crate::semantics::nullability::non_null_contract(&declared))
 }
 
 /// Tests one policy while keeping the immutable profile owned by the caller.

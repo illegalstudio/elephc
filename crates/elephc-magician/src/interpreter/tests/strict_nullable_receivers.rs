@@ -245,3 +245,21 @@ fn strict_nullability_eval_property_aliases_and_owners() {
         finish(&mut context, &mut scope, &mut values, "property aliases");
     }
 }
+
+/// Copies and variable aliases preserve a missing element's null before parameter conversion.
+#[test]
+fn strict_nullability_eval_copied_missing_values_and_owners() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    let source = "function nullableCopiedConsumer(int $value){echo 'bad';}$rows=[7]; \
+        $copy=$rows[20];try{nullableCopiedConsumer($copy);}catch(TypeError $e){echo 'C|';} \
+        $alias=&$copy;try{nullableCopiedConsumer($alias);}catch(TypeError $e){echo 'A|';} \
+        echo gettype($copy);";
+    for fallback in [false, true] {
+        let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        let result = execute(source, fallback, &mut context, &mut scope, &mut values);
+        assert!(result.is_ok(), "{:?}; {}", result.as_ref().err(), values.output);
+        assert_eq!(values.output, "C|A|NULL");
+        finish(&mut context, &mut scope, &mut values, "copied missing values");
+    }
+}

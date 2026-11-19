@@ -262,3 +262,50 @@ fn nullable_property_aliases_emit_on_every_target() {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Typed stores and copied scalar misses retain original null until the declared consumer.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn nullable_local_stores_and_copies_preserve_original_null() {
+    let source = include_str!("../../../tests/fixtures/strict/nullable_locals.lfc");
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for optimize in [false, true] {
+        let module = super::semantic_sources::lower_capturing_arguments(source, Target::detect_host(), profile, optimize, SourceMode::Lfc);
+        let output = super::native_module::run(&module);
+        let stdout = String::from_utf8_lossy(&output.stdout); let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "optimize={optimize}: {stdout}; {stderr}");
+        assert_eq!(stdout, "I|S:4|C|A|NULL:NULL:NULL", "{stderr}");
+        assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+    }
+}
+
+/// Source checks retain invalid typed declarations even when control-flow pruning removes them.
+#[test]
+fn nullable_local_declarations_are_checked_before_folding() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for source in ["<?php if(false){int $value=null;}",
+        "<?php if(false){array<int> $value=null;}"] {
+        let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), SourceMode::Lfc).unwrap();
+        let error = crate::semantics::validate_source(&program, profile).unwrap_err();
+        assert!(error.message.contains("strict-nullability"), "{error:?}");
+        crate::semantics::validate_source(&program, SemanticProfile::PERMISSIVE).unwrap();
+    }
+    for source in ["<?php ?int $value=null;", "<?php mixed $value=null;",
+        "<?php int|mixed $value=null;"] {
+        let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), SourceMode::Lfc).unwrap();
+        crate::semantics::validate_source(&program, profile).unwrap();
+    }
+}
+
+/// Declared null-only guards share the existing scalar storage adapters on all supported targets.
+#[test]
+fn nullable_local_stores_emit_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/nullable_locals.lfc");
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::semantic_sources::lower_capturing_arguments(source, Target::parse(name).unwrap(), profile, false, SourceMode::Lfc);
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

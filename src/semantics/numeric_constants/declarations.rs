@@ -21,7 +21,10 @@ pub(super) fn check(annotation: &TypeExpr, value: &Expr, source: SourceMode, cla
 /// Shares original-kind proof and diagnostics between declaration producers and explicit arguments.
 pub(super) fn check_value(annotation: &TypeExpr, value: &Expr, class: Option<&str>,
     definitions: &Definitions, evidence: &mut Evidence, context: &str) -> Result<(), CompileError> {
-    let Some(expected) = super::super::conversions::scalar_hint(annotation) else { return Ok(()); };
+    let expected = if evidence.profile.contains(StrictFeature::Nullability) {
+        super::super::conversions::implicit_hint(annotation)
+    } else { super::super::conversions::scalar_hint(annotation) };
+    let Some(expected) = expected else { return Ok(()); };
     check_expected(&expected, value, class, definitions, evidence, context)
 }
 

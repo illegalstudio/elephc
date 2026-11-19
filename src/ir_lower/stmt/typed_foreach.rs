@@ -30,6 +30,7 @@ pub(super) fn lower_typed_assign(
         .as_ref()
         .map(|assignment| assignment.value)
         .unwrap_or_else(|| lower_expr(ctx, value));
+    crate::ir_lower::nullability::require_declared_value(ctx, lowered, &php_type, span);
     let lowered = if crate::ir_lower::conversion_boundaries::active(ctx, &php_type) {
         let checked = crate::ir_lower::conversion_boundaries::implicit(ctx, lowered, &php_type, span);
         crate::ir_lower::conversion_boundaries::value_storage(ctx, checked, &php_type, span)

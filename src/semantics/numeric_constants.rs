@@ -173,6 +173,17 @@ impl AstVisitor for NumericValidator {
             _ => self.scopes.last().and_then(|(_, class, _)| class.clone()),
         };
         self.scopes.push((stmt.source_mode, class, stmt.strict_types));
+        if self.error.is_none() && stmt.source_mode != SourceMode::Internal
+            && self.evidence.profile.contains(StrictFeature::Nullability) {
+            if let StmtKind::TypedAssign { type_expr, value, .. } = &stmt.kind {
+                let (_, class, strict_types) = self.scopes.last().unwrap();
+                self.evidence.strict_types = *strict_types;
+                if let Err(error) = declarations::check_value(type_expr, value, class.as_deref(),
+                    &self.definitions, &mut self.evidence, "typed local declaration") {
+                    self.error = Some(error);
+                }
+            }
+        }
     }
 
     /// Restores the lexical class after a declaration or nested statement finishes.

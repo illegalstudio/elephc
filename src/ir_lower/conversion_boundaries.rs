@@ -159,6 +159,12 @@ pub(super) fn local_store(ctx: &mut LoweringContext<'_, '_>, name: &str, value: 
     };
     if ctx.source_mode == crate::source::SourceMode::Internal
         || !ctx.semantic_profile.contains(contract.feature) { return None; }
+    if contract.feature == StrictFeature::Nullability {
+        super::nullability::require_declared_value(ctx, value, &contract.ty, span);
+        ctx.prepare_eval_native_binding_store(name, span);
+        // Nullability adds a check; ordinary local contextualization still owns conversion.
+        return None;
+    }
     let value = membership(ctx, value, &contract.ty, contract.feature, span);
     ctx.prepare_eval_native_binding_store(name, span);
     Some((value_storage(ctx, value, &contract.ty, span), contract.ty))
