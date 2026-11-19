@@ -1,0 +1,48 @@
+//! Purpose:
+//! Associates inferred array contents with live array-owned reference element sources.
+//!
+//! Called from:
+//! - Successful array publication and canonical reference candidate validation.
+//!
+//! Key details:
+//! - Array allocation tokens own constraint lifetimes, not the scalar referent's lifetime.
+//! - Returned snapshots borrow no maps and retain no PHP values.
+
+use super::*;
+use crate::eval_ir::EvalParameterType;
+
+/// An array-owned element association inspected before a shared referent can change.
+pub(crate) struct EvalArrayReferenceSource {
+    pub(crate) array: RuntimeCellHandle,
+    pub(crate) key: EvalArrayReferenceKey,
+    pub(crate) contracts: Vec<EvalParameterType>,
+}
+
+impl ElephcEvalContext {
+    /// Replaces one published array's content obligations without retaining its runtime allocation.
+    pub(crate) fn set_array_reference_contracts(&mut self, array: RuntimeCellHandle, contracts: Vec<EvalParameterType>) {
+        self.prune_retired_array_aliases();
+        let address = array.as_ptr() as usize;
+        if contracts.is_empty() && !self.array_element_aliases.contains_key(&address) { return; }
+        let aliases = self.array_element_aliases.entry(address).or_insert_with(|| {
+            let lifetime = crate::ffi::array_references::register_array_reference_cell(address, &self.array_reference_retirements);
+            EvalArrayReferenceAliases { targets: std::collections::HashMap::new(), contracts: Vec::new(), lifetime }
+        });
+        aliases.contracts = contracts;
+    }
+
+    /// Snapshots only exact live array associations targeting this persistent reference cell.
+    pub(crate) fn array_reference_sources(&self, reference: RuntimeCellHandle) -> Vec<EvalArrayReferenceSource> {
+        let mut sources = Vec::new();
+        for (address, aliases) in &self.array_element_aliases {
+            if !aliases.lifetime.is_live() || aliases.contracts.is_empty() { continue; }
+            for (key, target) in &aliases.targets {
+                if matches!(target, EvalReferenceTarget::Cell { cell } if cell.as_ptr() == reference.as_ptr()) {
+                    sources.push(EvalArrayReferenceSource { array: RuntimeCellHandle::from_raw(*address as *mut _),
+                        key: key.clone(), contracts: aliases.contracts.clone() });
+                }
+            }
+        }
+        sources
+    }
+}

@@ -111,9 +111,9 @@ pub(in crate::interpreter) fn set_scope_cell(
         if ownership == ScopeCellOwnership::Owned { let _ = eval_release_value(context, values, cell); }
         return Err(status);
     }
-    let result = set_scope_cell_unchecked(context, scope, name, cell, ownership, values);
+    let result = set_scope_cell_unchecked(context, scope, name.clone(), cell, ownership, values);
     if result.is_err() && ownership == ScopeCellOwnership::Owned { let _ = eval_release_value(context, values, cell); }
-    result
+    finish_scope_source_publication(result, scope, &name, context, values)
 }
 
 /// Marks an in-place write in the scope that actually owns the visible binding.
@@ -175,17 +175,28 @@ pub(in crate::interpreter) fn set_owned_scope_cell(
         if let Some(reference) = visible_scope_cell(context, scope, &name) {
             if values.is_reference(reference)? {
                 let same_owner = reference == cell;
-                let mut replaced = set_scope_cell_unchecked(context, scope, name, cell, ScopeCellOwnership::Owned, values)?;
+                let mut replaced = set_scope_cell_unchecked(context, scope, name.clone(), cell, ScopeCellOwnership::Owned, values)?;
                 if same_owner { replaced.push(cell); }
                 return Ok(replaced);
             }
         }
-        update_scope_cell(context, scope, name, |scope, name| {
+        update_scope_cell(context, scope, name.clone(), |scope, name| {
             scope.set_owned_respecting_references(name, cell)
         })
     })();
     if result.is_err() { let _ = eval_release_value(context, values, cell); }
-    result
+    finish_scope_source_publication(result, scope, &name, context, values)
+}
+
+/// Refreshes successful array source metadata and balances displaced owners if a host check fails.
+fn finish_scope_source_publication(result: Result<Vec<RuntimeCellHandle>, EvalStatus>,
+    scope: &ElephcEvalScope, name: &str, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let replaced = result?;
+    if let Err(status) = local_binding_origins::refresh_reference_sources(scope, name, context, values) {
+        return finish_eval_void_arguments(Err(status), replaced, context, values).map(|()| Vec::new());
+    }
+    Ok(replaced)
 }
 
 /// Applies a storage mutation to the actual scope behind a local or global alias.

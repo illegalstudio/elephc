@@ -132,3 +132,52 @@ fn strict_array_mutations_alias_metadata_survives_copy_and_reindex() {
         assert_eq!(output, "4:4"); assert_eq!(returned, FakeValue::Int(5));
     }
 }
+
+/// Escaped literal element references retain their array schema before either alias can mutate.
+#[test]
+fn strict_array_reference_elements_preserve_closed_array_contracts() {
+    let source = "$value=1;$items=[&$value]; \
+        try{$value='bad';}catch(TypeError $error){echo 'V';} \
+        function corrupt_element(&$alias){$alias='bad';} \
+        try{corrupt_element($items[0]);}catch(TypeError $error){echo 'A';}return $items[0];";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "VA"); assert_eq!(returned, FakeValue::Int(1));
+    }
+}
+
+
+/// Copied arrays keep independent live sources and release constraints after the last array owner dies.
+#[test]
+fn strict_array_reference_sources_follow_array_owner_lifetimes() {
+    let source = "$value=1;$first=[&$value];$second=$first;unset($first); \
+        try{$value='bad';}catch(TypeError $error){echo 'C';} \
+        unset($second);$value='released';return $value;";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "C"); assert_eq!(returned, FakeValue::String("released".to_string()));
+    }
+}
+
+/// An explicit mixed copy does not inherit a retired closed owner's element restriction.
+#[test]
+fn strict_array_reference_sources_keep_open_copy_contexts() {
+    let source = "$value=1;$closed=[&$value];array<mixed> $open=$closed; \
+        unset($closed);$value='released';return $open[0];";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert!(output.is_empty()); assert_eq!(returned, FakeValue::String("released".to_string()));
+    }
+}
+
+/// Every live typed array source constrains a shared element independently of the referent's kind.
+#[test]
+fn strict_array_reference_sources_intersect_live_element_contracts() {
+    let source = "$value=1;array<int|string> $first=[&$value];array<int|bool> $second=[&$value]; \
+        try{$value='bad';}catch(TypeError $error){echo 'B';}unset($second);$value='allowed'; \
+        try{$value=false;}catch(TypeError $error){echo 'A';}return $first[0];";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "BA"); assert_eq!(returned, FakeValue::String("allowed".to_string()));
+    }
+}

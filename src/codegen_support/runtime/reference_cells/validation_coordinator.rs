@@ -28,7 +28,8 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter, eval_brid
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
     }
     if eval_bridge && (emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
-        || emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)) {
+        || emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)
+        || emitter.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayTypes)) {
         // Exact eval sources see the original RHS before native property coercion can change it.
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
@@ -126,7 +127,8 @@ mod tests {
     #[test]
     fn native_reference_coordinator_checks_eval_sources_on_every_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            for feature in [elephc_semantics::StrictFeature::Coercions, elephc_semantics::StrictFeature::Locals] {
+            for feature in [elephc_semantics::StrictFeature::Coercions, elephc_semantics::StrictFeature::Locals,
+                elephc_semantics::StrictFeature::ArrayTypes] {
                 for enabled in [false, true] {
                     let target = Target::parse(name).unwrap();
                     let mut emitter = Emitter::new(target);

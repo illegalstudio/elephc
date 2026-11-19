@@ -83,6 +83,10 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     }
     /// Models runtime-owned references without borrowing a test scope address.
     fn supports_persistent_references(&self) -> bool { true }
+    /// Retired fake graph nodes stay inspectable but cannot contribute live source constraints.
+    fn reference_source_is_live(&self, value: RuntimeCellHandle) -> bool {
+        self.reference_owner_count(value) != 0
+    }
     /// Recognizes a fake reference independently from its current concrete PHP value.
     fn is_reference(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         Ok(self.references.contains_key(&(value.as_ptr() as usize)))

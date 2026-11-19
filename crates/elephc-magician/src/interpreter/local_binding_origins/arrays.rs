@@ -154,7 +154,7 @@ pub(in crate::interpreter) fn publish_write(scope: &mut ElephcEvalScope, name: &
             if values.is_reference(cell)? { context.bind_local_reference_types(cell, &[origin]); }
         }
     }
-    Ok(())
+    refresh_reference_sources(scope, name, context, values)
 }
 
 /// Finds an established content constraint while keeping pending captures neutral until first write.
@@ -165,4 +165,33 @@ fn contains_closed_contents(ty: &Type) -> bool {
         Type::Nullable(inner) => contains_closed_contents(inner),
         _ => false,
     }
+}
+
+/// Refreshes array-owned element constraints after a binding has successfully published its value.
+pub(in crate::interpreter) fn refresh_reference_sources(scope: &ElephcEvalScope, name: &str,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) { return Ok(()); }
+    let Some(value) = visible_scope_cell(context, scope, name) else { return Ok(()); };
+    let contracts = generic_local_contracts(scope, name, context);
+    refresh_value_sources(value, &contracts, context, values)
+}
+
+/// Replaces one value owner's source constraints, including explicit open contexts on independent copies.
+pub(in crate::interpreter) fn refresh_value_sources(value: RuntimeCellHandle, contracts: &[EvalParameterType],
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) { return Ok(()); }
+    if !matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        context.clear_array_metadata(value); return Ok(());
+    }
+    let mut contents = Vec::new();
+    for contract in contracts {
+        if let Some(schema) = source_schema(&generic_type(contract)).and_then(crate::eval_ir::array_contents_type) {
+            let schema = parameter_type(&schema);
+            if !contents.contains(&schema) { contents.push(schema); }
+        }
+    }
+    context.set_array_reference_contracts(value, contents);
+    Ok(())
 }

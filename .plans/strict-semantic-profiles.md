@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step240 (this commit). Remaining feature integration is active. Issue:
+Verified through step241 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2928,3 +2928,11 @@ Probe239 separately confirmed a remaining reverse reference-element bug: support
 One reusable element-source adapter projects internal conditional array metadata for actual arrays while preserving ordinary mixed/union alternatives. Direct writes, literal observation and mutating builtin insertions consume it. Literal argument unpacking carries each final normalized key's producer separately, avoiding an invented homogeneous argument tuple. Variable spreads derive their element view from the retained source contract. Push/unshift keep the count result rooted while replacement construction can allocate or fail.
 
 Thirty-nine exact tests and the complete seven-gate generated-builtin workflow pass in joba68ad380 (50 total gates with build/hygiene/source stability). New regressions cover nested arrays through shared aliases, positional and named literal argument unpacking with references, declared mixed versus inferred homogeneous variable spreads with independent ArrayKeys, and alias visibility after copying/reindexing. Existing mutation/source/native argument owner controls remain green with balanced owners. The generated docs are unchanged. Reverse reference-element source guards remain pending as recorded in knowledgeb17793a4; this step preserves references but does not claim that missing validation or public admission is complete.
+
+### Verified241: direct array-owned reference source guards
+
+Array alias metadata retains content obligations with its existing allocation-lifetime token. Canonical reference replacement snapshots live direct element associations and pins every source value before validating the original candidate. The same guard runs through the existing native reference validation bridge; ArrayTypes independently selects that bridge on all five targets. Publication, copies, closures and mutation refresh source metadata without permanently constraining a scalar referent after its array owners disappear.
+
+A shared void-operand cleanup helper roots validation leases and preserves failure priority. Native allocation tokens remain authoritative; in-memory RuntimeValueOps can report logical retirement, and FakeOps uses its own ownership graph instead of invalidating process-global tokens for synthetic cell IDs. Closure value captures reuse the existing metadata-preserving copy helper.
+
+Forty-four exact focused tests pass in job0165b6b7 (48 total gates with build/hygiene/source stability). The recorded A-versus-VA regression now prints VA before mutation and preserves the original integer. Copies retain constraints until their last array owner is gone, an explicit mixed copy sheds a retired closed owner's restriction, and every live typed source contributes independently. Existing array/source/native argument regressions and all-five emitter checks pass with balanced owners. This verifies direct reference elements only; nested source traversal, prospective/self-referential candidates, nested empty refinement, splice/reference preservation and native execution/host audits remain pending. Public admission is unchanged.

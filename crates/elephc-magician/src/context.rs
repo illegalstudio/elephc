@@ -20,6 +20,7 @@ mod functions;
 mod generics;
 mod global_registry;
 mod local_types;
+mod array_reference_types;
 mod property_reference_types;
 mod native_catalog;
 mod native_defaults;

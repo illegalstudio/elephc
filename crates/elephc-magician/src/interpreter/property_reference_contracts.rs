@@ -33,11 +33,13 @@ pub(in crate::interpreter) fn eval_replace_reference_value(
     if values.coordinates_property_reference_candidates() {
         return values.reference_replace(reference, value);
     }
+    array_reference_contracts::validate(reference, value, context, values)?;
     let mut prepared = prepare_property_reference_candidates(reference, value, context, values)?;
     let current = context as *mut ElephcEvalContext;
     for pointer in unsafe { crate::context::live_native_reference_contexts() } {
         if pointer == current { continue; }
         let Some(owner) = (unsafe { pointer.as_mut() }) else { continue; };
+        array_reference_contracts::validate(reference, value, owner, values)?;
         prepared.extend(prepare_property_reference_candidates(reference, value, owner, values)?);
     }
     if let Some(candidate) = coerce_property_reference_candidates(prepared, value, context, values)? {
@@ -53,6 +55,12 @@ pub(crate) fn eval_validate_property_reference(
     reference: RuntimeCellHandle, value: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    array_reference_contracts::validate(reference, value, context, values)?;
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+        for declared in context.local_reference_types(reference) {
+            validate_generic_local(&declared, "reference", value, context, values)?;
+        }
+    }
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals) {
         for declared in context.local_reference_types(reference) {
             if !eval_declared_value_type_accepts_exact(&declared, None, None, value, context, values)? {

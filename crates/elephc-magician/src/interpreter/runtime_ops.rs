@@ -1085,6 +1085,10 @@ pub trait RuntimeValueOps {
     /// Native publishers coordinate eval and native declarations from the same original RHS.
     fn coordinates_property_reference_candidates(&self) -> bool { false }
 
+    /// Checks logical source retirement for runtimes whose live metadata cells remain inspectable.
+    /// Native allocations are already protected by their allocation-lifetime token.
+    fn reference_source_is_live(&self, _value: RuntimeCellHandle) -> bool { true }
+
     /// Reports whether a boxed value is a writable persistent PHP reference.
     fn is_reference(&mut self, _value: RuntimeCellHandle) -> Result<bool, EvalStatus> { Ok(false) }
 

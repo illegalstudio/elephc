@@ -207,6 +207,22 @@ pub(in crate::interpreter) fn finish_eval_argument_values(
     })
 }
 
+/// Retires rooted check operands while preserving the original failure without creating a PHP result.
+pub(in crate::interpreter) fn finish_eval_void_arguments(
+    result: Result<(), EvalStatus>, arguments: impl IntoIterator<Item = RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let arguments = arguments.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    with_runtime_owners(&arguments, || {
+        let mut released = Ok(());
+        for argument in &arguments {
+            let cleanup = release_expr_result(argument.take(), context, values);
+            if released.is_ok() { released = cleanup; }
+        }
+        result.and(released)
+    })
+}
+
 #[cfg(test)]
 pub(in crate::interpreter) use with_eval_call_arguments as with_eval_method_arguments;
 

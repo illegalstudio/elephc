@@ -54,6 +54,7 @@ pub(in crate::interpreter) fn finish_array_mutation(target: &EvalReferenceTarget
                     EvalReferenceTarget::Variable { scope, name } => {
                         if let Some(scope) = unsafe { scope.as_mut() } {
                             scope.infer_array_local_type(name.clone(), origin.clone());
+                            refresh_reference_sources(scope, name, context, values)?;
                             if let Some(cell) = visible_scope_cell(context, scope, name) {
                                 context.bind_local_reference_types(cell, &[origin]);
                             }

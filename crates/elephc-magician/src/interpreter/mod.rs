@@ -12,6 +12,7 @@
 //!   to `RuntimeValueOps`, which will be backed by elephc runtime hooks.
 
 mod array_literals;
+mod array_reference_contracts;
 mod argument_value_owners;
 mod call_argument_owners;
 

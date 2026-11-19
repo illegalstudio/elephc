@@ -19,7 +19,7 @@ mod source_views;
 
 pub(super) use source_views::{LocalAssignmentProducer, prepare_assignment, source_view, evaluate_assignment};
 
-pub(super) use arrays::element_source_type;
+pub(super) use arrays::{element_source_type, refresh_reference_sources, refresh_value_sources};
 pub(super) use arrays::{prepare_write as prepare_array_local_write, publish_write as publish_array_local_write};
 
 /// Captures a producer's declared alternatives without executing PHP or borrowing live maps.
@@ -201,6 +201,7 @@ pub(in crate::interpreter) fn store_local_with_origin(context: &mut ElephcEvalCo
     if let Some(source) = source { scope.record_local_source_view(name.clone(), source); }
     if let Some(origin) = array_origin {
         scope.infer_array_local_type(name.clone(), origin);
+        refresh_reference_sources(scope, &name, context, values)?;
         if values.supports_persistent_references() {
             eval_persistent_variable_reference(&name, context, scope, values)?;
         }
@@ -212,5 +213,6 @@ pub(in crate::interpreter) fn store_local_with_origin(context: &mut ElephcEvalCo
             eval_persistent_variable_reference(&name, context, scope, values)?;
         }
     }
+    refresh_reference_sources(scope, &name, context, values)?;
     Ok(replaced)
 }
