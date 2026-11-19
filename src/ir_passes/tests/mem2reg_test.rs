@@ -481,7 +481,7 @@ fn keeps_dynamic_eval_visible_local_in_memory() {
         b.position_at_end(entry);
         b.emit(Op::LanguageConstructCall, vec![],
             Some(Immediate::ProfiledData { data: crate::ir::DataId::from_raw(0), strict_php: false }),
-            IrType::Void, PhpType::Void, Ownership::NonHeap);
+            IrType::Heap(crate::ir::IrHeapKind::Mixed), PhpType::Mixed, Ownership::MaybeOwned);
         let value = b.emit_const_i64(9);
         b.emit_store_local(slot, value);
         let result = b.emit_load_local(slot, IrType::I64, PhpType::Int);
