@@ -715,11 +715,11 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     // payload only after the instance check, so the callee never receives a boxed cell where
     // its ABI expects a raw object pointer.
     let by_reference = sig.ref_params.get(index).copied().unwrap_or(false);
-    // The bare `object` type is spelled `Object("")`: it names no class to test an instance
-    // against, so the declared-class guard below does not apply to it.
+    // The bare `object` type is spelled `Object("")`: `guard_union_object_param` tests object-ness
+    // for it instead of an instance of a class, and names the parameter in its TypeError.
     if !by_reference {
         if let PhpType::Object(class_name) = param_ty {
-        if !class_name.is_empty() {
+        {
             let source_ty = ctx.builder.value_php_type(value.value);
             // A union-typed local is stored in a boxed Mixed slot, so its IR type no longer
             // names the `Class|false` alternative. Recover the checker's static type from the
