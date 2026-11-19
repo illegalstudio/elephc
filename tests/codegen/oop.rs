@@ -45,6 +45,8 @@ mod static_asymmetric_visibility;
 mod override_constants_php86;
 #[path = "oop/enum_debug_info_php86.rs"]
 mod enum_debug_info_php86;
+#[path = "oop/const_objects_php86.rs"]
+mod const_objects_php86;
 #[path = "oop/constructor_deprecation_php86.rs"]
 mod constructor_deprecation_php86;
 #[path = "oop/readonly_native_properties.rs"]

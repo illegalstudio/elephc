@@ -11,8 +11,17 @@ use super::*;
 
 /// Lowers a global constant declaration.
 pub(super) fn lower_const_decl(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
+    // An object constant keeps one identity for the whole program: store the single object in
+    // the hidden slot every read consults instead of in the constant's ordinary global.
+    let storage = if crate::ir_lower::expr::constants::constant_initializer_needs_identity(value)
+        && crate::ir_lower::expr::constants::identity_constant_type(value).is_some()
+    {
+        crate::ir_lower::expr::constants::identity_constant_storage_name(name)
+    } else {
+        name.to_string()
+    };
     let value = lower_expr(ctx, value);
-    let data = ctx.intern_global_name(name);
+    let data = ctx.intern_global_name(&storage);
     ctx.emit_void(
         Op::StoreGlobal,
         vec![value.value],

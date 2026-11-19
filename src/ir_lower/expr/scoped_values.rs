@@ -221,6 +221,29 @@ fn lower_class_constant_value(
     value: &Expr,
     read: crate::span::Span,
 ) -> LoweredValue {
+    // A class constant built by `new` holds ONE object for the whole program
+    // (`Config::DEFAULTS->timeout = 30` must be visible to every later read). The class has no
+    // declaration statement to store it, so the first read materializes it in a hidden global
+    // and every read unboxes that same object.
+    if crate::ir_lower::expr::constants::constant_initializer_needs_identity(value) {
+        if let Some(identity_type) =
+            crate::ir_lower::expr::constants::identity_constant_type(value)
+        {
+            let storage =
+                crate::ir_lower::expr::constants::identity_class_constant_storage_name(class_name, name);
+            return crate::ir_lower::expr::constants::lower_identity_constant(
+                ctx,
+                &storage,
+                &identity_type,
+                read,
+                |ctx| {
+                    with_class_constant_frame(ctx, class_name, name, value, read, |ctx| {
+                        lower_expr(ctx, value)
+                    })
+                },
+            );
+        }
+    }
     with_class_constant_frame(ctx, class_name, name, value, read, |ctx| lower_expr(ctx, value))
 }
 

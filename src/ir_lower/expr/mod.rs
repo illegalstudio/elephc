@@ -32,7 +32,7 @@ use crate::types::{
 };
 use std::collections::HashSet;
 
-mod constants;
+pub(crate) mod constants;
 mod dynamic_callable_factory;
 mod array_merge_values;
 use array_merge_values::lower_array_value_for_merge;

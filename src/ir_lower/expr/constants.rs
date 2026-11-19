@@ -445,6 +445,138 @@ fn static_constant_name_arg(arg: &Expr) -> Option<&str> {
     }
 }
 
+/// Prefix of the compiler-internal global that holds a constant whose value must keep one
+/// identity across reads (an object built by `new`).
+///
+/// The name is reserved: it is not a source variable, so it never appears in `$GLOBALS`, and
+/// the `--web` request reset clears it like any other program global.
+pub(crate) const IDENTITY_CONSTANT_PREFIX: &str = "__elephc_const_object_";
+
+/// Returns whether a constant initializer builds a value that must keep one identity.
+///
+/// Objects are handles: `const CONFIG = new stdClass(); CONFIG->debug = true;` mutates the
+/// single object the constant holds (PHP 8.6), and `Config::DEFAULTS === Config::DEFAULTS`
+/// stays true. Re-lowering the initializer at every read would hand each site a fresh object
+/// and silently drop the write, so those constants are materialized once into their own
+/// storage. Scalars, strings and arrays are values, so their initializer may be re-evaluated.
+pub(crate) fn constant_initializer_needs_identity(value: &Expr) -> bool {
+    matches!(
+        value.kind,
+        ExprKind::NewObject { .. }
+            | ExprKind::NewScopedObject { .. }
+            | ExprKind::NewDynamic { .. }
+            | ExprKind::NewDynamicObject { .. }
+    )
+}
+
+/// Returns the hidden global name that stores identity constant `name`.
+pub(crate) fn identity_constant_storage_name(name: &str) -> String {
+    format!("{IDENTITY_CONSTANT_PREFIX}{}", sanitize_storage_part(name))
+}
+
+/// Returns the hidden global name that stores identity constant `class::name`.
+pub(crate) fn identity_class_constant_storage_name(class_name: &str, name: &str) -> String {
+    format!(
+        "{IDENTITY_CONSTANT_PREFIX}class_{}_{}",
+        sanitize_storage_part(class_name),
+        sanitize_storage_part(name)
+    )
+}
+
+/// Keeps a hidden storage name inside the label character set the assembler accepts.
+fn sanitize_storage_part(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '_' { ch } else { '_' })
+        .collect()
+}
+
+/// Returns the object type an identity constant's initializer produces, when it is known
+/// statically. `new $class` and `new self` have no class name a write can dispatch on, so a
+/// read of those keeps the previous inline evaluation.
+pub(crate) fn identity_constant_type(value: &Expr) -> Option<PhpType> {
+    match crate::types::checker::infer_expr_type_syntactic(value).codegen_repr() {
+        PhpType::Object(class) if !class.is_empty() => Some(PhpType::Object(class)),
+        _ => None,
+    }
+}
+
+/// Lowers a read of a constant whose value must keep one identity (see
+/// [`constant_initializer_needs_identity`]).
+///
+/// The value lives in `storage_name`: the declaration stored it there (top-level `const`), or
+/// the first read materializes it through `lower_initializer` (class constants and `define()`).
+/// Either way every read unboxes that one object and retains it for the consumer, so property
+/// writes through the read mutate the constant's object.
+pub(crate) fn lower_identity_constant(
+    ctx: &mut LoweringContext<'_, '_>,
+    storage_name: &str,
+    php_type: &PhpType,
+    span: Span,
+    lower_initializer: impl FnOnce(&mut LoweringContext<'_, '_>) -> LoweredValue,
+) -> LoweredValue {
+    let data = ctx.intern_global_name(storage_name);
+    let cached = ctx.emit_value(
+        Op::LoadGlobal,
+        Vec::new(),
+        Some(Immediate::GlobalName(data)),
+        PhpType::Mixed,
+        Op::LoadGlobal.default_effects(),
+        Some(span),
+    );
+    let initialize = ctx.builder.create_named_block("const.init", Vec::new());
+    let ready = ctx.builder.create_named_block("const.ready", Vec::new());
+    let missing = ctx.emit_value(
+        Op::IsNull,
+        vec![cached.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: missing.value,
+        then_target: initialize,
+        then_args: Vec::new(),
+        else_target: ready,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(initialize);
+    let built = lower_initializer(ctx);
+    ctx.emit_void(
+        Op::StoreGlobal,
+        vec![built.value],
+        Some(Immediate::GlobalName(data)),
+        Op::StoreGlobal.default_effects(),
+        Some(span),
+    );
+    ctx.builder.terminate(Terminator::Br {
+        target: ready,
+        args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(ready);
+    let stored = ctx.emit_value(
+        Op::LoadGlobal,
+        Vec::new(),
+        Some(Immediate::GlobalName(data)),
+        PhpType::Mixed,
+        Op::LoadGlobal.default_effects(),
+        Some(span),
+    );
+    // The load borrows the global's box; unboxing retains the object for the reader, and the
+    // borrowed box itself must NOT be released (that would decref the constant's own cell).
+    ctx.emit_owned_value(
+        Op::MixedUnbox,
+        vec![stored.value],
+        None,
+        php_type.clone(),
+        Op::mixed_unbox_effects(php_type),
+        Some(span),
+    )
+}
+
 /// Lowers a constant reference through prescanned metadata or global storage fallback.
 pub(super) fn lower_const_ref(
     ctx: &mut LoweringContext<'_, '_>,
@@ -467,6 +599,15 @@ pub(super) fn lower_const_ref(
         );
     }
     if let Some((value, php_type)) = ctx.constant_value(name.as_str()) {
+        let initializer = Expr::new(value.clone(), expr.span);
+        if constant_initializer_needs_identity(&initializer) {
+            if let Some(identity_type) = identity_constant_type(&initializer) {
+                let storage = identity_constant_storage_name(name.as_str());
+                return lower_identity_constant(ctx, &storage, &identity_type, expr.span, |ctx| {
+                    with_constant_deprecations_suppressed(|| super::lower_expr(ctx, &initializer))
+                });
+            }
+        }
         return lower_constant_value(ctx, value, php_type, expr);
     }
     if ctx.has_eval_barrier() || ctx.eval_executed() {
