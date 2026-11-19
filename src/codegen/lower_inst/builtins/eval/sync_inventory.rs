@@ -158,7 +158,8 @@ pub(super) fn eval_sync_global_type(ctx: &FunctionContext<'_>, name: &str) -> Op
             // Only real global storage instructions make a name a program
             // global; eval scope ops reference names through the same data
             // pool without any global storage behind them.
-            if !matches!(inst.op, Op::LoadGlobal | Op::LoadGlobalRefCell | Op::StoreGlobal) {
+            if !matches!(inst.op, Op::LoadGlobal | Op::LoadGlobalRefCell | Op::StoreGlobal
+                | Op::GlobalBindingPresent | Op::UnsetGlobal) {
                 continue;
             }
             if !is_typed_superglobal {

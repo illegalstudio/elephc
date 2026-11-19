@@ -12,12 +12,17 @@ use super::context::LoweringContext;
 use crate::{ir::{Immediate, LocalKind, Op, Terminator}, span::Span};
 use elephc_semantics::StrictFeature;
 
+/// Selects initialized-read restrictions for user lowering, independently of PHP-only syntax.
+pub(super) fn enabled(ctx: &LoweringContext<'_, '_>) -> bool {
+    ctx.semantic_profile.contains(StrictFeature::Initialization)
+        && ctx.source_mode != crate::source::SourceMode::Internal
+        && !ctx.builder.function().flags.is_internal
+}
+
 /// Finds canonical program presence or frame presence bits without consulting its incidental value representation.
 pub(super) fn binding_presence(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span)
     -> Option<super::context::LoweredValue> {
-    if !ctx.semantic_profile.contains(StrictFeature::Initialization)
-        || ctx.source_mode == crate::source::SourceMode::Internal
-        || ctx.builder.function().flags.is_internal || name == "GLOBALS"
+    if !enabled(ctx) || name == "GLOBALS"
         || crate::names::is_generated_local_name(name)
         || ctx.reads_from_eval_scope(name)
         || ctx.extern_globals.contains_key(name) { return None; }

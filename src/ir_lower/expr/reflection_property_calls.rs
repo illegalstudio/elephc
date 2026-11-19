@@ -200,6 +200,9 @@ fn reflection_property_physical_ref(
     Some(Immediate::ReflectionPropertyRef {
         class: u32::try_from(info.class_id).ok()?,
         property: u32::try_from(index).ok()?,
+        profile: crate::ir_lower::initialization::enabled(ctx).then(||
+            crate::source::EvalSourceProfile::new(crate::php_only::is_enabled(), ctx.semantic_profile))
+            .unwrap_or_default(),
     })
 }
 

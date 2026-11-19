@@ -32,7 +32,7 @@ const REFERENCE_WITHOUT_CELL_MESSAGE: &str =
 /// Lowers a declared object property read for statically known object receivers.
 pub(in crate::codegen::lower_inst) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
-    if let Some(Immediate::ReflectionPropertyRef { class, property }) = inst.immediate {
+    if let Some(Immediate::ReflectionPropertyRef { class, property, .. }) = inst.immediate {
         let slot = resolve_physical_property_slot(ctx, object, class, property, inst)?;
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         ctx.load_value_to_reg(object, base_reg)?;
@@ -1007,6 +1007,9 @@ pub(super) fn lower_runtime_allow_dynamic_prop_get(
     abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&miss_label);
+    if ctx.property_read_requires_initialization() {
+        super::super::exceptions::emit_error(ctx, elephc_semantics::initialization::DYNAMIC_PROPERTY_MESSAGE);
+    }
     emit_boxed_null(ctx);
     ctx.emitter.label(&done_label);
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())

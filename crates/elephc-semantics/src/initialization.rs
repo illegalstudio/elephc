@@ -16,3 +16,6 @@ pub fn variable_message(name: &str) -> String {
 pub fn property_message(name: &str) -> String {
     format!("--strict-initialization: property ${name} is not initialized")
 }
+
+/// Reports a missing property when its runtime name is unavailable to a static diagnostic.
+pub const DYNAMIC_PROPERTY_MESSAGE: &str = "--strict-initialization: property is not initialized";

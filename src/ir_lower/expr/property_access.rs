@@ -586,9 +586,7 @@ pub(super) fn lower_direct_property_read(ctx: &mut LoweringContext<'_, '_>, obje
         && result_type == PhpType::Str
         && extern_receiver_class(ctx, &ctx.builder.value_php_type(object.value)).is_some();
     let immediate = if matches!(op, Op::PropGet | Op::NullsafePropGet)
-        && ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization)
-        && ctx.source_mode != crate::source::SourceMode::Internal
-        && !ctx.builder.function().flags.is_internal {
+        && crate::ir_lower::initialization::enabled(ctx) {
         Immediate::ProfiledData { data, profile: crate::source::EvalSourceProfile::new(
             crate::php_only::is_enabled(), ctx.semantic_profile) }
     } else { Immediate::Data(data) };
@@ -1230,10 +1228,14 @@ fn lower_dynamic_property_fetch_without_runtime_hooks(
         release_owning_receiver_temporary(ctx, object, expr.span);
         return lower_null(ctx, expr);
     }
+    let immediate = if crate::ir_lower::initialization::enabled(ctx) {
+        Immediate::ProfiledPropertyFetch { mode, profile: crate::source::EvalSourceProfile::new(
+            crate::php_only::is_enabled(), ctx.semantic_profile) }
+    } else { Immediate::PropertyFetchMode(mode) };
     let result = ctx.emit_value(
         Op::DynamicPropGet,
         vec![object.value, property.value],
-        Some(Immediate::PropertyFetchMode(mode)),
+        Some(immediate),
         result_type,
         Op::DynamicPropGet.default_effects() | if mode == PropertyFetchMode::QuietRead {
             crate::ir::Effects::WRITES_HEAP | crate::ir::Effects::ALLOC_HEAP | crate::ir::Effects::REFCOUNT_OP

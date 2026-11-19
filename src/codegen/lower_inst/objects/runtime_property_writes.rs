@@ -23,7 +23,7 @@ const MAGIC_SET_GUARD_HANDLER_OFFSET: usize = 48;
 pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
-    if let Some(Immediate::ReflectionPropertyRef { class, property }) = inst.immediate {
+    if let Some(Immediate::ReflectionPropertyRef { class, property, .. }) = inst.immediate {
         let slot = resolve_physical_property_slot(ctx, object, class, property, inst)?;
         let value_ty = ctx.value_php_type(value)?;
         ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;

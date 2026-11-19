@@ -149,7 +149,14 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
                 return Err(ValidationError::SemanticProfileMismatch { inst: InstId::from_raw(index as u32),
                     expected: module.semantic_profile.bits(), actual: required });
             }
-            if let Some(Immediate::ProfiledData { profile, .. }) = inst.immediate {
+            let read_profile = match inst.immediate {
+                Some(Immediate::ProfiledData { profile, .. }
+                    | Immediate::ProfiledPropertyFetch { profile, .. }) => Some(profile),
+                Some(Immediate::ReflectionPropertyRef { profile, .. })
+                    if profile.semantics() != elephc_semantics::SemanticProfile::PERMISSIVE => Some(profile),
+                _ => None,
+            };
+            if let Some(profile) = read_profile {
                 if profile.semantics() != module.semantic_profile {
                     return Err(ValidationError::SemanticProfileMismatch {
                         inst: InstId::from_raw(index as u32), expected: module.semantic_profile.bits(),
@@ -653,6 +660,7 @@ mod instruction_effect_tests {
             let immediate = Some(Immediate::ReflectionPropertyRef {
                 class: 1,
                 property: 0,
+                profile: crate::source::EvalSourceProfile::default(),
             });
             let mut instruction = Instruction::new(
                 op,
@@ -760,6 +768,9 @@ fn validate_instruction_immediate(
     if matches!(inst.immediate, Some(Imm::NumericUpdate { .. })) && inst.op != StrIncDec {
         return Err(ValidationError::UnexpectedImmediate(inst_id));
     }
+    if matches!(inst.immediate, Some(Imm::ProfiledPropertyFetch { .. })) && inst.op != DynamicPropGet {
+        return Err(ValidationError::UnexpectedImmediate(inst_id));
+    }
     if matches!(inst.immediate, Some(Imm::NumericOperation { .. }))
         && !matches!(inst.op, MixedNumericBinop | ICheckedPow)
     { return Err(ValidationError::UnexpectedImmediate(inst_id)); }
@@ -824,7 +835,7 @@ fn validate_instruction_immediate(
         PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
-        GlobalBindingPresent | LoadGlobalRefCell | EvalScopeGet | EvalScopeBindingType | EvalScopeEndBinding => require_immediate(inst_id, inst, "global name", |imm| {
+        GlobalBindingPresent | UnsetGlobal | LoadGlobalRefCell | EvalScopeGet | EvalScopeBindingType | EvalScopeEndBinding => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
         }),
         EvalScopeBindLocalType => require_immediate(inst_id, inst, "checked scope binding type", |imm| {
@@ -1144,7 +1155,7 @@ fn validate_opcode_rules(
         | LoadReflectionStaticProperty
         | ReflectionStaticPropertyInitialized
         | ExternGlobalLoad => check_count(inst_id, inst, 0, "0"),
-        ThrowError | ThrowTypeError | ThrowValueError | ThrowArithmeticError | ThrowOutOfBounds =>
+        UnsetGlobal | ThrowError | ThrowTypeError | ThrowValueError | ThrowArithmeticError | ThrowOutOfBounds =>
             check_count(inst_id, inst, 0, "0"),
         ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
         UnsetLocal | ZeroLocalSlot | PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell

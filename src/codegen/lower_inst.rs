@@ -250,6 +250,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PopCallOperandOwner => ownership::lower_pop_call_operand_owner(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
         Op::GlobalBindingPresent => globals_constants::lower_global_binding_present(ctx, &inst),
+        Op::UnsetGlobal => globals_constants::lower_unset_global(ctx, &inst),
         Op::LoadGlobalRefCell => globals_constants::lower_load_global_ref_cell(ctx, &inst),
         Op::StoreGlobal => lower_store_global(ctx, &inst),
         Op::ExternGlobalLoad => lower_extern_global_load(ctx, &inst),

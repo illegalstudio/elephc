@@ -307,6 +307,8 @@ pub enum Immediate {
     ReflectionPropertyRef {
         class: u32,
         property: u32,
+        /// User read policy; a permissive word marks trusted physical access.
+        profile: crate::source::EvalSourceProfile,
     },
     FieldRef {
         layout: u32,
@@ -337,6 +339,11 @@ pub enum Immediate {
     /// raising, warning variant, so an emitter that forgets the immediate cannot silently turn a
     /// value read into a silent probe.
     PropertyFetchMode(PropertyFetchMode),
+    /// Retains the physical source policy without changing dynamic-name fetch semantics.
+    ProfiledPropertyFetch {
+        mode: PropertyFetchMode,
+        profile: crate::source::EvalSourceProfile,
+    },
     /// Compact metadata for `Op::IterStart`.
     IterStart(IterStartMetadata),
 }
@@ -957,6 +964,8 @@ pub enum Op {
     LoadGlobal,
     /// Tests program-symbol presence without dereferencing or creating its boxed value.
     GlobalBindingPresent,
+    /// Removes the program name before retiring its wrapper, preserving escaped old cells.
+    UnsetGlobal,
     /// Acquires a managed activation lease sharing the boxed program symbol's reference identity.
     /// The result must be adopted into a guarded reference owner before replacing a local name.
     LoadGlobalRefCell,
@@ -1523,6 +1532,7 @@ impl Op {
             LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             LoadStaticLocalRefCell => E::READS_GLOBAL,
             GlobalBindingPresent => E::READS_GLOBAL,
+            UnsetGlobal => E::php_callback(),
             LoadGlobalRefCell => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
@@ -1928,6 +1938,7 @@ impl Op {
             PopCallOperandOwner => "pop_call_operand_owner",
             LoadGlobal => "load_global",
             GlobalBindingPresent => "global_binding_present",
+            UnsetGlobal => "unset_global",
             LoadGlobalRefCell => "load_global_ref_cell",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",

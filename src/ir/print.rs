@@ -278,8 +278,11 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::PropertyRef { class, property } => {
             let _ = write!(out, " property#{}::{}", class, property);
         }
-        Immediate::ReflectionPropertyRef { class, property } => {
+        Immediate::ReflectionPropertyRef { class, property, profile } => {
             let _ = write!(out, " reflection-property#{}::{}", class, property);
+            if profile.semantics() != elephc_semantics::SemanticProfile::PERMISSIVE {
+                let _ = write!(out, " semantics={:#x}", profile.semantics().bits());
+            }
         }
         Immediate::FieldRef { layout, field } => {
             let _ = write!(out, " field#{}::{}", layout, field);
@@ -331,6 +334,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::PropertyFetchMode(mode) => {
             let _ = write!(out, " fetch={}", mode.as_eir());
+        }
+        Immediate::ProfiledPropertyFetch { mode, profile } => {
+            let _ = write!(out, " fetch={} semantics={:#x}", mode.as_eir(), profile.semantics().bits());
         }
         Immediate::IterStart(metadata) => {
             let _ = write!(

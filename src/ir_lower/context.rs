@@ -3506,6 +3506,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         super::local_binding_origins::end(self, name, span);
         self.binding_state_suppressed = previous || ends_origin || ends_presence;
+        if ends_presence && self.local_uses_global_storage(name) && !self.extern_globals.contains_key(name) {
+            let data = self.intern_global_name(name);
+            self.emit_void(Op::UnsetGlobal, Vec::new(), Some(Immediate::GlobalName(data)),
+                Op::UnsetGlobal.default_effects(), span);
+            self.local_types.insert(name.to_string(), PhpType::Void);
+            self.binding_state_suppressed = previous;
+            return null;
+        }
         let result = self.unset_local_storage(name, null, span);
         self.binding_state_suppressed = previous;
         result

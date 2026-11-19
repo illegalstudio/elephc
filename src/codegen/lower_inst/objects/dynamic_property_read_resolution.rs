@@ -359,8 +359,11 @@ pub(super) fn materialize_loaded_property_result(
     }
 }
 
-/// Emits a PHP null value for a dynamic property lookup that matched no declared slot.
+/// Applies the original read policy before materializing a missing dynamic property result.
 pub(super) fn emit_dynamic_property_miss_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    if ctx.property_read_requires_initialization() {
+        super::super::exceptions::emit_error(ctx, elephc_semantics::initialization::DYNAMIC_PROPERTY_MESSAGE);
+    }
     if crate::types::is_nullable_pointer_type(&inst.result_php_type)
         || matches!(inst.result_php_type, PhpType::Buffer(_))
     {

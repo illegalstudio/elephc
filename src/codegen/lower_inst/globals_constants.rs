@@ -9,6 +9,21 @@
 
 use super::*;
 
+/// Removes only the program name's owner before an old value can invoke PHP during retirement.
+pub(super) fn lower_unset_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let name = ctx.global_name_data(expect_global_name(inst)?)?;
+    let symbol = ir_global_symbol(name);
+    ctx.data.add_comm(symbol.clone(), 16);
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &PhpType::Int);
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &PhpType::Int, true);
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+    Ok(())
+}
+
 /// Reads the canonical symbol's cell pointer without interpreting initialized null as absence.
 pub(super) fn lower_global_binding_present(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let name = ctx.global_name_data(expect_global_name(inst)?)?;

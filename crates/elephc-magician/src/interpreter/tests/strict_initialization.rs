@@ -113,3 +113,26 @@ fn strict_initialization_eval_scope_fixture_and_owners() {
         }
     }
 }
+
+/// Dynamic reads and canonical removal keep old aliases and retire throwing old owners.
+#[test]
+fn strict_initialization_eval_extended_fixture_and_owners() {
+    let source = include_str!("../../../../../tests/fixtures/strict/initialized_extended_reads.php").strip_prefix("<?php").unwrap();
+    for dispatch in [false, true] {
+        let mut context = ElephcEvalContext::new();
+        context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Initialization, true)).unwrap();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        assert!(context.set_global_scope(&mut scope));
+        let program = crate::parser::parse_fragment_with_semantics(format!("$argc=1;{source}").as_bytes(), context.semantic_profile()).unwrap();
+        let result = if dispatch { bytecode::try_execute(&mut context, &program, &mut scope, &mut values) }
+            else { Ok(None) };
+        let result = result.and_then(|control| match control {
+            Some(control) => Ok(control),
+            None => execute_statements(program.statements(), &mut context, &mut scope, &mut values),
+        }).unwrap_or_else(|error| panic!("dispatch={dispatch}: {error:?}; output={}", values.output));
+        assert!(matches!(result, EvalControl::None | EvalControl::ReturnVoid));
+        assert_eq!(values.output, "A:missing|I|old:new|I|AE:missing|I|I:A|I|D:I|", "dispatch={dispatch}");
+        assert!(values.warnings.is_empty(), "{:?}", values.warnings);
+        assert_clean(&mut context, &mut scope, &mut values, "extended reads");
+    }
+}

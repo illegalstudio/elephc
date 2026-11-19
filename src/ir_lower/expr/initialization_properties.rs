@@ -29,9 +29,7 @@ pub(super) fn magic_probe(ctx: &mut LoweringContext<'_, '_>, object: LoweredValu
 fn select(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
     probe: Option<PropertyFetchMode>, expr: &Expr,
 ) -> Option<LoweredValue> {
-    if !ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization)
-        || ctx.source_mode == crate::source::SourceMode::Internal
-        || ctx.builder.function().flags.is_internal { return None; }
+    if !crate::ir_lower::initialization::enabled(ctx) { return None; }
     let ty = ctx.builder.value_php_type(object.value);
     let (class, nullable) = singular_object_class(&ty)?;
     if nullable { return None; }
