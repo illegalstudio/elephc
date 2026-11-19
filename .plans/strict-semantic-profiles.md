@@ -2876,3 +2876,9 @@ Nested array stores also check normalized keys and original values against the s
 Nullsafe dynamic method calls now retain their inferred selector type and require string alternatives under Mixed. Property names keep their broader PHP conversion domain; the two operations do not share an incorrect coercive predicate. A statically skipped nullsafe selector requires no proof.
 
 Three focused regressions pass: invalid mixed/partial-union selectors, guarded and skipped controls, all-five EIR validation/emission and native optimized/unoptimized clean-heap execution, plus the prior successful-nullsafe-view regression. Default build, diff/assembly hygiene and unchanged-source verification pass. Mixed remains gated while remaining source, builtin, reference and runtime proof contracts are completed.
+
+### Verified233: conditional array content contracts
+
+A reusable generated metadata schema carries array key/element contracts independently of whole-value kind stability. Native binding metadata accepts the internal schema only for local bindings; parameters and returns reject the reserved marker. Conditional schemas validate arrays recursively but permit unrelated scalar and null stores. One-argument element schemas normalize to integer-key shapes without requiring packed physical layout.
+
+The shared generic and alias validators consume the same schema. Focused tests cover incorrect appends and whole-array replacements, scalar/null changes, explicit mixed and union elements, integer-key gaps, independent ArrayKeys normalization and alias rejection with balanced owners. Existing nullability property aliases and native metadata ABI layout remain green. Default build, seven exact test registrations/executions, diff hygiene, assembly comments and unchanged-source verification passed in job70b725d9. Automatic producer recording is still pending; ArrayTypes and Mixed remain gated.

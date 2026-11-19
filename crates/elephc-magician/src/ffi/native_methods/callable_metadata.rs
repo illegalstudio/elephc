@@ -185,6 +185,13 @@ fn native_callable_type_from_spec(
     if type_spec.is_empty() {
         return None;
     }
+    if let Some(schema) = type_spec.strip_prefix(
+        elephc_semantics::native_local_contract::ARRAY_CONTENTS_TYPE_SPEC_PREFIX) {
+        if !matches!(position, NativeCallableTypePosition::LocalBinding) { return None; }
+        let schema = crate::parser::generics::parse_type_string(schema).ok()?;
+        let contract = crate::eval_ir::array_contents_type(schema)?;
+        return Some(crate::eval_ir::parameter_type(&contract));
+    }
     let nullable_shorthand = type_spec.strip_prefix('?');
     let (type_spec, mut allows_null) = match nullable_shorthand {
         Some(inner) => (inner, true),
@@ -289,6 +296,24 @@ fn native_callable_take_string_bytes(bytes: &[u8], offset: &mut usize) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Conditional array metadata is confined to generated local bindings and retains unions.
+    #[test]
+    fn native_array_contents_metadata_keeps_binding_only_contracts() {
+        let prefix = elephc_semantics::native_local_contract::ARRAY_CONTENTS_TYPE_SPEC_PREFIX;
+        for schema in ["array<int>", "array<int|string>", "array<string,int>", "array<int>|array<string>"] {
+            let spelling = format!("{prefix}{schema}");
+            let ty = native_callable_type_from_spec(&spelling, NativeCallableTypePosition::LocalBinding).unwrap();
+            assert!(crate::eval_ir::array_contents_schema(&crate::eval_ir::generic_type(&ty)).is_some());
+            for position in [NativeCallableTypePosition::Parameter, NativeCallableTypePosition::Return] {
+                assert!(native_callable_type_from_spec(&spelling, position).is_none());
+            }
+        }
+        for schema in ["int", "array<>", "array<int,int,int>", "array<int>|int"] {
+            assert!(native_callable_type_from_spec(&format!("{prefix}{schema}"),
+                NativeCallableTypePosition::LocalBinding).is_none(), "{schema}");
+        }
+    }
 
     /// Verifies the native ABI type grammar keeps `false` as its literal generic atom rather
     /// than treating it as a class name. This is what makes `GMP|false` return values accept

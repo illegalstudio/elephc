@@ -140,3 +140,5 @@ mod escaped_reference_sources;
 mod fresh_reference_sources;
 
 mod strict_indexing;
+
+mod strict_array_contents;

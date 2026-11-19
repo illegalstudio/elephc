@@ -35,7 +35,9 @@ pub(super) fn declared(value: RuntimeCellHandle, ty: &EvalParameterType,
 /// Classifies the complete declaration before a reference preparation can retarget storage.
 pub(super) fn non_null_contract(ty: &EvalParameterType) -> bool {
     if ty.allows_null() || !ty.is_intersection() && ty.variants().iter().any(|variant|
-        matches!(variant, EvalParameterTypeVariant::Mixed | EvalParameterTypeVariant::Void)) {
+        matches!(variant, EvalParameterTypeVariant::Mixed | EvalParameterTypeVariant::Void)
+            || matches!(variant, EvalParameterTypeVariant::Generic(ty)
+                if crate::eval_ir::array_contents_schema(ty).is_some())) {
         return false;
     }
     true

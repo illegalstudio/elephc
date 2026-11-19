@@ -45,7 +45,10 @@ pub(in crate::interpreter) fn validate_generic_local_contracts(scope: &ElephcEva
 /// Checks an initialized or reassigned typed local without coercing its stored value.
 pub(in crate::interpreter) fn validate_generic_local(declared: &EvalParameterType, name: &str, value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
     if generic_value_accepts(&generic_type(declared), value, context, values)? { return Ok(()); }
-    eval_throw_type_error(&format!("Typed local ${name} expects {}", crate::eval_ir::php_type_label(declared)), context, values)
+    let message = if let Some(schema) = crate::eval_ir::array_contents_schema(&generic_type(declared)) {
+        format!("--strict-array-types: ${name} requires {schema} when holding an array")
+    } else { format!("Typed local ${name} expects {}", crate::eval_ir::php_type_label(declared)) };
+    eval_throw_type_error(&message, context, values)
 }
 
 /// Checks an array write against its key and element contracts before mutating storage.
@@ -63,11 +66,17 @@ pub(in crate::interpreter) fn validate_generic_local_element(declared: Option<&E
     let accepted = array_write_accepts(&ty, array, normalized.unwrap_or(index), value, context, values);
     let released = normalized.map_or(Ok(()), |key| values.release(key));
     if accepted.and_then(|accepted| released.map(|()| accepted))? { return Ok(()); }
-    eval_throw_type_error(&format!("Array write violates typed local {ty}"), context, values)
+    let message = if let Some(schema) = crate::eval_ir::array_contents_schema(&ty) {
+        format!("--strict-array-types: array write requires {schema}")
+    } else { format!("Array write violates typed local {ty}") };
+    eval_throw_type_error(&message, context, values)
 }
 
 /// Checks non-null array arms and requires integer keys for indexed array contracts.
 fn array_write_accepts(ty: &Type, array: RuntimeCellHandle, index: RuntimeCellHandle, value: RuntimeCellHandle, context: &ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
+    if let Some(schema) = crate::eval_ir::array_contents_schema(ty) {
+        return array_write_accepts(schema, array, index, value, context, values);
+    }
     match ty {
         Type::Atom(name) => Ok(name == "array" || name == "mixed"),
         Type::Nullable(inner) => array_write_accepts(inner, array, index, value, context, values),

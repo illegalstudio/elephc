@@ -51,3 +51,9 @@ mod tests {
         assert_eq!(std::mem::offset_of!(BindingCopyV1, descriptor), 40);
     }
 }
+
+/// Reserved generated prefix for an array-content constraint that permits other value kinds.
+pub const ARRAY_CONTENTS_TYPE_SPEC_PREFIX: &str = "@array-contents:";
+
+/// Internal generic term used after decoding an array-content source constraint.
+pub const ARRAY_CONTENTS_TYPE_NAME: &str = "@array-contents";
