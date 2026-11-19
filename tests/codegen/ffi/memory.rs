@@ -150,3 +150,43 @@ echo strlen(directSearch($value)), strlen(callableSearch($value));
     assert_eq!(out.stdout, "44", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// `FFI::addr(<fresh temporary>)` transfers the pointee and the pointer CData releases it.
+///
+/// Without the `owns_pointee` release path this loop leaves one `calloc` block per iteration
+/// behind; the heap-debug run fails with a non-clean leak summary.
+#[test]
+fn test_ffi_addr_temporary_releases_the_pointee() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$ffi = FFI::cdef("typedef struct { char bytes[16]; } Block;");
+for ($i = 0; $i < 64; $i++) {
+    $block = $ffi->new("Block");
+    $pointer = FFI::addr($block);
+    unset($pointer, $block);
+}
+echo "ok";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "ok", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A nested field/view keeps its owner allocation alive after the parent CData is released,
+/// and the last view release frees the owner's allocation.
+#[test]
+fn test_ffi_nested_view_retains_the_owner_allocation() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$ffi = FFI::cdef("
+typedef struct { int a; int b; } Row;
+typedef struct { Row rows[2]; } Table;
+");
+$table = $ffi->new("Table");
+$row = $table->rows[1];
+$row->a = 7;
+unset($table);
+echo $row->a;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "7", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

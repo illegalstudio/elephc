@@ -47,6 +47,7 @@ mod codegen {
     mod nullable_pointers;
     mod pointer_arrays;
     mod ffi;
+    mod ffi_php_src;
     mod dead_strip;
     mod locals_retype;
     mod stack_guard;

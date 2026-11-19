@@ -50,6 +50,9 @@
 //!   result, 4 = indexed array, 5 = hash).
 
 use crate::codegen_support::runtime::data::{DEBUGINFO_NULL_PREFIX, DEBUGINFO_NULL_SUFFIX};
+use crate::codegen_support::try_handlers::{
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+};
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Frame slots shared by the three helpers (byte offsets below the frame pointer).
@@ -76,9 +79,14 @@ const PREV_PAD: usize = 88;
 const PREV_LINE: usize = 96;
 /// Fetch-helper slot that keeps the capacity of the parked raw print_r capture.
 const SAVE_CAP: usize = 104;
+/// Fetch-helper slot recording whether the guard push ran (0 for FFI CData, whose
+/// internal-handler-style debug info is allowed to throw a catchable exception).
+const GUARDED: usize = 112;
 /// Frame size of the fetch helper: the shared slots, `ENTRY`, `PREV_GUARD`, `PREV_PAD`,
-/// `PREV_LINE` and the capture save slots, plus the 16-byte ABI footer.
-const FETCH_FRAME: usize = 128;
+/// `PREV_LINE`, the capture save slots, and the FFI CData exception boundary, plus the
+/// 16-byte ABI footer.
+const FETCH_FRAME: usize = 128 + TRY_HANDLER_SLOT_SIZE + 16;
+const HANDLER: usize = FETCH_FRAME - 16;
 const _: () = assert!(SAVE_CAP <= FETCH_FRAME - 16);
 
 /// Tag reported when the class has no run-time `__debugInfo()`.
@@ -157,12 +165,31 @@ pub(crate) fn emit_obj_debuginfo_fetch(emitter: &mut Emitter) {
     }
     let entry_reg = nested_entry_reg(emitter);
     abi::store_at_offset(emitter, entry_reg, ENTRY);
+    // FFI CData mirrors php-src's internal get_debug_info handler: an exception thrown there is
+    // an ordinary catchable exception, and the var_dump walker prints the empty object header
+    // before it propagates. Userland `__debugInfo()` keeps the uncatchable PHP 8.5 behavior.
+    store_imm_slot(emitter, 1, GUARDED);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x11", "_ffi_cdata_class_id");    // resolve the FFI CData class id
+            emitter.instruction("ldr x11, [x11]");                              // load the FFI CData class id (or -1)
+            emitter.instruction("cmp x9, x11");                                 // is this object an FFI CData?
+            emitter.instruction("b.eq __rt_obj_debuginfo_cdata");               // CData uses a local catch boundary
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r10", "_ffi_cdata_class_id");    // resolve the FFI CData class id
+            emitter.instruction("cmp r9, QWORD PTR [r10]");                     // is this object an FFI CData?
+            emitter.instruction("je __rt_obj_debuginfo_cdata");                 // CData uses a local catch boundary
+        }
+    }
     emit_guard_push(emitter);
     emit_print_r_capture_save(emitter);
     abi::load_at_offset(emitter, arg0, OBJ);
     abi::load_at_offset(emitter, entry_reg, ENTRY);
     abi::emit_call_reg(emitter, entry_reg);                                     // invoke __debugInfo() with $this borrowed in the first argument
     abi::store_at_offset(emitter, result, OWNER);
+
+    emitter.label("__rt_obj_debuginfo_void_check");
     // -- a method that returns nothing leaves no value in the result register: read PHP's null --
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -241,7 +268,14 @@ pub(crate) fn emit_obj_debuginfo_fetch(emitter: &mut Emitter) {
 
     // -- normal return: the call finished, so hand the guard back to the enclosing call --
     emitter.label("__rt_obj_debuginfo_done");
+    // The FFI CData arm restores the capture at its own call site so classification can resume
+    // the caller's print_r buffer; restoring here too would abort that just-restored buffer.
+    abi::load_at_offset(emitter, result, GUARDED);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_obj_debuginfo_capture_restored");
     emit_print_r_capture_restore(emitter);
+    emitter.label("__rt_obj_debuginfo_capture_restored");
+    abi::load_at_offset(emitter, result, GUARDED);                              // did this call install the debugInfo guard?
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_obj_debuginfo_none");    // CData skipped both the push and the pop
     emit_guard_pop(emitter);
     emitter.label("__rt_obj_debuginfo_none");
     abi::load_at_offset(emitter, tag_reg, TAG);
@@ -253,6 +287,53 @@ pub(crate) fn emit_obj_debuginfo_fetch(emitter: &mut Emitter) {
     // -- a non-array result: PHP's uncatchable `__debuginfo() must return an array` fatal --
     emitter.label("__rt_obj_debuginfo_invalid");
     emit_fatal_exit(emitter);
+
+    // -- FFI CData: catch an escaping exception so the dump walker state can be restored --
+    emitter.label("__rt_obj_debuginfo_cdata");
+    store_imm_slot(emitter, 0, GUARDED);
+    for (symbol, offset) in [
+        ("_exc_handler_top", HANDLER),
+        ("_exc_call_frame_top", HANDLER - 8),
+        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
+    ] {
+        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
+        abi::store_at_offset(emitter, result, offset);
+    }
+    abi::emit_frame_slot_address(emitter, result, HANDLER);
+    abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
+    abi::emit_frame_slot_address(emitter, arg0, HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
+    emitter.save_exception_handler();                                           // capture an exception from the CData internal handler
+    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_obj_debuginfo_cdata_caught");
+    emit_print_r_capture_save(emitter);
+    abi::load_at_offset(emitter, arg0, OBJ);
+    abi::load_at_offset(emitter, entry_reg, ENTRY);
+    abi::emit_call_reg(emitter, entry_reg);                                     // invoke CData __debugInfo() through the local boundary
+    abi::store_at_offset(emitter, result, OWNER);
+    for (symbol, offset) in [
+        ("_exc_handler_top", HANDLER),
+        ("_exc_call_frame_top", HANDLER - 8),
+        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
+    ] {
+        abi::load_at_offset(emitter, result, offset);
+        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
+    }
+    emit_print_r_capture_restore(emitter);
+    abi::load_at_offset(emitter, result, OWNER);                                // restore the returned container after the capture restore
+    abi::emit_jump(emitter, "__rt_obj_debuginfo_classify");
+
+    emitter.label("__rt_obj_debuginfo_cdata_caught");
+    for (symbol, offset) in [
+        ("_exc_handler_top", HANDLER),
+        ("_exc_call_frame_top", HANDLER - 8),
+        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
+    ] {
+        abi::load_at_offset(emitter, result, offset);
+        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
+    }
+    emit_print_r_capture_restore(emitter);
+    abi::emit_call_label(emitter, "__rt_vd_seen_pop");                          // the walker pushed this object before the fetch
+    abi::emit_jump(emitter, "__rt_throw_current");                              // rethrow to the enclosing PHP catch
+
 
 }
 
@@ -283,11 +364,9 @@ fn emit_guard_push(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, scratch, "_debuginfo_call_line", 0);
     abi::store_at_offset(emitter, scratch, PREV_LINE);
     abi::emit_load_symbol_to_reg(emitter, scratch, "_php_diagnostic_line", 0);
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_debuginfo_call_line", 0);   // the dump call's line: the user method's own calls overwrite the diagnostic line before a fatal can name it
+    abi::emit_store_reg_to_symbol(emitter, scratch, "_debuginfo_call_line", 0); // the dump call's line: the user method's own calls overwrite the diagnostic line before a fatal can name it
 }
 
-/// Moves an in-flight print_r capture out of the way while `__debugInfo()` runs.
-///
 /// Moves an outer print_r capture aside so PHP hooks can echo or start nested captures.
 fn emit_print_r_capture_save(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
@@ -551,10 +630,15 @@ mod tests {
             assert!(fetch.find("_class_debuginfo_ptrs").unwrap() < fetch.find("__rt_heap_kind").unwrap(), "{name}");
             assert!(fetch.contains("__rt_mixed_unbox"), "{name}");
             assert!(fetch.contains("__rt_debuginfo_fatal"), "{name}");
-            assert!(!fetch.contains("__rt_throw_current"), "{name}");
+            // The FFI CData arm deliberately catches and rethrows from its internal-handler
+            // style __debugInfo(); the userland arm must stay on the uncatchable guard path.
+            let userland = fetch
+                .split_once("__rt_obj_debuginfo_cdata")
+                .map_or(fetch, |(before, _)| before);
+            assert!(!userland.contains("__rt_throw_current"), "{name}");
             assert!(fetch.contains("_debuginfo_null_prefix") && fetch.contains("_debuginfo_null_suffix"), "{name}");
             assert!(fetch.contains("_debuginfo_guard") && fetch.contains("_exc_handler_top"), "{name}");
-            assert!(!fetch.contains("_exc_call_frame_top"), "{name}");
+            assert!(!userland.contains("_exc_call_frame_top"), "{name}");
             assert!(fetch.contains("_print_r_mode") && fetch.contains("_print_r_ptr"), "{name}");
             assert!(renderers.contains("__rt_var_dump_open_object_n"), "{name}");
             assert!(renderers.contains("__rt_print_r_hash"), "{name}");

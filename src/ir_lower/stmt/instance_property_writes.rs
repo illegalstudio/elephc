@@ -70,6 +70,13 @@ pub(super) fn lower_property_assign(
             }
         }
     }
+    // `$this->n++` on a FINAL class's plain declared int slot is the parser's capture-once
+    // assignment; its checked producer can stay in a raw frame cell, but only when the
+    // property write sees it directly. Replay the capture's prelude and let the ordinary
+    // typed write consume `$old + 1`, exactly like the explicit `$this->n = $old + 1` form.
+    if let Some(rewritten) = rewrite_plain_int_property_incdec(ctx, object, property, value, span) {
+        return lower_property_assign(ctx, object, property, &rewritten, span);
+    }
     let value_expr = value;
     let (mut receiver, lowered_value, deferred_value_owner) = if crate::ir_lower::expr::is_static_property_write_chain(object)
         || (!property.starts_with("__elephc_") && crate::ir_lower::expr::defer_native_property_write_receiver(ctx, object)) {
@@ -453,6 +460,75 @@ fn lower_property_assign_guarding_magic_subclasses(
 }
 
 /// Lowers the ordinary object property write, once the receiver and the value are evaluated.
+/// Replays a capture-once property increment as a direct checked update on a plain int slot.
+///
+/// The parser's `IncDec` form captures the place in a generated local and assigns the
+/// incremented value to a second generated local. For a final class's declared, non-reference,
+/// non-readonly `int` property with no hooks, that indirection only boxes the checked result:
+/// the property boundary narrowing can keep an `ICheckedAdd`/`ICheckedSub` producer unboxed when
+/// it reaches the store directly. The prelude is evaluated here (one read, in source order) and
+/// the returned `$old + 1`/`$old - 1` expression is handed to the ordinary write path.
+fn rewrite_plain_int_property_incdec(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+    span: Span,
+) -> Option<Expr> {
+    if !matches!(object.kind, ExprKind::This) {
+        return None;
+    }
+    let ExprKind::Assignment { target, value: operation, prelude, .. } = &value.kind else {
+        return None;
+    };
+    let ExprKind::Variable(_) = &target.kind else { return None };
+    let (increment, captured) = match &operation.kind {
+        ExprKind::PreIncrement(captured) => (true, captured),
+        ExprKind::PreDecrement(captured) => (false, captured),
+        _ => return None,
+    };
+    let [Stmt { kind: StmtKind::Assign { name, value: read }, .. }] = prelude.as_slice() else {
+        return None;
+    };
+    if name != captured {
+        return None;
+    }
+    let ExprKind::PropertyAccess { object: read_object, property: read_property } = &read.kind else {
+        return None;
+    };
+    if read_property != property || read_object.as_ref() != object {
+        return None;
+    }
+    let class_name = ctx.current_class.as_deref()?.trim_start_matches('\\');
+    let info = ctx.classes.get(class_name)?;
+    if !info.is_final
+        || info.is_readonly_class
+        || info.readonly_properties.contains(property)
+        || info.methods.contains_key(&crate::names::php_symbol_key("__set"))
+        || info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
+    {
+        return None;
+    }
+    let (index, (slot_name, property_ty)) = info.visible_property(property)?;
+    if *property_ty != PhpType::Int
+        || !info.property_slot_is_declared(index, slot_name)
+        || info.property_slot_is_reference(index, slot_name)
+    {
+        return None;
+    }
+    // Preserve source order: the capture prelude reads the place once before the write.
+    super::lower_stmt(ctx, &prelude[0]);
+    let op = if increment { crate::parser::ast::BinOp::Add } else { crate::parser::ast::BinOp::Sub };
+    Some(Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(Expr::new(ExprKind::Variable(captured.clone()), span)),
+            op,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
+        },
+        span,
+    ))
+}
+
 fn lower_property_assign_value(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
@@ -592,7 +668,9 @@ fn lower_property_slot_assign(
     // even when source syntax used a literal. The complete runtime dispatcher uses that name to
     // distinguish declared slots, existing dynamic-hash entries, and missing names handled by
     // `__set`. The immediate-only `PropSet` ladder cannot materialize the guarded magic call.
-    let runtime_shaped_receiver = receiver_requires_literal_runtime_dispatch(ctx, object, span);
+    // FFI's by-reference foreach also exposes a CData view whose slot must be addressed by name.
+    let runtime_shaped_receiver = receiver_requires_literal_runtime_dispatch(ctx, object, span)
+        || receiver_member_is_ffi_cdata(ctx, span);
     if preserve_property_operand || runtime_shaped_receiver {
         let property_name = ctx.emit_value(
             Op::ConstStr,
@@ -659,6 +737,28 @@ fn receiver_requires_literal_runtime_dispatch(
             .get(&(ctx.loop_storage_scope.clone(), span)),
         None | Some(None) | Some(Some(PhpType::Mixed))
     )
+}
+
+/// Returns whether the checker's receiver view names FFI\CData, which needs the runtime name ladder.
+///
+/// A CData view's scalar payload and pointer/aggregate view share one boxed storage shape, so a
+/// by-reference foreach temporary is genuinely runtime-shaped even when the checker can name the
+/// class. The immediate-only `PropSet` ladder cannot address its field by name.
+fn receiver_member_is_ffi_cdata(ctx: &LoweringContext<'_, '_>, span: Span) -> bool {
+    let is_cdata = |name: &str| {
+        name.trim_start_matches('\\').eq_ignore_ascii_case("FFI\\CData")
+    };
+    match ctx
+        .member_receiver_types
+        .get(&(ctx.loop_storage_scope.clone(), span))
+        .and_then(|ty| ty.as_ref())
+    {
+        Some(PhpType::Object(name)) => is_cdata(name),
+        Some(PhpType::Union(members)) => members.iter().any(|member| {
+            matches!(member, PhpType::Object(name) if is_cdata(name))
+        }),
+        _ => false,
+    }
 }
 
 /// Returns whether this receiver can dispatch the write through an inherited abstract setter.

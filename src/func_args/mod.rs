@@ -145,6 +145,28 @@ fn desugar_on_compiler_stack(program: Program) -> Result<Program, CompileError> 
     }
 }
 
+/// Removes the compiler-added surplus-argument collector from a signature used at a C
+/// callback boundary.
+///
+/// Eval/backtrace programs give every PHP function-like scope the hidden
+/// `mixed ...$__elephc_func_args` tail. C callbacks have a fixed ABI, so the hidden tail is
+/// dropped before validating or emitting a trampoline; the function still receives an empty
+/// collector when the trampoline invokes it.
+pub(crate) fn strip_hidden_args_collector(sig: &mut FunctionSig) {
+    if sig.variadic.as_deref() != Some(HIDDEN_ARGS_PARAM) {
+        return;
+    }
+    if !sig.params.is_empty() {
+        sig.params.pop();
+        sig.param_type_exprs.pop();
+        sig.param_attributes.pop();
+        sig.defaults.pop();
+        sig.ref_params.pop();
+        sig.declared_params.pop();
+    }
+    sig.variadic = None;
+}
+
 /// Returns whether `sig`'s variadic parameter is the hidden one this pass appends rather
 /// than a variadic the source function declared.
 ///

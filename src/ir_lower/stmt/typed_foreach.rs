@@ -229,6 +229,42 @@ fn lower_foreach_selected(
     ctx: &mut LoweringContext<'_, '_>, array: &Expr, key_var: Option<&str>,
     value_var: &str, value_by_ref: bool, body: &[Stmt], loop_span: Span,
 ) {
+    // FFI CData iteration yields CData view objects: mutating `$value->cdata` writes through
+    // to the underlying memory, so the loop does not need an engine reference binding.
+    let ffi_receiver = match &array.kind {
+        ExprKind::Variable(name) => match ctx.local_type(name) {
+            PhpType::Object(class) if class.eq_ignore_ascii_case("FFI\\CData") => Some(true),
+            PhpType::Object(class) if class.eq_ignore_ascii_case("FFI") => Some(false),
+            _ => None,
+        },
+        _ => None,
+    };
+    let ffi_cdata_source = ffi_receiver.is_some();
+    let by_ref_requested = value_by_ref;
+    // php-src's iterator keeps a writable CData wrapper for `foreach ($array as &$value)` but
+    // converts scalar elements to PHP scalars for a value loop. Each loop also needs its own
+    // cursor: the CData object carries `__elephc_index`, so iterating it directly makes a
+    // nested loop consume the outer one. The static helper returns a storage-sharing view with
+    // an independent cursor and by-reference mode. An `FFI` context object is iterable but has
+    // no C array storage, so only CData receives the view.
+    let view_source;
+    let array = if ffi_receiver == Some(true) {
+        view_source = Expr::new(
+            ExprKind::StaticMethodCall {
+                receiver: StaticReceiver::Named(crate::names::Name::unqualified("FFI")),
+                method: "__elephc_iter_view".to_string(),
+                args: vec![
+                    array.clone(),
+                    Expr::new(ExprKind::BoolLiteral(by_ref_requested), array.span),
+                ],
+            },
+            array.span,
+        );
+        &view_source
+    } else {
+        array
+    };
+    let value_by_ref = value_by_ref && !ffi_cdata_source;
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
@@ -364,8 +400,10 @@ fn lower_foreach_selected(
                 value_needs_null_init,
                 array.span,
             );
-        } else if value_needs_null_init {
-            ctx.declare_local(value_var, value_ty.clone());
+        } else {
+            if value_needs_null_init {
+                ctx.declare_local(value_var, value_ty.clone());
+            }
             ctx.set_local_type(value_var, value_ty);
         }
     }

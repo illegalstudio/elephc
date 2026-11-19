@@ -32,6 +32,10 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     // "something that makes a fiber" would be an approximation of it.
     module.required_runtime_features.fiber |= module.class_infos.contains_key("Fiber");
     module.required_runtime_features.generator |= module.class_infos.contains_key("Generator");
+    module.required_runtime_features.ffi |= module
+        .class_infos
+        .get("FFI")
+        .is_some_and(|info| info.static_methods.contains_key("__elephc_wrap"));
 }
 
 /// Returns whether this call is `__elephc_opcache_rt_compile`.
