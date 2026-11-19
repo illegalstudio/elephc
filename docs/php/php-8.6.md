@@ -63,11 +63,12 @@ instead of during production.
   `Watcher::getHandle()` returns the concrete `StreamPollHandle` type rather than the
   `Io\Poll\Handle` interface so the checker accepts the upstream
   `getHandle()->getStream()` pattern; the returned object still implements the interface.
-- The stream error surface wraps `fopen()` only. Other stream operations still emit PHP 8.5
-  warnings, and user-wrapper operations that report several errors (`stream_select()` cast
-  failures, over-reading `stream_read()`) are not accumulated. `stream_select()` accepts the
-  new sixth `$context` argument but ignores its error options. Warnings are written to stderr;
-  silent and exception modes suppress the `fopen()` warning.
+- The stream error surface wraps every operation the 8.6 RFC defines one for: the
+  error-aware `fopen()`, the user-wrapper reads (`fread()`, `stream_get_contents()`),
+  `fwrite()`'s `stream_write()` accounting, `file_get_contents()`, `stream_select()`'s
+  `stream_cast()` failures, `stream_copy_to_stream()`, and the context-option setters.
+  Warnings are written to stderr; silent and exception modes suppress the `fopen()`
+  warning.
 - Parameter doc comments are attached, but `ReflectionFunction` cannot yet be constructed from a
   closure or arrow function, so those two parameter lists are parsed and stored without a
   user-visible reflection path. Doc comments on properties and hook methods themselves are not
