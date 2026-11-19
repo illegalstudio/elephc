@@ -14,6 +14,7 @@ pub(super) fn lower_pipe(ctx: &mut LoweringContext<'_, '_>, value: &Expr, callab
     match &callable.kind {
         ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
             let arg = lower_pipe_value_temp(ctx, value, expr);
+            let arg_span = arg.span;
             let synthetic = Expr::new(
                 ExprKind::FunctionCall {
                     name: name.clone(),
@@ -21,10 +22,11 @@ pub(super) fn lower_pipe(ctx: &mut LoweringContext<'_, '_>, value: &Expr, callab
                 },
                 expr.span,
             );
-            lower_expr(ctx, &synthetic)
+            lower_pipe_synthetic_call(ctx, &synthetic, arg_span)
         }
         ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, method }) => {
             let arg = lower_pipe_value_temp(ctx, value, expr);
+            let arg_span = arg.span;
             let synthetic = Expr::new(
                 ExprKind::StaticMethodCall {
                     receiver: receiver.clone(),
@@ -33,10 +35,11 @@ pub(super) fn lower_pipe(ctx: &mut LoweringContext<'_, '_>, value: &Expr, callab
                 },
                 expr.span,
             );
-            lower_expr(ctx, &synthetic)
+            lower_pipe_synthetic_call(ctx, &synthetic, arg_span)
         }
         ExprKind::FirstClassCallable(CallableTarget::Method { object, method }) => {
             let arg = lower_pipe_value_temp(ctx, value, expr);
+            let arg_span = arg.span;
             let synthetic = Expr::new(
                 ExprKind::MethodCall {
                     object: object.clone(),
@@ -45,7 +48,7 @@ pub(super) fn lower_pipe(ctx: &mut LoweringContext<'_, '_>, value: &Expr, callab
                 },
                 expr.span,
             );
-            lower_expr(ctx, &synthetic)
+            lower_pipe_synthetic_call(ctx, &synthetic, arg_span)
         }
         ExprKind::Variable(name) => lower_pipe_callable_variable(ctx, value, name, expr),
         _ => {
@@ -53,6 +56,16 @@ pub(super) fn lower_pipe(ctx: &mut LoweringContext<'_, '_>, value: &Expr, callab
             lower_pipe_runtime_call(ctx, &arg, callable, expr)
         }
     }
+}
+
+/// Lowers the direct call a pipe to a first-class callable becomes. The checker records no
+/// argument site for the piped temp, so its scalar-parameter check is requested by span; a
+/// call nested in the receiver keeps its own recorded sites.
+fn lower_pipe_synthetic_call(ctx: &mut LoweringContext<'_, '_>, call: &Expr, arg_span: Span) -> LoweredValue {
+    let previous = ctx.pipe_guard_arg_span.replace(arg_span);
+    let lowered = lower_expr(ctx, call);
+    ctx.pipe_guard_arg_span = previous;
+    lowered
 }
 
 /// Lowers `value |> $callable` when the local still has straight-line callable metadata.

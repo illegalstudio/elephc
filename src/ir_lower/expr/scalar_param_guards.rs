@@ -223,8 +223,10 @@ pub(super) fn guarded_scalar_param(
         return None;
     }
     let needed = match source {
-        GuardSource::Recorded(span) => ctx.scalar_guard_arg_sites.contains(&span),
-        GuardSource::Unrecorded => crate::types::param_binding::runtime_scalar_guard_needed(
+        GuardSource::Recorded(span) if ctx.pipe_guard_arg_span != Some(span) => {
+            ctx.scalar_guard_arg_sites.contains(&span)
+        }
+        GuardSource::Recorded(_) | GuardSource::Unrecorded => crate::types::param_binding::runtime_scalar_guard_needed(
             declared,
             &ctx.builder.value_php_type(value),
             crate::source::current_strict_types(),
