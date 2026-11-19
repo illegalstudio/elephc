@@ -10,7 +10,7 @@
 //! - Cleanup clears the transferred owner before invoking potentially reentrant destruction.
 //! - Failed construction marks the object so its destructor stays suppressed after escape.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter};
 use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_OWNER_OFFSET, TRY_HANDLER_SLOT_SIZE};
 use elephc_memoir::{FrameOffset, GuardLayout, RecordOffset};
 
@@ -73,18 +73,9 @@ fn release_callable_body(emitter: &mut Emitter) {
 /// Suppresses `__destruct` before releasing a raw object whose constructor did not complete.
 fn release_unconstructed_object_body(emitter: &mut Emitter) {
     elephc_memoir::guarded_owners::emit_take_guard_owner(emitter, GUARD_LAYOUT);
-    if emitter.target.arch == Arch::AArch64 {
-        emitter.instruction("cbz x0, __rt_exception_release_unconstructed_object_drop"); // skip header access for an already-cleared guard
-        emitter.instruction("ldr x10, [x0, #-8]");                              // load the persistent object kind and destructor state
-        emitter.instruction("orr x10, x10, #0x4000");                           // suppress __destruct for this failed construction permanently
-        emitter.instruction("str x10, [x0, #-8]");                              // preserve suppression if the constructor escaped another owner
-        emitter.label("__rt_exception_release_unconstructed_object_drop");
-    } else {
-        emitter.instruction("test rax, rax");                                   // avoid reading a header from an already-cleared guard
-        emitter.instruction("jz __rt_exception_release_unconstructed_object_drop"); // null owners need only the ordinary no-op release
-        emitter.instruction("or QWORD PTR [rax - 8], 0x4000");                  // persist failed-construction destructor suppression across escape and GC
-        emitter.label("__rt_exception_release_unconstructed_object_drop");
-    }
+    elephc_memoir::values::destructor_header::emit_suppress_unconstructed(
+        emitter, "__rt_exception_release_unconstructed_object_drop",
+    );
     abi::emit_call_label(emitter, "__rt_decref_any");
 }
 
@@ -96,7 +87,7 @@ fn emit_release_body(emitter: &mut Emitter, symbol: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::Target;
+    use crate::codegen_support::platform::{Arch, Target};
 
     /// Every target marks failed construction before releasing the guard's raw object owner.
     #[test]
