@@ -1629,9 +1629,8 @@ pub(super) fn coerce_operands_to_params_guarded(
                 .map(|_| source)
         })
         .collect::<Vec<_>>();
-    // A positional operand whose check was deferred here keeps the argument-time contract:
-    // its conversion runs without first publishing every operand, exactly as when it was
-    // converted while its argument was lowered, so a guarded call costs no extra roots.
+    // A positional operand whose check was deferred here is converted inside the check loop,
+    // right after its own check, as when it was converted while its argument was lowered.
     let deferred_positional = (0..limit)
         .map(|index| positional && needs_guard[index].is_some())
         .collect::<Vec<_>>();
@@ -1639,20 +1638,20 @@ pub(super) fn coerce_operands_to_params_guarded(
         .map(|index| !deferred_positional[index]
             && (needs_guard[index].is_some() || operand_needs_param_coercion(ctx, sig, &operands, index)))
         .collect::<Vec<_>>();
-    // A deferred guard can throw too: every other owned operand (a freshly built array, a call
-    // result) must be published first, or the throw leaks it. Guarded operands themselves stay
-    // unpublished, so an accepted check costs no extra root; they are pinned over the checks
-    // instead (see below).
-    let publish_all = needs_coercion.iter().any(|needs| *needs);
-    let publish_others = !publish_all && deferred_positional.iter().any(|deferred| *deferred);
-    if publish_all || publish_others {
+    // A check can throw (a refusal, a precision deprecation's handler, a `Stringable`'s
+    // `__toString()`), so every owned operand is published first, the checked ones included:
+    // the unwinder then releases them after the exception exists, so a destructor they run
+    // throws with it as its previous exception, and a check that converts its operand (an
+    // `int`/`float` binding, a string conversion) reads a borrowed value and never releases a
+    // box an owner still points at.
+    let publish = needs_coercion.iter().any(|needs| *needs)
+        || deferred_positional.iter().any(|deferred| *deferred);
+    if publish {
         // Source evaluation has completed, but any parameter conversion below can throw.
         // Publish the one last source value that did not need protection during source
         // evaluation, plus synthesized owned operands, before the first conversion runs.
         for index in 0..limit {
-            if sig.ref_params.get(index).copied().unwrap_or(false)
-                || publish_others && deferred_positional[index]
-            {
+            if sig.ref_params.get(index).copied().unwrap_or(false) {
                 continue;
             }
             let lowered = lowered_value_from_id(ctx, operands[index]);
@@ -1669,17 +1668,6 @@ pub(super) fn coerce_operands_to_params_guarded(
             }
         }
     }
-    // The deferred guarded operands that are owned temporaries stay unpublished, so an accepted
-    // check costs no root, but they are pinned over the checks: a refusal throws its `TypeError`
-    // first and the unwinder then releases them, so a destructor they run throws with the
-    // `TypeError` as its previous exception (PHP's order with `zend.exception_ignore_args=1`).
-    let pinned_operands = (0..limit)
-        .filter(|index| publish_others && deferred_positional[*index])
-        .map(|index| lowered_value_from_id(ctx, operands[index]))
-        .filter(|value| ctx.value_is_owning_temporary(*value))
-        .map(|value| value.value)
-        .collect::<Vec<_>>();
-    let mut pins = super::call_operand_owners::pin_in_flight_owners(ctx, &pinned_operands, guard_span);
     for index in 0..limit {
         if sig.ref_params.get(index).copied().unwrap_or(false) {
             if let Some((local, span)) = reference_check(index) {
@@ -1696,26 +1684,21 @@ pub(super) fn coerce_operands_to_params_guarded(
             if let Some(converted) = super::scalar_param_guards::guard_scalar_param(
                 ctx, sig, index, lowered, source, guard_span, false, &[],
             ) {
-                // The guard already produced the `int`/`float` PHP binds; an owned box it
-                // converted was released by the guard, a published one retires with the call.
+                // The guard already produced the `int`/`float` PHP binds; the published box
+                // retires with the call's operands.
                 operands[index] = converted.value;
                 continue;
             }
             if deferred_positional[index] && param_ty.codegen_repr() == PhpType::Str {
-                // The same owned conversion argument lowering would have made. It carries the
-                // call's span: a conversion that can warn publishes its span as the current
-                // line, and a span-less one would publish line 0 over the caller's site (a
-                // compiler-generated span is not published at all). A `Stringable`'s
-                // `__toString()` can throw: its box is pinned above, and the string it makes is
-                // pinned too, for the later checks.
+                // The same conversion argument lowering would have made, from the published
+                // (borrowed) box, so it releases nothing. It carries the call's span: a
+                // conversion that can warn publishes its span as the current line, and a
+                // span-less one would publish line 0 over the caller's site (a
+                // compiler-generated span is not published at all). The string it makes is
+                // published too, before a later check can throw.
                 let source = lowered_value_from_id(ctx, operands[index]);
                 let string = coerce_to_string_at_span(ctx, source, Some(guard_span));
-                if publish_others && ctx.value_is_owning_temporary(string) {
-                    pins.extend(super::call_operand_owners::pin_in_flight_owners(
-                        ctx, &[string.value], guard_span,
-                    ));
-                }
-                operands[index] = string.value;
+                operands[index] = root_evaluated_call_argument(ctx, string, Span::dummy()).value;
                 continue;
             }
         }
@@ -1804,9 +1787,6 @@ pub(super) fn coerce_operands_to_params_guarded(
             }
         }
     }
-    // Every check has passed: the pins retire without releasing, leaving each operand's
-    // ordinary ownership as it was.
-    super::call_operand_owners::unpin_in_flight_owners(ctx, pins, guard_span);
     operands
 }
 
