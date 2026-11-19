@@ -47,14 +47,14 @@ fn run_inner(command: ReplCommand) -> Result<i32, String> {
     let mut args = vec!["elephc".to_string(), source.to_string(), "--quiet".to_string()];
     args.extend(command.compile_args.clone());
     let mut config = crate::cli::parse_compile_args(&args);
-    crate::apply_project_ini(&mut config);
+    crate::entry::apply_project_ini(&mut config);
     // Preloading belongs to a different execution model: it would compile arbitrary PHP
     // into the host and require its whole include graph in the executable cache identity.
     if config.ini_overrides.iter().rev().find(|(key, _)| key == "opcache.preload")
         .is_some_and(|(_, value)| !value.is_empty()) {
         return Err("opcache.preload is not supported in the REPL; use require_once in the session".into());
     }
-    crate::emit_ini_override_warnings(&config);
+    crate::entry::emit_ini_override_warnings(&config);
     if let Some(output) = command.build_output {
         crate::pipeline::compile_repl(config, &output);
         return Ok(0);

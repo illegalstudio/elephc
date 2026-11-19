@@ -111,10 +111,7 @@ fn prepare_runtime_object_with_mode(
     pic: bool,
     library_boundary: bool,
 ) -> Result<PreparedRuntimeObject, String> {
-    let cache_dir = runtime_cache_dir();
-    fs::create_dir_all(&cache_dir)
-        .map_err(|err| format!("failed to create runtime cache '{}': {}", cache_dir.display(), err))?;
-    harden_runtime_cache_dir(&cache_dir)?;
+    let cache_dir = usable_runtime_object_cache_dir()?;
 
     // Worktrees commonly share a package version and cache directory while their
     // runtime emitters differ. Cargo supplies a source-derived emitter identity
@@ -227,7 +224,87 @@ fn prepare_runtime_object_with_mode(
     Ok(prepared)
 }
 
-/// Returns the platform-specific cache directory path for runtime objects.
+/// Returns the directory holding prepared runtime objects: `ELEPHC_RUNTIME_CACHE_DIR` when it
+/// is set and non-empty, else [`runtime_cache_dir`].
+///
+/// The override moves only the runtime objects, which are keyed by everything that shapes them
+/// and safe to share between concurrent compilers; REPL hosts and `elephc test` outputs stay
+/// under the cache root. Test suites that isolate `XDG_CACHE_HOME` per test use it to share
+/// one runtime object per shape instead of regenerating it on every compile.
+fn runtime_object_cache_dir() -> PathBuf {
+    match env::var_os("ELEPHC_RUNTIME_CACHE_DIR") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => runtime_cache_dir(),
+    }
+}
+
+/// Returns a runtime-object cache directory this process may write, or a temporary one.
+///
+/// A cache the process cannot create, or one it does not own, must never stop a compile: a
+/// read-only checkout, or a target tree restored from another user's CI artifact, is otherwise
+/// indistinguishable from a broken install. The runtime is then assembled into the OS temporary
+/// directory, which keeps the per-user ownership the hardening requires without silently
+/// trusting the rejected directory.
+fn usable_runtime_object_cache_dir() -> Result<PathBuf, String> {
+    let requested = runtime_object_cache_dir();
+    if directory_accepts_files(&requested) && harden_runtime_cache_dir(&requested).is_ok() {
+        return Ok(requested);
+    }
+    let fallback = env::temp_dir().join(temporary_runtime_cache_dir_name());
+    if !directory_accepts_files(&fallback) {
+        return Err(format!(
+            "failed to create runtime cache '{}': the directory does not accept files",
+            fallback.display()
+        ));
+    }
+    harden_runtime_cache_dir(&fallback)?;
+    Ok(fallback)
+}
+
+/// Returns whether `dir` exists and accepts a new file.
+///
+/// `create_dir_all` succeeds for a directory that already exists, and the ownership hardening
+/// only inspects the group and other bits, so a cache this user owns with mode `0500` would be
+/// selected and then fail while writing the assembly or a lease. A real file probe also covers
+/// ACLs and read-only mounts, which the mode bits cannot describe.
+fn directory_accepts_files(dir: &std::path::Path) -> bool {
+    if fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(format!(
+        ".write-probe.{}.{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default()
+    ));
+    match fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+        Ok(file) => {
+            drop(file);
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Returns the per-user directory name of the runtime cache under the OS temporary directory.
+///
+/// `/tmp` serves every user on a Linux machine and the cache directory is hardened to
+/// owner-only, so one fixed name would let the first user's directory reject every other user's
+/// compile once it exists. The effective user id keeps each user's fallback theirs; the
+/// ownership check still refuses a directory this user does not own. The integration-test helper
+/// `tests/integration.rs::shared_runtime_cache_dir` derives the same name.
+fn temporary_runtime_cache_dir_name() -> String {
+    #[cfg(unix)]
+    let owner = unsafe { libc::geteuid() };
+    #[cfg(not(unix))]
+    let owner = 0;
+    format!("elephc-runtime-cache-{owner}")
+}
+
+/// Returns the platform-specific cache root for runtime objects, REPL hosts and test outputs.
 pub(crate) fn runtime_cache_dir() -> PathBuf {
     if let Some(path) = env::var_os("XDG_CACHE_HOME") {
         PathBuf::from(path).join("elephc")

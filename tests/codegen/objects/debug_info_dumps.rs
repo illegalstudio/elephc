@@ -3,7 +3,7 @@
 //! result at run time (a body the compiler cannot fold into static descriptor rows).
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through Rust's test harness.
+//! - `cargo test --test codegen_tests_oop` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expectation is reference PHP 8.5 output, byte for byte (stdout only).

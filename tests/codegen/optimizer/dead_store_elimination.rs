@@ -3,7 +3,7 @@
 //! the real CLI optimization pipeline.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::dead_store_elimination`.
+//! - `cargo test --test codegen_tests_core optimizer::dead_store_elimination`.
 //!
 //! Key details:
 //! - Uses `--emit-ir` so the test can confirm the dead `store_local` (and the now

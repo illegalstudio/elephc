@@ -12,7 +12,7 @@ from common import REPO, SUITES, atomic_json, render_markdown, require_baselines
 
 INTERNAL = {
     "script-cache": ["cargo", "test", "-p", "elephc-magician", "file_cache_format", "--", "--ignored", "--nocapture"],
-    "null-representation": ["cargo", "test", "--test", "codegen_tests", "null_sentinel::benches", "--", "--ignored", "--nocapture"],
+    "null-representation": ["cargo", "test", "--test", "codegen_tests_runtime", "null_sentinel::benches", "--", "--ignored", "--nocapture"],
 }
 
 

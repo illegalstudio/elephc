@@ -4,7 +4,7 @@
 //! runtime view, plus a per-function cause table on stdout.
 //!
 //! Called from:
-//! - `crate::main()` when the first argument is exactly `monitor`.
+//! - `crate::entry::run()` when the first argument is exactly `monitor`.
 //!
 //! Key details:
 //! - A launched program defaults to exact capture on macOS and Linux. A running

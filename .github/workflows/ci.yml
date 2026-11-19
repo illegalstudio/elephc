@@ -927,7 +927,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Cross-run cache keyed on the committed lock plus the recipe sources that
@@ -997,7 +997,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Cross-run cache keyed on the committed lock plus the recipe sources that
@@ -1067,7 +1067,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Cross-run cache keyed on the committed lock plus the recipe sources that
@@ -1450,7 +1450,7 @@ jobs:
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
         run: |
           bash scripts/ci/run_prebuilt_tests.sh \
-            'binary(=codegen_tests) and test(test_gmp_php_src_phpt_corpus)' --run-ignored only --nocapture
+            'binary(/^codegen_tests_/) and test(test_gmp_php_src_phpt_corpus)' --run-ignored only --nocapture
 
       - name: Audit consumer compilation
         if: always()
@@ -1969,9 +1969,9 @@ jobs:
       - name: Run focused native, eval and argument regressions
         shell: elephc-ci-shell {0}
         run: |
-          bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(test_tokenizer_)'
-          bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(=codegen::lfc::lfc_and_strict_php_eval_calls_do_not_leak_profiles)'
-          bash scripts/ci/run_prebuilt_tests.sh 'binary(=error_tests) and test(tokenizer_)'
+          bash scripts/ci/run_prebuilt_tests.sh 'binary(/^codegen_tests_/) and test(test_tokenizer_)'
+          bash scripts/ci/run_prebuilt_tests.sh 'binary(/^codegen_tests_/) and test(=codegen::lfc::lfc_and_strict_php_eval_calls_do_not_leak_profiles)'
+          bash scripts/ci/run_prebuilt_tests.sh 'binary_id(elephc::integration) and test(/^error_tests::/) and test(tokenizer_)'
           bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=ir_lower::tests::corpus::lowers_tokenizer_example_on_every_target)'
           bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=autoload::prelude_probe::tests::probe_detects_tokenizer_in_autoloaded_classes)'
           bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=ir_lower::tests::string_offset_lifetime::string_offset_lifetime_stabilizes_views_on_all_targets)'
@@ -2055,7 +2055,7 @@ jobs:
       # per-contract assertions — name sets, signature shapes, eval coverage — to
       # the thirty-four `curl_*` surfaces instead of counting them and moving on.
       - name: Cross-backend parity with the curl surface published
-        run: bash scripts/ci/run_prebuilt_tests.sh 'binary(=builtin_parity_tests)'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'binary_id(elephc::integration) and test(/^builtin_parity_tests::/)'
 
       # The compiler-side half: `builtins::parity_tests` compares every
       # prelude-provided contract with the PHP declaration its injected prelude

@@ -13,26 +13,39 @@ def run(arguments):
     if not arguments:
         raise ValueError("Expected a libtest filter and optional libtest arguments")
     root = Path(os.environ["ELEPHC_CI_TEST_ROOT"]).resolve()
-    binaries = [path for path in (root / "target/debug/deps").glob("codegen_tests-*")
-                if path.is_file() and os.access(path, os.X_OK)]
-    if len(binaries) != 1:
-        raise ValueError(f"Expected one archived codegen test binary, found {len(binaries)}")
+    # The codegen suite is six binaries split by domain, so a libtest filter runs in
+    # whichever of them lists a matching test: one process per selected domain, and a
+    # filter that matches nothing still fails instead of reporting a green run.
+    binaries = sorted(path for path in (root / "target/debug/deps").glob("codegen_tests_*-*")
+                      if path.is_file() and os.access(path, os.X_OK))
+    if not binaries:
+        raise ValueError("Expected archived codegen test binaries, found none")
     environment = dict(os.environ, ELEPHC_TEST_PREBUILT_BRIDGES="1",
                        CARGO_TARGET_DIR=str(root / "target"), CARGO_MANIFEST_DIR=os.getcwd(),
                        CARGO_BIN_EXE_elephc=str(root / "target/debug/elephc"))
     environment.setdefault("RUST_MIN_STACK", "33554432")
-    command = [str(binaries[0]), *arguments]
-    listing = subprocess.check_output([*command, "--list"], text=True, env=environment)
-    selected = set(re.findall(r"^\S+: test$", listing, re.MULTILINE))
-    if "--ignored" not in arguments and "--include-ignored" not in arguments:
-        ignored = subprocess.check_output([*command, "--list", "--ignored"], text=True, env=environment)
-        selected.difference_update(re.findall(r"^\S+: test$", ignored, re.MULTILINE))
-    if not selected:
+    commands = []
+    total = 0
+    for binary in binaries:
+        command = [str(binary), *arguments]
+        selected = set(re.findall(r"^\S+: test$", subprocess.check_output(
+            [*command, "--list"], text=True, env=environment), re.MULTILINE))
+        if "--ignored" not in arguments and "--include-ignored" not in arguments:
+            ignored = subprocess.check_output([*command, "--list", "--ignored"], text=True, env=environment)
+            selected.difference_update(re.findall(r"^\S+: test$", ignored, re.MULTILINE))
+        if selected:
+            commands.append(command)
+            total += len(selected)
+    if not commands:
         raise ValueError("The archived libtest filter selected no tests")
-    print(f"Running {len(selected)} archived codegen tests in one libtest process", flush=True)
+    print(f"Running {total} archived codegen tests in one libtest process per domain", flush=True)
     # The caller's existing job deadline and fixture watchdogs remain authoritative,
     # as for the former cargo-test invocation. Do not add process-per-test retries.
-    return subprocess.call(command, env=environment)
+    failure = 0
+    for command in commands:
+        status = subprocess.call(command, env=environment)
+        failure = failure or status
+    return failure
 
 
 if __name__ == "__main__":

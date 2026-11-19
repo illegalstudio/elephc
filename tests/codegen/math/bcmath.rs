@@ -2,7 +2,7 @@
 //! End-to-end integration tests for the PHP BCMath builtin surface.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the math test group.
+//! - `cargo test --test codegen_tests_data` through the math test group.
 //!
 //! Key details:
 //! - Expected strings follow PHP BCMath truncation and fixed-scale formatting.

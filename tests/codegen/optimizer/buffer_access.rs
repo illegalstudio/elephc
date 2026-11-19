@@ -4,7 +4,7 @@
 //! index and of locals stored into packed fields, and loop-hoisted buffer handle resolution.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::buffer_access`.
+//! - `cargo test --test codegen_tests_core optimizer::buffer_access`.
 //!
 //! Key details:
 //! - Textual EIR pins the optimized loop shape; every fixture also runs natively with the

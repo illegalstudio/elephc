@@ -2,7 +2,7 @@
 //! Exercises exact and saturated incoming-edge counts in native cycle collection.
 //!
 //! Called from:
-//! - Focused `codegen_tests` runtime GC regressions on executable targets.
+//! - Focused `codegen_tests_runtime` runtime GC regressions on executable targets.
 //!
 //! Key details:
 //! - PHP output and balanced ownership must agree with IR optimization on and off.

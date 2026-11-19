@@ -3,7 +3,7 @@
 //! binary, so `--php-version` is not something the user has to remember.
 //!
 //! Called from:
-//! - `cargo test --test php_profile_resolve_tests` through Rust's test harness.
+//! - `cargo test --test integration php_profile_resolve_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - `php_profile::resolve`'s own unit tests cover every source, their precedence, the

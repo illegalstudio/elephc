@@ -6,7 +6,7 @@
 //! ownership of large results nobody keeps and the float formatters near a full scratch.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the regressions codegen test module.
+//! - `cargo test --test codegen_tests_core` through the regressions codegen test module.
 //!
 //! Key details:
 //! - Each expected string is BUILT IN RUST from the PHP format rules, so a test compares the
