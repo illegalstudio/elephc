@@ -108,3 +108,22 @@ fn strict_array_contracts_respect_independent_profiles_and_trusted_sources() {
         crate::types::checker::check_staged_semantics(&program, Target::detect_host(), profile).unwrap();
     }
 }
+
+/// Nested stores validate the selected container before replacing its original elements.
+#[test]
+fn strict_array_contracts_reject_nested_element_changes() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayTypes, true);
+    for source in ["<?php $items=[[1]];$items[0][0]='changed';",
+        "<?php $items=['row'=>[1]];$items['row'][0]='changed';"] {
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        let error = crate::types::checker::check_staged_semantics(&program, Target::detect_host(), profile).unwrap_err();
+        assert!(error.message.contains("strict-array-types"), "{source}: {error:?}");
+        crate::types::checker::check_staged_semantics(&program, Target::detect_host(), SemanticProfile::PERMISSIVE).unwrap();
+    }
+    for source in ["<?php $items=[[1]];$items[0][0]=2;",
+        "<?php function nestedOpen(array $items):void{$items[0][0]='changed';}"] {
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        crate::types::checker::check_staged_semantics(&program, Target::detect_host(), profile)
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+}

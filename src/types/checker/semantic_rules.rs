@@ -70,6 +70,25 @@ impl Checker {
                 || crate::types::param_binding::scalar_param_cast(expected, member).is_some())
     }
 
+    /// Requires a supported writable receiver and PHP key without rebuilding flow facts.
+    pub(crate) fn require_mixed_dimension_write(&self, receiver: &PhpType,
+        key: Option<&PhpType>, span: Span) -> Result<(), CompileError> {
+        crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+            receiver, span, "offset writes", |member| match member {
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Void
+                    | PhpType::False | PhpType::Bool => true,
+                PhpType::Str => key.is_some(),
+                PhpType::Object(name) => self.object_type_supports_dimensions(name),
+                _ => false,
+            })?;
+        if let Some(key) = key.filter(|_| crate::semantics::mixed::uses_php_offset_key(receiver)
+            || matches!(receiver, PhpType::Void | PhpType::False | PhpType::Bool)) {
+            crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+                key, span, "PHP offset keys", crate::semantics::mixed::array_key_kind)?;
+        }
+        Ok(())
+    }
+
     /// Validates countability using the current source policy and existing interface metadata.
     pub(crate) fn require_mixed_countable_type(&self, actual: &PhpType, span: Span) -> Result<(), CompileError> {
         crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,

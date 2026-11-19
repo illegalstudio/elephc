@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step230 (this commit). Remaining feature integration is active. Issue:
+Verified through step231 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2864,3 +2864,9 @@ Nullability is now a public compiler and eval guarantee, independent of exact Co
 Real opaque eval exposed two additional boundaries. Registered borrowed builtins must retain interpreter Reflection dispatch, independently of their argument ownership strategy. Ordinary non-coercible parameter mismatches now use the existing catchable TypeError path instead of RuntimeFatal; exact acceptance and permitted weak conversions still run first. Source tests retain eval's existing property-reference syntax, without extending its grammar.
 
 The composed31-gate evidence includes all-five library/emitter paths, public native and real opaque eval bundles, REPL/LFC/example/cache/source controls, default/generic declarations, Reflection under permissive/NN/ArrayKeys, weak/object parameter controls and balanced nominal argument owners. New and retained gates have explicit run provenance; default builds, diff/assembly hygiene and unchanged-source checks pass. Nullability becomes the fourteenth integrated guarantee. Mixed and ArrayTypes and the full umbrella remain gated until their remaining runtime, producer and reference contracts are complete.
+
+### Verified231: mixed receiver and nested array write proofs
+
+Writable dimension receivers and PHP keys now require supported logical alternatives through one shared checker helper. Direct/indexed/append, newly created arrays and nested paths consume their existing inferred views; property writes, appends and indexed stores share member receiver proof. Quiet null or slot creation permissions do not turn an unknown mixed source into a writable array proof.
+
+Nested array stores also check normalized keys and original values against the selected array contract before widening, retaining the existing single RHS inference and promoted update handling. Five exact new/control regressions pass, including valid guard/open-array cases, independent profiles and builtin/property controls. Default build, diff/assembly hygiene and source stability pass. These source proofs do not admit unfinished Mixed/ArrayTypes runtime guarantees; both feature bits and the complete umbrella remain gated.

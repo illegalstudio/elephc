@@ -35,6 +35,8 @@ pub(super) fn check_property_assign(
     compound_property_update: bool,
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    crate::semantics::mixed::member_receiver(checker.semantic_profile, checker.semantic_source_mode,
+        &checker.mixed_selection_receiver_view(object, &obj_ty), false, false, span)?;
     // Capture the checked receiver view before RHS inference can invalidate property guards.
     checker.record_member_receiver_type(span, &obj_ty);
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
@@ -76,6 +78,8 @@ pub(super) fn check_property_array_push(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    crate::semantics::mixed::member_receiver(checker.semantic_profile, checker.semantic_source_mode,
+        &checker.mixed_selection_receiver_view(object, &obj_ty), false, false, span)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let obj_ty = checker.union_single_object_class(&obj_ty)
         .filter(|_| matches!(&obj_ty, PhpType::Union(members)
@@ -220,6 +224,8 @@ pub(super) fn check_property_array_assign(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    crate::semantics::mixed::member_receiver(checker.semantic_profile, checker.semantic_source_mode,
+        &checker.mixed_selection_receiver_view(object, &obj_ty), false, false, span)?;
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let normalized_idx_ty = property_write_key_type(normalized_array_key_type(index, idx_ty.clone(), checker.semantic_profile));
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;

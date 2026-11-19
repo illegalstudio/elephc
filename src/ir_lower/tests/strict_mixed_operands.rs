@@ -213,3 +213,28 @@ fn strict_mixed_array_guard_preserves_packed_and_hash_views() {
         assert!(errors.contains("HEAP DEBUG: leak summary: clean"), "{errors}");
     }
 }
+
+/// Writable receivers and keys require the same source proofs as ordinary reads.
+#[test]
+fn strict_mixed_writes_require_supported_receivers_and_keys() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Mixed, true);
+    for source in ["<?php function f(mixed $value):void{$value[0]=7;}",
+        "<?php function f(mixed $value):void{$value[]=7;}",
+        "<?php function f(mixed $value):void{$value->item=7;}",
+        "<?php function f(mixed $value):void{$value->items[]=7;}",
+        "<?php function f(mixed $value):void{$value->items[0]=7;}",
+        "<?php function f(array $value,mixed $key):void{$value[$key]=7;}",
+        "<?php function f(mixed $key):void{$created[$key]=7;}"] {
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        let error = crate::types::checker::check_staged_semantics(&program, Target::detect_host(), profile).unwrap_err();
+        assert!(error.message.contains("strict-mixed"), "{source}: {error:?}");
+    }
+    for source in ["<?php function f(mixed $value):void{if(is_array($value)){$value[0]=7;}}",
+        "<?php function f(array $value,int|string $key):void{$value[$key]=7;}",
+        "<?php class C{public int $item=0;}function f(mixed $value):void{if($value instanceof C){$value->item=7;}}",
+        "<?php $created[]=7;$created[0]=8;"] {
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        crate::types::checker::check_staged_semantics(&program, Target::detect_host(), profile)
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+}

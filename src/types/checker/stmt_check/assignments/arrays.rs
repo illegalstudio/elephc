@@ -43,6 +43,7 @@ pub(super) fn check_array_assign(
     // instead of rejecting the target, exactly as the append form already does.
     if !env.contains_key(array) {
         let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+        checker.require_mixed_dimension_write(&PhpType::Void, Some(&idx_ty), index.span)?;
         crate::semantics::array_keys::validate(checker.semantic_profile, &idx_ty, index.span)?;
         let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
         let key_ty = normalized_array_key_type(index, idx_ty, checker.semantic_profile);
@@ -64,6 +65,7 @@ pub(super) fn check_array_assign(
     let storage = checker.guarded_local_storage_type(&Expr::var(array), env).cloned()
         .or_else(|| env.get(array).cloned());
     let current = env.get(array).cloned().unwrap_or(PhpType::Mixed);
+    checker.require_mixed_dimension_write(&current, Some(&idx_ty), span)?;
     let nullable = nullable_array_write_view(&current);
     let had_nullable_read = nullable.is_some();
     let arr_ty = nullable.unwrap_or(current);
@@ -408,11 +410,14 @@ pub(super) fn check_nested_array_assign(
     super::static_properties::promote_static_nested_write_root(checker, target, span)?;
     let arr_ty = checker.infer_nested_write_parent_with_effects(array, env)?;
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+    checker.require_mixed_dimension_write(&arr_ty, Some(&idx_ty), span)?;
     crate::semantics::array_keys::validate_write_receiver(checker.semantic_profile, &arr_ty, &idx_ty, index.span)?;
     if !nested_write_parent_can_promote(&arr_ty, array)
         || !check_promoted_nested_update_value(checker, target, value, span, env)?
     {
-        checker.infer_type_with_assignment_effects(value, env)?;
+        let value_ty = checker.infer_type_with_assignment_effects(value, env)?;
+        let key_ty = normalized_array_key_type(index, idx_ty.clone(), checker.semantic_profile);
+        checker.require_array_write_contract(&arr_ty, &key_ty, &value_ty, span)?;
     }
     match arr_ty {
         PhpType::Mixed => Ok(()),
@@ -553,6 +558,7 @@ pub(super) fn check_array_push(
     let storage = checker.guarded_local_storage_type(&Expr::var(array), env).cloned()
         .or_else(|| env.get(array).cloned());
     let current = env.get(array).cloned().unwrap_or(PhpType::Mixed);
+    checker.require_mixed_dimension_write(&current, None, span)?;
     let nullable = nullable_array_write_view(&current);
     let had_nullable_read = nullable.is_some();
     let arr_ty = nullable.unwrap_or(current);
