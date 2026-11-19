@@ -4054,6 +4054,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.is_ref_bound_local(name) && self.local_type(name).codegen_repr() == PhpType::Mixed
             && !owner_needs_promotion
         {
+            // An initialized owner word can contain zero after a conditional detach.
+            // Runtime-idempotent promotion republishes the owner on that predecessor.
+            self.promote_local_ref_cell(name, span);
             return;
         }
         if !self.is_ref_bound_local(name) || owner_needs_promotion {

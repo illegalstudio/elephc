@@ -261,8 +261,9 @@ pub(super) fn lower_closure_with_context(
                 // widening metadata first leaves a raw array, object, or string in storage that
                 // `PromoteLocalRefCell` then interprets as a boxed Mixed pointer.
                 ctx.promote_local_mixed_ref_cell(capture, Some(expr.span));
-            } else if by_ref && !ctx.is_ref_bound_local(capture) {
-                // Keep a local cell owner independent of the descriptor's capture lease.
+            } else if by_ref {
+                // A conditional unset can detach a conservatively aliased local at runtime.
+                // Idempotent promotion republishes its frame owner before the descriptor retains it.
                 ctx.promote_local_ref_cell(capture, Some(expr.span));
             }
             let captured = if by_ref { ctx.load_local(capture, Some(expr.span)) }

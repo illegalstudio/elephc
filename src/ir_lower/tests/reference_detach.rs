@@ -13,10 +13,7 @@ use crate::ir::{Immediate, LocalKind, Op};
 use crate::types::PhpType;
 use std::path::Path;
 
-/// The original loop's final unset cannot retroactively box the captured string storage.
-#[test]
-fn captured_string_detach_preserves_payload_type_on_all_targets() {
-    let source = r#"<?php
+const CAPTURED_LOOP_SOURCE: &str = r#"<?php
 $saved = static fn(): string => "";
 for ($i = 0; $i < 4; $i++) {
     $text = str_repeat("x", $i + 1);
@@ -27,9 +24,13 @@ for ($i = 0; $i < 4; $i++) {
 }
 unset($text, $saved);
 "#;
+
+/// The original loop's final unset cannot retroactively box the captured string storage.
+#[test]
+fn captured_string_detach_preserves_payload_type_on_all_targets() {
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(
-            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+            CAPTURED_LOOP_SOURCE, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
         let main = module.functions.iter().find(|function| function.name == "main").unwrap();
         let (slot, owner) = main.instructions.iter().find_map(|inst| match inst.immediate {
@@ -45,10 +46,13 @@ unset($text, $saved);
         let detached = main.instructions.iter().position(|inst| {
             inst.op == Op::UnsetLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
         }).expect("the final unset must clear promotion state");
-        let release = &main.instructions[detached - 1];
+        let raw_release = &main.instructions[detached - 1];
+        assert_eq!(raw_release.op, Op::ReleaseRawLocalSlot, "{name}");
+        assert_eq!(raw_release.immediate, Some(Immediate::LocalSlot(slot)), "{name}");
+        let release = &main.instructions[detached + 1];
         assert_eq!(release.op, Op::ReleaseLocalRefCell, "{name}");
         assert_eq!(release.immediate, Some(Immediate::LocalSlot(owner)), "{name}");
-        let zero = &main.instructions[detached + 1];
+        let zero = &main.instructions[detached + 2];
         assert_eq!(zero.op, Op::ZeroLocalSlot, "{name}");
         assert_eq!(zero.immediate, Some(Immediate::LocalSlot(slot)), "{name}");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
@@ -96,5 +100,22 @@ unset($text, $old, $fresh);
             "{name}: detached by-reference captures must invoke their retained descriptor cells",
         );
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Ordinary captured strings share each loop update and retire their owners after final detach.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn captured_string_detach_native_values_and_owners() {
+    for optimize in [false, true] {
+        let module = super::semantic_sources::lower_capturing_arguments(CAPTURED_LOOP_SOURCE,
+            Target::detect_host(), elephc_semantics::SemanticProfile::PERMISSIVE, optimize,
+            crate::source::SourceMode::Php);
+        let output = super::native_module::run(&module);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "opt={optimize}: {stderr}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "x:x|xx:xx|xxx:xxx|xxxx:xxxx|", "opt={optimize}: {stderr}");
+        assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {stderr}");
     }
 }
