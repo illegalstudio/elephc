@@ -15,6 +15,7 @@
 //!   embedded NULs survive the NUL-terminated string boundary.
 
 use super::*;
+use super::html_dump;
 use std::ffi::{c_int, c_long, c_void};
 
 type Writer = extern "C" fn(*mut c_void, *const c_char, c_int) -> c_int;
@@ -38,10 +39,6 @@ extern "C" {
     fn output_buffer_create_io(write: Option<Writer>, close: Option<Closer>, ctx: *mut c_void, encoder: *mut c_void) -> *mut c_void;
     #[link_name = "xmlOutputBufferClose"]
     fn output_buffer_close(buf: *mut c_void) -> c_int;
-    #[link_name = "htmlDocDumpMemoryFormat"]
-    fn html_doc_dump(doc: Node, mem: *mut *mut u8, size: *mut c_int, format: c_int);
-    #[link_name = "htmlNodeDumpFormatOutput"]
-    fn html_node_dump(buf: *mut c_void, doc: Node, node: Node, encoding: *const c_char, format: c_int);
     #[link_name = "xmlC14NExecute"]
     fn c14n_execute(doc: Node, visible: Option<Visible>, user: *mut c_void, mode: c_int, prefixes: *mut *mut u8, comments: c_int, buf: *mut c_void) -> c_int;
 }
@@ -98,38 +95,13 @@ fn write(view: &View, operation: i64, document: bool, options: i64, format: bool
                 save_close(ctx);
                 if written < 0 { return None; }
             }
-            1 if document => {
-                let mut mem: *mut u8 = std::ptr::null_mut();
-                let mut size: c_int = 0;
-                html_doc_dump(doc, &mut mem, &mut size, c_int::from(format));
-                if mem.is_null() { return None; }
-                out.extend_from_slice(std::slice::from_raw_parts(mem, size.max(0) as usize));
-                ffi::string_free(mem.cast());
-            }
-            // One node of an HTML document: no output encoding, so non-ASCII text stays UTF-8
-            // (PHP writes `saveHTML($node)` of a parsed document this way; for a document built with
-            // `createElement` PHP writes `&#xE9;` there, which the import cannot reproduce).
-            1 => {
-                let buf = output_buffer_create_io(Some(collect), None, sink, std::ptr::null_mut());
-                if buf.is_null() { return None; }
-                html_node_dump(buf, doc, node, std::ptr::null(), c_int::from(format));
-                output_buffer_close(buf);
-            }
+            1 if document => out = html_dump::dump(doc, std::ptr::null_mut(), format, options & 8 == 0),
+            // One node: UTF-8 output; PHP writes the text of a document that is not an HTML one
+            // (`createElement`) with character references (`options` bit 3).
+            1 => out = html_dump::dump(doc, node, format, options & 8 == 0),
             // The DOCTYPE node of a document: "name \x1f publicId \x1f systemId [\x1f internalSubset]"
             // read back from libxml2's own serialization, which has no opaque accessor.
-            4 if !document => {
-                // Copy the DTD out of its document first: an HTML document would serialize it
-                // through the HTML writer, which has no DTD form for a bare node.
-                let copy = copy_dtd(node);
-                if copy.is_null() { return None; }
-                let ctx = save_to_io(Some(collect), None, sink, b"UTF-8\0".as_ptr().cast(), 0);
-                if ctx.is_null() { free_dtd(copy); return None; }
-                let written = save_tree(ctx, copy);
-                save_close(ctx);
-                free_dtd(copy);
-                if written < 0 { return None; }
-                return Some(doctype_fields(&out));
-            }
+            4 if !document => return doctype_of(node),
             2 => {
                 let buf = output_buffer_create_io(Some(collect), None, sink, std::ptr::null_mut());
                 if buf.is_null() { return None; }
@@ -146,6 +118,25 @@ fn write(view: &View, operation: i64, document: bool, options: i64, format: bool
         }
     }
     Some(out)
+}
+
+/// The fields of a DTD node, "name \x1f publicId \x1f systemId [\x1f internalSubset]".
+pub(super) fn doctype_of(node: Node) -> Option<Vec<u8>> {
+    let mut out: Vec<u8> = Vec::new();
+    let sink = (&mut out as *mut Vec<u8>).cast::<c_void>();
+    unsafe {
+        // Copy the DTD out of its document first: an HTML document would serialize it
+        // through the HTML writer, which has no DTD form for a bare node.
+        let copy = copy_dtd(node);
+        if copy.is_null() { return None; }
+        let ctx = save_to_io(Some(collect), None, sink, b"UTF-8\0".as_ptr().cast(), 0);
+        if ctx.is_null() { free_dtd(copy); return None; }
+        let written = save_tree(ctx, copy);
+        save_close(ctx);
+        free_dtd(copy);
+        if written < 0 { return None; }
+    }
+    Some(doctype_fields(&out))
 }
 
 /// Splits `<!DOCTYPE name [PUBLIC "p" "s" | SYSTEM "s"] [ [subset] ]>` into its fields.

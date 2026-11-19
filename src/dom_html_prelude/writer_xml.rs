@@ -386,6 +386,36 @@ fn writer() -> Stmt {
                         ]),
                 )
                 .method(
+                    method("inScope")
+                        .static_()
+                        .param("cur", t_class("DOMNode"))
+                        .param("prefix", TypeExpr::Str)
+                        .param("uri", TypeExpr::Str)
+                        .returns(TypeExpr::Bool)
+                        .body(vec![
+                            s_assign("walk", e_prop(e_var("cur"), "parentNode")),
+                            s_while(e_instance_of(e_var("walk"), "DOMElement"), vec![
+                                s_assign("ancestor", e_prop(e_var("walk"), "nodeName")),
+                                s_assign("colon", e_call("strpos", vec![e_var("ancestor"), e_str(":")])),
+                                s_assign("own", e_ternary(e_binop(e_var("colon"), BinOp::StrictEq, e_bool(false)), e_str(""), e_call("substr", vec![e_var("ancestor"), e_int(0), e_var("colon")]))),
+                                s_if(
+                                    e_binop(e_binop(e_var("own"), BinOp::StrictEq, e_var("prefix")), BinOp::And, e_binop(e_prop(e_var("walk"), "__elephc_dom_ns"), BinOp::StrictEq, e_var("uri"))),
+                                    vec![s_return(e_bool(true))],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_binop(e_binop(e_var("prefix"), BinOp::StrictEq, e_str("")), BinOp::And, e_binop(e_prop(e_var("walk"), "__elephc_dom_xmlns"), BinOp::StrictEq, e_var("uri"))),
+                                    vec![s_return(e_bool(true))],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("walk", e_prop(e_var("walk"), "parentNode")),
+                            ]),
+                            s_return(e_bool(false)),
+                        ]),
+                )
+                .method(
                     method("hasTextChild")
                         .static_()
                         .param("cur", t_class("DOMNode"))
@@ -502,8 +532,10 @@ fn writer() -> Stmt {
                                 None,
                             ),
                             s_assign("uri", e_prop(e_var("cur"), "__elephc_dom_ns")),
+                            s_assign("ownColon", e_call("strpos", vec![e_var("name"), e_str(":")])),
+                            s_assign("ownPrefix", e_ternary(e_binop(e_var("ownColon"), BinOp::StrictEq, e_bool(false)), e_str(""), e_call("substr", vec![e_var("name"), e_int(0), e_var("ownColon")]))),
                             s_if(
-                                e_binop(e_binop(e_var("uri"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_var("default"), BinOp::StrictEq, e_null())),
+                                e_binop(e_binop(e_binop(e_var("uri"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_var("default"), BinOp::StrictEq, e_null())), BinOp::And, e_not(e_self_call("inScope", vec![e_var("cur"), e_var("ownPrefix"), e_cast(CastType::String, e_var("uri"))]))),
                                 vec![
                                     s_assign("colon", e_call("strpos", vec![e_var("name"), e_str(":")])),
                                     s_if(
@@ -521,6 +553,42 @@ fn writer() -> Stmt {
                                 None,
                             ),
                             s_assign("attrs", e_ternary(e_call("is_object", vec![e_var("bound")]), e_method_call(e_var("bound"), "__elephc_dom_attributes", vec![]), e_prop(e_var("cur"), "__attrs"))),
+                            s_assign("declaredHere", e_array(vec![])),
+                            s_if(
+                                e_binop(e_call("is_array", vec![e_var("attrs")]), BinOp::And, e_not(e_call("is_object", vec![e_var("bound")]))),
+                                vec![
+                                    s_foreach(e_var("attrs"), None, "nsPair", vec![
+                                        s_if(
+                                            e_binop(e_binop(e_call("is_array", vec![e_var("nsPair")]), BinOp::And, e_call("isset", vec![e_index(e_var("nsPair"), e_int(2))])), BinOp::And, e_call("is_string", vec![e_index(e_var("nsPair"), e_int(2))])),
+                                            vec![
+                                                s_assign("attrName", e_cast(CastType::String, e_index(e_var("nsPair"), e_int(0)))),
+                                                s_assign("attrColon", e_call("strpos", vec![e_var("attrName"), e_str(":")])),
+                                                s_if(
+                                                    e_binop(e_var("attrColon"), BinOp::StrictNotEq, e_bool(false)),
+                                                    vec![
+                                                        s_assign("attrPrefix", e_call("substr", vec![e_var("attrName"), e_int(0), e_var("attrColon")])),
+                                                        s_if(
+                                                            e_binop(e_binop(e_not(e_call("isset", vec![e_index(e_var("declaredHere"), e_var("attrPrefix"))])), BinOp::And, e_binop(e_binop(e_var("attrPrefix"), BinOp::StrictNotEq, e_var("ownPrefix")), BinOp::Or, e_binop(e_var("uri"), BinOp::StrictEq, e_null()))), BinOp::And, e_not(e_self_call("inScope", vec![e_var("cur"), e_var("attrPrefix"), e_cast(CastType::String, e_index(e_var("nsPair"), e_int(2)))]))),
+                                                            vec![
+                                                                s_array_assign("declaredHere", e_var("attrPrefix"), e_bool(true)),
+                                                                s_prop_assign(e_this(), "out", e_binop(e_this_prop("out"), BinOp::Concat, e_binop(e_binop(e_binop(e_binop(e_str(" xmlns:"), BinOp::Concat, e_var("attrPrefix")), BinOp::Concat, e_str("=\"")), BinOp::Concat, e_self_call("attribute", vec![e_cast(CastType::String, e_index(e_var("nsPair"), e_int(2))), e_bool(false)])), BinOp::Concat, e_str("\"")))),
+                                                            ],
+                                                            vec![],
+                                                            None,
+                                                        ),
+                                                    ],
+                                                    vec![],
+                                                    None,
+                                                ),
+                                            ],
+                                            vec![],
+                                            None,
+                                        ),
+                                    ]),
+                                ],
+                                vec![],
+                                None,
+                            ),
                             s_if(
                                 e_call("is_array", vec![e_var("attrs")]),
                                 vec![

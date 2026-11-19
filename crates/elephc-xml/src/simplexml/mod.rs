@@ -18,6 +18,7 @@ mod iteration;
 mod dom_tree;
 mod dom_element;
 mod dom_write;
+mod html_dump;
 mod mutation;
 mod query;
 mod retirement;

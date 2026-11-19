@@ -88,11 +88,27 @@ pub unsafe extern "C" fn elephc_xml_sx_html_append(handle: i64, kind: i64, name:
             ffi::create_int_subset(parent.doc.raw, name,
                 public.as_ref().map_or(std::ptr::null(), |id| id.as_ptr()),
                 system.as_ref().map_or(std::ptr::null(), |id| id.as_ptr()))
+        } else if kind == 8 {
+            // An attribute written without a value (`<a bar>`): no text child at all.
+            match parent.first() {
+                Some(owner) => ffi::add_literal(owner, name, std::ptr::null(), 1, 0),
+                None => std::ptr::null_mut(),
+            }
         } else {
             ffi::html_append(parent.doc.raw, parent.first().unwrap_or(std::ptr::null_mut()), kind, name, value)
         };
         if node.is_null() { return 0; }
         insert(parent.with_scope(Scope::Node(node)))
+    })
+}
+/// Publishes the first imported node of a builder (a text node, a comment) that is no root element.
+#[no_mangle]
+pub extern "C" fn elephc_xml_sx_html_first(handle: i64) -> i64 {
+    guard(|| {
+        let Some(document) = view(handle) else { return 0; };
+        let first = unsafe { ffi::child(document.doc.raw) };
+        if first.is_null() { return 0; }
+        insert(document.with_scope(Scope::Node(first)))
     })
 }
 /// Publishes an imported root while keeping rootless builder leases internal.

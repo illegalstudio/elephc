@@ -2735,6 +2735,7 @@ fn decl_class_simplexmlelement() -> Stmt {
                         vec![
                             s_assign("info", e_call("explode", vec![e_str("\u{1f}"), e_method_call(e_this(), "__elephc_dom_write", vec![e_int(4), e_int(1), e_int(0), e_bool(false)])])),
                             s_assign("doctype", e_new("DOMDocumentType", vec![e_index(e_var("info"), e_int(0)), e_index(e_var("info"), e_int(1)), e_index(e_var("info"), e_int(2))])),
+                            s_prop_assign(e_var("doctype"), "nodeValue", e_null()),
                             s_if(
                                 e_binop(e_call("count", vec![e_var("info")]), BinOp::Gt, e_int(3)),
                                 vec![
@@ -3452,7 +3453,7 @@ fn decl_fn_elephc_simplexml_import_child() -> Stmt {
                             None,
                         ),
                         s_foreach(e_prop(e_var("node"), "__attrs"), None, "pair", vec![
-                            s_assign("attribute", e_call("elephc_xml_sx_html_append", vec![e_var("handle"), e_int(2), e_cast(CastType::String, e_index(e_var("pair"), e_int(0))), e_cast(CastType::String, e_index(e_var("pair"), e_int(1)))])),
+                            s_assign("attribute", e_call("elephc_xml_sx_html_append", vec![e_var("handle"), e_ternary(e_binop(e_call("isset", vec![e_index(e_var("pair"), e_int(2))]), BinOp::And, e_binop(e_index(e_var("pair"), e_int(2)), BinOp::StrictEq, e_bool(true))), e_int(8), e_int(2)), e_cast(CastType::String, e_index(e_var("pair"), e_int(0))), e_cast(CastType::String, e_index(e_var("pair"), e_int(1)))])),
                             s_if(
                                 e_binop(e_var("attribute"), BinOp::StrictEq, e_int(0)),
                                 vec![

@@ -1058,7 +1058,8 @@ fn element_members() -> ClassBuilder {
                             s_if(
                                 e_binop(e_instance_of(e_var("owner"), "DOMElement"), BinOp::And, e_binop(e_var("owner"), BinOp::StrictNotEq, e_this())),
                                 vec![
-                                    s_throw(e_new("DOMException", vec![e_str("Inuse Attribute Error"), e_int(10)])),
+                                    // legacy php moves an attribute that another element owns
+                                    s_expr(e_method_call(e_var("owner"), "removeAttribute", vec![e_prop(e_var("attr"), "nodeName")])),
                                 ],
                                 vec![],
                                 None,
@@ -1090,7 +1091,7 @@ fn element_members() -> ClassBuilder {
                             s_if(
                                 e_binop(e_instance_of(e_var("owner"), "DOMElement"), BinOp::And, e_binop(e_var("owner"), BinOp::StrictNotEq, e_this())),
                                 vec![
-                                    s_throw(e_new("DOMException", vec![e_str("Inuse Attribute Error"), e_int(10)])),
+                                    s_expr(e_method_call(e_var("owner"), "removeAttribute", vec![e_prop(e_var("attr"), "nodeName")])),
                                 ],
                                 vec![],
                                 None,

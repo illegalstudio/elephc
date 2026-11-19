@@ -68,10 +68,17 @@ fn load_html() -> MethodBuilder {
             // Materialize the eager parse as a native HTML document and bind every node to it, so the
             // tree is shared with SimpleXML like a loadXML document (called by name: a program
             // without the bridge never reaches loadHTML).
-            s_assign("_native", e_expr_call(e_str("__elephc_simplexml_import_document"), vec![e_this(), e_str("SimpleXMLElement")])),
             s_if(
-                e_instance_of(e_var("_native"), "SimpleXMLElement"),
-                vec![s_expr(e_expr_call(e_str("__elephc_simplexml_bind_dom"), vec![e_this(), e_var("_native")]))],
+                e_call("function_exists", vec![e_str("__elephc_simplexml_import_document")]),
+                vec![
+                    s_assign("_native", e_expr_call(e_str("__elephc_simplexml_import_document"), vec![e_this(), e_str("SimpleXMLElement")])),
+                    s_if(
+                        e_instance_of(e_var("_native"), "SimpleXMLElement"),
+                        vec![s_expr(e_expr_call(e_str("__elephc_simplexml_bind_dom"), vec![e_this(), e_var("_native")]))],
+                        vec![],
+                        None,
+                    ),
+                ],
                 vec![],
                 None,
             ),

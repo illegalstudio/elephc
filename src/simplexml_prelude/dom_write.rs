@@ -26,6 +26,13 @@ fn extern_dom_write() -> Stmt {
         .build()
 }
 
+fn extern_html_first() -> Stmt {
+    extern_fn("elephc_xml_sx_html_first", "elephc_xml")
+        .param("handle", CType::Int)
+        .returns(CType::Int)
+        .build()
+}
+
 /// `__elephc_dom_html_import`: imports a free-standing DOM document or node into a native HTML
 /// document so `saveHTML` can use libxml2's serializer (written as PHP, then transcribed).
 fn html_import() -> Stmt {
@@ -62,6 +69,14 @@ function("__elephc_dom_html_import")
         s_try(vec![
             s_expr(e_call("__elephc_simplexml_import_child", vec![e_var("builder"), e_var("node")])),
             s_assign("root", e_call("elephc_xml_sx_html_root", vec![e_var("builder")])),
+            s_if(
+                e_binop(e_var("root"), BinOp::StrictEq, e_int(0)),
+                vec![
+                    s_assign("root", e_call("elephc_xml_sx_html_first", vec![e_var("builder")])),
+                ],
+                vec![],
+                None,
+            ),
             s_if(
                 e_binop(e_var("root"), BinOp::StrictEq, e_int(0)),
                 vec![
@@ -121,7 +136,7 @@ pub(super) fn extend(program: &mut Program) {
             }
         }
     }
-    for mut declaration in [extern_dom_write(), html_import()] {
+    for mut declaration in [extern_dom_write(), extern_html_first(), html_import()] {
         declaration.span = crate::span::Span::synthetic();
         program.push(declaration);
     }

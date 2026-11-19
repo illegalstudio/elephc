@@ -75,7 +75,7 @@ fn document() -> ClassBuilder {
                                 vec![],
                                 None,
                             ),
-                            s_assign("out", e_method_call(e_var("bound"), "__elephc_dom_write", vec![e_int(1), e_ternary(e_var("whole"), e_int(0), e_int(1)), e_int(0), e_var("format")])),
+                            s_assign("out", e_method_call(e_var("bound"), "__elephc_dom_write", vec![e_int(1), e_ternary(e_var("whole"), e_int(0), e_int(1)), e_ternary(e_this_prop("__elephc_dom_html"), e_int(0), e_int(8)), e_var("format")])),
                             s_return(e_binop(e_var("prefix"), BinOp::Concat, e_var("out"))),
                         ]),
                 )

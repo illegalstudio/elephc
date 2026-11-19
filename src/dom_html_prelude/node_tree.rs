@@ -477,6 +477,16 @@ fn tree() -> ClassBuilder {
                                 None,
                             ),
                             s_assign("nodeKind", e_prop(e_var("node"), "nodeType")),
+                            // appendChild of an attribute node sets it on the element, as php does
+                            s_if(
+                                e_binop(e_binop(e_binop(e_var("nodeKind"), BinOp::StrictEq, e_int(2)), BinOp::And, e_binop(e_var("kind"), BinOp::StrictEq, e_int(1))), BinOp::And, e_binop(e_var("child"), BinOp::StrictEq, e_null())),
+                                vec![
+                                    s_expr(e_call("call_user_func", vec![e_array(vec![e_this(), e_str("setAttributeNode")]), e_var("node")])),
+                                    s_return(e_var("node")),
+                                ],
+                                vec![],
+                                None,
+                            ),
                             s_if(
                                 e_binop(e_binop(e_binop(e_var("nodeKind"), BinOp::StrictEq, e_int(2)), BinOp::Or, e_binop(e_var("nodeKind"), BinOp::StrictEq, e_int(9))), BinOp::Or, e_binop(e_var("nodeKind"), BinOp::StrictEq, e_int(13))),
                                 vec![
