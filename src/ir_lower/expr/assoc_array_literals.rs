@@ -53,8 +53,17 @@ pub(super) fn lower_assoc_array_literal_as(
         let value_expr = reference_source.unwrap_or(value);
         let key_value = lower_expr(ctx, key);
         let key = root_array_literal_item(ctx, key_value, key.span, &mut roots);
-        let value_operand = lower_reference_literal_value(ctx, value_expr)
-            .unwrap_or_else(|| lower_expr(ctx, value_expr));
+        let value_operand = if reference_source.is_some() {
+            // A reference bind creates an undefined variable silently in PHP.
+            ctx.begin_quiet_undefined_reads(value_expr);
+            let value = lower_reference_literal_value(ctx, value_expr)
+                .unwrap_or_else(|| lower_expr(ctx, value_expr));
+            ctx.end_quiet_undefined_reads();
+            value
+        } else {
+            lower_reference_literal_value(ctx, value_expr)
+                .unwrap_or_else(|| lower_expr(ctx, value_expr))
+        };
         // A packed record address or `null` stored as a pointer value is the pointer word.
         let value_operand = match &hash_ty {
             PhpType::AssocArray { value: value_ty, .. } => {

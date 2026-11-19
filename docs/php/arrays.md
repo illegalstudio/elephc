@@ -406,14 +406,13 @@ storage you need.
 
 Reference elements also constrain later array operations:
 
-- Builtins that rebuild a table (`array_shift()`, `array_unshift()`, `sort()`,
-  `rsort()`, `usort()`, `shuffle()`, `array_splice()` and `array_reverse()`) do
-  not preserve reference-cell identity. Some reference-promoted storage shapes
-  are rejected at compile time by those builtins instead of being miscompiled.
-  Perform the rebuild before creating references, or rebuild into a fresh array.
-- `filter_var()` and array-walking `filter_var_array()` forms rebuild arrays and
-  drop reference bindings on their elements; see
-  [Filtering](filter.md#known-gaps).
+- `array_shift()`, `array_unshift()`, `array_reverse()` and `array_merge()`
+  preserve reference-cell identity. The ordering/removal builtins `sort()`,
+  `rsort()`, `usort()`, `shuffle()` and `array_splice()` still detach reference
+  cells (the values stay correct, but later writes through the alias no longer
+  reach the array); some reference-promoted storage shapes are rejected at
+  compile time by those builtins instead of being miscompiled. Perform the
+  reorder before creating references, or rebuild into a fresh array.
 - `call_user_func_array()` over an argument array that contains reference
   elements still forwards those cells to the callback. Ordinary values and
   scalar reference variables are passed by value with PHP's warning; dereference

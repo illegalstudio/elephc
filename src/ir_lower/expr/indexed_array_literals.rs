@@ -437,10 +437,21 @@ pub(super) fn lower_mixed_array_literal(
                 let key = lower_expr(ctx, key);
                 let (key, key_owner) = root_owned_call_operand(ctx, key, span);
                 let value_span = value_expr.span;
-                let value = crate::ir_lower::expr::assoc_array_literals::lower_reference_literal_value(
-                    ctx, value_expr,
-                )
-                .unwrap_or_else(|| lower_expr(ctx, value_expr));
+                let value = if reference_source.is_some() {
+                    // A reference bind creates an undefined variable silently in PHP.
+                    ctx.begin_quiet_undefined_reads(value_expr);
+                    let value = crate::ir_lower::expr::assoc_array_literals::lower_reference_literal_value(
+                        ctx, value_expr,
+                    )
+                    .unwrap_or_else(|| lower_expr(ctx, value_expr));
+                    ctx.end_quiet_undefined_reads();
+                    value
+                } else {
+                    crate::ir_lower::expr::assoc_array_literals::lower_reference_literal_value(
+                        ctx, value_expr,
+                    )
+                    .unwrap_or_else(|| lower_expr(ctx, value_expr))
+                };
                 let value = retype_pointer_literal_value(ctx, value, pointer_elem.as_ref(), value_span);
                 ctx.emit_void(
                     Op::HashSet,

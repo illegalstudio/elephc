@@ -514,6 +514,29 @@ pub(super) fn check_ref_assign(
                     "Reference assignment to an array element requires an integer or string array key",
                 ));
             }
+            // A reference element forces hash storage with boxed Mixed values. Mirror that
+            // promotion in the flow-sensitive type environment so later array builtins see the
+            // same layout the EIR writer installs instead of a stale packed-array type.
+            let mut root = array;
+            while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+                root = array;
+            }
+            if let ExprKind::Variable(root_name) = &root.kind {
+                let storage = match env.get(root_name).map(PhpType::codegen_repr) {
+                    Some(PhpType::Array(_)) => Some(PhpType::AssocArray {
+                        key: Box::new(PhpType::Int),
+                        value: Box::new(PhpType::Mixed),
+                    }),
+                    Some(PhpType::AssocArray { key, .. }) => Some(PhpType::AssocArray {
+                        key,
+                        value: Box::new(PhpType::Mixed),
+                    }),
+                    _ => None,
+                };
+                if let Some(storage) = storage {
+                    env.insert(root_name.clone(), storage);
+                }
+            }
             let target_ty = checker.infer_type(source, env)?;
             checker.record_operation_exception_flow(source, env);
             env.insert(target.to_string(), target_ty);

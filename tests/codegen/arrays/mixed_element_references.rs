@@ -69,6 +69,62 @@ $q = ["x" => 1]; rf($q); echo $q["x"], "\n";
     assert_eq!(out, "1|2\n1|9\n1|2\n2\n");
 }
 
+/// `array_shift()` and `array_unshift()` preserve the surviving reference cells.
+#[test]
+fn test_reference_cells_survive_shift_and_unshift() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3];
+$r = &$a[1];
+$shifted = array_shift($a);
+$r = 99;
+echo $shifted, "|", $a[0], "|", $a[1], "\n";
+$b = [1, 2];
+$s = &$b[0];
+array_unshift($b, 0);
+$s = 42;
+echo $b[0], "|", $b[1], "|", $b[2], "\n";
+$c = [1, 2, 3];
+$t = &$c[0];
+$reversed = array_reverse($c);
+$t = 7;
+echo $reversed[2], "|", $reversed[0], "\n";
+$d = [1, 2];
+$u = &$d[0];
+array_unshift($d);
+$u = 5;
+echo $d[0], "\n";
+$f = [1, 2];
+$x = &$f[1];
+$merged = array_merge($f, [3]);
+$x = 9;
+echo $merged[1], "\n";
+"#,
+    );
+    assert_eq!(out, "1|99|3\n0|42|2\n7|3\n5\n9\n");
+}
+
+/// Reference array literals create undefined variables silently, like PHP.
+#[test]
+fn test_reference_literals_create_undefined_variables_silently() {
+    let output = compile_and_run_capture(
+        r#"<?php
+set_error_handler(function (int $errno, string $message): bool {
+    echo "WARN:", $message, "\n";
+    return true;
+});
+$refs = [&$third];
+var_dump($third);
+"#,
+    );
+    assert_eq!(output.stdout, "NULL\n");
+    assert!(
+        !output.stderr.contains("Undefined variable"),
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
 /// A receiver that shares nothing must not be copied: the reference still reaches the only
 /// cell, a missing key is created in it, and a non-array `mixed` keeps answering no element.
 #[test]
