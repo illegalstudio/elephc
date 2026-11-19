@@ -119,6 +119,8 @@ mod ternary_cast;
 mod missing_string;
 pub(crate) use missing_string::loop_region_missing_string_names;
 mod closures;
+
+pub(crate) use self::closures::expr_writes_local;
 mod closure_calls;
 mod descriptor_calls;
 mod descriptor_native_selections;

@@ -490,7 +490,10 @@ fn lower_array_assign_from_value(
         Some(ty) => super::array_write_storage::publish_auto_vivified_container(
             ctx, array, array_value, ty, span,
         ),
-        None => load_array_local_for_write(ctx, array, span),
+        None if crate::ir_lower::expr::expr_writes_local(value, array) => {
+            load_array_local_for_write(ctx, array, span)
+        }
+        None => array_value,
     };
     // A hash whose stamped value type cannot hold the assigned value widens its storage first,
     // like the indexed path does; PHP's untyped arrays keep the runtime value (#1951).

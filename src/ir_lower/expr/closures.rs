@@ -563,7 +563,7 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
 }
 
 /// Returns true when an expression can store into the local named `name`.
-fn expr_writes_local(expr: &Expr, name: &str) -> bool {
+pub(crate) fn expr_writes_local(expr: &Expr, name: &str) -> bool {
     match &expr.kind {
         ExprKind::Reference(inner) => expr_writes_local(inner, name),
         ExprKind::Assignment { target, value, result_target, prelude, .. } => {
