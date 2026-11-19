@@ -16,6 +16,7 @@ pub(crate) mod comparisons;
 pub(crate) mod strings;
 pub(crate) mod array_keys;
 pub(crate) mod nullability;
+pub(crate) mod mixed;
 pub(crate) mod reflection;
 mod numeric_constants;
 mod validation;

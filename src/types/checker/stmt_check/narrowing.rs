@@ -64,9 +64,10 @@ enum GuardTarget {
 
 impl GuardTarget {
     /// Returns the conservative type used when the current type has no matching union member.
-    fn fallback_type(&self) -> PhpType {
+    fn fallback_type(&self, preserve_array_view: bool) -> PhpType {
         match self {
             Self::Exact(ty) => ty.clone(),
+            Self::AnyArray if preserve_array_view => PhpType::php_array(),
             Self::AnyArray => PhpType::Mixed,
         }
     }
@@ -392,13 +393,15 @@ impl Checker {
                 let kept: Vec<PhpType> =
                     members.iter().filter(|m| guard_matches(self, m, target)).cloned().collect();
                 if kept.is_empty() {
-                    target.fallback_type()
+                    target.fallback_type(self.semantic_source_mode != crate::source::SourceMode::Internal
+                        && self.semantic_profile.contains(elephc_semantics::StrictFeature::Mixed))
                 } else {
                     self.normalize_union_type(kept)
                 }
             }
             _ if guard_matches(self, current, target) => current.clone(),
-            _ => target.fallback_type(),
+            _ => target.fallback_type(self.semantic_source_mode != crate::source::SourceMode::Internal
+                        && self.semantic_profile.contains(elephc_semantics::StrictFeature::Mixed)),
         }
     }
 

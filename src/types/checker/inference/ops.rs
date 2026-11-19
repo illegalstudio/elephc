@@ -39,6 +39,7 @@ impl Checker {
         }
         let lt = self.infer_type(left, env)?;
         let rt = self.infer_type(right, env)?;
+        validate_mixed_binary_operands(self, op, &lt, &rt, expr.span)?;
         if *op == BinOp::Xor {
             self.require_boolean_type(&lt, left.span)?;
             self.require_boolean_type(&rt, right.span)?;
@@ -84,7 +85,7 @@ impl Checker {
                     || lt == PhpType::Str
                     || rt == PhpType::Str
                 {
-                    Ok(PhpType::Mixed)
+                    Ok(crate::semantics::mixed::numeric_result(self.semantic_profile, self.semantic_source_mode))
                 } else if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
                 } else if let Some(literal_ty) =
@@ -92,7 +93,7 @@ impl Checker {
                 {
                     Ok(literal_ty)
                 } else {
-                    Ok(PhpType::Mixed)
+                    Ok(crate::semantics::mixed::power_result(self.semantic_profile, self.semantic_source_mode))
                 }
             }
             BinOp::Add => {
@@ -110,7 +111,7 @@ impl Checker {
                     || lt == PhpType::Str
                     || rt == PhpType::Str
                 {
-                    Ok(PhpType::Mixed)
+                    Ok(crate::semantics::mixed::numeric_result(self.semantic_profile, self.semantic_source_mode))
                 } else if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
                 } else if let Some(literal_ty) =
@@ -120,7 +121,7 @@ impl Checker {
                 } else if int_arithmetic_identity_is_always_int(op, left, right) {
                     Ok(PhpType::Int)
                 } else {
-                    Ok(PhpType::Mixed)
+                    Ok(crate::semantics::mixed::integer_result(self.semantic_profile, self.semantic_source_mode))
                 }
             }
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
@@ -145,7 +146,7 @@ impl Checker {
                         || lt == PhpType::Str
                         || rt == PhpType::Str
                     {
-                        Ok(PhpType::Mixed)
+                        Ok(crate::semantics::mixed::numeric_result(self.semantic_profile, self.semantic_source_mode))
                     } else if let Some(literal_ty) =
                         checked_literal_int_arithmetic_type(op, left, right)
                     {
@@ -153,7 +154,7 @@ impl Checker {
                     } else if int_arithmetic_identity_is_always_int(op, left, right) {
                         Ok(PhpType::Int)
                     } else {
-                        Ok(PhpType::Mixed)
+                        Ok(crate::semantics::mixed::integer_result(self.semantic_profile, self.semantic_source_mode))
                     }
                 } else {
                     Ok(PhpType::Int)
@@ -658,6 +659,7 @@ impl Checker {
         let var_ty = env.get(var).cloned().ok_or_else(|| {
             CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
         })?;
+        self.require_mixed_callable_type(&var_ty, expr.span)?;
         if var_ty != PhpType::Callable {
             if matches!(var_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
                 // A boxed array read can carry any runtime callable shape.
@@ -855,6 +857,7 @@ impl Checker {
             return Ok(ret_ty);
         }
         let callee_ty = self.infer_type(callee, env)?;
+        self.require_mixed_callable_type(&self.mixed_selection_receiver_view(callee, &callee_ty), expr.span)?;
         if matches!(callee_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
             // String and boxed callables resolve at runtime; PHP still rejects unpacking
             // after named arguments while compiling the call expression.
@@ -1886,4 +1889,35 @@ fn is_one_int_literal(expr: &Expr) -> bool {
 /// Returns `true` if `expr` is an empty array literal (`[]`).
 fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::ArrayLiteral(elems) if elems.is_empty())
+}
+
+/// Requires every logical operand pair to support a kind-dependent numeric operation.
+fn validate_mixed_binary_operands(checker: &Checker, op: &BinOp, left: &PhpType,
+    right: &PhpType, span: crate::span::Span) -> Result<(), CompileError> {
+    if *op == BinOp::Concat {
+        for ty in [left, right] {
+            crate::semantics::mixed::validate_use(checker.semantic_profile, checker.semantic_source_mode,
+                ty, span, "concatenation", |member| matches!(member, PhpType::Resource(_))
+                    || checker.valid_dynamic_property_name_type(member))?;
+        }
+        return Ok(());
+    }
+    if crate::semantics::numeric::operator(op).is_none() { return Ok(()); }
+    let supports = |left: &PhpType, right: &PhpType| {
+        if crate::types::object_operators::binary_plan_with_classes(op, left, right, &checker.classes).is_some() {
+            return true;
+        }
+        if *op == BinOp::Add && is_array_like_type(left) && is_array_like_type(right) { return true; }
+        if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight) {
+            return (is_integer_operand_type(checker, left) || *left == PhpType::Float)
+                && (is_integer_operand_type(checker, right) || *right == PhpType::Float);
+        }
+        is_arithmetic_operand_type(checker, left) && is_arithmetic_operand_type(checker, right)
+    };
+    crate::semantics::mixed::validate_use(checker.semantic_profile, checker.semantic_source_mode,
+        left, span, "numeric operations", |left| crate::semantics::mixed::every_alternative(
+            right, &mut |right| supports(left, right)))?;
+    crate::semantics::mixed::validate_use(checker.semantic_profile, checker.semantic_source_mode,
+        right, span, "numeric operations", |right| crate::semantics::mixed::every_alternative(
+            left, &mut |left| supports(left, right)))
 }

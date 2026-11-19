@@ -690,6 +690,7 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
+        self.require_mixed_value_type(expected, actual, self.semantic_source_mode, span, context)?;
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             Ok(())
         } else {

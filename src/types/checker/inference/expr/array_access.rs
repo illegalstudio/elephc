@@ -54,6 +54,18 @@ impl Checker {
             crate::semantics::nullability::validate_receiver(self.semantic_profile,
                 self.semantic_source_mode, &arr_ty, self.null_probe_operations.contains(&expr.span), expr.span)?;
         }
+        if !for_write && !self.null_probe_operations.contains(&expr.span) {
+            crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+                &self.mixed_selection_receiver_view(array, &arr_ty), expr.span, "offset access", |member| match member {
+                    PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Buffer(_) => true,
+                    PhpType::Object(name) => self.object_type_supports_dimensions(name),
+                    _ => false,
+                })?;
+        }
+        if crate::semantics::mixed::uses_php_offset_key(&arr_ty) {
+            crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+                &idx_ty, index.span, "PHP offset keys", crate::semantics::mixed::array_key_kind)?;
+        }
         crate::semantics::array_keys::validate_receiver(self.semantic_profile, &arr_ty, &idx_ty, index.span)?;
         let buffer = matches!(arr_ty, PhpType::Buffer(_));
         self.buffer_read_observations.entry(expr.span)

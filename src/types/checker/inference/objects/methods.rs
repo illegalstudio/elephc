@@ -37,6 +37,8 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        crate::semantics::mixed::member_receiver(self.semantic_profile, self.semantic_source_mode,
+            &self.mixed_selection_receiver_view(object, &obj_ty), false, false, expr.span)?;
         let class = match &obj_ty {
             PhpType::Object(name) if !name.is_empty() => Some(name.clone()),
             PhpType::Union(_) => self.union_single_object_class(&obj_ty),
@@ -243,6 +245,8 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         self.require_valid_unresolved_call_argument_order(args, "Nullsafe method call")?;
         let obj_ty = self.infer_type(object, env)?;
+        crate::semantics::mixed::member_receiver(self.semantic_profile, self.semantic_source_mode,
+            &self.mixed_selection_receiver_view(object, &obj_ty), false, true, expr.span)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         let Some((class_name, nullable)) =
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
@@ -277,6 +281,8 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         self.require_valid_unresolved_call_argument_order(args, "Dynamic method call")?;
         let obj_ty = self.infer_type(object, env)?;
+        crate::semantics::mixed::member_receiver(self.semantic_profile, self.semantic_source_mode,
+            &self.mixed_selection_receiver_view(object, &obj_ty), false, true, expr.span)?;
         let Some((_class_name, _nullable)) =
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
         else {

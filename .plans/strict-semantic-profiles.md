@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step216 (this commit). Remaining feature integration is active. Issue:
+Verified through step228 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2844,3 +2844,9 @@ Native optimized/unoptimized execution now rejects scalar, named and variadic nu
 Original non-null defaults and known call arguments are checked before folding, including named/static-spread arguments, constant aliases, declaration surfaces and deferred constructor inputs. A conservative context-free hint adapter recognizes standard outer PHP kinds without guessing that an unresolved template or lexical class name is a concrete non-null class. Explicit nullable/mixed defaults, weak non-null inputs and trusted implementation sources retain their independent behavior.
 
 Runtime descriptor variadics reuse the same adapter to recover array, iterable and callable element contracts after promotion to mixed transport. Null-only checks remain independent of exact Coercions membership. Native execution covers both optimization modes and NN alone or combined with Coercions, valid and explicitly nullable/mixed tails, and balanced heap cleanup. The interpreter walker/fallback checks the same fixture with balanced owners. All-five EIR validation/emission and existing scalar descriptor/default regressions are focused gates. Default build, diff hygiene and assembly comments are verified before committing. Public NN admission remains pending the final receiver/callable/reference and host acceptance checks.
+
+### Verified228: logical Mixed alternatives and array-family proofs
+
+Kind-dependent arithmetic, calls, declared values, ordinary receivers, PHP keys, dynamic property names, callable shapes, updates and foreach now validate every logical alternative through existing checker capabilities. Unknown mixed storage requires narrowing; nested mixed array elements remain open until consumed. Numeric results retain their closed int|float alternatives, and checked integer operations retain proven Int results when Overflow applies. A successful is_array guard preserves the packed-or-hash array family instead of erasing its proof to Mixed. Successful nullsafe declaration views remain distinct from upstream non-execution.
+
+Nine exact compiler/EIR regressions pass, including all-five target emission, both native optimizer modes, clean heaps, independent profiles, closed numeric chains and nullsafe/array guard controls. The shared builtin exporter and documentation workflow, default build, assembly/diff hygiene and unchanged Rust source digest also pass. Mixed remains gated while writable, builtin, reference, interpreted and host contracts are completed. Public Nullability remains pending its actual Reflection invocation fix; the complete umbrella is still gated.

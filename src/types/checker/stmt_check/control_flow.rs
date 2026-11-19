@@ -353,6 +353,12 @@ impl Checker {
                         .insert(value_var.clone());
                 }
                 let arr_ty = arr_ty?;
+                crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+                    &arr_ty, array.span, "foreach iteration", |member| match member {
+                        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Buffer(_) => true,
+                        PhpType::Object(class) => self.object_type_implements_iterable(class),
+                        _ => false,
+                    })?;
                 // A refined Iterable view can still occupy a boxed reference-local, which
                 // already uses runtime dispatch for by-reference indexed and hash payloads.
                 let boxed_iterable_source = arr_ty == PhpType::Iterable

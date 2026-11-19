@@ -49,6 +49,7 @@ impl Checker {
     /// Checks an implicit scalar boundary using its source operation rather than physical storage.
     pub(crate) fn require_noncoercive_value_type(&self, expected: &PhpType, actual: &PhpType,
         source: crate::source::SourceMode, span: Span, context: &str) -> Result<(), CompileError> {
+        self.require_mixed_value_type(expected, actual, source, span, context)?;
         if crate::semantics::nullability::non_null_contract(expected) {
             crate::semantics::nullability::validate_receiver(self.semantic_profile, source, actual, false, span)?;
         }
@@ -58,6 +59,36 @@ impl Checker {
                 "--{}: {context} requires {expected} without implicit conversion, got {actual}", feature.flag())));
         }
         Ok(())
+    }
+
+    /// Uses existing compatibility and total weak bindings for every dynamic source alternative.
+    pub(crate) fn require_mixed_value_type(&self, expected: &PhpType, actual: &PhpType,
+        source: crate::source::SourceMode, span: Span, context: &str) -> Result<(), CompileError> {
+        if *expected == PhpType::Mixed { return Ok(()); }
+        crate::semantics::mixed::validate_use(self.semantic_profile, source, actual, span, context,
+            |member| Self::types_compatible(expected, member) || self.type_accepts(expected, member)
+                || crate::types::param_binding::scalar_param_cast(expected, member).is_some())
+    }
+
+    /// Validates countability using the current source policy and existing interface metadata.
+    pub(crate) fn require_mixed_countable_type(&self, actual: &PhpType, span: Span) -> Result<(), CompileError> {
+        crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+            actual, span, "counting", |member| match member {
+                PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+                PhpType::Object(name) => self.object_type_implements_interface(name, "Countable"),
+                _ => false,
+            })
+    }
+
+    /// Proves the callable shape without rebuilding known-target resolution or argument planning.
+    pub(crate) fn require_mixed_callable_type(&self, actual: &PhpType, span: Span) -> Result<(), CompileError> {
+        crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+            actual, span, "callable invocation", |member| match member {
+                PhpType::Callable | PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+                PhpType::Object(class) => self.classes.get(class)
+                    .is_some_and(|info| info.methods.contains_key("__invoke")),
+                _ => false,
+            })
     }
 
     /// Checks the PHP-visible boolean contract without restricting internal implementation tests.

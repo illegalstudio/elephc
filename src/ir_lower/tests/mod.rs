@@ -898,3 +898,5 @@ mod indexed_reads;
 mod nullable_receivers;
 mod nullable_descriptors;
 mod nullable_declarations;
+
+mod strict_mixed_operands;

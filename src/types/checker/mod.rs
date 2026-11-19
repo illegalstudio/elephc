@@ -51,6 +51,7 @@ pub(crate) use entry_bindings::{PreBoundLocal, PreBoundLocals};
 mod reference_creation;
 mod mixed_storage_scan;
 mod semantic_rules;
+mod mixed_views;
 mod numeric_regions;
 mod packed_counter;
 mod promotable_arrays;

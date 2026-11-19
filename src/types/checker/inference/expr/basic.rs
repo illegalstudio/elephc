@@ -25,6 +25,11 @@ impl Checker {
         if let ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name)
             | ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) = &expr.kind {
             if let Some(ty) = env.get(name) {
+                crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+                    ty, expr.span, "increment or decrement", |member| matches!(member,
+                        PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False | PhpType::Void)
+                        || crate::types::object_operators::binary_plan_with_classes(
+                            &crate::parser::ast::BinOp::Add, member, &PhpType::Int, &self.classes).is_some())?;
                 if crate::types::object_operators::binary_plan_with_classes(
                     &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes).is_none() {
                     if let Some(rule) = crate::semantics::numeric::operator_rule(self.semantic_profile, self.semantic_source_mode,
@@ -74,6 +79,11 @@ impl Checker {
                 let negate = matches!(expr.kind, ExprKind::Negate(_));
                 let ty = self.infer_type(inner, env)?;
                 let operation = if negate { crate::parser::ast::BinOp::Sub } else { crate::parser::ast::BinOp::Add };
+                crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
+                    &ty, expr.span, "unary arithmetic", |member| matches!(member,
+                        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Str)
+                        || crate::types::object_operators::binary_plan_with_classes(
+                            &operation, &PhpType::Int, member, &self.classes).is_some())?;
                 if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
                     &operation, &PhpType::Int, &ty, &self.classes,
                 ) { return Ok(plan.result_type(&operation)); }
@@ -87,13 +97,13 @@ impl Checker {
                         if !negate || matches!(&inner.kind, ExprKind::IntLiteral(value) if *value != i64::MIN) {
                             Ok(PhpType::Int)
                         } else {
-                            Ok(PhpType::Mixed)
+                            Ok(crate::semantics::mixed::integer_result(self.semantic_profile, self.semantic_source_mode))
                         }
                     }
                     PhpType::Float => Ok(PhpType::Float),
-                    PhpType::Str if !negate => Ok(PhpType::Mixed),
+                    PhpType::Str if !negate => Ok(crate::semantics::mixed::numeric_result(self.semantic_profile, self.semantic_source_mode)),
                     PhpType::Mixed | PhpType::Bool | PhpType::False | PhpType::Void => {
-                        Ok(PhpType::Mixed)
+                        Ok(crate::semantics::mixed::numeric_result(self.semantic_profile, self.semantic_source_mode))
                     }
                     // Negating a counter is ordinary arithmetic — `$i = 4; $i++; echo -$i;` is
                     // `-5` in php — and the union stays the union: negation cannot turn a float
