@@ -46,6 +46,7 @@ sensitive.
 | `array_filter()` mode validation | An invalid `$mode` raises `ValueError` on the 8.6 profile instead of silently using value mode. |
 | `json_decode()` error positions | Token coordinates in decoder messages follow PHP 8.6. |
 | Base conversion notices | `base_convert()`, `bindec()`, `hexdec()` and `octdec()` raise php-src's `Notice: Input number is larger than PHP_INT_MAX, precision has been lost in conversion` the moment the integer accumulator widens to `double`. The notice is emitted from the callers around the shared parse helper, so `base_convert()`'s intermediate widening is reported too; 8.5 and earlier stay silent. Covered by `tests/codegen/strings/base_conversion_notice_php86.rs`. |
+| `number_format()` precision range | `$decimals` outside the platform `int` range (`-2147483648..2147483647`) raises php-src's `ValueError` on 8.6, including the `INT_MIN` endpoint; 8.5 keeps clamping. The precision call now also participates in `try`/`catch`, so the handler stays installed. Covered by `tests/codegen/strings/number_format_php86.rs`. |
 
 ## Deliberately deferred
 

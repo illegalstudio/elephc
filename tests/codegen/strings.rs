@@ -119,5 +119,7 @@ mod mbstring_regex_settings;
 
 #[path = "strings/base_conversion_notice_php86.rs"]
 mod base_conversion_notice_php86;
+#[path = "strings/number_format_php86.rs"]
+mod number_format_php86;
 #[path = "strings/pack_unpack_php86.rs"]
 mod pack_unpack_php86;

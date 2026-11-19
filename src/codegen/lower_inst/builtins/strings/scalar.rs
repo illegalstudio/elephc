@@ -85,6 +85,36 @@ pub(super) fn push_decimal_count(ctx: &mut FunctionContext<'_>, inst: &Instructi
     if inst.operands.len() >= 2 {
         let decimals = expect_operand(inst, 1)?;
         load_as_int(ctx, decimals, "number_format decimals")?;
+        if crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86 {
+            // PHP 8.6 turns the previous silent clamp into a ValueError for any $decimals
+            // outside the platform `int` range.
+            // `INT_MIN` does not fit AArch64's compare-immediate encoding, so the symmetric
+            // magnitude guard (which materializes its bound) expresses the platform `int`
+            // range except for the single extra value `INT_MIN`, accepted explicitly first.
+            let int_min_ok = ctx.next_label("number_format_decimals_int_min");
+            let decimals_reg = abi::int_result_reg(ctx.emitter);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_load_int_immediate(ctx.emitter, "x9", i64::from(i32::MIN));
+                    ctx.emitter.instruction(&format!("cmp {}, x9", decimals_reg)); // is this the lowest accepted `int`?
+                    ctx.emitter.instruction(&format!("b.eq {}", int_min_ok));       // INT_MIN is inside the accepted range
+                }
+                Arch::X86_64 => {
+                    abi::emit_load_int_immediate(ctx.emitter, "r10", i64::from(i32::MIN));
+                    ctx.emitter.instruction(&format!("cmp {}, r10", decimals_reg)); // is this the lowest accepted `int`?
+                    ctx.emitter.instruction(&format!("je {}", int_min_ok));         // INT_MIN is inside the accepted range
+                }
+            }
+            super::super::exceptions::emit_value_error_unless(
+                ctx,
+                super::super::exceptions::ValueGuard::SignedMagnitudeAtMost(
+                    decimals_reg,
+                    i64::from(i32::MAX),
+                ),
+                "number_format(): Argument #2 ($decimals) must be between -2147483648 and 2147483647",
+            );
+            ctx.emitter.label(&int_min_ok);
+        }
     } else {
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     }

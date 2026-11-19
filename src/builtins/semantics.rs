@@ -802,6 +802,13 @@ pub fn resolve_builtin_effects(
     if weak_float_int {
         effects |= Effects::MAY_WARN | Effects::MAY_THROW;
     }
+    // PHP 8.6 rejects an out-of-range `$decimals` with a ValueError, so a `try` around
+    // the call must keep its handler installed instead of being treated as pure.
+    if def.name == "number_format"
+        && crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php86
+    {
+        effects |= Effects::MAY_THROW;
+    }
     effects
 }
 
