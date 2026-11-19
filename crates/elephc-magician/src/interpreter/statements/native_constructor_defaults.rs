@@ -273,7 +273,7 @@ pub(super) fn materialize_native_callable_object_default(
     let mut constructor_args = Vec::with_capacity(args.len());
     let constructed = (|| {
         for arg in args {
-            constructor_args.push(EvaluatedCallArg {
+            constructor_args.push(EvaluatedCallArg { source_type: None,
                 evaluation_owner: None,
                 name: arg.name.clone(),
                 value: materialize_native_callable_default(&arg.value, context, values)?,

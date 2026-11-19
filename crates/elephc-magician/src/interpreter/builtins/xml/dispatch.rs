@@ -190,7 +190,7 @@ pub(in crate::interpreter) fn eval_xml_values_result(
     let evaluated = evaluated_args
         .iter()
         .copied()
-        .map(|value| EvaluatedCallArg {
+        .map(|value| EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value,

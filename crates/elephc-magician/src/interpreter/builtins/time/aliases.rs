@@ -60,7 +60,7 @@ pub(in crate::interpreter) fn eval_date_procedural_alias_with_values(
     let evaluated_args = evaluated_args
         .iter()
         .copied()
-        .map(|value| EvaluatedCallArg {
+        .map(|value| EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value,

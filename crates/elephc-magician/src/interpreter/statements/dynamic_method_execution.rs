@@ -351,7 +351,7 @@ pub(in crate::interpreter) fn positional_args(
     args: Vec<RuntimeCellHandle>,
 ) -> Vec<EvaluatedCallArg> {
     args.into_iter()
-        .map(|value| EvaluatedCallArg {
+        .map(|value| EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value,

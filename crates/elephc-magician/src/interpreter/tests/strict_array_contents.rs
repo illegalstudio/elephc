@@ -18,7 +18,7 @@ fn run_contents(source: &str, schema: &str, features: &[StrictFeature]) -> (Stri
 }
 
 /// Runs either explicit metadata or automatic producer inference with complete owner cleanup.
-fn run_source(source: &str, schema: Option<&str>, features: &[StrictFeature], dispatch: bool) -> (String, FakeValue) {
+pub(super) fn run_source(source: &str, schema: Option<&str>, features: &[StrictFeature], dispatch: bool) -> (String, FakeValue) {
     let mut context = ElephcEvalContext::new();
     let profile = features.iter().fold(SemanticProfile::PERMISSIVE,
         |profile, feature| profile.with(*feature, true));

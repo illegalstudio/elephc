@@ -149,7 +149,7 @@ fn append_unpacked_arguments(
                 if value != original {
                     if let Some(owners) = owners.as_deref_mut() { owners.push(value); }
                 }
-                EvaluatedCallArg {
+                EvaluatedCallArg { source_type: None,
                     evaluation_owner: None,
                     name: None,
                     value,
@@ -185,7 +185,7 @@ fn append_unpacked_arguments(
                 if value != original {
                     if let Some(owners) = owners.as_deref_mut() { owners.push(value); }
                 }
-                EvaluatedCallArg {
+                EvaluatedCallArg { source_type: None,
                     evaluation_owner: None,
                     name: Some(name),
                     value,

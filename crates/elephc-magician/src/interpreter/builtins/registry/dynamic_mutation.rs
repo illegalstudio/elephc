@@ -209,9 +209,12 @@ fn eval_dynamic_array_push_unshift_call(
     }
     let inserted_values = inserted.iter().map(|arg| arg.value).collect::<Vec<_>>();
     let replacement =
-        eval_array_push_unshift_replacement(name, array.value, &inserted_values, values)?;
+        eval_array_push_unshift_replacement(name, array.value, &inserted_values, context, values)?;
     let result = eval_array_push_unshift_count_result(array.value, inserted_values.len(), values)?;
-    finish_owned_direct_ref_replacement(target, replacement, result, context, values).map(Some)
+    let element = inserted.iter().map(|arg| arg.source_type.as_ref()
+        .map(crate::eval_ir::generic_type).unwrap_or_else(|| elephc_generics::Type::atom("mixed")))
+        .reduce(crate::eval_ir::merge_array_element_sources).unwrap_or_else(|| elephc_generics::Type::atom("never"));
+    local_binding_origins::finish_array_mutation(target, array.value, replacement, result, element, context, values).map(Some)
 }
 
 /// Evaluates a dynamic `array_splice()` call against a writable array.
@@ -240,7 +243,9 @@ fn eval_dynamic_array_splice_call(
         context,
         values,
     )?;
-    finish_owned_direct_ref_replacement(target, replacement, removed, context, values).map(Some)
+    let element = local_binding_origins::replacement_element_source(
+        optional_evaluated_ref_arg(&bound, 3).and_then(|arg| arg.source_type.as_ref()));
+    local_binding_origins::finish_array_mutation(target, array.value, replacement, removed, element, context, values).map(Some)
 }
 
 /// Evaluates a dynamic internal array pointer call against a writable array.

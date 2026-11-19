@@ -391,7 +391,7 @@ fn call_shared_runtime_builtin(
     if id == elephc_builtin_contract::RuntimeBuiltinId::Unserialize {
         if let [data] = args {
             if let Some(function) = context.native_function("__elephc_gmp_unserialize") {
-                let arguments = vec![EvaluatedCallArg {
+                let arguments = vec![EvaluatedCallArg { source_type: None,
                     evaluation_owner: None,
                     name: None,
                     value: data.borrowed(),

@@ -19,6 +19,7 @@ pub(in crate::interpreter) fn eval_builtin_array_mutating_declared_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)
+        || context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
         || context.semantic_profile().contains(elephc_semantics::StrictFeature::Comparisons)
             && elephc_builtin_contract::lookup(name).and_then(|contract| contract.comparison_policy())
                 .is_some_and(|policy| policy.requires_argument_check())

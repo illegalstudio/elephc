@@ -13,6 +13,8 @@ use crate::eval_ir::{generic_type, parameter_type};
 use elephc_generics::Type;
 
 mod arrays;
+mod array_mutations;
+pub(super) use array_mutations::{finish_array_mutation, replacement_element_source};
 mod source_views;
 
 pub(super) use source_views::{LocalAssignmentProducer, prepare_assignment, source_view, evaluate_assignment};

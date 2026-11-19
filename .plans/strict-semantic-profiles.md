@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step238 (this commit). Remaining feature integration is active. Issue:
+Verified through step239 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2912,3 +2912,13 @@ Twenty-two exact focused tests pass in jobb418f63b, including new inferred-versu
 Indexed/hash builders optionally observe source producers at each element's actual evaluation point, after key effects and before the value. Nested literals return a per-evaluation source schema alongside their existing owned runtime value. Duplicate normalized keys retain only the final source entry. Assignment RHS evaluation preserves an existing declared/content destination context and validates the full candidate after source effects. Inference retains nullable/union/mixed alternatives and compatible nominal values instead of using incidental runtime tags or inventing mixed after heterogeneous inference.
 
 Twenty-seven exact focused tests pass in job2defcc72. New cases cover declared mixed/union literal entries, key/value assignment effects, duplicate keys, complete effects before failed replacement, nested sources, empty nested evidence, declared destinations, nullable and inherited nominal values. A regression also preserves scalar alternatives of a declared mixed producer whose current occupant is itself an array, both in literals and first appends. Existing source/capture/parameter/pending/reference/VM/generic/nullability cases remain green with balanced owners. Default build, diff/assembly hygiene and source stability pass. Native-default spread source alternatives and reference-element guards still need audit; this is not complete runtime Mixed support or public ArrayTypes admission.
+
+### Verified239: owned array mutation and argument source contracts
+
+Evaluated arguments carry source_type separately from their PHP value owner and reference target. Source evaluation captures this metadata before later argument effects; forwarding preserves it and synthetic host arguments remain explicitly unknown. ArrayTypes uses the shared owner-safe direct/dynamic mutator path. Pending empty origins refine from original inserted/replacement alternatives after the complete candidate validates and storage publication succeeds. Mixed and union source alternatives retain their openness.
+
+Push/unshift use one rooted replacement builder instead of four leaking copy loops. Key/element temporaries retire on success/failure, existing references and alias targets are copied, push preserves sparse keys and host append history, and unshift reindexes integer keys. Catchable exhaustion preserves the original array. Common element-source joins move to eval_ir/array_contracts for literal/mutation reuse.
+
+Thirty-five exact focused tests plus seven generated-builtin workflow gates pass in jobd1e161a3 (46 total gates including build/hygiene/source stability). New mutation cases cover closed direct/dynamic paths, first push/unshift/splice, declared mixed/union and named replacement sources, complete effects before rejected first writes, copies, sparse keys, append history and exhaustion with balanced owners. Prior array/source/VM/generic/nullability tests and native argument owner/array staging regressions remain green. The full update-builtin-docs workflow produces no generated diff.
+
+Probe239 separately confirmed a remaining reverse reference-element bug: supported literal references plus a reference function printed A instead of required VA. Knowledgeb17793a4 and pending-array-reference-regression240.txt retain it; no reverse-guard fix or feature admission is claimed. Shared nested content argument projection, spread source metadata, reference lifetimes and native/runtime Mixed obligations remain pending.

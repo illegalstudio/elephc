@@ -51,13 +51,13 @@ pub(super) fn eval_gmp_helper_values_result(
     let function = eval_gmp_host_function(name, helper, context, values)?;
     let strict = values.bool_value(false)?;
     let mut arguments = Vec::with_capacity(evaluated_args.len() + 1);
-    arguments.push(EvaluatedCallArg {
+    arguments.push(EvaluatedCallArg { source_type: None,
         evaluation_owner: None,
         name: None,
         value: strict.borrowed(),
         ref_target: None,
     });
-    arguments.extend(evaluated_args.iter().copied().map(|value| EvaluatedCallArg {
+    arguments.extend(evaluated_args.iter().copied().map(|value| EvaluatedCallArg { source_type: None,
         evaluation_owner: None,
         name: None,
         value: value.borrowed(),

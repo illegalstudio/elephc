@@ -124,13 +124,13 @@ fn eval_array_walk_ref_result_from_scope(
                 index: eval_array_reference_key(key, context.semantic_profile(), values)?.ok_or(EvalStatus::RuntimeFatal)?,
             };
             let args = vec![
-                EvaluatedCallArg {
+                EvaluatedCallArg { source_type: None,
                     evaluation_owner: None,
                     name: None,
                     value,
                     ref_target: Some(ref_target),
                 },
-                EvaluatedCallArg {
+                EvaluatedCallArg { source_type: None,
                     evaluation_owner: None,
                     name: None,
                     value: key,

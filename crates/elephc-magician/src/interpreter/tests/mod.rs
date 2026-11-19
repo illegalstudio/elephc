@@ -142,3 +142,4 @@ mod fresh_reference_sources;
 mod strict_indexing;
 
 mod strict_array_contents;
+mod strict_array_mutation_origins;

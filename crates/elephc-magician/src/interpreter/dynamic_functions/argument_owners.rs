@@ -51,7 +51,7 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
 
             if let Some(name) = arg.name() {
                 saw_named = true;
-                let (value, ref_target) = eval_source_call_argument(
+                let (value, ref_target, source_type) = eval_source_argument_with_type(
                     arg, evaluated_args.len(), modes, context, caller_scope, values)?;
                 let (value, mut ref_target) = own_temporary_reference(value, ref_target, context, values)?;
                 capture_argument_receiver_owners(ref_target.as_mut(), &mut receiver_owners);
@@ -60,7 +60,7 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
                 } else {
                     value
                 };
-                evaluated_args.push(EvaluatedCallArg {
+                evaluated_args.push(EvaluatedCallArg { source_type,
                     evaluation_owner: None,
                     name: Some(name.to_string()),
                     value,
@@ -72,7 +72,7 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
             if saw_named {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            let (value, ref_target) = eval_source_call_argument(
+            let (value, ref_target, source_type) = eval_source_argument_with_type(
                 arg, evaluated_args.len(), modes, context, caller_scope, values)?;
             let (value, mut ref_target) = own_temporary_reference(value, ref_target, context, values)?;
             capture_argument_receiver_owners(ref_target.as_mut(), &mut receiver_owners);
@@ -81,7 +81,7 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
             } else {
                 value
             };
-            evaluated_args.push(EvaluatedCallArg {
+            evaluated_args.push(EvaluatedCallArg { source_type,
                 evaluation_owner: None,
                 name: None,
                 value,
@@ -207,4 +207,21 @@ fn own_temporary_reference(
         return Ok((reference, Some(EvalReferenceTarget::Cell { cell: reference.borrowed() })));
     }
     Ok((value, target))
+}
+
+/// Captures logical argument producers while preserving the existing lvalue and owner evaluation path.
+fn eval_source_argument_with_type(argument: &EvalCallArg, position: usize,
+    modes: &CallArgumentModes, context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>, Option<EvalParameterType>), EvalStatus> {
+    let source = local_binding_origins::source_view(argument.value(), context, scope);
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
+        && !modes.by_reference(argument.name(), position) {
+        if let EvalExpr::Array(elements) = argument.value() {
+            let (value, source) = array_literals::evaluate_literal(elements, context, scope, values)?;
+            return Ok((value, None, Some(source)));
+        }
+    }
+    let (value, target) = eval_source_call_argument(argument, position, modes, context, scope, values)?;
+    Ok((value, target, source))
 }

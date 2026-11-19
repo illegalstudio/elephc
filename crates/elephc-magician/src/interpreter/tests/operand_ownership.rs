@@ -1018,7 +1018,7 @@ fn dynamic_callable_binding_failure_releases_prepared_defaults() {
         &[Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Bool], false)),
           Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Class("MissingTarget".into())], true))],
         &[Some(EvalExpr::Const(EvalConst::Bool(false))), Some(EvalExpr::Const(EvalConst::Null))], &[false, false], &[false, false],
-        vec![EvaluatedCallArg { evaluation_owner: None, name: Some("target".into()), value: caller.borrowed(), ref_target: None }],
+        vec![EvaluatedCallArg { source_type: None, evaluation_owner: None, name: Some("target".into()), value: caller.borrowed(), ref_target: None }],
         EvalByRefBindingMode::RequireTarget, &mut context, &mut values,
     );
     assert!(matches!(result, Err(EvalStatus::RuntimeFatal)));

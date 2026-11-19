@@ -18,7 +18,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_values(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args = evaluated_args
         .into_iter()
-        .map(|value| EvaluatedCallArg {
+        .map(|value| EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value,

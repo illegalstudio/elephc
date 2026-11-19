@@ -70,6 +70,24 @@ fn normalize_arrays(ty: Type) -> Type {
     }
 }
 
+/// Merges an explicitly open alternative without inventing mixed for unrelated inferred values.
+pub(crate) fn merge_array_element_sources(previous: Type, next: Type) -> Type {
+    if previous == next || previous == Type::atom("mixed") { return previous; }
+    if next == Type::atom("mixed") { return next; }
+    if matches!(&previous, Type::Union(members) if members.contains(&next)) { return previous; }
+    if matches!(&next, Type::Union(_) | Type::Nullable(_)) { return next; }
+    if matches!(&previous, Type::Union(_) | Type::Nullable(_)) { return previous; }
+    if empty_array_schema(&previous) { return next; }
+    if empty_array_schema(&next) { return previous; }
+    previous
+}
+
+/// Empty nested literals contribute no element evidence until a sibling supplies one.
+fn empty_array_schema(ty: &Type) -> bool {
+    matches!(ty, Type::Apply(name, args) if name == "array"
+        && args.as_slice() == [Type::atom("never"), Type::atom("never")])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

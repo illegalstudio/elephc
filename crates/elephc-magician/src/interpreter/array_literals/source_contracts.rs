@@ -9,7 +9,7 @@
 //! - Metadata borrows no runtime cells and never becomes a global handle proof map.
 
 use super::*;
-use crate::eval_ir::{generic_type, parameter_type};
+use crate::eval_ir::{generic_type, parameter_type, merge_array_element_sources};
 use elephc_generics::Type;
 
 /// Source alternatives of the final entries, independent from their boxed storage kinds.
@@ -43,29 +43,11 @@ impl LiteralSource {
             let key = match key { EvalArrayReferenceKey::Int(_) => Type::atom("int"),
                 EvalArrayReferenceKey::String(_) => Type::atom("string") };
             if !keys.contains(&key) { keys.push(key); }
-            element = Some(match element { None => ty, Some(previous) => merge_element(previous, ty) });
+            element = Some(match element { None => ty, Some(previous) => merge_array_element_sources(previous, ty) });
         }
         let key = match keys.len() { 0 => Type::atom("never"), 1 => keys.remove(0), _ => Type::Union(keys) };
         Type::Apply("array".to_string(), vec![key, element.unwrap_or_else(|| Type::atom("never"))])
     }
-}
-
-/// Merges an explicitly open alternative without inventing mixed for unrelated inferred values.
-fn merge_element(previous: Type, next: Type) -> Type {
-    if previous == next || previous == Type::atom("mixed") { return previous; }
-    if next == Type::atom("mixed") { return next; }
-    if matches!(&previous, Type::Union(members) if members.contains(&next)) { return previous; }
-    if matches!(&next, Type::Union(_) | Type::Nullable(_)) { return next; }
-    if matches!(&previous, Type::Union(_) | Type::Nullable(_)) { return previous; }
-    if empty_array_schema(&previous) { return next; }
-    if empty_array_schema(&next) { return previous; }
-    previous
-}
-
-/// Empty nested literals contribute no element evidence until a sibling supplies one.
-fn empty_array_schema(ty: &Type) -> bool {
-    matches!(ty, Type::Apply(name, args) if name == "array"
-        && args.as_slice() == [Type::atom("never"), Type::atom("never")])
 }
 
 /// Evaluates a literal once and returns its logical producer alongside the owned array.

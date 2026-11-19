@@ -32,6 +32,8 @@ pub enum EvalOutcome {
 /// One already evaluated function-like call argument.
 #[derive(Clone)]
 pub(super) struct EvaluatedCallArg {
+    /// Logical producer alternatives captured before later argument effects.
+    pub(super) source_type: Option<crate::eval_ir::EvalParameterType>,
     /// Exact source-evaluation lease, preserved through binding without copying its owner.
     pub(super) evaluation_owner: Option<ArgumentValueOwner>,
     pub(super) name: Option<String>,

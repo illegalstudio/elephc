@@ -97,7 +97,7 @@ pub(super) fn eval_reflection_instance_property_set_value(
                 &object_class_name,
                 &hook_method,
                 object,
-                vec![EvaluatedCallArg {
+                vec![EvaluatedCallArg { source_type: None,
                     evaluation_owner: None,
                     name: None,
                     value,

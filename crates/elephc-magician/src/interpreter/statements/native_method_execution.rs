@@ -37,7 +37,7 @@ pub(in crate::interpreter) fn eval_native_method_with_positional_values_unchecke
 fn positional_native_method_args(values: Vec<RuntimeCellHandle>) -> Vec<EvaluatedCallArg> {
     values
         .into_iter()
-        .map(|value| EvaluatedCallArg {
+        .map(|value| EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value,
