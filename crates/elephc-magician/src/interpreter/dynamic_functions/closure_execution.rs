@@ -582,6 +582,9 @@ fn bind_closure_captures(
                 ScopeCellOwnership::Borrowed,
             );
         }
+        if let Some(source) = capture.source_view() {
+            function_scope.record_local_source_view(capture.name().to_string(), source.clone());
+        }
     }
 }
 

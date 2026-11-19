@@ -23,6 +23,7 @@ pub(super) fn eval_closure_expr(
     let mut owners = Vec::with_capacity(captures.len());
     for capture in captures {
         let origin = local_producer_contract(&EvalExpr::LoadVar(capture.name().to_string()), context, scope);
+        let source = local_binding_origins::source_view(&EvalExpr::LoadVar(capture.name().to_string()), context, scope);
         let binding = match eval_closure_capture(capture, context, scope, values) {
             Ok(binding) => binding,
             Err(status) => return finish_eval_argument_values(Err(status), owners, context, values),
@@ -32,7 +33,7 @@ pub(super) fn eval_closure_expr(
         // context registry would strand every captured value after its Closure is freed.
         bindings.push(EvalClosureCaptureBinding::new(
             binding.name(), binding.value().borrowed(), binding.by_ref_target().cloned(),
-        ).with_binding_type(origin));
+        ).with_binding_type(origin).with_source_view(source));
     }
     let closure = EvalClosure::new(function.clone(), bindings, is_static);
     let name = context.define_closure(closure);

@@ -35,7 +35,7 @@ fn eval_local_offset_write(
     let mut result = (|| {
         let index = index.map(|index| eval_owned_expr(index, context, scope, values)).transpose()?;
         if let Some(index) = index { operands.push(index); }
-        let producer = local_producer_contract(value, context, scope);
+        let producer = local_binding_origins::source_view(value, context, scope);
         let value = eval_owned_expr(value, context, scope, values)?;
         operands.push(value);
         let current = visible_scope_cell(context, scope, name).map(|cell| values.retain(cell)).transpose()?;

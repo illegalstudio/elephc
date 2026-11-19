@@ -74,6 +74,7 @@ pub struct EvalClosureCaptureBinding {
     pub(super) value: RuntimeCellHandle,
     pub(super) by_ref_target: Option<EvalReferenceTarget>,
     binding_type: Option<EvalParameterType>,
+    source_view: Option<EvalParameterType>,
 }
 
 impl EvalClosureCaptureBinding {
@@ -88,6 +89,7 @@ impl EvalClosureCaptureBinding {
             value,
             by_ref_target,
             binding_type: None,
+            source_view: None,
         }
     }
 
@@ -95,6 +97,17 @@ impl EvalClosureCaptureBinding {
     pub(crate) fn with_binding_type(mut self, binding_type: Option<EvalParameterType>) -> Self {
         self.binding_type = binding_type;
         self
+    }
+
+    /// Copies a current source view separately from the captured binding's enforcing contract.
+    pub(crate) fn with_source_view(mut self, source_view: Option<EvalParameterType>) -> Self {
+        self.source_view = source_view;
+        self
+    }
+
+    /// Borrows the source alternatives observed when this value was captured.
+    pub(crate) fn source_view(&self) -> Option<&EvalParameterType> {
+        self.source_view.as_ref()
     }
 
     /// Returns the producer alternatives copied from the defining activation.

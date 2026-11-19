@@ -25,7 +25,7 @@ use crate::interpreter::{
     eval_inc_dec_value, eval_output_value, eval_boolean_condition, finish_eval_argument_values, release_function_args,
     eval_pcntl_maybe_dispatch, eval_release_value, eval_unary_value,
     finish_activation_scope, set_owned_scope_cell, visible_scope_cell, EvalControl, RuntimeValueOps,
-    warn_eval_discarded_function_call, local_producer_contract, store_local_with_origin, retire_scope_replacements,
+    warn_eval_discarded_function_call, store_local_with_origin, retire_scope_replacements,
 };
 use crate::runtime_hooks::owner_frames::with_runtime_owners;
 use crate::scope::ElephcEvalScope;
@@ -69,7 +69,7 @@ struct Vm {
     /// Callees selected before evaluating nested argument calls.
     prepared_calls: Vec<Arc<CompiledBody>>,
     /// Copied source facts nested in assignment evaluation order, without value owners.
-    prepared_stores: Vec<Option<crate::eval_ir::EvalParameterType>>,
+    prepared_stores: Vec<super::super::local_binding_origins::LocalAssignmentProducer>,
     max_frames: usize,
     result: Option<EvalControl>,
 }
@@ -205,7 +205,7 @@ fn step(
             let source = body.store_sources.get(index as usize).ok_or(EvalStatus::RuntimeFatal)?;
             let slot = vm.frames.last().ok_or(EvalStatus::RuntimeFatal)?.scope_slot;
             let scope = frame_scope(slot, &mut vm.scopes, scope);
-            let producer = local_producer_contract(source, context, scope);
+            let producer = super::super::local_binding_origins::prepare_assignment(source, context, scope);
             vm.prepared_stores.push(producer);
         }
         Op::Store(slot) => {

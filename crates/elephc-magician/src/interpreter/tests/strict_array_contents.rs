@@ -257,3 +257,65 @@ fn strict_array_origins_typed_heterogeneous_initializers_preserve_context() {
         assert!(output.is_empty()); assert_eq!(returned, FakeValue::Int(6));
     }
 }
+
+/// Equal runtime scalar kinds retain distinct inferred and explicitly mixed source views.
+#[test]
+fn strict_array_origins_scalar_sources_are_independent_from_locals() {
+    let source = "function mixed_scalar():mixed{return 1;} \
+        $number=1;$copy=$number;$number='changed'; \
+        $items=[];$items[]=$copy;try{$items[]='bad';}catch(TypeError $error){echo 'I';} \
+        $open=mixed_scalar();$open_copy=$open;$other=[];$other[]=$open_copy;$other[]='allowed'; \
+        $strings=[];$strings[]=$number;try{$strings[]=2;}catch(TypeError $error){echo 'S';} \
+        return count($items)+count($other)+count($strings);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "IS"); assert_eq!(returned, FakeValue::Int(4));
+    }
+}
+
+/// Generation changes retire cached source views instead of reusing the old scalar proof.
+#[test]
+fn strict_array_origins_source_views_follow_scope_generations() {
+    let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+    let first = values.int(1).unwrap(); scope.set("source", first, ScopeCellOwnership::Owned);
+    let integer = EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false);
+    scope.record_local_source_view("source".to_string(), integer.clone());
+    assert_eq!(scope.local_source_view("source"), Some(&integer));
+    scope.mark_reference_changed("source"); assert!(scope.local_source_view("source").is_none());
+    scope.record_local_source_view("source".to_string(), integer);
+    let replacement = values.string("new").unwrap();
+    let old = scope.set("source", replacement, ScopeCellOwnership::Owned).unwrap(); values.release(old).unwrap();
+    assert!(scope.local_source_view("source").is_none());
+    for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+    for owners in values.cell_owners.values() { assert_eq!(*owners, 0); }
+}
+
+/// Scalar declarations supply array element views even when stable Locals enforcement is disabled.
+#[test]
+fn strict_array_origins_scalar_parameter_source_views() {
+    let source = "function inferred_parameter(int $number){$items=[];$items[]=$number; \
+        try{$items[]='bad';}catch(TypeError $error){echo 'I';}return count($items);} \
+        function mixed_parameter(mixed $number){$items=[];$items[]=$number;$items[]='allowed';return count($items);} \
+        echo inferred_parameter(1),mixed_parameter(1);return 7;";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "I12"); assert_eq!(returned, FakeValue::Int(7));
+    }
+}
+
+/// Captured scalar views inform first writes without becoming an implicit stable local contract.
+#[test]
+fn strict_array_origins_scalar_capture_views_do_not_enable_locals() {
+    let source = "function mixed_capture_value():mixed{return 1;} \
+        $number=1;$open=mixed_capture_value();$capture=function()use($number,$open){ \
+        $items=[];$items[]=$number;try{$items[]='bad';}catch(TypeError $error){echo 'I';} \
+        $number='changed';$other=[];$other[]=$number; \
+        try{$other[]=2;}catch(TypeError $error){echo 'S';} \
+        $mixed=[];$mixed[]=$open;$mixed[]='allowed';return count($mixed);};echo $capture();return $number;";
+    for dispatch in [false, true] {
+        for features in [vec![StrictFeature::ArrayTypes], vec![StrictFeature::ArrayTypes, StrictFeature::Nullability]] {
+            let (output, returned) = run_source(source, None, &features, dispatch);
+            assert_eq!(output, "IS2"); assert_eq!(returned, FakeValue::Int(1));
+        }
+    }
+}

@@ -145,6 +145,7 @@ pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
     local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     inferred_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
+    local_source_views: HashMap<String, (u64, crate::eval_ir::EvalParameterType)>,
     array_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_storage_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_binding_types: HashMap<String, crate::eval_ir::EvalParameterType>,
@@ -163,6 +164,7 @@ impl ElephcEvalScope {
             entries: HashMap::new(),
             local_types: HashMap::new(),
             inferred_local_types: HashMap::new(),
+            local_source_views: HashMap::new(),
             array_local_types: HashMap::new(),
             native_storage_types: HashMap::new(),
             native_binding_types: HashMap::new(),
@@ -198,6 +200,21 @@ impl ElephcEvalScope {
     /// Returns a successful producer's contract, including explicitly open mixed origins.
     pub(crate) fn inferred_local_type(&self, name: &str) -> Option<&crate::eval_ir::EvalParameterType> {
         self.inferred_local_types.get(name)
+    }
+
+    /// Records a current source view without adding it to the enforced local contracts.
+    pub(crate) fn record_local_source_view(&mut self, name: String, ty: crate::eval_ir::EvalParameterType) {
+        if let Some(entry) = self.entry(&name).filter(|entry| entry.flags().is_visible()) {
+            self.local_source_views.insert(name, (entry.generation(), ty));
+        }
+    }
+
+    /// Reads only a still-current unshared view; alias and external writes require fresh proof.
+    pub(crate) fn local_source_view(&self, name: &str) -> Option<&crate::eval_ir::EvalParameterType> {
+        if self.reference_target(name).is_some() || self.global_alias_target(name).is_some() { return None; }
+        let entry = self.entry(name).filter(|entry| entry.flags().is_visible() && !entry.flags().by_ref)?;
+        let (generation, ty) = self.local_source_views.get(name)?;
+        (*generation == entry.generation()).then_some(ty)
     }
 
     /// Records array contents independently from the whole binding's producer kind.
@@ -424,6 +441,7 @@ impl ElephcEvalScope {
         self.native_storage_types.remove(&name);
         self.inferred_local_types.remove(&name);
         self.array_local_types.remove(&name);
+        self.local_source_views.remove(&name);
         self.native_binding_types.remove(&name);
         if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         self.reference_targets.remove(&name);
@@ -443,6 +461,7 @@ impl ElephcEvalScope {
         self.native_storage_types.remove(&name);
         self.inferred_local_types.remove(&name);
         self.array_local_types.remove(&name);
+        self.local_source_views.remove(&name);
         self.native_binding_types.remove(&name);
         if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         let Some(entry) = self.entries.get(&name).copied() else {
@@ -618,6 +637,7 @@ impl ElephcEvalScope {
         self.static_bindings.clear();
         self.inferred_local_types.clear();
         self.array_local_types.clear();
+        self.local_source_views.clear();
         self.native_binding_types.clear();
         self.aot_visible_names.clear();
         self.reference_targets.clear();

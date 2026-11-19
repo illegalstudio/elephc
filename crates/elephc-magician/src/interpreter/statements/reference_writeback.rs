@@ -86,6 +86,14 @@ pub(in crate::interpreter) fn bind_method_scope_args(
             let value = copy_scope_value(bound_arg.value, context, values)?;
             method_scope.set(name.clone(), value, ScopeCellOwnership::Owned);
         }
+        if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+            let source = parameter_types.get(position).and_then(Option::as_ref)
+                .map(crate::eval_ir::generic_type).unwrap_or_else(|| elephc_generics::Type::atom("mixed"));
+            let source = if parameter_is_variadic.get(position).copied().unwrap_or(false) {
+                elephc_generics::Type::Apply("array".to_string(), vec![elephc_generics::Type::atom("int"), source])
+            } else { source };
+            method_scope.record_local_source_view(name.clone(), crate::eval_ir::parameter_type(&source));
+        }
     }
     alias_duplicate_method_ref_args(method_scope, params, bound_args, context, values)
 }

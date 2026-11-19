@@ -133,6 +133,9 @@ pub(in crate::interpreter) fn prepare_write(scope: &ElephcEvalScope, name: &str,
         }
         None => infer_schema(value, context, values, 0)?,
     };
+    if !generic_value_accepts(&element, value, context, values)? {
+        return eval_throw_type_error("--strict-array-types: first array value violates its source contract", context, values);
+    }
     let schema = Type::Apply("array".to_string(), vec![key, element]);
     Ok(array_contents_type(schema).map(|ty| parameter_type(&ty)))
 }

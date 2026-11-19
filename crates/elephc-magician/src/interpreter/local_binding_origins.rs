@@ -13,6 +13,9 @@ use crate::eval_ir::{generic_type, parameter_type};
 use elephc_generics::Type;
 
 mod arrays;
+mod source_views;
+
+pub(super) use source_views::{LocalAssignmentProducer, prepare_assignment, source_view};
 
 pub(super) use arrays::{prepare_write as prepare_array_local_write, publish_write as publish_array_local_write};
 
@@ -169,8 +172,15 @@ pub(in crate::interpreter) fn value_contract(value: RuntimeCellHandle, context: 
 /// Consumes an assignment value, then establishes only a genuinely new successful binding.
 pub(in crate::interpreter) fn store_local_with_origin(context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, name: String, value: RuntimeCellHandle,
-    producer: Option<EvalParameterType>, values: &mut impl RuntimeValueOps,
+    producer: LocalAssignmentProducer, values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let LocalAssignmentProducer { binding: producer, source } = producer;
+    let source = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+        match source.map(Ok).unwrap_or_else(|| value_contract(value, context, values)) {
+            Ok(source) => Some(source),
+            Err(status) => { let _ = eval_release_value(context, values, value); return Err(status); }
+        }
+    } else { None };
     let fresh = context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals)
         && visible_scope_cell(context, scope, &name).is_none()
         && scope.local_type(&name).is_none();
@@ -185,6 +195,7 @@ pub(in crate::interpreter) fn store_local_with_origin(context: &mut ElephcEvalCo
         }
     } else { None };
     let replaced = set_owned_scope_cell(context, scope, name.clone(), value, values)?;
+    if let Some(source) = source { scope.record_local_source_view(name.clone(), source); }
     if let Some(origin) = array_origin {
         scope.infer_array_local_type(name.clone(), origin);
         if values.supports_persistent_references() {

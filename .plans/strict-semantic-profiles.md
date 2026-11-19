@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step236 (this commit). Remaining feature integration is active. Issue:
+Verified through step237 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2900,3 +2900,9 @@ Fourteen exact focused tests pass. New cases cover first indexed/append writes, 
 Parameter bindings retain conditional array contents independently from Locals, including explicit open bare arrays, mixed and variadic element declarations. Shared local-contract collection follows caller variable/cell reference targets with cycle protection, so an untyped reference parameter cannot mutate past its caller's closed array schema. Compound pending capture metadata remains neutral until first successful write. Null-only classification now reads complete source unions/intersections and conditional content schemas, preserving legal captured scalar/null stores under independent Nullability.
 
 Eighteen exact tests pass in job31f83f8e. New cases verify typed and open parameters, variadics, by-reference rejection before mutation, captured closed/pending arrays with and without Nullability, and explicit heterogeneous union/mixed typed initializers. Previous first-write, source-origin, actual VM store, generic union and nullability regressions remain green with balanced owners. Default build, diff/assembly hygiene and unchanged-source verification pass. Scalar source views without Locals, other literal/compound producers, builtins, properties/statics/native channels and runtime Mixed still require implementation; public admission remains unchanged.
+
+### Verified237: source views separate from binding restrictions
+
+Assignment preparation now carries distinct binding and current-source metadata through walker and actual bytecode stores. Successful assignments record source views by scope name and generation; changed, shared, referenced and global-aliased entries conservatively discard them. These views never enter enforced local contracts. Scalar parameter declarations seed source views after binding, and closure captures copy them in a separate source_view field, preserving legal scalar reassignment without Locals. First array writes use the current source view and validate the actual candidate before publishing a schema.
+
+Twenty-two exact focused tests pass in jobb418f63b, including new inferred-versus-declared-mixed scalar copies, generation invalidation, scalar parameter views and captured views with independent Nullability. Captured untyped scalar reassignment remains legal. Earlier pending/closed array origins, reference mutation rejection, actual VM copy stores and generic unions remain green with balanced owners. Default build, diff/assembly hygiene and source stability pass. This is an ArrayTypes source-context channel, not complete runtime Mixed proof support. Literal element contexts, compound producers, shared scalar proof invalidation, mutations, property/static/native lifetimes and remaining compiler/host obligations are unfinished; public admission remains unchanged.
