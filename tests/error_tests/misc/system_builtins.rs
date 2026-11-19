@@ -1126,3 +1126,52 @@ fn test_php86_file_metadata_nul_paths() {
         );
     }
 }
+
+/// PHP 8.6 lets pcntl_signal's $restart_syscalls accept null and validates pcntl_exec lists.
+#[test]
+fn test_php86_pcntl_signal_null_and_exec_list() {
+    use elephc::php_version::PhpVersion;
+
+    // The signature fix: null is accepted at 8.6 and rejected by the old 8.5 contract.
+    // The declared signature is shared across profiles; the 8.6 fix aligns it with the
+    // runtime accepting null, so both profiles now type-check the call.
+    assert!(
+        error_at(PhpVersion::Php86, "<?php pcntl_signal(15, 0, null);").is_none(),
+        "PHP 8.6 must accept a null $restart_syscalls"
+    );
+
+    for (source, message) in [
+        (
+            "<?php pcntl_exec('/bin/true', ['a' => 'b']);",
+            "pcntl_exec(): Argument #2 ($args) must be a list array",
+        ),
+        (
+            "<?php pcntl_exec('/bin/true', [\"a\\0\"]);",
+            "pcntl_exec(): Argument #2 ($args) individual argument must not contain null bytes",
+        ),
+    ] {
+        let error = error_at(PhpVersion::Php86, source).expect("PHP 8.6 must reject");
+        assert!(error.contains(message), "{error}");
+        assert!(
+            error_at(PhpVersion::Php85, source).is_none(),
+            "PHP 8.5 must accept: {source}"
+        );
+    }
+}
+
+/// PHP 8.6 reports hash_file()'s filename as argument #2 for a NUL byte.
+#[test]
+fn test_php86_hash_file_nul_filename_argument_number() {
+    use elephc::php_version::PhpVersion;
+
+    let source = "<?php hash_file('md5', \"a\\0\");";
+    let error = error_at(PhpVersion::Php86, source).expect("PHP 8.6 must reject the NUL filename");
+    assert!(
+        error.contains("hash_file(): Argument #2 ($filename) must not contain any null bytes"),
+        "{error}"
+    );
+    assert!(
+        error_at(PhpVersion::Php85, source).is_none(),
+        "PHP 8.5 must accept the call"
+    );
+}

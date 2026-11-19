@@ -11,7 +11,7 @@
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{ArrayEntry, Expr, ExprKind};
 use crate::types::PhpType;
 
 /// Validates the executable path plus the optional argument and environment arrays.
@@ -43,6 +43,11 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 ));
             }
         };
+        if crate::codegen_support::compile_php_version()
+            >= crate::php_version::PhpVersion::Php86
+        {
+            reject_non_list_args(value, &parameter)?;
+        }
         if !matches!(
             value_ty,
             PhpType::Array(_)
@@ -96,4 +101,65 @@ builtin! {
         crate::builtins::semantics::pcntl_semantics(crate::ir::PcntlRuntime::Exec),
         crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted,
     ),
+}
+
+/// Rejects a statically non-list `$args` and NUL bytes in literal argument values on 8.6.
+fn reject_non_list_args(argument: &Expr, parameter: &str) -> Result<(), CompileError> {
+    let entries: Vec<&ArrayEntry> = match &argument.kind {
+        ExprKind::ArrayLiteral(values) => {
+            for value in values {
+                reject_nul_value(value, parameter)?;
+            }
+            return Ok(());
+        }
+        ExprKind::ArrayLiteralAssoc(entries) => {
+            for (index, _) in entries.iter().enumerate() {
+                if !matches!(&entries[index].0.kind, ExprKind::IntLiteral(value) if *value == index as i64) {
+                    return Err(CompileError::new(
+                        argument.span,
+                        "pcntl_exec(): Argument #2 ($args) must be a list array",
+                    ));
+                }
+            }
+            return Ok(());
+        }
+        ExprKind::ArrayLiteralMixed(entries) => entries.iter().collect(),
+        _ => return Ok(()),
+    };
+    let mut next = 0i64;
+    for entry in entries {
+        match entry {
+            ArrayEntry::Value(value) => {
+                reject_nul_value(value, parameter)?;
+                next += 1;
+            }
+            ArrayEntry::Keyed(key, value) => {
+                if !matches!(&key.kind, ExprKind::IntLiteral(found) if *found == next) {
+                    return Err(CompileError::new(
+                        argument.span,
+                        "pcntl_exec(): Argument #2 ($args) must be a list array",
+                    ));
+                }
+                reject_nul_value(value, parameter)?;
+                next += 1;
+            }
+            // A spread's shape is only known at runtime.
+            ArrayEntry::Spread(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// Rejects a literal NUL byte in one `$args` value.
+fn reject_nul_value(value: &Expr, parameter: &str) -> Result<(), CompileError> {
+    if matches!(&value.kind, ExprKind::StringLiteral(text) if text.contains('\0')) {
+        return Err(CompileError::new(
+            value.span,
+            &format!(
+                "pcntl_exec(): Argument #2 (${}) individual argument must not contain null bytes",
+                parameter
+            ),
+        ));
+    }
+    Ok(())
 }

@@ -296,8 +296,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "restart_syscalls",
-                ty: TypeSpec::Bool,
-                default: Some(DefaultSpec::Bool(true)),
+                ty: TypeSpec::Nullable(&TypeSpec::Bool),
+                default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
         ],
