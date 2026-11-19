@@ -78,9 +78,16 @@ def invocation(script, environment):
             raise ValueError("PDO execution requires the runner Docker client and socket")
         command += ["--volume", f"{docker}:/usr/bin/docker:ro",
                     "--volume", f"{socket}:{socket}", "--group-add", str(socket.stat().st_gid)]
+    # The managed libzip recipe needs CMake, which the pinned image may predate.
+    # A host-provisioned directory under RUNNER_TEMP is mounted at the same path;
+    # let a workflow prepend it without replacing the trusted image PATH. The
+    # resulting PATH is part of the native toolchain fingerprint, so every step
+    # in the job must receive the same extra directory.
+    extra_path = environment.get("ELEPHC_CI_EXTRA_PATH", "")
+    path = f"{extra_path}:{IMAGE_PATH}" if extra_path else IMAGE_PATH
     overrides = {"HOME": str(home), "TMPDIR": str(temporary),
                  "CARGO_HOME": str(home / ".cargo"), "RUSTUP_HOME": "/usr/local/rustup",
-                 "PATH": IMAGE_PATH}
+                 "PATH": path}
     if environment.get("ELEPHC_CI_EXEC_ROLE", "").startswith(("php-", "reference")):
         overrides["PATH"] = "/opt/elephc/php/bin:" + overrides["PATH"]
     if environment.get("ELEPHC_CI_BUILD_GUARD_LOG"):

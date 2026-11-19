@@ -520,3 +520,18 @@ echo count((new ReflectionProperty(U::class, 'token'))->getAttributes()), (new U
     );
     assert_eq!(out, "01SensitiveParameter\n10OverrideOverride\n0tk\n");
 }
+
+
+/// Verifies an `object`-typed receiver keeps its inferred method return type instead of
+/// falling back to `Int` (which rendered a returned string as `0`).
+#[test]
+fn test_object_typed_receiver_keeps_method_return_type() {
+    let out = compile_and_run(r#"<?php
+class NamedValue {
+    public function name(): string { return "named"; }
+}
+function read_name(object $value) { return $value->name(); }
+echo read_name(new NamedValue());
+"#);
+    assert_eq!(out, "named");
+}

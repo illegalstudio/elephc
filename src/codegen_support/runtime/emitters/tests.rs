@@ -565,43 +565,57 @@ fn concat_headroom_guard_is_emitted_for_every_architecture() {
 #[test]
 fn x86_64_runtime_cross_assembles() {
     let target = Target::parse("linux-x86_64").unwrap();
-    let mut emitter = Emitter::new(target);
-    emitter.concat_capacity = 8 * 1024 * 1024;
-    emitter.emit_text_prelude();
-    emit_runtime(&mut emitter, RuntimeFeatures::all());
-    let mut asm = emitter.output();
-    asm.push('\n');
-    asm.push_str(&crate::codegen_support::runtime::emit_runtime_data_fixed(
-        8 * 1024 * 1024,
-        target,
-        crate::php_version::PhpVersion::Php85,
-    ));
-    // CI's linux-aarch64 runner does not install clang; the test still runs on
-    // linux-x86_64 and macOS. Skip rather than turn a missing cross tool into a
-    // failure that hides the runtime defects this test is meant to catch.
-    let clang_available = std::process::Command::new("clang")
-        .arg("--version")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false);
-    if !clang_available {
-        eprintln!("clang unavailable; skipping x86_64 runtime cross-assembly");
-        return;
+    // The all-features build covers every gated helper; the empty build covers the
+    // fallback arms (notably the user-wrapper-disabled `__rt_fopen` path).
+    for (label, features) in [
+        ("all", RuntimeFeatures::all()),
+        ("none", RuntimeFeatures::none()),
+    ] {
+        let mut emitter = Emitter::new(target);
+        emitter.concat_capacity = 8 * 1024 * 1024;
+        emitter.emit_text_prelude();
+        emit_runtime(&mut emitter, features);
+        let mut asm = emitter.output();
+        asm.push('\n');
+        asm.push_str(&crate::codegen_support::runtime::emit_runtime_data_fixed(
+            8 * 1024 * 1024,
+            target,
+            crate::php_version::PhpVersion::Php85,
+            features,
+        ));
+        // CI's linux-aarch64 runner does not install clang; the test still runs on
+        // linux-x86_64 and macOS. Skip rather than turn a missing cross tool into a
+        // failure that hides the runtime defects this test is meant to catch.
+        let clang_available = std::process::Command::new("clang")
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if !clang_available {
+            eprintln!("clang unavailable; skipping x86_64 runtime cross-assembly");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "elephc-x86-asm-{}-{label}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("rt.s");
+        let obj = dir.join("rt.o");
+        std::fs::write(&src, asm).unwrap();
+        let status = std::process::Command::new("clang")
+            .args(["-target", "x86_64-unknown-linux-gnu", "-c"])
+            .arg(&src)
+            .arg("-o")
+            .arg(&obj)
+            .status()
+            .expect("clang available");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            status.success(),
+            "x86_64 runtime must cross-assemble with {label} features"
+        );
     }
-    let dir = std::env::temp_dir().join(format!("elephc-x86-asm-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let src = dir.join("rt.s");
-    let obj = dir.join("rt.o");
-    std::fs::write(&src, asm).unwrap();
-    let status = std::process::Command::new("clang")
-        .args(["-target", "x86_64-unknown-linux-gnu", "-c"])
-        .arg(&src)
-        .arg("-o")
-        .arg(&obj)
-        .status()
-        .expect("clang available");
-    let _ = std::fs::remove_dir_all(&dir);
-    assert!(status.success(), "x86_64 runtime must cross-assemble");
 }
 
 /// x86_64 heap-backed transient reservations must carry the full ELPH kind word.

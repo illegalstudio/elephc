@@ -43,6 +43,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
                     + crate::catalog_pcntl::CONTRACTS.len()
                     + crate::catalog_tidy::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
+                    + crate::catalog_zip::CONTRACTS.len()
                     + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
                     + curl_capacity,
             );
@@ -54,6 +55,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_tidy::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_zip::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
             #[cfg(feature = "curl")]
             contracts.extend_from_slice(crate::catalog_curl::CURL_CONTRACTS);
@@ -197,7 +199,8 @@ mod tests {
         // `__elephc_phar_archive_valid` helpers.
         // +7: the ext/posix bridge builtins `posix_kill`, `posix_isatty`, `posix_geteuid`,
         // `posix_getpgrp`, `posix_get_last_error`, `posix_errno` and `posix_strerror`.
-        assert_eq!(contracts().len(), 1343 + curl_surface);
+        // +10: the deprecated procedural `zip_*` prelude contracts.
+        assert_eq!(contracts().len(), 1353 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

@@ -660,6 +660,15 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             expr(index, depth),
             expr(value, depth)
         ),
+        StmtKind::Global { vars } => format!(
+            "s_global({})",
+            lit(&vars.join(","))
+        ),
+        StmtKind::NestedArrayAssign { target, value } => format!(
+            "s_nested_array_assign({}, {})",
+            expr(target, depth),
+            expr(value, depth)
+        ),
         StmtKind::PropertyAssign {
             object,
             property,
@@ -1408,6 +1417,7 @@ mod tests {
                 crate::pdo_prelude::OptionalDrivers::from_build_environment(),
             ),
             "image" => crate::image_prelude::image_declarations(),
+            "zip" => crate::zip_prelude::zip_declarations(),
             other => panic!("unknown prelude {other}"),
         };
         let php = std::fs::read_to_string(&php_path).expect("must read the PHP fixture");
@@ -1424,6 +1434,14 @@ mod tests {
             };
             let left = strip_spans(&format!("{:?}", built_stmt));
             let right = strip_spans(&format!("{:?}", parsed_stmt));
+            // The zip prelude deliberately marks the user-visible ZipArchive class as
+            // real PHP source so var_dump() consults __debugInfo(); the parsed fixture is
+            // internal. Normalize that intentional difference for the structural oracle.
+            let left = if which == "zip" {
+                left.replace("source_mode: Php", "source_mode: Internal")
+            } else {
+                left
+            };
             if left != right {
                 if let Ok(dir) = std::env::var("ELEPHC_ORACLE_DUMP") {
                     std::fs::write(format!("{dir}/built.txt"), left.replace("}, ", "},\n"))
@@ -1433,6 +1451,35 @@ mod tests {
                 }
                 panic!("mismatch in {label}");
             }
+        }
+    }
+
+    /// Always-on structural equality check for the hand-built zip prelude.
+    ///
+    /// `converted_prelude_matches_its_php_on_request` only runs when the oracle
+    /// environment variables are set; this test binds the zip builder to its committed
+    /// provenance file in every normal `cargo test` run.
+    #[test]
+    fn zip_prelude_matches_its_php_source() {
+        let built = crate::zip_prelude::zip_declarations();
+        let php_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/php_src/zip/prelude.php");
+        let php = std::fs::read_to_string(php_path).expect("zip prelude fixture");
+        let tokens = crate::lexer::tokenize(&php).expect("zip prelude must tokenize");
+        let parsed = crate::parser::parse_internal(&tokens).expect("zip prelude must parse");
+
+        assert_eq!(built.len(), parsed.len(), "zip declaration count");
+        for (built_stmt, parsed_stmt) in built.iter().zip(parsed.iter()) {
+            let label = match &built_stmt.kind {
+                StmtKind::FunctionDecl { name, .. }
+                | StmtKind::ClassDecl { name, .. }
+                | StmtKind::ExternFunctionDecl { name, .. } => name.clone(),
+                _ => "<other>".to_string(),
+            };
+            let left = strip_spans(&format!("{:?}", built_stmt))
+                .replace("source_mode: Php", "source_mode: Internal");
+            let right = strip_spans(&format!("{:?}", parsed_stmt));
+            assert_eq!(left, right, "zip prelude mismatch in {label}");
         }
     }
 

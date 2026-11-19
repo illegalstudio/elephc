@@ -130,7 +130,7 @@ frameworks = []
 [[package]]
 name = "openssl"
 version = "3.5.8"
-recipe = 1
+recipe = 2
 dependencies = []
 provides = ["openssl"]
 

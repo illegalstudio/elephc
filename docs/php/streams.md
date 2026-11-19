@@ -341,7 +341,10 @@ Supported wrapper methods include `stream_open`, `stream_read`, `stream_write`,
 
 `file_get_contents()` on a registered wrapper path opens the wrapper and drains
 `stream_read()` to EOF through the same stream helper as `fopen()`. A refused
-`stream_open()` returns `false` after the usual failed-open warning.
+`stream_open()` returns `false` after the usual failed-open warning. If
+`stream_read()` or `stream_eof()` throws, the exception propagates and a cleanup
+guard closes the hidden wrapper handle before the catch runs, so repeated caught
+failures do not exhaust the 256 handle slots.
 
 `url_stat` is consulted by the whole stat family: `stat()`, `lstat()`,
 `file_exists()`, the integer getters (`filesize()`, `filemtime()`, `fileatime()`,
@@ -411,5 +414,7 @@ names (`"stream-context"`, `"stream filter"`) are not distinguished yet.
 `stream_get_meta_data()` derives `eof`, `seekable`, `blocked`, and `mode` from
 the live descriptor. `stream_type` is `"STDIO"` for seekable streams and
 `"tcp_socket"` for non-seekable streams. `wrapper_type` is reported as
-`"plainfile"` and `uri` as the empty string because elephc does not track
-per-resource open paths in v1.
+`"plainfile"` and `uri` as the empty string for ordinary file descriptors, which
+do not track their open paths. Registered userspace wrappers report their actual
+`mode`, `wrapper_type` (`"user-space"`), and `uri`; saved metadata owns a copy of
+the URI so recycling the wrapper handle slot cannot rewrite it.

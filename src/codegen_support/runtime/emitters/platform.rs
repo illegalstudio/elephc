@@ -27,7 +27,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_header(emitter, features.web, mbstring);
     io::emit_cstr(emitter);
     io::emit_disk_space(emitter);
-    io::emit_fopen(emitter);
+    io::emit_fopen(emitter, features.user_stream_wrapper);
     io::emit_simplexml_wrapper_failure(emitter);
     io::emit_fileinfo_streams(emitter);
     io::emit_fgets(emitter);
@@ -75,7 +75,11 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_readdir(emitter);
     io::emit_closedir(emitter);
     io::emit_rewinddir(emitter);
-    io::emit_stream_get_meta_data(emitter);
+    io::emit_stream_get_meta_data(emitter, features.user_stream_wrapper);
+    if features.user_stream_wrapper {
+        io::emit_zip_register_stream_meta(emitter);
+    }
+    io::emit_stream_wrapper_class(emitter);
     io::emit_gethostname(emitter);
     io::emit_gethostbyname(emitter);
     io::emit_gethostbyaddr(emitter);
@@ -208,7 +212,10 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_fd_write(emitter);
     io::emit_phar_write(emitter);
     io::emit_phar_read(emitter);
-    io::emit_file_get_contents_url(emitter);
+    io::emit_file_get_contents_url(emitter, features.user_stream_wrapper);
+    if features.user_stream_wrapper {
+        io::emit_file_get_contents_wrapper(emitter);
+    }
     io::emit_fputcsv(emitter);
     io::emit_basename(emitter);
     io::emit_dirname(emitter);
@@ -287,6 +294,34 @@ mod tests {
                 assert_eq!(assembly.contains("__rt_mbstring_output_header:"), selected, "{name}");
                 assert_eq!(assembly.contains("elephc_mbstring_response_commit_v1"), selected, "{name}");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod zip_metadata_runtime_tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Verifies the zip wrapper metadata helpers follow the user-wrapper feature gate.
+    #[test]
+    fn zip_stream_runtime_helpers_are_gated() {
+        for name in ["linux-x86_64", "linux-aarch64", "macos-aarch64", "ios-arm64", "ios-sim-arm64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_platform_runtime(&mut emitter, RuntimeFeatures::none());
+            let assembly = emitter.output();
+            assert!(assembly.contains("elephc_runtime_stream_wrapper_class"), "{name}");
+            assert!(!assembly.contains("__rt_zip_register_stream_meta"), "{name}");
+            assert!(!assembly.contains("__rt_file_get_contents_wrapper"), "{name}");
+            assert!(!assembly.contains("_zip_stream_uri"), "{name}");
+
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_platform_runtime(&mut emitter, RuntimeFeatures {
+                user_stream_wrapper: true, ..RuntimeFeatures::none()
+            });
+            let assembly = emitter.output();
+            assert!(assembly.contains("__rt_zip_register_stream_meta"), "{name}");
+            assert!(assembly.contains("__rt_file_get_contents_wrapper"), "{name}");
         }
     }
 }

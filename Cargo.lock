@@ -767,6 +767,7 @@ dependencies = [
  "elephc-uri",
  "elephc-web",
  "elephc-zend",
+ "elephc-zip",
  "flate2",
  "fs2",
  "indicatif",
@@ -1062,6 +1063,14 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "elephc-zip"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde_json",
 ]
 
 [[package]]

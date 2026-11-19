@@ -56,7 +56,9 @@ use crate::types::checker::builtins::{
 ///
 /// `target` selects object-format spelling for target-visible symbols.
 /// `php_version` selects version-sensitive initial state and is included in the
-/// runtime cache identity by the caller.
+/// runtime cache identity by the caller. `features` gates optional tables; the same
+/// feature set is part of the runtime cache key, so two programs that differ only in
+/// wrapper support never share an object.
 ///
 /// The `--web` bridge references one C-ABI symbol
 /// (`elephc_web_capture`): it must carry the platform's C-ABI mangling so the
@@ -67,6 +69,7 @@ pub(crate) fn emit_runtime_data_fixed(
     heap_size: usize,
     target: Target,
     php_version: PhpVersion,
+    features: crate::codegen_support::RuntimeFeatures,
 ) -> String {
     // A compile-time `--ini memory_limit` lowers the allocator's runtime ceiling below the
     // reserved heap capacity. The runtime cache key includes the same value, so one cached
@@ -1069,6 +1072,8 @@ pub(crate) fn emit_runtime_data_fixed(
     ));
     out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Class name must be a valid object or a string\"\n");
     out.push_str(".globl _diag_file_get_contents_failed_msg\n_diag_file_get_contents_failed_msg:\n    .ascii \"Warning: file_get_contents(): Failed to open stream\\n\"\n");
+    out.push_str(".globl _diag_fgc_wrapper_prefix\n_diag_fgc_wrapper_prefix:\n    .ascii \"Warning: file_get_contents(\"\n");
+    out.push_str(".globl _diag_fgc_wrapper_suffix\n_diag_fgc_wrapper_suffix:\n    .ascii \"): Failed to open stream: operation failed\\n\"\n");
     out.push_str(".globl _diag_fopen_failed_msg\n_diag_fopen_failed_msg:\n    .ascii \"Warning: fopen(): Failed to open stream\\n\"\n");
     out.push_str(".globl _simplexml_wrapper_init_message\n_simplexml_wrapper_init_message:\n    .ascii \"SimpleXMLElement is not properly initialized\"\n");
     out.push_str(".globl _simplexml_wrapper_context_message\n_simplexml_wrapper_context_message:\n    .ascii \"It's not possible to assign a complex type to properties, resource given\"\n");
@@ -1213,6 +1218,18 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".p2align 3\n.globl _cstr2_base\n_cstr2_base:\n    .quad _cstr_buf2\n");
     out.push_str(".p2align 3\n.globl _cstr2_cap\n_cstr2_cap:\n    .quad 4096\n");
     out.push_str(&comm_directive("_eof_flags", 256, target));
+    out.push_str(&comm_directive("_runtime_wrapper_class_buf", 1024, target));
+    // Synthetic user-wrapper stream metadata: 256 handles, one kind byte, a
+    // 256-byte URI buffer, and the exact fopen mode each. Kind 1 is a native
+    // zip:// open, kind 2 is the ZipArchive::getStream memory wrapper. A program
+    // that cannot register a user wrapper never references these tables.
+    if features.user_stream_wrapper {
+        out.push_str(&comm_directive("_zip_stream_kind", 256, target));
+        out.push_str(&comm_directive("_zip_stream_uri_len", 2048, target));
+        out.push_str(&comm_directive("_zip_stream_uri", 65536, target));
+        out.push_str(&comm_directive("_zip_stream_mode_len", 2048, target));
+        out.push_str(&comm_directive("_zip_stream_mode", 4096, target));
+    }
     out.push_str(&comm_directive("_popen_files", 2048, target));
     out.push_str(&comm_directive("_dir_handles", 2048, target));
     // Per-fd glob:// state pointers (256 fds × 8B). Each slot is a pointer to
@@ -2023,6 +2040,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _meta_stype_stdio\n_meta_stype_stdio:\n    .ascii \"STDIO\"\n");
     out.push_str(".globl _meta_stype_socket\n_meta_stype_socket:\n    .ascii \"tcp_socket\"\n");
     out.push_str(".globl _meta_wrapper_plainfile\n_meta_wrapper_plainfile:\n    .ascii \"plainfile\"\n");
+    out.push_str(".globl _runtime_wrapper_class_empty\n_runtime_wrapper_class_empty:\n    .byte 0\n");
+    out.push_str(".globl _meta_stype_zip\n_meta_stype_zip:\n    .ascii \"zip\"\n");
+    out.push_str(".globl _meta_wrapper_zip\n_meta_wrapper_zip:\n    .ascii \"zip wrapper\"\n");
+    out.push_str(".globl _meta_stype_userspace\n_meta_stype_userspace:\n    .ascii \"user-space\"\n");
+    out.push_str(".globl _meta_wrapper_userspace\n_meta_wrapper_userspace:\n    .ascii \"user-space\"\n");
+    out.push_str(".globl _meta_mode_rb\n_meta_mode_rb:\n    .ascii \"rb\"\n");
     out.push_str(".globl _meta_mode_r\n_meta_mode_r:\n    .ascii \"r\"\n");
     out.push_str(".globl _meta_mode_w\n_meta_mode_w:\n    .ascii \"w\"\n");
     out.push_str(".globl _meta_mode_rw\n_meta_mode_rw:\n    .ascii \"r+\"\n");
@@ -2156,7 +2179,7 @@ mod tests {
             (Platform::Linux, Arch::X86_64, "8", "16"),
         ] {
             let target = Target::new(platform, arch);
-            let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85);
+            let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85, crate::codegen_support::RuntimeFeatures::all());
 
             let mut seen = 0usize;
             for line in asm.lines().filter(|line| line.starts_with(".comm ")) {
@@ -2194,7 +2217,7 @@ mod tests {
             (Target::new(Platform::Linux, Arch::AArch64), false),
             (Target::new(Platform::Linux, Arch::X86_64), false),
         ] {
-            let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85);
+            let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85, crate::codegen_support::RuntimeFeatures::all());
             assert_eq!(asm.contains("_iconv_write_options"), expected, "{target:?}");
         }
     }
@@ -2210,6 +2233,7 @@ mod tests {
             8_388_608,
             Target::new(Platform::Linux, Arch::AArch64),
             PhpVersion::Php85,
+            crate::codegen_support::RuntimeFeatures::all(),
         );
 
         assert!(asm.contains(".p2align 3\n.globl _stack_limit\n_stack_limit:\n    .quad 0\n"));
@@ -2223,8 +2247,8 @@ mod tests {
     #[test]
     fn test_error_reporting_mask_tracks_php_profile() {
         let target = Target::new(Platform::Linux, Arch::X86_64);
-        let php84 = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php84);
-        let php85 = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85);
+        let php84 = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php84, crate::codegen_support::RuntimeFeatures::all());
+        let php85 = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85, crate::codegen_support::RuntimeFeatures::all());
 
         assert!(php84.contains("_php_error_reporting:\n    .quad 32767\n"));
         assert!(php85.contains("_php_error_reporting:\n    .quad 30719\n"));
@@ -2256,7 +2280,7 @@ mod tests {
             (Platform::Linux, Arch::X86_64, ""),
         ] {
             let target = Target::new(platform, arch);
-            let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85);
+            let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85, crate::codegen_support::RuntimeFeatures::all());
             for slot in &bridge_slots {
                 let wanted = format!(".comm {prefix}{slot}, 8, ");
                 assert!(

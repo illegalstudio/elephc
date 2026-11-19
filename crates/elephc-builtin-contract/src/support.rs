@@ -412,9 +412,10 @@ mod tests {
         // `parse_str()` query parser, and the internal unserialize property store and
         // PHAR validity probe.
         assert_eq!(eval_internal, 151);
-        // 30 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
-        // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 382);
+        // 30 registry builtins awaiting eval homes, plus the PHP-visible prelude-provided
+        // and name-resolver-rewritten functions eval does not reach (see `eval_support`);
+        // the ten deprecated `zip_*` procedures are part of that latter group.
+        assert_eq!(eval_pending, 392);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -434,9 +435,10 @@ mod tests {
         // builtins as ordinary PCNTL registry operations.
         assert_eq!(aot_registry, 858);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
-        // `preg_grep` and the filter surface), and name-resolver rewrites remain outside
-        // the ordinary AOT registry. The two PHP-visible locale functions are prelude-provided.
-        assert_eq!(aot_external, 485 + curl_surface);
+        // `preg_grep`, the filter surface, and the ten deprecated `zip_*` procedures),
+        // and name-resolver rewrites remain outside the ordinary AOT registry. The two
+        // PHP-visible locale functions are prelude-provided.
+        assert_eq!(aot_external, 495 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -498,8 +500,9 @@ mod tests {
         // `__elephc_call_strict_types` reader, the tokenizer prelude's two line-aware
         // diagnostic helpers, `__elephc_set_memory_limit`, the `preg_grep()` prelude's
         // three internal compiled-pattern helpers, the internal `parse_str()` parser, and
-        // the internal unserialize property store and PHAR validity probe.
-        assert_eq!(unsupported, 533);
+        // the internal unserialize property store and PHAR validity probe, plus the ten
+        // deprecated `zip_*` procedures whose prelude surface eval does not implement.
+        assert_eq!(unsupported, 543);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

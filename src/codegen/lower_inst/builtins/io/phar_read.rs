@@ -27,7 +27,22 @@ pub(crate) fn lower_file_get_contents(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_arg_count_between(inst, "file_get_contents", 1, 5)?;
-    require_absent_stream_context(ctx, inst, 2, "file_get_contents")?;
+    // The stream-context argument is consumed by the shared context state that
+    // `stream_context_create()` installs; the generic reader below opens user wrappers
+    // through `__rt_fopen`, which reads that state. Keeping the argument in the plan
+    // preserves PHP's call shape even though elephc currently models one active context.
+    // Only a *literal* `zip://` path proves the read goes through that user-space wrapper;
+    // a dynamic path may take any built-in reader, and those do not consume the options.
+    // Rejecting every other context keeps a call like `file_get_contents($url, false, $ctx)`
+    // from silently dropping an `http` method/header configuration that `main` also refused.
+    let path_prefix = match inst.operands.first().copied() {
+        Some(path) => static_string_prefix(ctx, path)?,
+        None => None,
+    };
+    let literal_user_wrapper = path_prefix.as_deref().is_some_and(path_is_user_wrapper);
+    if !literal_user_wrapper {
+        require_absent_stream_context(ctx, inst, 2, "file_get_contents")?;
+    }
     let range = FileReadRange::from_operands(ctx, inst, 3, 4)?;
     range.emit_negative_length_guard(ctx, FILE_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE)?;
     emit_file_get_contents_bytes(ctx, inst, range.is_active())?;
@@ -89,12 +104,56 @@ fn emit_file_get_contents_bytes(
     Ok(())
 }
 
-/// Rejects a non-null `$context` argument instead of silently ignoring the stream context.
+/// Returns whether a literal path provably uses the injected `zip://` user-space wrapper.
 ///
-/// elephc has no stream-context plumbing on the read path, so honoring a real context is
-/// impossible. An omitted argument, a literal `null`, and the registry's `null` default all
-/// materialize a statically null operand and are accepted; anything else is a compile error
-/// naming the parameter rather than a read that quietly drops the caller's options.
+/// The wrapper reads the shared context slot, so it is the one literal scheme for which
+/// `file_get_contents()` accepts a non-null `$context`. Scheme matching is case-insensitive,
+/// as php-src lowercases wrapper protocols before lookup.
+fn path_is_user_wrapper(path: &str) -> bool {
+    path.to_ascii_lowercase().starts_with("zip://")
+}
+
+/// Returns the statically-known prefix of a concatenated path.
+///
+/// `file_get_contents('zip://' . $file . '#entry', false, $context)` is provably a
+/// `zip://` read even though the whole path is not constant: the left spine of the
+/// `StrConcat` graph starts at a literal. An unknown value stops the proof, so a
+/// dynamic `$url` still reaches the reader without a context.
+fn static_string_prefix(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<String>> {
+    if let Some(literal) = optional_const_string_operand(ctx, value)? {
+        return Ok(Some(literal));
+    }
+    let Some(value_ref) = ctx.function.value(value) else {
+        return Ok(None);
+    };
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let Some(inst_ref) = ctx.function.instruction(inst) else {
+        return Ok(None);
+    };
+    // The call operand is normally an `acquire` of the concatenated value; follow it
+    // (and any further copies) back to the value that actually owns the literal prefix.
+    if inst_ref.op == Op::Acquire {
+        let Some(source) = inst_ref.operands.first().copied() else {
+            return Ok(None);
+        };
+        return static_string_prefix(ctx, source);
+    }
+    if inst_ref.op != Op::StrConcat {
+        return Ok(None);
+    }
+    let Some(left) = inst_ref.operands.first().copied() else {
+        return Ok(None);
+    };
+    static_string_prefix(ctx, left)
+}
+
+/// Rejects a non-null `$context` argument for a built-in reader that cannot honor it.
+///
+/// An omitted argument, a literal `null`, and the registry's `null` default all materialize a
+/// statically null operand and are accepted. User-space wrapper reads are handled by the
+/// path check above and reach `__rt_file_get_contents_wrapper`.
 fn require_absent_stream_context(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,

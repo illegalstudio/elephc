@@ -478,15 +478,51 @@ string(3) "EFG"
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies a non-null `$context` is refused with a diagnostic that names the parameter, rather
-/// than being silently ignored: elephc has no stream-context plumbing on the read path, so a
-/// caller's context options could not be honored.
+/// Verifies a literal local path still refuses a non-null `$context` instead of silently
+/// dropping its options; only a literal `zip://` user-wrapper path accepts one.
 #[test]
-fn test_file_get_contents_rejects_a_non_null_stream_context() {
+fn test_file_get_contents_rejects_local_stream_context() {
+    let error = compile_source_expect_backend_error(
+        r#"<?php
+file_put_contents("x.txt", "ABC");
+$context = stream_context_create([]);
+echo file_get_contents("x.txt", false, $context);
+"#,
+    );
+    assert!(
+        error.contains("file_get_contents() $context argument"),
+        "expected a diagnostic naming $context, got: {error}"
+    );
+}
+
+/// Verifies built-in remote readers still refuse a non-null context rather than silently
+/// dropping its options; user-space wrapper reads take the dedicated context path instead.
+#[test]
+fn test_file_get_contents_rejects_builtin_remote_stream_context() {
     let error = compile_source_expect_backend_error(
         r#"<?php
 $context = stream_context_create([]);
-echo file_get_contents("x.txt", false, $context);
+echo file_get_contents("http://example.com", false, $context);
+"#,
+    );
+    assert!(
+        error.contains("file_get_contents() $context argument"),
+        "expected a diagnostic naming $context, got: {error}"
+    );
+}
+
+/// Verifies a dynamic path still refuses a non-null `$context`.
+///
+/// Only a literal `zip://` prefix proves the read goes through the user-space wrapper that
+/// consumes the announced context. A dynamic path may resolve to a built-in HTTP reader that
+/// ignores it, so accepting the context would silently drop the caller's options.
+#[test]
+fn test_file_get_contents_rejects_dynamic_path_stream_context() {
+    let error = compile_source_expect_backend_error(
+        r#"<?php
+$path = "http://example.com";
+$context = stream_context_create([]);
+echo file_get_contents($path, false, $context);
 "#,
     );
     assert!(

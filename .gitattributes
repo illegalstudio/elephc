@@ -1,3 +1,7 @@
 # The parser corpus fixtures are byte-exact PHP output that includes bare CR and CRLF
 # character data; they must never be newline-normalized or flagged as whitespace errors.
 crates/elephc-xml/src/parser/tests/fixtures/*.out -text -whitespace
+
+# Zip fixtures are byte-exact php-src expectations with trailing spaces and blank lines.
+tests/php_src/zip/** -text -whitespace
+tests/codegen/zip_php_src_cases.rs -text -whitespace

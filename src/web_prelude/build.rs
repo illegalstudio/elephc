@@ -29,11 +29,11 @@ use crate::opcache_prelude;
 use crate::parser::ast::{BinOp, CType, CastType, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{class, e_array, e_array_assoc, e_binop, e_bool, e_call, e_cast,
     e_const, e_index, e_instance_of, e_int, e_method_call, e_neg, e_new, e_not, e_null,
-    e_post_inc, e_static_prop, e_str, e_ternary, e_this, e_this_prop, e_var, extern_fn,
-    function, interface, internal_declarations, method, s_array_assign, s_assign, s_continue,
-    s_do_while, s_expr, s_for, s_foreach, s_if, s_prop_assign, s_return, s_return_void,
-    s_static_prop_array_assign, s_static_prop_assign, s_throw, t_array, t_class, t_mixed,
-    t_nullable, t_ptr, t_union
+    e_null_coalesce, e_post_inc, e_static_prop, e_str, e_ternary, e_this, e_this_prop, e_var,
+    extern_fn, function, interface, internal_declarations, method, s_array_assign, s_assign,
+    s_continue, s_do_while, s_expr, s_for, s_foreach, s_global, s_if, s_prop_assign, s_return,
+    s_return_void, s_static_prop_array_assign, s_static_prop_assign, s_throw, t_array, t_class,
+    t_mixed, t_nullable, t_ptr, t_union
 };
 use crate::web_prelude::PhpVersion;
 
@@ -4774,6 +4774,23 @@ fn decl_fn_ini_set() -> Stmt {
         crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_SET),
         crate::shared_ini_prelude::memory_limit_set(true),
     ];
+    body.push(s_global("__elephc_zip_open_basedir"));
+    body.push(s_if(
+        e_binop(e_var("option"), BinOp::StrictEq, e_str("open_basedir")),
+        vec![
+            s_assign(
+                "old",
+                e_null_coalesce(e_var("__elephc_zip_open_basedir"), e_str("")),
+            ),
+            s_assign(
+                "__elephc_zip_open_basedir",
+                e_cast(CastType::String, e_var("value")),
+            ),
+            s_return(e_var("old")),
+        ],
+        vec![],
+        None,
+    ));
     body.extend(opcache_prelude::build::opcache_ini_set_arms());
     body.extend(vec![
             s_assign("old", e_str("")),

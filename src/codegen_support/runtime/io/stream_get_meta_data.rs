@@ -18,9 +18,9 @@ use crate::codegen_support::abi;
 /// stream_get_meta_data: build the metadata hash for a stream descriptor.
 /// Input:  AArch64 x0 = descriptor / x86_64 rdi = descriptor
 /// Output: pointer to a `{string => mixed}` hash table
-pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
+pub fn emit_stream_get_meta_data(emitter: &mut Emitter, user_stream_wrapper: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_stream_get_meta_data_linux_x86_64(emitter);
+        emit_stream_get_meta_data_linux_x86_64(emitter, user_stream_wrapper);
         return;
     }
 
@@ -39,6 +39,58 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #80");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the stream descriptor
 
+    if user_stream_wrapper {
+        // -- synthetic user-wrapper descriptors (including zip://) --
+        emitter.instruction("mov x9, #0x4000");                                 // high half of USER_WRAPPER_FD_BASE
+        emitter.instruction("lsl x9, x9, #16");                                 // form 0x40000000
+        emitter.instruction("cmp x0, x9");                                      // is this a synthetic wrapper descriptor?
+        emitter.instruction("b.lt __rt_sgmd_regular");                          // real descriptors use the filesystem path
+        emitter.instruction("sub x10, x0, x9");                                 // handle slot = fd - base
+        emitter.instruction("cmp x10, #256");                                   // is the synthetic slot in range?
+        emitter.instruction("b.ge __rt_sgmd_regular");                          // out-of-range descriptors use the regular path
+        emitter.instruction("str x10, [sp, #72]");                              // save the handle slot
+        abi::emit_symbol_address(emitter, "x9", "_zip_stream_kind");
+        emitter.instruction("ldrb w11, [x9, x10]");                             // kind = _zip_stream_kind[slot]
+        emitter.instruction("str w11, [sp, #64]");                              // save the wrapper kind
+        emitter.instruction("mov x0, #16");                                     // initial capacity
+        emitter.instruction("mov x1, #7");                                      // value type = mixed
+        emitter.instruction("bl __rt_hash_new");                                // allocate the metadata hash
+        emitter.instruction("str x0, [sp, #8]");                                // save the hash pointer
+        emit_set_bool_const(emitter, "_meta_key_timed_out", 9, 0);
+        emit_set_bool_const(emitter, "_meta_key_blocked", 7, 1);
+        emitter.instruction("ldr x0, [sp, #0]");                                // reload the synthetic descriptor
+        emitter.instruction("bl __rt_feof");                                    // ask the wrapper for its current EOF state
+        emitter.instruction("str x0, [sp, #32]");                               // save the wrapper EOF flag
+        emit_set_bool_slot(emitter, "_meta_key_eof", 3, 32);
+        emitter.instruction("ldr w11, [sp, #64]");                              // reload the wrapper kind
+        emitter.instruction("cmp w11, #0");                                     // generic user wrapper?
+        emitter.instruction("b.eq __rt_sgmd_synth_generic");                    // use the user-space metadata shape
+        emitter.instruction("cmp w11, #1");                                     // direct zip:// wrapper?
+        emitter.instruction("b.ne __rt_sgmd_zip_no_wrapper");                   // getStream memory streams omit wrapper_type
+        emit_set_str_const(emitter, "_meta_key_wrapper_type", 12, "_meta_wrapper_zip", 11);
+        emitter.label("__rt_sgmd_zip_no_wrapper");
+        emit_set_str_const(emitter, "_meta_key_stream_type", 11, "_meta_stype_zip", 3);
+        emit_set_wrapper_str_aarch64(emitter, "_meta_key_mode", 4, "_zip_stream_mode", 4, "_zip_stream_mode_len");
+        emit_set_int_const(emitter, "_meta_key_unread_bytes", 12);
+        emit_set_bool_const(emitter, "_meta_key_seekable", 8, 1);
+        emit_set_wrapper_str_aarch64(emitter, "_meta_key_uri", 3, "_zip_stream_uri", 8, "_zip_stream_uri_len");
+        emitter.instruction("b __rt_sgmd_synth_done");                          // return the completed hash
+
+        emitter.label("__rt_sgmd_synth_generic");
+        emit_set_str_const(emitter, "_meta_key_stream_type", 11, "_meta_stype_userspace", 10);
+        emit_set_str_const(emitter, "_meta_key_wrapper_type", 12, "_meta_wrapper_userspace", 10);
+        emit_set_wrapper_str_aarch64(emitter, "_meta_key_mode", 4, "_zip_stream_mode", 4, "_zip_stream_mode_len");
+        emit_set_int_const(emitter, "_meta_key_unread_bytes", 12);
+        emit_set_bool_const(emitter, "_meta_key_seekable", 8, 1);
+        emit_set_wrapper_str_aarch64(emitter, "_meta_key_uri", 3, "_zip_stream_uri", 8, "_zip_stream_uri_len");
+        emitter.label("__rt_sgmd_synth_done");
+        emitter.instruction("ldr x0, [sp, #8]");                                // load the final hash pointer
+        emitter.instruction("ldp x29, x30, [sp, #80]");                         // restore frame pointer and return address
+        emitter.instruction("add sp, sp, #96");                                 // release the metadata frame
+        emitter.instruction("ret");                                             // return the synthetic-wrapper metadata
+    }
+
+    emitter.label("__rt_sgmd_regular");
     // -- seekability: lseek(fd, 0, SEEK_CUR) --
     emitter.instruction("mov x1, #0");                                          // offset 0
     emitter.instruction("mov x2, #1");                                          // SEEK_CUR
@@ -126,6 +178,25 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the metadata hash pointer
 }
 
+/// Stores one synthetic-wrapper string (mode or URI) as an owned hash value.
+///
+/// The per-handle source buffers are reused when the handle slot is recycled, so the
+/// value is persisted before insertion; `__rt_hash_set` copies the key, not a borrowed
+/// string value, and saved metadata must keep its original bytes.
+fn emit_set_wrapper_str_aarch64(emitter: &mut Emitter, key_sym: &str, key_len: i64, table: &str, shift: i64, len_table: &str) {
+    emitter.instruction("ldr x10, [sp, #72]");                                  // reload the handle slot
+    abi::emit_symbol_address(emitter, "x1", table);                             // value buffer base
+    emitter.instruction(&format!("lsl x11, x10, #{}", shift));                  // slot stride
+    emitter.instruction("add x1, x1, x11");                                     // value pointer
+    abi::emit_symbol_address(emitter, "x9", len_table);                         // value length table
+    emitter.instruction("ldr x2, [x9, x10, lsl #3]");                           // stored value length
+    emitter.instruction("bl __rt_str_persist");                                 // copy into owned storage
+    emitter.instruction("mov x3, x1");                                          // value_lo = owned pointer
+    emitter.instruction("mov x4, x2");                                          // value_hi = length
+    emitter.instruction("mov x5, #1");                                          // value tag = string
+    emit_hash_put_aarch64(emitter, key_sym, key_len);
+}
+
 /// Emit one `__rt_hash_set` with the value already staged in x3/x4/x5.
 fn emit_hash_put_aarch64(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the hash pointer
@@ -176,7 +247,7 @@ fn emit_set_str_slots(emitter: &mut Emitter, key_sym: &str, key_len: i64, ptr_sl
 }
 
 /// Emits the Linux x86_64 stream runtime helper for stream get meta data.
-fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
+fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter, user_stream_wrapper: bool) {
     let plat = emitter.platform;
     let nonblock = plat.o_nonblock();
 
@@ -189,9 +260,61 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     //                       [-64]=stype_ptr [-72]=stype_len
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 80");                                         // reserve the metadata spill slots
+    emitter.instruction("sub rsp, 96");                                         // reserve the metadata spill slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the stream descriptor
 
+        if user_stream_wrapper {
+        // -- synthetic user-wrapper descriptors (including zip://) --
+        emitter.instruction("mov r10, 0x40000000");                             // USER_WRAPPER_FD_BASE
+        emitter.instruction("cmp rdi, r10");                                    // is this a synthetic wrapper descriptor?
+        emitter.instruction("jl __rt_sgmd_regular_x86");                        // real descriptors use the filesystem path
+        emitter.instruction("mov r10, rdi");                                    // copy the synthetic descriptor
+        emitter.instruction("sub r10, 0x40000000");                             // handle slot = fd - USER_WRAPPER_FD_BASE
+        emitter.instruction("cmp r10, 256");                                    // is the synthetic slot in range?
+        emitter.instruction("jge __rt_sgmd_regular_x86");                       // out-of-range descriptors use the regular path
+        emitter.instruction("mov QWORD PTR [rbp - 88], r10");                   // save the handle slot
+        abi::emit_symbol_address(emitter, "r11", "_zip_stream_kind");
+        emitter.instruction("movzx eax, BYTE PTR [r11 + r10]");                 // kind = _zip_stream_kind[slot]
+        emitter.instruction("mov QWORD PTR [rbp - 80], rax");                   // save the wrapper kind
+        emitter.instruction("mov rdi, 16");                                     // initial capacity
+        emitter.instruction("mov rsi, 7");                                      // value type = mixed
+        emitter.instruction("call __rt_hash_new");                              // allocate the metadata hash
+        emitter.instruction("mov QWORD PTR [rbp - 16], rax");                   // save the hash pointer
+        emit_set_bool_const_x86(emitter, "_meta_key_timed_out", 9, 0);
+        emit_set_bool_const_x86(emitter, "_meta_key_blocked", 7, 1);
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // reload the synthetic descriptor
+        emitter.instruction("call __rt_feof");                                  // ask the wrapper for its current EOF state
+        emitter.instruction("mov QWORD PTR [rbp - 40], rax");                   // save the wrapper EOF flag
+        emit_set_bool_slot_x86(emitter, "_meta_key_eof", 3, 40);
+        emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                   // reload the wrapper kind
+        emitter.instruction("test rax, rax");                                   // generic user wrapper?
+        emitter.instruction("jz __rt_sgmd_synth_generic_x86");                  // use the user-space metadata shape
+        emitter.instruction("cmp rax, 1");                                      // direct zip:// wrapper?
+        emitter.instruction("jne __rt_sgmd_zip_no_wrapper_x86");                // getStream memory streams omit wrapper_type
+        emit_set_str_const_x86(emitter, "_meta_key_wrapper_type", 12, "_meta_wrapper_zip", 11);
+        emitter.label("__rt_sgmd_zip_no_wrapper_x86");
+        emit_set_str_const_x86(emitter, "_meta_key_stream_type", 11, "_meta_stype_zip", 3);
+        emit_set_wrapper_str_x86(emitter, "_meta_key_mode", 4, "_zip_stream_mode", 4, "_zip_stream_mode_len");
+        emit_set_int_const_x86(emitter, "_meta_key_unread_bytes", 12);
+        emit_set_bool_const_x86(emitter, "_meta_key_seekable", 8, 1);
+        emit_set_wrapper_str_x86(emitter, "_meta_key_uri", 3, "_zip_stream_uri", 8, "_zip_stream_uri_len");
+        emitter.instruction("jmp __rt_sgmd_synth_done_x86");                    // return the completed hash
+
+        emitter.label("__rt_sgmd_synth_generic_x86");
+        emit_set_str_const_x86(emitter, "_meta_key_stream_type", 11, "_meta_stype_userspace", 10);
+        emit_set_str_const_x86(emitter, "_meta_key_wrapper_type", 12, "_meta_wrapper_userspace", 10);
+        emit_set_wrapper_str_x86(emitter, "_meta_key_mode", 4, "_zip_stream_mode", 4, "_zip_stream_mode_len");
+        emit_set_int_const_x86(emitter, "_meta_key_unread_bytes", 12);
+        emit_set_bool_const_x86(emitter, "_meta_key_seekable", 8, 1);
+        emit_set_wrapper_str_x86(emitter, "_meta_key_uri", 3, "_zip_stream_uri", 8, "_zip_stream_uri_len");
+        emitter.label("__rt_sgmd_synth_done_x86");
+        emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                   // load the final hash pointer
+        emitter.instruction("add rsp, 96");                                     // release the metadata spill slots
+        emitter.instruction("pop rbp");                                         // restore the caller frame pointer
+        emitter.instruction("ret");                                             // return the synthetic-wrapper metadata
+    }
+
+    emitter.label("__rt_sgmd_regular_x86");
     // -- seekability: lseek(fd, 0, SEEK_CUR) --
     emitter.instruction("xor esi, esi");                                        // offset 0
     emitter.instruction("mov edx, 1");                                          // SEEK_CUR
@@ -272,9 +395,26 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
 
     // -- return the completed hash --
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the final hash pointer
-    emitter.instruction("add rsp, 80");                                         // release the metadata spill slots
+    emitter.instruction("add rsp, 96");                                         // release the metadata spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the metadata hash pointer
+}
+
+/// Stores one synthetic-wrapper string as an owned hash value on x86_64.
+fn emit_set_wrapper_str_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64, table: &str, shift: i64, len_table: &str) {
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // reload the handle slot
+    abi::emit_symbol_address(emitter, "rcx", table);                            // value buffer base
+    emitter.instruction("mov r11, r10");                                        // copy the slot index
+    emitter.instruction(&format!("shl r11, {}", shift));                        // slot stride
+    emitter.instruction("add rcx, r11");                                        // value pointer
+    abi::emit_symbol_address(emitter, "r11", len_table);                        // value length table
+    emitter.instruction("mov rdx, QWORD PTR [r11 + r10 * 8]");                  // stored value length
+    emitter.instruction("mov rax, rcx");                                        // persist the borrowed pointer
+    emitter.instruction("call __rt_str_persist");                               // copy into owned storage
+    emitter.instruction("mov rcx, rax");                                        // value_lo = owned pointer
+    emitter.instruction("mov r8, rdx");                                         // value_hi = length
+    emitter.instruction("mov r9, 1");                                           // value tag = string
+    emit_hash_put_x86(emitter, key_sym, key_len);
 }
 
 /// Emit one `__rt_hash_set` with the value already staged in rcx/r8/r9.

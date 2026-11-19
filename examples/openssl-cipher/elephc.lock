@@ -4,7 +4,7 @@ schema = 1
 [[package]]
 name = "openssl-crypto"
 version = "3.6.4"
-recipe = 1
+recipe = 2
 dependencies = ["zlib"]
 provides = ["openssl-crypto"]
 

@@ -50,7 +50,7 @@ jobs:
           esac
           cargo build --locked --target "$triple" \
             -p elephc-curl -p elephc-xml -p elephc-tidy -p elephc-fileinfo -p elephc-gmp \
-            -p elephc-tokenizer -p elephc-phar -p elephc-tls -p elephc-uri
+            -p elephc-tokenizer -p elephc-phar -p elephc-tls -p elephc-uri -p elephc-zip
           echo "triple=$triple" >> "$GITHUB_OUTPUT"
       - name: Publish iOS bridge outputs
         id: publish
@@ -68,6 +68,7 @@ jobs:
             target/${{ steps.build.outputs.triple }}/debug/libelephc_phar.a
             target/${{ steps.build.outputs.triple }}/debug/libelephc_tls.a
             target/${{ steps.build.outputs.triple }}/debug/libelephc_uri.a
+            target/${{ steps.build.outputs.triple }}/debug/libelephc_zip.a
 
   inventory:
     needs: build

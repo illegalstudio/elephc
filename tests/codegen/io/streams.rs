@@ -7697,6 +7697,68 @@ fclose($f);
     );
 }
 
+/// Verifies a throwing wrapper read closes its hidden file_get_contents() handle.
+///
+/// Without exceptional cleanup, repeated caught failures fill all 256 wrapper handle
+/// slots, so the final plain wrapper open fails even though each throw was handled.
+#[test]
+fn test_file_get_contents_wrapper_read_throw_releases_handle() {
+    let out = compile_and_run(
+        r#"<?php
+class ThrowReadW {
+    public function stream_open($p, $m, $o, &$op): bool { return true; }
+    public function stream_read($n): string { throw new RuntimeException("boom"); }
+    public function stream_eof(): bool { return false; }
+    public function stream_close(): void {}
+}
+stream_wrapper_register("throwread", "ThrowReadW");
+$caught = 0;
+for ($i = 0; $i < 260; $i++) {
+    try { file_get_contents("throwread://x"); } catch (Throwable $e) { $caught++; }
+}
+class GoodReadW {
+    public function stream_open($p, $m, $o, &$op): bool { return true; }
+    public function stream_read($n): string { return "ok"; }
+    public function stream_eof(): bool { return true; }
+    public function stream_close(): void {}
+}
+stream_wrapper_register("goodread", "GoodReadW");
+$stream = fopen("goodread://x", "r");
+var_dump(is_resource($stream));
+var_dump($caught);
+if (is_resource($stream)) { fclose($stream); }
+"#,
+    );
+    assert_eq!(out.trim_end(), "bool(true)\nint(260)");
+}
+
+/// Verifies wrapper metadata keeps its saved URI and the actual fopen mode.
+///
+/// The wrapper metadata buffers are per handle slot, so a saved array must not alias
+/// them when the slot is reused, and a writable wrapper must not report "rb".
+#[test]
+fn test_stream_get_meta_data_wrapper_keeps_uri_and_mode() {
+    let out = compile_and_run(
+        r#"<?php
+class MetaW {
+    public function stream_open($p, $m, $o, &$op): bool { return true; }
+    public function stream_read($n): string { return ""; }
+    public function stream_eof(): bool { return true; }
+    public function stream_close(): void {}
+}
+stream_wrapper_register("metaw", "MetaW");
+$first = fopen("metaw://first", "w");
+$saved = stream_get_meta_data($first);
+fclose($first);
+$second = fopen("metaw://second", "a+");
+$current = stream_get_meta_data($second);
+echo $saved["uri"], "|", $saved["mode"], "|", $current["uri"], "|", $current["mode"];
+fclose($second);
+"#,
+    );
+    assert_eq!(out, "metaw://first|w|metaw://second|a+");
+}
+
 /// Verifies compiled PHP output for stream get meta data reports eof consistently with feof.
 #[test]
 fn test_stream_get_meta_data_reports_eof_consistently_with_feof() {

@@ -27,7 +27,7 @@ jobs:
   managed-native-smoke:
     name: Managed Native Packages (${{ inputs.target }})
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
 
@@ -48,6 +48,11 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
+      - name: Install iOS Rust targets
+        if: inputs.target == 'macos-aarch64'
+        shell: elephc-ci-shell {0}
+        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
       - name: Restore shared compiler
         uses: ./.github/actions/restore-build-artifact
         with:
@@ -66,6 +71,21 @@ jobs:
       - name: Verify isolated native cache starts empty
         shell: elephc-ci-shell {0}
         run: test ! -e "$ELEPHC_NATIVE_CACHE"
+
+      - name: Ensure cmake for the managed libzip build
+        # The pinned CI image predates the Dockerfile's cmake entry, and the
+        # managed libzip recipe is CMake-only. The runner user cannot use apt
+        # inside the container, so fetch the pinned Kitware binary and publish
+        # its directory through the image shell's explicit extra-path hook.
+        if: runner.os == 'Linux'
+        shell: elephc-ci-shell {0}
+        run: |
+          cmake_bin="$(sh scripts/ci/ensure_cmake.sh --print-path)"
+          if [ -n "$cmake_bin" ]; then
+            test -x "$cmake_bin/cmake"
+            echo "ELEPHC_CI_EXTRA_PATH=$cmake_bin" >> "$GITHUB_ENV"
+            echo "ELEPHC_CMAKE=$cmake_bin/cmake" >> "$GITHUB_ENV"
+          fi
 
       - name: Materialize catalog PCRE2 from verified source
         shell: elephc-ci-shell {0}
@@ -138,6 +158,22 @@ jobs:
               --manifest-path "$RUNNER_TEMP/oniguruma-$target/elephc.toml"
           done
 
+      - name: Build libzip and its iOS chain for device and Simulator
+        # The same managed package recipes run under the Xcode toolchain for both
+        # iOS targets: bzip2 and xz via their configure/Makefile paths, OpenSSL via
+        # its ios64-xcrun/iossimulator-arm64-xcrun configurations (no-asm), and
+        # libzip via a generated CMake toolchain file.
+        if: inputs.target == 'macos-aarch64'
+        shell: elephc-ci-shell {0}
+        run: |
+          for target in ios-arm64 ios-sim-arm64; do
+            source scripts/ci/configure_ios_native_toolchain.sh "$target"
+            mkdir -p "$RUNNER_TEMP/zip-$target"
+            ./target/debug/elephc native add libzip \
+              --target "$target" \
+              --manifest-path "$RUNNER_TEMP/zip-$target/elephc.toml"
+          done
+
       - name: Materialize catalog curl (and its libssh2/nghttp2/openssl/zlib dependencies) from verified source
         # curl's recipe declares libssh2, nghttp2, openssl and zlib as
         # dependencies, and libssh2 declares openssl and zlib in turn (see
@@ -189,6 +225,20 @@ jobs:
           git diff --exit-code -- \
             examples/tidy/elephc.toml \
             examples/tidy/elephc.lock
+
+      - name: Materialize catalog libzip and its compression/crypto chain from verified source
+        # libzip is the ext/zip engine itself. `elephc native add libzip` declares
+        # bzip2, xz, zlib and openssl through the catalog; the recipe compiles all
+        # five from the verified tarballs and never probes a system -lzip/-lbz2/
+        # -llzma/-lcrypto. The committed example lock must stay reproducible.
+        shell: elephc-ci-shell {0}
+        run: |
+          ./target/debug/elephc native add libzip \
+            --target "${{ inputs.target }}" \
+            --manifest-path examples/zip/elephc.toml
+          git diff --exit-code -- \
+            examples/zip/elephc.toml \
+            examples/zip/elephc.lock
 
       - name: Compile and run regex through the production resolver
         shell: elephc-ci-shell {0}
@@ -309,6 +359,58 @@ jobs:
           grep -F '      Hello <b>world</b>' "$RUNNER_TEMP/tidy.out"
           grep -F 'replacing unexpected i with </i>' "$RUNNER_TEMP/tidy.err"
 
+      - name: Compile and run zip through the production resolver
+        # Exercises the chain every tests/codegen/zip fixture also needs (see
+        # tests/codegen/support/zip_native.rs) end to end: the elephc_zip bridge
+        # staticlib linked against the managed libzip + bzip2 + liblzma + libz +
+        # libssl + libcrypto archives from the project's lock. The example writes,
+        # reads back, comments, extracts and streams an archive, so every asserted
+        # line proves the bridge reached real libzip.
+        shell: elephc-ci-shell {0}
+        run: |
+          ./target/debug/elephc \
+            build \
+            --target "${{ inputs.target }}" \
+            examples/zip/main.php
+          ./examples/zip/main > "$RUNNER_TEMP/zip.out"
+          grep -F "entries: 3" "$RUNNER_TEMP/zip.out"
+          grep -F "0 readme.txt" "$RUNNER_TEMP/zip.out"
+          grep -F "archive comment: generated" "$RUNNER_TEMP/zip.out"
+
+      - name: Compile and run curl and zip together
+        # The two bridges share zlib and OpenSSL, so this pins the resolver's
+        # dependent-before-dependency archive order: GNU ld cannot satisfy
+        # libzip's inflate/deflate references if the curl chain emitted zlib
+        # first. The program only calls curl_version() (no network) and writes
+        # one archive, so a link-order regression fails here, not in production.
+        shell: elephc-ci-shell {0}
+        run: |
+          project="$RUNNER_TEMP/zip-curl"
+          mkdir -p "$project"
+          printf '[native]\nschema = 1\n\n[native.dependencies]\n' > "$project/elephc.toml"
+          ./target/debug/elephc native add curl \
+            --target "${{ inputs.target }}" \
+            --manifest-path "$project/elephc.toml"
+          ./target/debug/elephc native add libzip \
+            --target "${{ inputs.target }}" \
+            --manifest-path "$project/elephc.toml"
+          printf '%s\n' \
+            '<?php' \
+            '$version = curl_version();' \
+            'echo "curl: ", $version['"'"'version'"'"'], "\n";' \
+            '$zip = new ZipArchive();' \
+            'echo $zip->open(__DIR__ . '"'"'/combined.zip'"'"', ZipArchive::CREATE) ? "open\n" : "fail\n";' \
+            '$zip->addFromString('"'"'a.txt'"'"', '"'"'a'"'"');' \
+            'echo $zip->close() ? "close\n" : "fail\n";' \
+            > "$project/main.php"
+          ./target/debug/elephc build --with-curl --with-zip \
+            --target "${{ inputs.target }}" \
+            "$project/main.php"
+          "$project/main" > "$RUNNER_TEMP/zip-curl.out"
+          grep -F 'curl: ' "$RUNNER_TEMP/zip-curl.out"
+          grep -F 'open' "$RUNNER_TEMP/zip-curl.out"
+          grep -F 'close' "$RUNNER_TEMP/zip-curl.out"
+
       - name: Reinstall locked state offline
         shell: elephc-ci-shell {0}
         run: |
@@ -337,6 +439,11 @@ jobs:
             --offline \
             --target "${{ inputs.target }}" \
             --manifest-path examples/tidy/elephc.toml
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ inputs.target }}" \
+            --manifest-path examples/zip/elephc.toml
 
       - name: Audit consumer compilation
         if: always()

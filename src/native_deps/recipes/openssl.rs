@@ -1,13 +1,16 @@
 //! Purpose:
-//! Builds static OpenSSL 3.5.8 `libssl`/`libcrypto` archives used only as libcurl's TLS backend.
+//! Builds static OpenSSL 3.5.8 `libssl`/`libcrypto` archives used as libcurl's TLS backend
+//! and libzip's AES/ZipCrypto backend.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for openssl recipe revision 1.
+//! - `crate::native_deps::recipe::CuratedRecipes` for the current openssl recipe revision.
 //!
 //! Key details:
 //! - Runs OpenSSL's documented out-of-tree `Configure` + `make build_libs`, static only
 //!   (`no-shared`), and retains only the two archives plus the exact catalog-declared header set;
 //!   never a system OpenSSL. PHP `openssl_encrypt`/`hash()` stay on `elephc-crypto` (RustCrypto).
+//! - The iOS targets use OpenSSL's `xcrun` configurations (device and Simulator) with
+//!   `no-asm`, so the build does not depend on the host assembling perlasm output.
 
 use std::fs;
 use std::path::Path;
@@ -52,6 +55,11 @@ fn build_variant(request: &RecipeRequest<'_>, include_ssl: bool) -> Result<(), N
     if !include_ssl {
         command.arg("no-ssl");
     }
+    if request.target.platform == Platform::MacOS
+        && request.target.apple_variant != AppleVariant::MacOS
+    {
+        command.arg("no-asm");
+    }
     run_checked(&mut command, "configure trusted OpenSSL recipe")?;
 
     let mut make = request.toolchain.command(Path::new("make"));
@@ -91,17 +99,39 @@ fn build_variant(request: &RecipeRequest<'_>, include_ssl: bool) -> Result<(), N
 
 /// Maps an Elephc target to OpenSSL's own documented `Configure` target name.
 fn configure_target(target: Target) -> Result<&'static str, NativeError> {
-    match (target.platform, target.arch, target.apple_variant) {
-        (Platform::MacOS, Arch::AArch64, AppleVariant::MacOS) => Ok("darwin64-arm64-cc"),
-        (Platform::MacOS, Arch::AArch64, AppleVariant::IOS) => Ok("ios64-xcrun"),
-        (Platform::MacOS, Arch::AArch64, AppleVariant::IOSSimulator) => {
+    match (target.platform, target.apple_variant, target.arch) {
+        (Platform::MacOS, AppleVariant::MacOS, Arch::AArch64) => Ok("darwin64-arm64-cc"),
+        (Platform::MacOS, AppleVariant::IOS, Arch::AArch64) => Ok("ios64-xcrun"),
+        (Platform::MacOS, AppleVariant::IOSSimulator, Arch::AArch64) => {
             Ok("iossimulator-arm64-xcrun")
         }
-        (Platform::Linux, Arch::AArch64, _) => Ok("linux-aarch64"),
-        (Platform::Linux, Arch::X86_64, _) => Ok("linux-x86_64"),
+        (Platform::Linux, _, Arch::AArch64) => Ok("linux-aarch64"),
+        (Platform::Linux, _, Arch::X86_64) => Ok("linux-x86_64"),
         _ => Err(NativeError::new(
             NativeErrorKind::Catalog,
             format!("no OpenSSL Configure target for '{}'", target.as_str()),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies every supported Apple target maps to a real OpenSSL `Configure` name.
+    #[test]
+    fn apple_targets_have_openssl_configure_names() {
+        assert_eq!(
+            configure_target(Target::new(Platform::MacOS, Arch::AArch64)).unwrap(),
+            "darwin64-arm64-cc"
+        );
+        assert_eq!(
+            configure_target(Target::new_apple(Arch::AArch64, AppleVariant::IOS)).unwrap(),
+            "ios64-xcrun"
+        );
+        assert_eq!(
+            configure_target(Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator)).unwrap(),
+            "iossimulator-arm64-xcrun"
+        );
     }
 }

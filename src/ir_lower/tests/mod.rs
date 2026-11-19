@@ -313,6 +313,7 @@ fn try_lower_source_at_for_target_with_reachability(
         false,
         &mut prelude_inventory,
     );
+    let ast = crate::zip_prelude::inject_if_used(ast, false, false, &mut prelude_inventory);
     let ast = crate::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::tokenizer_prelude::inject_if_used_with_web(ast, false, 134_217_728, false, &mut prelude_inventory);
     let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);

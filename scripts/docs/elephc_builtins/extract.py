@@ -627,6 +627,12 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
         "filter",
         "crates/elephc-builtin-contract/src/catalog_filter.rs",
     ),
+    # The deprecated procedural zip API is built AST over the ZipArchive prelude.
+    "zip": (
+        "zip_prelude/build.rs",
+        "zip",
+        "crates/elephc-builtin-contract/src/catalog_zip.rs",
+    ),
 }
 
 # PHP-visible functions whose injected prelude is not keyed by the contract ``Module`` or

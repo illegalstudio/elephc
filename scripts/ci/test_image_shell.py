@@ -58,6 +58,16 @@ class ImageExecution(unittest.TestCase):
         self.assertTrue(next(arg for arg in args if arg.startswith('PATH=')).startswith(
             f'PATH={self.temporary}/elephc-consumer-bin:'))
 
+    def test_extra_path_is_prepended_inside_the_image(self):
+        """A pinned host tool can join PATH without replacing the trusted image entries."""
+        self.env['ELEPHC_CI_EXTRA_PATH'] = '/runner/cmake/bin'
+        args = invocation(self.script, self.env)
+        path = next(arg for arg in args if arg.startswith('PATH='))
+        self.assertEqual(
+            path,
+            'PATH=/runner/cmake/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+        )
+
     def test_php_uses_selected_preinstalled_sdk(self):
         """NTS and ZTS images expose their release SDK while keeping the debug SDK separate."""
         self.env['ELEPHC_CI_EXEC_ROLE'] = 'php-ts'

@@ -114,8 +114,8 @@ find_native_archive() {
 
 CURL_ARCHIVE="$(find_native_archive curl 8.21.0 4 libcurl.a)"
 LIBSSH2_ARCHIVE="$(find_native_archive libssh2 1.11.1 2 libssh2.a)"
-LIBSSL_ARCHIVE="$(find_native_archive openssl 3.5.8 1 libssl.a)"
-LIBCRYPTO_ARCHIVE="$(find_native_archive openssl 3.5.8 1 libcrypto.a)"
+LIBSSL_ARCHIVE="$(find_native_archive openssl 3.5.8 2 libssl.a)"
+LIBCRYPTO_ARCHIVE="$(find_native_archive openssl 3.5.8 2 libcrypto.a)"
 ZLIB_ARCHIVE="$(find_native_archive zlib 1.3.2 1 libz.a)"
 NGHTTP2_ARCHIVE="$(find_native_archive nghttp2 1.70.0 2 libnghttp2.a)"
 

@@ -57,6 +57,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [PCNTL](php/pcntl.md) — forking, child waits, signals, process replacement, process groups, sessions, daemonization, and target-specific controls
 - [File information](php/fileinfo.md) - MIME types, encodings, custom magic databases and the complete PHP fileinfo surface
 - [Filter](php/filter.md) — validation, sanitization, array filtering, request input, callbacks and the complete FILTER_* constant family
+- [Zip](php/zip.md) - `ZipArchive` archives, compression, AES encryption, glob/pattern adds, extraction, and the deprecated procedural API on the managed libzip 1.11.4 package
 - [Tokenizer](php/tokenizer.md): PHP source inspection, lossless tokens, `PhpToken` and `TOKEN_PARSE`.
 - [XML](php/xml.md): the `ext/xml` SAX parser (`XMLParser`, handlers, `xml_parse_into_struct()`, error codes), `ext/xmlwriter` (`XMLWriter`, memory and URI output, DTDs, namespaces), and SimpleXML (live child/attribute views, XPath, namespaces, and DOM imports) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`)
 - [Tidy](php/tidy.md) — `ext/tidy`: HTML repair, configuration, diagnostics, the `tidy`/`tidyNode` objects and all 161 `TIDY_*` constants on a statically pinned libtidy 5.8.0 from the native catalog (`elephc native add libtidy`)

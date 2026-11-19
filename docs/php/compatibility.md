@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3181 constants).
 
-Overall coverage: functions **1130 / 2169** (52%), classes **204 / 329** (62%), constants **1673 / 3181** (53%).
+Overall coverage: functions **1140 / 2169** (53%), classes **205 / 329** (62%), constants **1673 / 3181** (53%).
 
 ## Coverage by PHP module
 
@@ -82,7 +82,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`xmlwriter`](./xml.md#functions) | 42 / 42 · 100% | 1 / 1 · 100% | - |
 | `xsl` | - | 0 / 1 · 0% | 0 / 14 · 0% |
 | [`zend opcache`](./opcache.md#functions) | 8 / 8 · 100% | - | - |
-| `zip` | 0 / 10 · 0% | 0 / 1 · 0% | - |
+| `zip` | 10 / 10 · 100% | 1 / 1 · 100% | - |
 | `zlib` | 4 / 30 · 13% | 0 / 2 · 0% | 0 / 27 · 0% |
 
 The counts above are what a compiled program has. Exported backend support differs in these modules (compiled / eval()):
@@ -100,8 +100,9 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `session` functions: 23 / 0
 - `standard` functions: 394 / 354
 - `standard` constants: 174 / 153
+- `zip` functions: 10 / 0
 
-Of those functions, 223 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
+Of those functions, 233 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session`, `zip` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
 
 The remaining 2 baseline extensions expose no functions, classes, or constants of their own, so they have no row above: `lexbor`, `mysqlnd`.
 
@@ -163,6 +164,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compiled-script manifest plus a runtime parsed-script cache for dynamic include/require through eval(), with optional persistent file caching; ordinary code remains AOT-compiled and there is no tracing JIT |
 | [File information](./fileinfo.md) ([PHP](https://www.php.net/manual/en/book.fileinfo.php)) | ✅ Supported | Six functions, finfo and eleven constants, backed by pinned static libmagic 5.46 with an embedded database; native and eval use the same declarations. Declare the libmagic native package; --with-fileinfo enables opaque dynamic use. |
+| [Zip](./zip.md) ([PHP](https://www.php.net/manual/en/book.zip.php)) | ✅ Supported | ZipArchive and the deprecated procedural zip_* API on libzip 1.11.4, built from the managed `libzip` catalog package (with bzip2, XZ/LZMA, zlib, and OpenSSL): stored/deflate/bzip2/LZMA/XZ reads, PPMd entry metadata, AES and ZipCrypto reads/writes, ZIP64, comments, mtimes, external attributes, glob/pattern adds, extraction, and callbacks. The project declares the package with `elephc native add libzip`; there is no system `-lzip` fallback. --with-zip forces the surface for opaque eval. The zip:// wrapper, PHP-shaped stream metadata, CRC-on-read, stream-context passwords, archive-close invalidation, AES and ZipCrypto writes are implemented. The module coverage table counts the ten procedural zip_* functions as shared `PreludeProvided` contracts (10/10 compiled) and ZipArchive as a prelude class (1/1 compiled); with the prelude injected (`--with-zip` or static zip use), both surfaces are also callable from `eval()`. Every runnable php-src fixture except gh17319 is migrated; gh17319 expects false from PHP's own freed archive resource. bug51353 carries an unconditional php-src SKIPIF for its 100,000-entry stress run. |
 
 ## Beyond PHP
 
