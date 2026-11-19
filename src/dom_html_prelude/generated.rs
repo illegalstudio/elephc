@@ -392,7 +392,7 @@ fn decl_class_domnode() -> Stmt {
                 .returns(t_mixed())
                 .body(vec![
                     s_if(
-                        e_instance_of(e_this(), "DOMDocument"),
+                        e_binop(e_instance_of(e_this(), "DOMDocument"), BinOp::Or, e_instance_of(e_this(), "DOMDocumentType")),
                         vec![
                             s_return(e_null()),
                         ],

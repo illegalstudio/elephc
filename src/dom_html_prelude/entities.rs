@@ -259,6 +259,16 @@ fn decl_fn_elephc_dom_decode_entities() -> Stmt {
                             vec![],
                             None,
                         ),
+                        // an undeclared `&name;` is an entity reference with no content in libxml2
+                        s_if(
+                            e_binop(e_var("_end"), BinOp::Gt, e_binop(e_var("_i"), BinOp::Add, e_int(1))),
+                            vec![
+                                s_assign("_i", e_binop(e_var("_end"), BinOp::Add, e_int(1))),
+                                s_continue(1),
+                            ],
+                            vec![],
+                            None,
+                        ),
                     ],
                     vec![],
                     None,

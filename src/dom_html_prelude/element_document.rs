@@ -1067,6 +1067,7 @@ fn element_members() -> ClassBuilder {
                             s_assign("old", e_method_call(e_this(), "getAttributeNode", vec![e_prop(e_var("attr"), "nodeName")])),
                             s_expr(e_method_call(e_this(), "setAttribute", vec![e_prop(e_var("attr"), "nodeName"), e_cast(CastType::String, e_prop(e_var("attr"), "nodeValue"))])),
                             s_prop_assign(e_var("attr"), "ownerElement", e_this()),
+                            s_prop_assign(e_var("attr"), "parentNode", e_this()),
                             s_if(
                                 e_instance_of(e_var("old"), "DOMAttr"),
                                 vec![
@@ -1107,6 +1108,7 @@ fn element_members() -> ClassBuilder {
                             ]),
                             ),
                             s_prop_assign(e_var("attr"), "ownerElement", e_this()),
+                            s_prop_assign(e_var("attr"), "parentNode", e_this()),
                             s_if(
                                 e_instance_of(e_var("old"), "DOMAttr"),
                                 vec![

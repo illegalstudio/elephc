@@ -481,7 +481,13 @@ fn tree() -> ClassBuilder {
                             s_if(
                                 e_binop(e_binop(e_binop(e_var("nodeKind"), BinOp::StrictEq, e_int(2)), BinOp::And, e_binop(e_var("kind"), BinOp::StrictEq, e_int(1))), BinOp::And, e_binop(e_var("child"), BinOp::StrictEq, e_null())),
                                 vec![
-                                    s_expr(e_call("call_user_func", vec![e_array(vec![e_this(), e_str("setAttributeNode")]), e_var("node")])),
+                                    s_assign("self", e_this()),
+                                    s_if(
+                                        e_instance_of(e_var("self"), "DOMElement"),
+                                        vec![s_expr(e_method_call(e_var("self"), "setAttributeNode", vec![e_var("node")]))],
+                                        vec![],
+                                        None,
+                                    ),
                                     s_return(e_var("node")),
                                 ],
                                 vec![],

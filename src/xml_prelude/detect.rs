@@ -101,7 +101,7 @@ pub(super) fn program_uses_xml(program: &[Stmt]) -> bool {
 /// native serializer). A DOM-only program calling one of them pulls the bridge in by itself, with
 /// no `simplexml_*` call to name it.
 pub(super) fn is_xml_bridge_method(method: &str) -> bool {
-    ["loadXML", "load", "loadHTML", "loadHTMLFile", "saveXML", "save", "saveHTML", "saveHTMLFile", "C14N", "C14NFile"]
+    ["loadXML", "load", "saveXML", "save", "saveHTML", "saveHTMLFile", "C14N", "C14NFile"]
         .iter()
         .any(|candidate| method.eq_ignore_ascii_case(candidate))
 }
