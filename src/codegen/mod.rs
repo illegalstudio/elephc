@@ -661,6 +661,17 @@ fn finalize_user_asm(
     )?;
     // The module-level helpers above resolve callables too, so they can ask for a shared body.
     lower_inst::emit_pending_property_guard_helpers(module, &mut emitter, &mut data, &mut shared)?;
+    // ...and reflect a class (an eval or callable wrapper that hands back a member reflector), so
+    // the builders they requested after the body drain are emitted here, with the guards those
+    // builders may raise in turn.
+    lower_inst::emit_pending_reflection_class_builders(
+        module,
+        &mut emitter,
+        &mut data,
+        &mut shared,
+        regalloc_linear,
+    )?;
+    lower_inst::emit_pending_property_guard_helpers(module, &mut emitter, &mut data, &mut shared)?;
     let empty_globals = HashSet::<String>::default();
     let empty_static_vars = HashMap::<(String, String), PhpType>::default();
     let user_functions = runtime_user_function_sigs(module);

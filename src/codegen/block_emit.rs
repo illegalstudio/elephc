@@ -731,6 +731,16 @@ fn emit_module_body(
         }
     }
     // A typed-property guard this body asked for is emitted right behind it, never inside it.
+    super::lower_inst::emit_pending_property_guard_helpers(module, emitter, data, shared)?;
+    // So is a `ReflectionClass` builder: a parallel worker's request lives in the worker's own
+    // shared state, which the serial drains after the pass never see.
+    super::lower_inst::emit_pending_reflection_class_builders(
+        module,
+        emitter,
+        data,
+        shared,
+        regalloc_linear,
+    )?;
     super::lower_inst::emit_pending_property_guard_helpers(module, emitter, data, shared)
 }
 
