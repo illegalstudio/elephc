@@ -434,11 +434,11 @@ const LIBTIDY_VERSIONS: &[PackageVersion] = &[PackageVersion {
 }];
 /// Pinned file/libmagic with a database embedded by the reviewed recipe.
 const LIBMAGIC_VERSIONS: &[PackageVersion] = &[PackageVersion {
-    version: "5.46",
+    version: "5.48",
     source: SourceArchive {
-        https_url: "https://astron.com/pub/file/file-5.46.tar.gz",
-        sha256: "c9cc77c7c560c543135edc555af609d5619dbef011997e988ce40a3d75d86088",
-        exact_size: 1_312_892,
+        https_url: "https://astron.com/pub/file/file-5.48.tar.gz",
+        sha256: "ed14656883b23a364b4057c05595d93252da9bc473d30106519519d0da141283",
+        exact_size: 2_693_209,
         body_limit: 8 * 1024 * 1024,
     },
     recipe_revision: 1,
@@ -449,7 +449,7 @@ const LIBMAGIC_VERSIONS: &[PackageVersion] = &[PackageVersion {
     provides: &["libmagic"],
 }];
 const PACKAGES: &[PackageSpec] = &[
-    PackageSpec { name: "libmagic", default_version: "5.46", versions: LIBMAGIC_VERSIONS },
+    PackageSpec { name: "libmagic", default_version: "5.48", versions: LIBMAGIC_VERSIONS },
     PackageSpec {
         name: "pcre2",
         default_version: "10.47",
@@ -716,9 +716,9 @@ mod tests {
     #[test]
     fn fileinfo_libmagic_catalog_is_pinned_and_target_complete() {
         let spec = version("libmagic", None).expect("fileinfo native package");
-        assert_eq!(spec.version, "5.46");
-        assert_eq!(spec.source.exact_size, 1_312_892);
-        assert_eq!(spec.source.sha256, "c9cc77c7c560c543135edc555af609d5619dbef011997e988ce40a3d75d86088");
+        assert_eq!(spec.version, "5.48");
+        assert_eq!(spec.source.exact_size, 2_693_209);
+        assert_eq!(spec.source.sha256, "ed14656883b23a364b4057c05595d93252da9bc473d30106519519d0da141283");
         assert_eq!(spec.supported_targets, TARGETS);
         assert_eq!(spec.ordered_link_outputs, &["lib/libelephc_magic_database.a", "lib/libmagic.a"]);
         assert!(spec.dependencies.is_empty());
