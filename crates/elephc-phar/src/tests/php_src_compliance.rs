@@ -224,28 +224,35 @@ pub(super) fn php_src_hash_signature_algorithms_round_trip() {
     }
 }
 
-/// Mirrors the OpenSSL entry of `test_signaturealgos.phpt` for the supported
-/// RSA-SHA1 form: the signature verifies against the sidecar and reports
-/// PHP's `OpenSSL` hash type.
+/// Mirrors the OpenSSL entries of `test_signaturealgos.phpt` and
+/// `ext/phar/tests/tar/tar_openssl_hash.phpt` for the supported RSA-SHA1 form:
+/// native, tar, and zip signatures verify against the sidecar under the default
+/// `phar.require_hash=1` policy and report PHP's `OpenSSL` hash type.
 #[test]
-pub(super) fn php_src_openssl_sha1_signature_reports_openssl() {
-    let path = temp_path("openssl_sha1", "phar");
-    let path_bytes = path.to_string_lossy();
-    assert_eq!(
-        put_entry_bytes(path_bytes.as_bytes(), b"file1.txt", b"hi"),
-        Some(2)
-    );
-    assert_eq!(
-        sign_archive_openssl(path_bytes.as_bytes(), TEST_RSA_KEY_PEM.as_bytes()),
-        Some(())
-    );
-    write_test_public_key(&path);
-    let (flag, _) = read_signature_info(path_bytes.as_bytes()).expect("OpenSSL signature");
-    assert_eq!(flag, PHAR_OPENSSL_SIGNATURE_TYPE);
-    assert_eq!(
-        signature_type_name(path_bytes.as_bytes()).as_deref(),
-        Some(&b"OpenSSL"[..])
-    );
-    assert!(parse_archive_path(&path).is_some());
-    remove_signed_fixture(&path);
+pub(super) fn php_src_openssl_sha1_signatures_round_trip() {
+    for extension in ["phar", "tar", "zip"] {
+        let path = temp_path("openssl_sha1", extension);
+        let path_bytes = path.to_string_lossy();
+        assert_eq!(
+            put_entry_bytes(path_bytes.as_bytes(), b"file1.txt", b"hi"),
+            Some(2)
+        );
+        assert_eq!(
+            sign_archive_openssl(path_bytes.as_bytes(), TEST_RSA_KEY_PEM.as_bytes()),
+            Some(())
+        );
+        write_test_public_key(&path);
+        let (flag, _) = read_signature_info(path_bytes.as_bytes()).expect("OpenSSL signature");
+        assert_eq!(flag, PHAR_OPENSSL_SIGNATURE_TYPE);
+        assert_eq!(
+            signature_type_name(path_bytes.as_bytes()).as_deref(),
+            Some(&b"OpenSSL"[..]),
+            "{extension}: OpenSSL type name"
+        );
+        assert!(
+            parse_archive_path(&path).is_some(),
+            "{extension}: OpenSSL signature must verify under require_hash=1"
+        );
+        remove_signed_fixture(&path);
+    }
 }
