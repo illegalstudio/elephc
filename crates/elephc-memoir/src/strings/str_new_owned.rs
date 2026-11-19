@@ -23,6 +23,12 @@ pub fn emit_allocate_owned_string(emitter: &mut impl Emitter) {
     crate::heap_alloc::emit_fresh_with_kind(emitter, HeapKind::new(STRING_HEAP_KIND));
 }
 
+/// Grows a prepared concat buffer and marks the result as an independent string owner.
+pub fn emit_grow_owned_string(emitter: &mut impl Emitter, x86_scratch: &str) {
+    abi::emit_call_label(emitter, "__rt_concat_grow");
+    crate::heap_alloc::emit_stamp_result_kind(emitter, HeapKind::new(STRING_HEAP_KIND), x86_scratch);
+}
+
 /// Emits the direct owned-string allocation helper for the active target.
 pub fn emit_str_new_owned(emitter: &mut impl Emitter) {
     if emitter.arch() == Arch::X86_64 {
