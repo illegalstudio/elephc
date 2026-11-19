@@ -42,3 +42,32 @@ pub(in crate::interpreter) fn source_view(expr: &EvalExpr,
         _ => local_producer_contract(expr, context, scope),
     }
 }
+
+/// Evaluates a literal RHS with source entry metadata while preserving an existing destination context.
+pub(in crate::interpreter) fn evaluate_assignment(expr: &EvalExpr, name: &str,
+    producer: &mut LocalAssignmentProducer, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+        if let EvalExpr::Array(elements) = expr {
+            let (value, observed) = array_literals::evaluate_literal(elements, context, scope, values)?;
+            let mut schemas = Vec::new();
+            for contract in scope.local_type(name).cloned().into_iter()
+                .chain(generic_local_contracts(scope, name, context).into_iter()
+                    .filter(|ty| arrays::contains_contents(&generic_type(ty)))) {
+                if let Some(schema) = arrays::source_schema(&generic_type(&contract)) {
+                    let pending = crate::eval_ir::array_contents_type(schema.clone())
+                        .is_some_and(|ty| crate::eval_ir::pending_array_contents(&ty));
+                    if !pending && !schemas.contains(&schema) { schemas.push(schema); }
+                }
+            }
+            let source = match schemas.len() {
+                0 => observed, 1 => parameter_type(&schemas.remove(0)),
+                _ => parameter_type(&Type::Intersection(schemas)),
+            };
+            producer.binding = Some(source.clone()); producer.source = Some(source);
+            return Ok(value);
+        }
+    }
+    eval_owned_expr(expr, context, scope, values)
+}

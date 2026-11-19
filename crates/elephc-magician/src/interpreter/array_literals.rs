@@ -11,6 +11,9 @@
 
 use super::*;
 
+mod source_contracts;
+pub(in crate::interpreter) use source_contracts::evaluate_literal;
+
 /// Recognizes only normalized native-default metadata, not PHP-visible function calls.
 pub(super) fn native_default_array_spread(element: &EvalArrayElement) -> Option<&EvalExpr> {
     let EvalArrayElement::Value(EvalExpr::Call { name, args }) = element else { return None; };
@@ -25,6 +28,7 @@ pub(super) fn eval_indexed_array(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+    mut observed: Option<&mut source_contracts::LiteralSource>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut array = values.array_new(elements.len())?;
     context.clear_array_metadata(array);
@@ -33,9 +37,16 @@ pub(super) fn eval_indexed_array(
         for (index, element) in elements.iter().enumerate() {
             let index = values.int(index as i64)?;
             operands.push(index);
+            let mut producer = None;
             let (value, target) = match element {
+                EvalArrayElement::Value(element) if observed.is_some() => {
+                    let (value, observed) = source_contracts::evaluate_value(element, context, scope, values)?;
+                    producer = observed;
+                    (value, None)
+                }
                 EvalArrayElement::Value(element) => (eval_owned_expr(element, context, scope, values)?, None),
                 EvalArrayElement::Reference(element) => {
+                    if observed.is_some() { producer = local_binding_origins::source_view(element, context, scope); }
                     eval_reference_array_element_value(element, context, scope, values)?
                 }
                 EvalArrayElement::KeyValue { .. } | EvalArrayElement::KeyReference { .. } => {
@@ -44,6 +55,7 @@ pub(super) fn eval_indexed_array(
             };
             operands.push(value);
             array = values.array_set(array, index, value)?;
+            if let Some(source) = observed.as_deref_mut() { source.record(index, producer, value, context, values)?; }
             if let Some(target) = target {
                 bind_array_element_reference(context, array, index, target, values)?;
             }
@@ -59,6 +71,7 @@ pub(super) fn eval_assoc_array(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+    mut observed: Option<&mut source_contracts::LiteralSource>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut array = values.assoc_new(elements.len())?;
     context.clear_array_metadata(array);
@@ -87,6 +100,7 @@ pub(super) fn eval_assoc_array(
                         key
                     };
                     array = values.array_set(array, key, value)?;
+                    if let Some(source) = observed.as_deref_mut() { source.record(key, None, value, context, values)?; }
                 }
                 continue;
             }
@@ -104,8 +118,14 @@ pub(super) fn eval_assoc_array(
             } else {
                 take_next_array_key(&mut next_key, &mut operands, values)?
             };
+            let mut producer = None;
             let (value, target) = if by_ref {
+                if observed.is_some() { producer = local_binding_origins::source_view(value, context, scope); }
                 eval_reference_array_element_value(value, context, scope, values)?
+            } else if observed.is_some() {
+                let (value, observed) = source_contracts::evaluate_value(value, context, scope, values)?;
+                producer = observed;
+                (value, None)
             } else {
                 (eval_owned_expr(value, context, scope, values)?, None)
             };
@@ -113,6 +133,7 @@ pub(super) fn eval_assoc_array(
             if explicit_key.is_none() { validate_array_append_key(key, context, values)?; }
             checked_array_keys::for_receiver(array, key, context, values)?;
             array = values.array_set(array, key, value)?;
+            if let Some(source) = observed.as_deref_mut() { source.record(key, producer, value, context, values)?; }
             if let Some(target) = target {
                 bind_array_element_reference(context, array, key, target, values)?;
             }

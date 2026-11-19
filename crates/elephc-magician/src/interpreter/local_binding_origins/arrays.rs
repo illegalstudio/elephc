@@ -38,7 +38,7 @@ pub(super) fn prepare(scope: &ElephcEvalScope, name: &str, producer: Option<&Eva
 }
 
 /// Projects array alternatives without narrowing explicitly open declaration arms.
-pub(super) fn source_schema(ty: &Type) -> Option<Type> {
+pub(in crate::interpreter) fn source_schema(ty: &Type) -> Option<Type> {
     if let Some(schema) = array_contents_schema(ty) { return Some(schema.clone()); }
     match ty {
         Type::Atom(name) if matches!(name.as_str(), "array" | "mixed") => Some(Type::atom("array")),
@@ -100,7 +100,7 @@ fn infer_schema(value: RuntimeCellHandle, context: &mut ElephcEvalContext,
 }
 
 /// Recognizes internal content metadata inside a compound producer without using value tags.
-pub(super) fn contains_contents(ty: &Type) -> bool {
+pub(in crate::interpreter) fn contains_contents(ty: &Type) -> bool {
     array_contents_schema(ty).is_some() || match ty {
         Type::Intersection(members) | Type::Union(members) => members.iter().any(contains_contents),
         Type::Nullable(inner) => contains_contents(inner),
@@ -127,7 +127,7 @@ pub(in crate::interpreter) fn prepare_write(scope: &ElephcEvalScope, name: &str,
     let element = match producer {
         Some(producer) => {
             let ty = generic_type(producer);
-            if matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            if matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) && contains_contents(&ty) {
                 source_schema(&ty).unwrap_or(ty)
             } else { ty }
         }

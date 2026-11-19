@@ -281,8 +281,8 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::StoreVar { name, value } => {
-            let producer = local_binding_origins::prepare_assignment(value, context, scope);
-            let value = eval_owned_expr(value, context, scope, values)?;
+            let mut producer = local_binding_origins::prepare_assignment(value, context, scope);
+            let value = local_binding_origins::evaluate_assignment(value, name, &mut producer, context, scope, values)?;
             let replaced = store_local_with_origin(context, scope, name.clone(), value, producer, values)?;
             retire_scope_replacements(replaced, context, values)?;
             Ok(EvalControl::None)

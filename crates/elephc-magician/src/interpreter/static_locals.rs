@@ -69,8 +69,8 @@ pub(super) fn bind(name: &str, init: &EvalExpr, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let Some(function) = context.current_function().map(str::to_string) else {
-        let producer = local_binding_origins::prepare_assignment(init, context, scope);
-        let value = eval_owned_expr(init, context, scope, values)?;
+        let mut producer = local_binding_origins::prepare_assignment(init, context, scope);
+        let value = local_binding_origins::evaluate_assignment(init, name, &mut producer, context, scope, values)?;
         let replaced = store_local_with_origin(context, scope, name.to_string(), value, producer, values)?;
         retire_scope_replacements(replaced, context, values)?;
         return Ok(());

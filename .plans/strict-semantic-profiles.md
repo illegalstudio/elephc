@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step237 (this commit). Remaining feature integration is active. Issue:
+Verified through step238 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -2906,3 +2906,9 @@ Eighteen exact tests pass in job31f83f8e. New cases verify typed and open parame
 Assignment preparation now carries distinct binding and current-source metadata through walker and actual bytecode stores. Successful assignments record source views by scope name and generation; changed, shared, referenced and global-aliased entries conservatively discard them. These views never enter enforced local contracts. Scalar parameter declarations seed source views after binding, and closure captures copy them in a separate source_view field, preserving legal scalar reassignment without Locals. First array writes use the current source view and validate the actual candidate before publishing a schema.
 
 Twenty-two exact focused tests pass in jobb418f63b, including new inferred-versus-declared-mixed scalar copies, generation invalidation, scalar parameter views and captured views with independent Nullability. Captured untyped scalar reassignment remains legal. Earlier pending/closed array origins, reference mutation rejection, actual VM copy stores and generic unions remain green with balanced owners. Default build, diff/assembly hygiene and source stability pass. This is an ArrayTypes source-context channel, not complete runtime Mixed proof support. Literal element contexts, compound producers, shared scalar proof invalidation, mutations, property/static/native lifetimes and remaining compiler/host obligations are unfinished; public admission remains unchanged.
+
+### Verified238: literal source and destination contexts
+
+Indexed/hash builders optionally observe source producers at each element's actual evaluation point, after key effects and before the value. Nested literals return a per-evaluation source schema alongside their existing owned runtime value. Duplicate normalized keys retain only the final source entry. Assignment RHS evaluation preserves an existing declared/content destination context and validates the full candidate after source effects. Inference retains nullable/union/mixed alternatives and compatible nominal values instead of using incidental runtime tags or inventing mixed after heterogeneous inference.
+
+Twenty-seven exact focused tests pass in job2defcc72. New cases cover declared mixed/union literal entries, key/value assignment effects, duplicate keys, complete effects before failed replacement, nested sources, empty nested evidence, declared destinations, nullable and inherited nominal values. A regression also preserves scalar alternatives of a declared mixed producer whose current occupant is itself an array, both in literals and first appends. Existing source/capture/parameter/pending/reference/VM/generic/nullability cases remain green with balanced owners. Default build, diff/assembly hygiene and source stability pass. Native-default spread source alternatives and reference-element guards still need audit; this is not complete runtime Mixed support or public ArrayTypes admission.

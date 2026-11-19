@@ -319,3 +319,71 @@ fn strict_array_origins_scalar_capture_views_do_not_enable_locals() {
         }
     }
 }
+
+/// Literal entries retain declared mixed/union alternatives instead of using incidental cell tags.
+#[test]
+fn strict_array_origins_literal_entries_preserve_open_producers() {
+    let source = "function literal_mixed_value():mixed{return 1;} \
+        function literal_union_value(int|string $value){$items=[$value];$items[]='allowed';$items[]=2; \
+        try{$items[]=false;}catch(TypeError $error){echo 'U';}return count($items);} \
+        $open=literal_mixed_value();$items=[$open];$items[]='allowed'; \
+        echo literal_union_value(1);return count($items);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "U3"); assert_eq!(returned, FakeValue::Int(2));
+    }
+}
+
+/// Literal effects precede later source snapshots and duplicate keys retain only the final entry.
+#[test]
+fn strict_array_origins_literal_effects_and_duplicate_keys() {
+    let source = "$key=1;$items=[($key='new'),$key];$items[]='more'; \
+        $map=['key'=>1,'key'=>'last'];$map['other']='more'; \
+        try{$map['bad']=2;}catch(TypeError $error){echo 'D';} \
+        $value=1;$keyed=[($value='key')=>$value];$keyed['next']='valid'; \
+        $before=7;try{$before=[1,($effect='s'),($later='tail')];}catch(TypeError $error){echo 'H';} \
+        echo $effect,$later,$before;return count($items)+count($map)+count($keyed);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "DHstail7"); assert_eq!(returned, FakeValue::Int(7));
+    }
+}
+
+/// Nested literal sources and existing declared destinations retain explicit element alternatives.
+#[test]
+fn strict_array_origins_nested_literal_and_destination_contexts() {
+    let source = "function nested_mixed_value():mixed{return 1;} \
+        $items=[[nested_mixed_value()]];$items[]=['allowed']; \
+        $empty=[[],[1]];$empty[]=[2]; \
+        array<int|string> $typed=[];$typed=[1,'allowed'];$typed[]=2; \
+        return count($items)+count($empty)+count($typed);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert!(output.is_empty()); assert_eq!(returned, FakeValue::Int(8));
+    }
+}
+
+/// Explicit nullable alternatives and inherited object values keep their compatible source schema.
+#[test]
+fn strict_array_origins_literal_nullable_and_nominal_compatibility() {
+    let source = "function literal_nullable(?int $value){$items=[1,$value];$items[]=null;return count($items);} \
+        class LiteralOriginBase{}class LiteralOriginChild extends LiteralOriginBase{} \
+        $items=[new LiteralOriginBase(),new LiteralOriginChild()];$items[]=new LiteralOriginChild(); \
+        echo literal_nullable(1);return count($items);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert_eq!(output, "3"); assert_eq!(returned, FakeValue::Int(3));
+    }
+}
+
+/// A declared mixed array occupant remains a mixed element source for literals and first appends.
+#[test]
+fn strict_array_origins_mixed_array_occupants_keep_scalar_alternatives() {
+    let source = "function mixed_array_occupant():mixed{return [1];} \
+        $items=[mixed_array_occupant()];$items[]='allowed'; \
+        $other=[];$other[]=mixed_array_occupant();$other[]=false;return count($items)+count($other);";
+    for dispatch in [false, true] {
+        let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
+        assert!(output.is_empty()); assert_eq!(returned, FakeValue::Int(4));
+    }
+}

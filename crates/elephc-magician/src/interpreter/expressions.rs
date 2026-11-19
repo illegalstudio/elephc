@@ -122,9 +122,9 @@ fn eval_expr_with_result_ownership(
                     )
                 })
             {
-                eval_assoc_array(elements, context, scope, values)
+                eval_assoc_array(elements, context, scope, values, None)
             } else {
-                eval_indexed_array(elements, context, scope, values)
+                eval_indexed_array(elements, context, scope, values, None)
             }
         }
         EvalExpr::ArrayGet { array, index } => {
@@ -257,8 +257,8 @@ fn eval_expr_with_result_ownership(
             }
         }
         EvalExpr::Assign { name, value } => {
-            let producer = local_binding_origins::prepare_assignment(value, context, scope);
-            let value = eval_owned_expr(value, context, scope, values)?;
+            let mut producer = local_binding_origins::prepare_assignment(value, context, scope);
+            let value = local_binding_origins::evaluate_assignment(value, name, &mut producer, context, scope, values)?;
             let replaced = store_local_with_origin(context, scope, name.clone(), value, producer, values)?;
             retire_scope_replacements(replaced, context, values)?;
             // The scope owns the stored cell; the expression result borrows that owner so
