@@ -117,7 +117,11 @@ fn analyze(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Bounde
     let dominance = crate::ir_passes::compute_dominance(function);
     let bound_block = match function.value(bound)?.def { ValueDef::Instruction { block, .. } | ValueDef::BlockParam { block, .. } => block };
     let bound_load = defining_instruction(function, bound).filter(|inst| inst.op == Op::LoadLocal);
-    if lp.contains(bound_block) || bound_load.is_some() {
+    // A literal bound the lowering emitted in the header (`$i >= 0`) is recomputed in the
+    // preheader, exactly as a later hoist would place it.
+    let bound_literal = defining_instruction(function, bound)
+        .is_some_and(|inst| inst.op == Op::ConstI64 && matches!(inst.immediate, Some(Immediate::I64(_))));
+    if !bound_literal && (lp.contains(bound_block) || bound_load.is_some()) {
         let load = bound_load?;
         let Some(Immediate::LocalSlot(bound_slot)) = load.immediate else { return None; };
         let storage = function.locals.get(bound_slot.as_raw() as usize)?;
@@ -129,7 +133,7 @@ fn analyze(function: &Function, lp: &NaturalLoop, data: &DataPool, pass: &Bounde
                 inst.immediate == Some(Immediate::LocalSlot(bound_slot)) && inst.op != Op::LoadLocal
             })) { return None; }
     }
-    if !lp.contains(bound_block) && !dominance.dominates(bound_block, preheader) { return None; }
+    if !bound_literal && !lp.contains(bound_block) && !dominance.dominates(bound_block, preheader) { return None; }
     let metadata = function.value(bound)?;
     if !matches!((&metadata.ir_type, &metadata.php_type),
         (IrType::I64, PhpType::Int) | (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)) { return None; }
@@ -249,11 +253,20 @@ fn apply(function: &mut Function, plan: &Plan) {
     let seed_int = integer_payload(&mut builder, seed);
     let bound = match builder.function().value(plan.bound).unwrap().def {
         ValueDef::Instruction { block, .. } if plan.blocks.contains(&block) => {
-            let load = defining_instruction(builder.function(), plan.bound).unwrap();
-            let immediate = load.immediate.clone();
-            let ty = load.result_type; let php = load.result_php_type.clone();
-            let ownership = if ty == IrType::I64 { Ownership::NonHeap } else { Ownership::Borrowed };
-            builder.emit(Op::LoadLocal, vec![], immediate, ty, php, ownership).unwrap()
+            let literal = defining_instruction(builder.function(), plan.bound)
+                .and_then(|inst| match (inst.op, &inst.immediate) {
+                    (Op::ConstI64, Some(Immediate::I64(value))) => Some(*value),
+                    _ => None,
+                });
+            if let Some(value) = literal {
+                builder.emit_const_i64(value)
+            } else {
+                let load = defining_instruction(builder.function(), plan.bound).unwrap();
+                let immediate = load.immediate.clone();
+                let ty = load.result_type; let php = load.result_php_type.clone();
+                let ownership = if ty == IrType::I64 { Ownership::NonHeap } else { Ownership::Borrowed };
+                builder.emit(Op::LoadLocal, vec![], immediate, ty, php, ownership).unwrap()
+            }
         }
         _ => plan.bound,
     };
