@@ -30,8 +30,8 @@ pub(super) fn parse_goto(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     *pos += 1;
-    let label = match tokens.get(*pos).map(|(token, _)| token) {
-        Some(Token::Identifier(label)) => label.clone(),
+    let label = match tokens.get(*pos).and_then(label_text) {
+        Some(label) => label.to_owned(),
         _ => {
             let at = tokens.get(*pos).map_or(span, |(_, meta)| meta.span);
             return Err(CompileError::new(
@@ -50,9 +50,21 @@ pub(super) fn parse_goto(
 /// Only a plain identifier immediately followed by `:` qualifies. `Foo::bar()` lexes `::` as one
 /// token, alternative-syntax `else:`/`case`/`default` use their own keyword tokens, and a ternary
 /// reaches its `:` only after a `?`, so none of them are mistaken for a label.
-pub(super) fn starts_goto_label(tokens: &[SpannedToken], pos: usize) -> bool {
-    matches!(tokens.get(pos).map(|(token, _)| token), Some(Token::Identifier(_)))
-        && matches!(tokens.get(pos + 1).map(|(token, _)| token), Some(Token::Colon))
+pub(super) fn goto_label(tokens: &[SpannedToken], pos: usize) -> Option<&str> {
+    if !matches!(tokens.get(pos + 1).map(|(token, _)| token), Some(Token::Colon)) {
+        return None;
+    }
+    tokens.get(pos).and_then(label_text)
+}
+
+/// Keeps contextual eval label spellings as type or literal tokens elsewhere in the grammar.
+fn label_text((token, metadata): &SpannedToken) -> Option<&str> {
+    match token {
+        Token::Identifier(label) => Some(label),
+        Token::Enum | Token::True | Token::False | Token::Null
+            if crate::syntax::parser::runtime_fragment() => token.word_spelling(metadata),
+        _ => None,
+    }
 }
 
 /// Parses a `name:` label with the cursor on the identifier, consuming the name and the colon.

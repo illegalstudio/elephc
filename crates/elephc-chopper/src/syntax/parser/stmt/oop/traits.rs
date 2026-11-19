@@ -188,7 +188,9 @@ fn parse_trait_adaptation_target(
 ) -> Result<(Option<Name>, String), CompileError> {
     // A bare method reference may be any semi-reserved word, as in a method declaration:
     // `use T { match as protected matchContent; }`.
-    if !super::super::name_starts_at(tokens, *pos) {
+    let qualified_runtime_target = crate::syntax::parser::runtime_fragment()
+        && matches!(tokens.get(*pos + 1), Some((Token::DoubleColon, _)));
+    if !qualified_runtime_target && !super::super::name_starts_at(tokens, *pos) {
         if let Some(method) = adaptation_bareword(tokens, *pos) {
             *pos += 1;
             return Ok((None, method));

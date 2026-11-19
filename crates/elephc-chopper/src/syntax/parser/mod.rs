@@ -22,6 +22,7 @@ mod declare_context;
 pub mod declaration_groups;
 /// Resolves relative `namespace\name` references against the namespace being parsed.
 mod relative_names;
+mod runtime_templates;
 pub(crate) mod tokenizer_feedback;
 pub mod stmt;
 
@@ -34,6 +35,7 @@ pub use relative_names::{
 
 /// Re-exports the root AST node for a parsed PHP file, containing all top-level statements.
 pub use ast::Program;
+pub use runtime_templates::{RuntimeTemplateHeader, RuntimeTemplateReference, RuntimeTemplateSyntax};
 
 use std::cell::{Cell, RefCell};
 
@@ -66,6 +68,23 @@ thread_local! {
     static ANONYMOUS_CLASS_SCOPE: RefCell<Option<(u64, usize)>> = const { RefCell::new(None) };
     /// Whether the current parse only validates syntax and may discard statement ASTs eagerly.
     static VALIDATION_ONLY: Cell<bool> = const { Cell::new(false) };
+    /// Whether the input is a tagless fragment for the runtime interpreter.
+    static RUNTIME_FRAGMENT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Restores the enclosing parser's fragment mode, including on unwind.
+struct RuntimeFragmentGuard(bool);
+
+impl Drop for RuntimeFragmentGuard {
+    /// Restores the preceding parse mode.
+    fn drop(&mut self) {
+        RUNTIME_FRAGMENT.with(|flag| flag.set(self.0));
+    }
+}
+
+/// Indicates that implicit array keys are assigned by the consumer at runtime.
+pub(crate) fn runtime_fragment() -> bool {
+    RUNTIME_FRAGMENT.with(Cell::get)
 }
 
 /// Scoped parser mode that drops each top-level statement after it validates.
@@ -85,16 +104,32 @@ struct AnonymousClassState {
     counter: usize,
 }
 
+impl AnonymousClassState {
+    /// Saves the enclosing parse's anonymous classes and starts a fresh set.
+    fn isolate() -> Self {
+        Self {
+            declarations: take_anonymous_classes(),
+            scope: ANONYMOUS_CLASS_SCOPE.with(|scope| scope.replace(None)),
+            counter: ANONYMOUS_CLASS_COUNTER.with(|counter| counter.replace(0)),
+        }
+    }
+}
+
+impl Drop for AnonymousClassState {
+    /// Restores anonymous class declarations and numbering on exit or unwind.
+    fn drop(&mut self) {
+        let declarations = std::mem::take(&mut self.declarations);
+        ANONYMOUS_CLASSES.with(|classes| classes.replace(declarations));
+        ANONYMOUS_CLASS_SCOPE.with(|saved| saved.replace(self.scope));
+        ANONYMOUS_CLASS_COUNTER.with(|saved| saved.set(self.counter));
+    }
+}
+
 impl ValidationOnlyGuard {
     /// Enables validation-only parsing and remembers the previous thread-local state.
     fn start() -> Self {
         let previous = VALIDATION_ONLY.with(|flag| flag.replace(true));
-        let compiler_classes = (!previous).then(|| {
-            let declarations = take_anonymous_classes();
-            let scope = ANONYMOUS_CLASS_SCOPE.with(|scope| scope.replace(None));
-            let counter = ANONYMOUS_CLASS_COUNTER.with(|counter| counter.replace(0));
-            AnonymousClassState { declarations, scope, counter }
-        });
+        let compiler_classes = (!previous).then(AnonymousClassState::isolate);
         Self { previous, compiler_classes }
     }
 }
@@ -102,11 +137,7 @@ impl ValidationOnlyGuard {
 impl Drop for ValidationOnlyGuard {
     /// Restores the parser mode of the enclosing parse.
     fn drop(&mut self) {
-        if let Some(AnonymousClassState { declarations, scope, counter }) = self.compiler_classes.take() {
-            ANONYMOUS_CLASSES.with(|classes| classes.replace(declarations));
-            ANONYMOUS_CLASS_SCOPE.with(|saved| saved.replace(scope));
-            ANONYMOUS_CLASS_COUNTER.with(|saved| saved.set(counter));
-        }
+        drop(self.compiler_classes.take());
         VALIDATION_ONLY.with(|flag| flag.set(self.previous));
     }
 }
@@ -233,6 +264,63 @@ pub fn parse_with_mode(
     }
 }
 
+/// Parses an eval fragment starting in PHP code mode with the shared syntax AST.
+///
+/// Retains ordered array entries, source ranges and the fragment's strict-types flag.
+pub fn parse_runtime_fragment(tokens: &[SpannedToken]) -> Result<(Program, bool), CompileError> {
+    parse_runtime_fragment_in_scope(tokens, "", false).map(|(ast, strict, _)| (ast, strict))
+}
+
+/// Parses tagless runtime tokens under a declaration's retained namespace and strict-types mode.
+pub fn parse_runtime_fragment_in_scope(
+    tokens: &[SpannedToken],
+    namespace: &str,
+    strict_types: bool,
+) -> Result<(Program, bool, RuntimeTemplateSyntax), CompileError> {
+    let _guard = RuntimeFragmentGuard(RUNTIME_FRAGMENT.with(|flag| flag.replace(true)));
+    let _classes = AnonymousClassState::isolate();
+    let trace = runtime_templates::Trace::start();
+    use crate::syntax::source::{SourceMode, SourceProfile, current_strict_types, with_parse_mode};
+    with_parse_mode(SourceProfile { mode: SourceMode::Php, strict_types }, || {
+        let namespace = namespace.split('\\').filter(|part| !part.is_empty()).map(str::to_owned).collect();
+        reject_excessive_nesting(tokens).map_err(CompileError::from_many)?;
+        let ast = relative_names::with_namespace_scope(namespace, || {
+            crate::syntax::compiler_stack::with_compiler_stack(|| parse_checked_tokens(tokens))
+        }).map_err(CompileError::from_many)?;
+        Ok((ast, current_strict_types(), trace.take()))
+    })
+}
+
+/// Parses a complete standalone type used when looking up a runtime specialization.
+pub fn parse_runtime_type(tokens: &[SpannedToken]) -> Result<ast::TypeExpr, CompileError> {
+    let _guard = RuntimeFragmentGuard(RUNTIME_FRAGMENT.with(|flag| flag.replace(true)));
+    let _trace = runtime_templates::Trace::start();
+    reject_excessive_nesting(tokens).map_err(CompileError::from_many)?;
+    relative_names::with_global_namespace_scope(|| {
+        crate::syntax::compiler_stack::with_compiler_stack(|| {
+            let mut pos = 0;
+            let span = tokens.first().map_or(Span::dummy(), |(_, metadata)| metadata.span);
+            let ty = stmt::parse_type_expr(tokens, &mut pos, span)?;
+            if !matches!(tokens.get(pos), Some((Token::Eof, _))) {
+                return Err(CompileError::new(span, "Unexpected token after type"));
+            }
+            Ok(ty)
+        })
+    })
+}
+
+/// Parses the leading type parameter list used by runtime declaration annotations.
+pub fn parse_runtime_type_parameters(tokens: &[SpannedToken]) -> Result<Vec<ast::TypeParam>, CompileError> {
+    let _guard = RuntimeFragmentGuard(RUNTIME_FRAGMENT.with(|flag| flag.replace(true)));
+    reject_excessive_nesting(tokens).map_err(CompileError::from_many)?;
+    relative_names::with_global_namespace_scope(|| {
+        crate::syntax::compiler_stack::with_compiler_stack(|| {
+            let span = tokens.first().map_or(Span::dummy(), |(_, metadata)| metadata.span);
+            stmt::parse_type_param_list(tokens, &mut 0, span)
+        })
+    })
+}
+
 /// Parses tokens with recovery, collecting all syntax errors encountered.
 #[allow(dead_code)]
 pub fn parse_with_recovery(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
@@ -285,16 +373,17 @@ fn parse_checked_tokens(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileE
     // Discard any anonymous classes left over from a previous parse that errored before draining.
     let _ = take_anonymous_classes();
 
-    // Skip OpenTag
-    if pos < tokens.len() && tokens[pos].0 == Token::OpenTag {
-        pos += 1;
-    } else {
-        let span = if pos < tokens.len() {
-            tokens[pos].1.span
+    if !runtime_fragment() {
+        if pos < tokens.len() && tokens[pos].0 == Token::OpenTag {
+            pos += 1;
         } else {
-            Span::dummy()
-        };
-        return Err(vec![CompileError::new(span, "Expected '<?php' open tag")]);
+            let span = if pos < tokens.len() {
+                tokens[pos].1.span
+            } else {
+                Span::dummy()
+            };
+            return Err(vec![CompileError::new(span, "Expected '<?php' open tag")]);
+        }
     }
 
     while pos < tokens.len() {
@@ -346,7 +435,7 @@ fn reject_excessive_nesting(tokens: &[SpannedToken]) -> Result<(), Vec<CompileEr
     let mut depth = 0usize;
     for (token, location) in tokens {
         match token {
-            Token::LParen | Token::LBrace | Token::LBracket => {
+            Token::LParen | Token::LBrace | Token::DollarBrace | Token::LBracket => {
                 depth += 1;
                 if depth > MAX_COMPILER_NESTING {
                     return Err(vec![CompileError::new(

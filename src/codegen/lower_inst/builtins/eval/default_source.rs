@@ -101,6 +101,7 @@ fn expression(expr: &Expr, context: &EvalNativeDefaultContext<'_>) -> Option<Str
         }
         ExprKind::ArrayLiteralMixed(entries) => {
             let values = entries.iter().map(|entry| Some(match entry {
+                ArrayEntry::Reference(_) | ArrayEntry::KeyReference(_, _) => return None,
                 ArrayEntry::Value(value) => expression(value, context)?,
                 ArrayEntry::Spread(value) => {
                     // Mixed literals retain the parser's Spread wrapper inside the entry too.

@@ -12,7 +12,7 @@ use crate::syntax::parser::validation_only;
 use crate::syntax::errors::CompileError;
 use crate::syntax::lexer::{SpannedToken, Token};
 use crate::syntax::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
-use crate::syntax::parser::expr::parse_assignment_value_expr;
+use crate::syntax::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::syntax::span::Span;
 
 use super::super::params::parse_type_expr;
@@ -171,7 +171,11 @@ pub(in crate::syntax::parser::stmt) fn parse_static_var(
 
         let init = if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Assign)) {
             *pos += 1;
-            parse_assignment_value_expr(tokens, pos)?
+            if crate::syntax::parser::runtime_fragment() {
+                parse_expr(tokens, pos)?
+            } else {
+                parse_assignment_value_expr(tokens, pos)?
+            }
         } else {
             Expr::new(ExprKind::Null, name_span)
         };
@@ -183,6 +187,9 @@ pub(in crate::syntax::parser::stmt) fn parse_static_var(
         declarations.push(Stmt::new(StmtKind::StaticVar { name, init }, declarator_span));
 
         if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Comma)) {
+            if crate::syntax::parser::runtime_fragment() {
+                return Err(CompileError::expected_semicolon(tokens[*pos].1.span));
+            }
             *pos += 1;
             continue;
         }
@@ -207,7 +214,7 @@ pub(in crate::syntax::parser::stmt) fn looks_like_typed_assign(tokens: &[Spanned
         return false;
     }
     let mut probe = pos;
-    match parse_type_expr(tokens, &mut probe, tokens[pos].1.span) {
+    match crate::syntax::parser::runtime_templates::lookahead(|| parse_type_expr(tokens, &mut probe, tokens[pos].1.span)) {
         Ok(_) => matches!(tokens.get(probe).map(|(t, _)| t), Some(Token::Variable(_))),
         Err(_) => false,
     }

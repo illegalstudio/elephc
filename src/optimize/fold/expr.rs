@@ -129,6 +129,7 @@ pub(in crate::optimize) fn fold_enum_case(case: EnumCaseDecl) -> EnumCaseDecl {
 pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
     let span = expr.span;
     let kind = match expr.kind {
+        kind @ ExprKind::Runtime(_) => kind,
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => {

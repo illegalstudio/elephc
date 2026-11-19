@@ -14,7 +14,7 @@
 use std::cell::Cell;
 
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ArrayEntry, CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver};
 use crate::span::Span;
 
 use super::names::{
@@ -213,24 +213,9 @@ pub(super) fn resolve_expr(
         ExprKind::ArrayLiteralMixed(entries) => ExprKind::ArrayLiteralMixed(
             entries
                 .iter()
-                .map(|entry| match entry {
-                    ArrayEntry::Spread(source) => ArrayEntry::Spread(resolve_expr(
-                        source,
-                        current_namespace,
-                        imports,
-                        symbols,
-                    )),
-                    ArrayEntry::Value(value) => ArrayEntry::Value(resolve_expr(
-                        value,
-                        current_namespace,
-                        imports,
-                        symbols,
-                    )),
-                    ArrayEntry::Keyed(key, value) => ArrayEntry::Keyed(
-                        resolve_expr(key, current_namespace, imports, symbols),
-                        resolve_expr(value, current_namespace, imports, symbols),
-                    ),
-                })
+                .map(|entry| entry.try_map_exprs::<std::convert::Infallible>(|value| {
+                    Ok(resolve_expr(value, current_namespace, imports, symbols))
+                }).unwrap())
                 .collect(),
         ),
         ExprKind::Match {

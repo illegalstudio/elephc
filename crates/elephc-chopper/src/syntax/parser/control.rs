@@ -20,7 +20,7 @@ use crate::syntax::parser::alt_syntax::{
 use crate::syntax::parser::ast::{CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::syntax::parser::expr::parse_expr;
 use crate::syntax::parser::stmt::{
-    expect_semicolon, expect_token, name_starts_at, parse_block, parse_body,
+    expect_semicolon, expect_token, parse_block, parse_body,
     parse_destructuring_pattern_unpack, parse_stmt, starts_destructuring_pattern,
 };
 use crate::syntax::span::Span;
@@ -456,6 +456,9 @@ pub fn parse_for(
         }
     }
     if !validation_only() && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Comma)) {
+        if crate::syntax::parser::runtime_fragment() {
+            return Err(CompileError::expected_semicolon(tokens[*pos].1.span));
+        }
         return Err(CompileError::new(
             tokens[*pos].1.span,
             "A comma-separated list is not supported in a for CONDITION (the init and \
@@ -489,7 +492,8 @@ pub fn parse_try(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     *pos += 1;
-    if validation_only() && !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LBrace)) {
+    let require_braces = validation_only() || crate::syntax::parser::runtime_fragment();
+    if require_braces && !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LBrace)) {
         return Err(CompileError::new(span, "Expected '{' after 'try'"));
     }
     let try_body = parse_body(tokens, pos)?;
@@ -509,7 +513,7 @@ pub fn parse_try(
                 exception_types.push(crate::syntax::names::Name::unqualified("parent"));
                 exception_type_args.push(Vec::new());
                 *pos += 1;
-            } else if name_starts_at(tokens, *pos) {
+            } else {
                 let (name, args) = crate::syntax::parser::stmt::parse_inherited_name(
                     tokens,
                     pos,
@@ -518,11 +522,6 @@ pub fn parse_try(
                 )?;
                 exception_types.push(name);
                 exception_type_args.push(args);
-            } else {
-                return Err(CompileError::new(
-                    span,
-                    "Expected exception class name in catch clause",
-                ));
             }
             if *pos < tokens.len() && tokens[*pos].0 == Token::Pipe {
                 *pos += 1;
@@ -549,7 +548,7 @@ pub fn parse_try(
             }
         };
         expect_token(tokens, pos, &Token::RParen, "Expected ')' after catch clause")?;
-        if validation_only() && !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LBrace)) {
+        if require_braces && !matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LBrace)) {
             return Err(CompileError::new(span, "Expected '{' after catch clause"));
         }
         let body = parse_body(tokens, pos)?;
@@ -564,7 +563,7 @@ pub fn parse_try(
         *pos += 1;
         // PHP's grammar only accepts a braced block after `finally`; the compiler's
         // single-statement form is not PHP syntax.
-        if validation_only() && tokens.get(*pos).map(|(token, _)| token) != Some(&Token::LBrace) {
+        if require_braces && tokens.get(*pos).map(|(token, _)| token) != Some(&Token::LBrace) {
             return Err(CompileError::new(
                 tokens.get(*pos).map_or(span, |(_, metadata)| metadata.span),
                 "Expected '{' after finally",
@@ -635,7 +634,16 @@ fn parse_for_clause(
 
     let clause_span = tokens[start].1.span;
     let mut stmts = Vec::new();
-    for piece in split_top_level_commas(&tokens[start..end]) {
+    let pieces = split_top_level_commas(&tokens[start..end]);
+    if crate::syntax::parser::runtime_fragment() && pieces.len() > 1 {
+        let span = tokens[start + pieces[0].len()].1.span;
+        return Err(if *terminator == Token::Semicolon {
+            CompileError::expected_semicolon(span)
+        } else {
+            CompileError::new(span, "Expected ')' after for update")
+        });
+    }
+    for piece in pieces {
         let Some((_, first)) = piece.first() else {
             return Err(CompileError::new(
                 clause_span,
@@ -934,7 +942,7 @@ fn expect_case_separator(
     pos: &mut usize,
     message: &str,
 ) -> Result<(), CompileError> {
-    if matches!(
+    if !crate::syntax::parser::runtime_fragment() && matches!(
         tokens.get(*pos).map(|(token, _)| token),
         Some(Token::Semicolon)
     ) {

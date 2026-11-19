@@ -36,7 +36,12 @@ pub fn parse_block(tokens: &[SpannedToken], pos: &mut usize) -> Result<Vec<Stmt>
     }
 
     if *pos >= tokens.len() || tokens[*pos].0 != Token::RBrace {
-        errors.push(CompileError::new(span, "Expected '}'"));
+        let missing = if crate::syntax::parser::runtime_fragment() {
+            tokens.get(*pos).map_or(span, |(_, metadata)| metadata.span)
+        } else {
+            span
+        };
+        errors.push(CompileError::new(missing, "Expected '}'"));
         return Err(CompileError::from_many(errors));
     }
     *pos += 1;
@@ -72,7 +77,7 @@ pub fn expect_semicolon(
         } else {
             Span::dummy()
         };
-        Err(CompileError::new(span, "Expected ';'"))
+        Err(CompileError::expected_semicolon(span))
     }
 }
 

@@ -35,6 +35,7 @@ pub(in crate::syntax::parser::stmt) fn parse_class_decl(
     is_final: bool,
     is_readonly_class: bool,
 ) -> Result<Stmt, CompileError> {
+    let class_start = tokens[*pos].1.span;
     *pos += 1; // consume 'class'
 
     let name = parse_unqualified_name(
@@ -44,6 +45,7 @@ pub(in crate::syntax::parser::stmt) fn parse_class_decl(
         "Expected class name after 'class'",
     )?;
 
+    let _type_scope = crate::syntax::parser::runtime_templates::TypeScope::enter();
     let type_params = parse_type_param_list(tokens, pos, span)?;
 
     let (extends, extends_args) = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
@@ -81,6 +83,11 @@ pub(in crate::syntax::parser::stmt) fn parse_class_decl(
         parse_class_like_body(tokens, pos, "class", is_abstract)?;
 
     expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of class")?;
+    let span = if crate::syntax::parser::runtime_fragment() {
+        Span::with_end_from(class_start, tokens[*pos - 1].1.span)
+    } else {
+        span
+    };
 
     Ok(Stmt::new(
         StmtKind::ClassDecl {
@@ -113,6 +120,7 @@ pub fn parse_anonymous_class(
     span: Span,
     is_readonly: bool,
 ) -> Result<Expr, CompileError> {
+    let class_start = tokens[*pos].1.span;
     *pos += 1; // consume 'class'
 
     // PHP places the constructor arguments before any `extends`/`implements` clause.
@@ -170,6 +178,11 @@ pub fn parse_anonymous_class(
     )?;
 
     let name = next_anonymous_class_name();
+    let declaration_span = if crate::syntax::parser::runtime_fragment() {
+        Span::with_end_from(class_start, tokens[*pos - 1].1.span)
+    } else {
+        span
+    };
     register_anonymous_class(Stmt::new(
         StmtKind::ClassDecl {
             name: name.clone(),
@@ -184,7 +197,7 @@ pub fn parse_anonymous_class(
             methods,
             constants,
         },
-        span,
+        declaration_span,
     ));
 
     Ok(Expr::new(
@@ -243,8 +256,13 @@ pub(in crate::syntax::parser::stmt) fn parse_enum_decl(
     expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of enum")?;
 
     if !validation_only() && !properties.is_empty() {
-        return Err(CompileError::new(span, "Enums cannot declare properties"));
+        return Err(CompileError::runtime_unsupported(span, "Enums cannot declare properties"));
     }
+    let span = if crate::syntax::parser::runtime_fragment() {
+        Span::with_end_from(span, tokens[*pos - 1].1.span)
+    } else {
+        span
+    };
 
     Ok(Stmt::new(
         StmtKind::EnumDecl {

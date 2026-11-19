@@ -593,6 +593,11 @@ impl<'a> ConversionScan<'a> {
             return;
         }
         match &expr.kind {
+            ExprKind::Runtime(runtime) => {
+                for value in runtime.exprs() {
+                    self.expr(value);
+                }
+            },
             ExprKind::Variable(name) => self.name(name),
             ExprKind::PreIncrement(name)
             | ExprKind::PostIncrement(name)

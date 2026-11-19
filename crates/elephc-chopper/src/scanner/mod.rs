@@ -90,6 +90,19 @@ pub struct Scan {
 
 /// Scans byte-preserving PHP tokens and collects lexical diagnostics.
 pub fn scan(source: &[u8]) -> Result<Scan, ParseError> {
+    scan_with(source, lex::scan)
+}
+
+/// Scans runtime PHP source, starting in HTML mode for files and code mode for eval fragments.
+pub fn scan_runtime(source: &[u8], file: bool) -> Result<Scan, ParseError> {
+    scan_with(source, |source| lex::scan_runtime(source, file))
+}
+
+/// Applies the source size limit before running either scanner entry point.
+fn scan_with(
+    source: &[u8],
+    scan: impl FnOnce(&[u8]) -> (Vec<Token>, Vec<LexError>, Vec<LexWarning>),
+) -> Result<Scan, ParseError> {
     if source.len() > u32::MAX as usize {
         return Err(ParseError {
             message: "PHP source exceeds the tokenizer size limit".into(),
@@ -98,7 +111,7 @@ pub fn scan(source: &[u8]) -> Result<Scan, ParseError> {
             warnings: Vec::new(),
         });
     }
-    let (tokens, errors, warnings) = lex::scan(source);
+    let (tokens, errors, warnings) = scan(source);
     Ok(Scan { tokens, errors, warnings })
 }
 

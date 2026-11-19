@@ -52,6 +52,9 @@ pub fn parse_unqualified_name(
         if validation_only() {
             return Err(CompileError::new(metadata.span, "Expected declaration name"));
         }
+        if crate::syntax::parser::runtime_fragment() && token.word_spelling(metadata).is_some() {
+            return Err(CompileError::runtime_unsupported(metadata.span, error));
+        }
         return Err(CompileError::new(span, error));
     };
     if validation_only() && crate::syntax::parser::keyword_name::is_reserved_construct_name(&name) {
@@ -93,6 +96,11 @@ pub fn parse_name(
                 *pos += 1;
             }
             _ if !relative && parts.len() == namespace_len => {
+                if crate::syntax::parser::runtime_fragment() && tokens.get(*pos)
+                    .is_some_and(|(token, metadata)| token.word_spelling(metadata).is_some())
+                {
+                    return Err(CompileError::runtime_unsupported(tokens[*pos].1.span, first_error));
+                }
                 return Err(CompileError::new(span, first_error))
             }
             _ => {

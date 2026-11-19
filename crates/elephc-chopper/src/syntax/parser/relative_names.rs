@@ -62,9 +62,13 @@ impl Drop for ParseScope {
 /// Every parsed file starts in the global namespace (an included file does not inherit its
 /// includer's), and a nested parse must not leak its namespace into the parse that started it.
 pub(super) fn with_global_namespace_scope<R>(parse: impl FnOnce() -> R) -> R {
+    with_namespace_scope(Vec::new(), parse)
+}
+
+/// Parses a retained declaration under its original namespace and isolated nesting state.
+pub(super) fn with_namespace_scope<R>(namespace: Vec<String>, parse: impl FnOnce() -> R) -> R {
     let _scope = ParseScope {
-        previous_namespace: CURRENT_NAMESPACE
-            .with(|current| std::mem::take(&mut *current.borrow_mut())),
+        previous_namespace: CURRENT_NAMESPACE.with(|current| current.replace(namespace)),
         previous_depth: STATEMENT_DEPTH.with(|depth| depth.replace(0)),
         previous_namespace_body_depth: NAMESPACE_BODY_DEPTH.with(|depth| depth.replace(usize::MAX)),
     };

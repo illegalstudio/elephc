@@ -403,6 +403,11 @@ impl Rewriter {
     /// three introspection calls.
     fn walk_expr(&mut self, expr: &mut Expr) {
         match &mut expr.kind {
+            ExprKind::Runtime(runtime) => {
+                for value in runtime.exprs_mut() {
+                    self.walk_expr(value);
+                }
+            },
             // A string literal is the only leaf that can name a callable, and every
             // dynamic backtrace form (literal `call_user_func*`, a callable held in a
             // variable, a callable array entry) spells the name through one.

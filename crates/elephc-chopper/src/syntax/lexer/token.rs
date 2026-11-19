@@ -65,6 +65,7 @@ pub enum Token {
     LParen,         // (
     RParen,         // )
     LBrace,         // {
+    DollarBrace,    // ${
     RBrace,         // }
 
     // Literals
@@ -267,6 +268,7 @@ impl Token {
             Token::LParen => "LParen",
             Token::RParen => "RParen",
             Token::LBrace => "LBrace",
+            Token::DollarBrace => "DollarBrace",
             Token::RBrace => "RBrace",
             Token::StringLiteral(..) => "StringLiteral",
             Token::IntLiteral(..) => "IntLiteral",

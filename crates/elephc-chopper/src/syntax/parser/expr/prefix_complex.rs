@@ -15,7 +15,7 @@ use crate::syntax::errors::CompileError;
 use crate::syntax::lexer::{SpannedToken, Token};
 use crate::syntax::names::Name;
 use crate::syntax::parser::ast::{
-    CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr,
+    CallableTarget, Expr, ExprKind, RuntimeClassReceiver, StaticReceiver, Stmt, StmtKind, TypeExpr,
 };
 use crate::syntax::parser::stmt::parse_type_arguments_only;
 use crate::syntax::parser::stmt::{
@@ -300,6 +300,9 @@ pub(super) fn parse_closure(
                 *pos += 1;
                 // A trailing comma closes the list: `use ($a, $b,)` (PHP 8.0+).
                 if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::RParen) {
+                    if crate::syntax::parser::runtime_fragment() {
+                        return Err(CompileError::expected_variable(tokens[*pos].1.span, "Expected capture after ','"));
+                    }
                     break;
                 }
             }
@@ -342,6 +345,11 @@ pub(super) fn parse_closure(
     }
     let return_type = parse_optional_closure_return_type(tokens, pos, span)?;
     let body = parse_block(tokens, pos)?;
+    let span = if crate::syntax::parser::runtime_fragment() {
+        Span::with_end_from(span, tokens[*pos - 1].1.span)
+    } else {
+        span
+    };
     Ok(Expr::new(
         ExprKind::Closure {
             params,
@@ -455,6 +463,9 @@ pub(super) fn collect_arrow_expr_captures(
     captures: &mut Vec<String>,
 ) {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => {
+            for value in runtime.exprs() { collect_arrow_expr_captures(value, bound, seen, captures); }
+        },
         ExprKind::Variable(name)
         | ExprKind::PreIncrement(name)
         | ExprKind::PostIncrement(name)
@@ -689,7 +700,7 @@ fn parse_closure_params(
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         if !params.is_empty() || variadic.is_some() {
             if tokens[*pos].0 != Token::Comma {
-                return Err(CompileError::new(
+                return Err(CompileError::runtime_unsupported(
                     tokens[*pos].1.span,
                     "Expected ',' between parameters",
                 ));
@@ -697,6 +708,9 @@ fn parse_closure_params(
             *pos += 1;
             // Allow a trailing comma before the closing paren (PHP 8.0+).
             if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
+                if crate::syntax::parser::runtime_fragment() {
+                    return Err(CompileError::expected_variable(tokens[*pos].1.span, "Expected parameter after ','"));
+                }
                 break;
             }
         }
@@ -710,7 +724,7 @@ fn parse_closure_params(
         // PHP accepts a parameter after the variadic through TOKEN_PARSE and rejects it while
         // compiling the declaration.
         if !validation_only() && variadic.is_some() {
-            return Err(CompileError::new(
+            return Err(CompileError::runtime_unsupported(
                 span,
                 "Variadic parameter must be the last parameter",
             ));
@@ -737,7 +751,7 @@ fn parse_closure_params(
                     variadic_type = type_ann;
                     *pos += 1;
                 }
-                _ => return Err(CompileError::new(span, "Expected variable after '...'")),
+                _ => return Err(CompileError::expected_variable(span, "Expected variable after '...'")),
             }
             continue;
         }
@@ -813,7 +827,13 @@ pub(crate) fn parse_statement_unset_call(
     span: Span,
 ) -> Result<Expr, CompileError> {
     let args = parse_args(tokens, pos, span)?;
-    validate_language_construct("unset", &args, tokens, *pos, span)?;
+    if crate::syntax::parser::runtime_fragment() {
+        if let Some((Token::Comma, metadata)) = pos.checked_sub(2).and_then(|index| tokens.get(index)) {
+            return Err(CompileError::new(metadata.span, "Expected unset operand after ','"));
+        }
+    } else {
+        validate_language_construct("unset", &args, tokens, *pos, span)?;
+    }
     let span = crate::syntax::parser::expr::span_through_prev_token(tokens, *pos, span);
     Ok(Expr::new(
         ExprKind::FunctionCall {
@@ -941,6 +961,9 @@ pub(super) fn parse_named_expr(
                 let (_, args) =
                     crate::syntax::parser::stmt::parse_inherited_name_at(tokens, pos, span, &name)?;
                 if !args.is_empty() {
+                    if crate::syntax::parser::runtime_fragment() {
+                        return super::runtime_members::parse_generic_call(tokens, pos, span, name, args);
+                    }
                     name = name.with_written_type_arguments(&args);
                 }
             }
@@ -1070,10 +1093,14 @@ pub(super) fn parse_named_expr(
         *pos += 1;
         parse_function_call_or_callable(tokens, pos, span, name)
     } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
+        crate::syntax::parser::runtime_templates::record_reference(&name, span);
         *pos += 1;
         // Built once so every form below — method call, property, constant, `::class` — agrees
         // about whether this receiver is generic.
         let receiver = static_receiver(name, static_type_args);
+        if crate::syntax::parser::runtime_fragment() && super::runtime_members::has_computed_name(tokens, *pos) {
+            return super::runtime_members::parse_static_member(tokens, pos, span, RuntimeClassReceiver::Named(receiver));
+        }
         let member = match tokens.get(*pos).map(|(token, _)| token) {
             Some(Token::Variable(property)) => {
                 let property = property.clone();
@@ -1154,6 +1181,11 @@ pub(super) fn parse_named_expr(
             }
             _ => return Err(CompileError::new(span, "Expected member name after '::'")),
         };
+        if crate::syntax::parser::runtime_fragment() {
+            if let Some(call) = super::runtime_members::try_parse_static_generic_method(tokens, pos, span, &receiver, &member)? {
+                return Ok(call);
+            }
+        }
         if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
             *pos += 1;
             if parse_first_class_callable_parens(tokens, pos)? {
@@ -1337,11 +1369,13 @@ pub(super) fn parse_new_object(
         ));
     }
 
-    if validation_only() && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
+    if (validation_only() || crate::syntax::parser::runtime_fragment())
+        && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen))
+    {
         // `new (expr)` / `new (expr)(args)` — the group is the class-name expression and only
         // constructor parentheses may follow it.
         *pos += 1;
-        let _class_expr = parse_expr(tokens, pos)?;
+        let class_expr = parse_expr(tokens, pos)?;
         expect_token(
             tokens,
             pos,
@@ -1365,18 +1399,22 @@ pub(super) fn parse_new_object(
         let span = crate::syntax::parser::expr::span_through_prev_token(tokens, *pos, span);
         return Ok(Expr::new(
             ExprKind::NewDynamic {
-                name_expr: Box::new(Expr::new(ExprKind::Null, span)),
+                name_expr: Box::new(class_expr),
                 args,
             },
             span,
         ));
     }
-    let (class_name, type_args) = crate::syntax::parser::stmt::parse_inherited_name(
-        tokens,
-        pos,
-        span,
-        "Expected class name after 'new'",
-    )?;
+    let name_start = *pos;
+    let class_name = parse_name(tokens, pos, span, "Expected class name after 'new'")?;
+    crate::syntax::parser::runtime_templates::record_reference(&class_name, tokens[name_start].1.span);
+    let (class_name, type_args) = if crate::syntax::parser::runtime_fragment()
+        && crate::syntax::parser::stmt::type_arguments_end(tokens, *pos).is_none()
+    {
+        (class_name, Vec::new())
+    } else {
+        crate::syntax::parser::stmt::parse_inherited_name_at(tokens, pos, span, &class_name)?
+    };
     if validation_only() && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::DoubleColon))
         && matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::Variable(_)))
     {

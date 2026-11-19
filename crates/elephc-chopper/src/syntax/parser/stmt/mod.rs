@@ -38,6 +38,7 @@ pub use params::{
     type_arguments_end,
 };
 pub(crate) use params::parameter_error_span;
+pub(in crate::syntax::parser) use params::parse_type_param_list;
 pub use assign::assignment_target_store_stmt;
 pub(crate) use assign::{
     lower_nested_append_assignment,
@@ -45,6 +46,7 @@ pub(crate) use assign::{
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 pub use blocks::{expect_semicolon, expect_token};
+pub(in crate::syntax::parser) use simple::try_parse_value_include;
 pub use names::{name_part_from_token, name_starts_at, parse_name, parse_unqualified_name};
 pub use assign::{parse_destructuring_pattern_unpack, starts_destructuring_pattern};
 pub use namespace_use::token_as_import_name;
@@ -191,6 +193,14 @@ fn parse_stmt_dispatch(
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
+    if crate::syntax::parser::runtime_fragment() {
+        if let Some(statement) = assign::try_parse_runtime_write(tokens, pos, span)? {
+            return Ok(statement);
+        }
+    }
+    if let Some(label) = goto::goto_label(tokens, *pos) {
+        return Ok(goto::parse_goto_label(label, pos, span));
+    }
     if validation_only() && matches!(&tokens[*pos].0, Token::Extern | Token::Packed) {
         return Err(CompileError::new(
             span,
@@ -203,6 +213,11 @@ fn parse_stmt_dispatch(
             Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span))
         }
         Token::LBrace => {
+            // Runtime bodies consume their own delimiters. A standalone block
+            // is outside the grammar accepted by Magician's eval entry point.
+            if crate::syntax::parser::runtime_fragment() {
+                return Err(CompileError::new(span, "Unexpected standalone block"));
+            }
             let stmts = parse_block(tokens, pos)?;
             Ok(Stmt::new(StmtKind::Synthetic(stmts), span))
         }
@@ -218,7 +233,7 @@ fn parse_stmt_dispatch(
         Token::PlusPlus | Token::MinusMinus => assign::parse_incdec_stmt(tokens, pos, span),
         Token::Class => oop::parse_class_decl(tokens, pos, span, false, false, false),
         Token::Enum
-            if tokens.get(*pos + 1).is_some_and(|(token, metadata)| {
+            if crate::syntax::parser::runtime_fragment() || tokens.get(*pos + 1).is_some_and(|(token, metadata)| {
                 name_part_from_token(token, metadata).is_some()
             }) =>
         {
@@ -289,9 +304,6 @@ fn parse_stmt_dispatch(
             ))
         }
         Token::Goto => goto::parse_goto(tokens, pos, span),
-        Token::Identifier(label) if goto::starts_goto_label(tokens, *pos) => {
-            Ok(goto::parse_goto_label(label, pos, span))
-        }
         Token::Static => {
             if *pos + 1 < tokens.len() && tokens[*pos + 1].0 == Token::DoubleColon {
                 if let Some(stmt) =
@@ -343,7 +355,7 @@ fn parse_stmt_dispatch(
         // `unset(...)` is a statement-only construct; expression positions reject it while
         // this arm accepts the standalone statement form PHP's grammar allows.
         Token::Identifier(name)
-            if validation_only() && name.eq_ignore_ascii_case("unset")
+            if (validation_only() || crate::syntax::parser::runtime_fragment()) && name.eq_ignore_ascii_case("unset")
                 && matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::LParen)) =>
         {
             *pos += 1; // consume `unset`
@@ -498,7 +510,7 @@ fn parse_loop_exit_level(
     tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<usize, CompileError> {
-    if tokens[*pos].0 == Token::Semicolon {
+    if crate::syntax::parser::runtime_fragment() || tokens[*pos].0 == Token::Semicolon {
         return Ok(1);
     }
 

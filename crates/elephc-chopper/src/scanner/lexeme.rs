@@ -48,7 +48,16 @@ pub(crate) enum Trivia {
 
 /// Finds the first whitespace or comment run using the selected source rules.
 #[inline]
-fn trivia<const PHP: bool>(source: &[u8]) -> Option<(Trivia, usize)> {
+fn trivia<const PHP: bool>(source: &[u8], runtime: bool) -> Option<(Trivia, usize)> {
+    if runtime {
+        let mut len = 0;
+        while let Some(ch) = leading_char(&source[len..]).filter(|ch| ch.is_whitespace()) {
+            len += ch.len_utf8();
+        }
+        if len != 0 {
+            return Some((Trivia::Whitespace, len));
+        }
+    }
     let space = |byte: u8| if PHP { is_whitespace(byte) } else { byte.is_ascii_whitespace() };
     let first = *source.first()?;
     if space(first) {
@@ -64,7 +73,7 @@ fn trivia<const PHP: bool>(source: &[u8]) -> Option<(Trivia, usize)> {
         [b'/', b'/', ..] | [b'#', ..] if !source.starts_with(b"#[") => {
             let mut len = 0;
             while let Some(&byte) = source.get(len) {
-                if byte == b'\n' || PHP && (byte == b'\r' || source[len..].starts_with(b"?>")) {
+                if byte == b'\n' || PHP && ((!runtime && byte == b'\r') || source[len..].starts_with(b"?>")) {
                     break;
                 }
                 len += 1;
@@ -75,9 +84,24 @@ fn trivia<const PHP: bool>(source: &[u8]) -> Option<(Trivia, usize)> {
     }
 }
 
+/// Decodes only the leading scalar, keeping runtime trivia scanning linear.
+fn leading_char(source: &[u8]) -> Option<char> {
+    let prefix = &source[..source.len().min(4)];
+    let text = match std::str::from_utf8(prefix) {
+        Ok(text) => text,
+        Err(error) => std::str::from_utf8(&prefix[..error.valid_up_to()]).ok()?,
+    };
+    text.chars().next()
+}
+
 /// Returns the next trivia span using Zend line endings and closing-tag boundaries.
 pub(crate) fn php_trivia(source: &[u8]) -> Option<(Trivia, usize)> {
-    trivia::<true>(source)
+    trivia::<true>(source, false)
+}
+
+/// Returns runtime trivia with LF line counting and support for Unicode whitespace.
+pub(crate) fn runtime_trivia(source: &[u8]) -> Option<(Trivia, usize)> {
+    trivia::<true>(source, true)
 }
 
 /// Returns the leading trivia length with the compiler's source rules.
@@ -88,7 +112,7 @@ pub fn compiler_trivia_len(source: &[u8]) -> usize {
         if byte.is_ascii_whitespace() {
             len += 1;
         } else if matches!(byte, b'/' | b'#') {
-            let Some((_, step)) = trivia::<false>(&source[len..]) else {
+            let Some((_, step)) = trivia::<false>(&source[len..], false) else {
                 break;
             };
             len += step;

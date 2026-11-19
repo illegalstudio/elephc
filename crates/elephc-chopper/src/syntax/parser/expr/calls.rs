@@ -36,6 +36,10 @@ pub(super) fn parse_scoped_static_call(
         ));
     }
     *pos += 1;
+    if crate::syntax::parser::runtime_fragment() && super::runtime_members::has_computed_name(tokens, *pos) {
+        return super::runtime_members::parse_static_member(tokens, pos, span,
+            crate::syntax::parser::ast::RuntimeClassReceiver::Named(receiver));
+    }
     let method = match tokens.get(*pos).map(|(token, _)| token) {
         Some(Token::Variable(property)) => {
             let property = property.clone();
@@ -114,6 +118,11 @@ pub(super) fn parse_scoped_static_call(
             ))
         }
     };
+    if crate::syntax::parser::runtime_fragment() {
+        if let Some(call) = super::runtime_members::try_parse_static_generic_method(tokens, pos, span, &receiver, &method)? {
+            return Ok(call);
+        }
+    }
     // If a `(` follows, this is a static method call; otherwise it's a
     // user-declared class-constant access (`MyClass::FOO`).
     if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {

@@ -77,8 +77,9 @@ pub(super) fn parse_prefix_increment_operand(
     tokens: &[SpannedToken], pos: &mut usize,
 ) -> Result<(Expr, PrefixIncrementTarget), CompileError> {
     let mut appended = PrefixIncrementTarget::Regular;
+    let operand_bp = if crate::syntax::parser::runtime_fragment() { u8::MAX } else { 35 };
     let expression = stacker::maybe_grow(64 * 1024, 4 * 1024 * 1024, || {
-        parse_expr_bp_inner(tokens, pos, 35, Some(&mut appended), false)
+        parse_expr_bp_inner(tokens, pos, operand_bp, Some(&mut appended), false)
     })?;
     Ok((expression, appended))
 }
@@ -175,6 +176,15 @@ fn parse_expr_bp_inner(
                 }
                 let span = tokens[*pos].1.span;
                 let increment = tokens[*pos].0 == Token::PlusPlus;
+                if crate::syntax::parser::runtime_fragment() && matches!(
+                    lhs.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }
+                ) {
+                    *pos += 1;
+                    lhs = super::runtime_members::property_update(lhs,
+                        crate::syntax::parser::ast::RuntimeWrite::IncDec { increment, prefix: false }, span);
+                    postfix_locked = true;
+                    continue;
+                }
                 if let Some(error) = super::append_writes::lower_null_property_write(&lhs, None, span) {
                     *pos += 1;
                     lhs = error;
@@ -243,6 +253,11 @@ fn parse_expr_bp_inner(
                 // `call_user_func([$cls, $method], ...args)`, reusing the runtime dispatch path.
                 let span = tokens[*pos].1.span;
                 *pos += 1; // consume '::'
+                if crate::syntax::parser::runtime_fragment() {
+                    lhs = super::runtime_members::parse_static_member(tokens, pos, span,
+                        crate::syntax::parser::ast::RuntimeClassReceiver::Computed(lhs))?;
+                    continue;
+                }
                 if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Class)) {
                     crate::syntax::parser::tokenizer_feedback::record(&tokens[*pos].1, "class");
                     *pos += 1;
@@ -424,6 +439,11 @@ fn parse_expr_bp_inner(
                                 || super::append_writes::is_null_append_property(&lhs) {
                                 return Err(CompileError::new(lhs.span, "Cannot use [] for reading"));
                             }
+                            if crate::syntax::parser::runtime_fragment() {
+                                lhs = super::runtime_members::parse_object_call(
+                                    tokens, pos, arrow_span, lhs, property, nullsafe)?;
+                                continue;
+                            }
                             *pos += 1; // consume '('
                             let dynamic_args =
                                 crate::syntax::parser::expr::parse_args(tokens, pos, arrow_span)?;
@@ -473,6 +493,16 @@ fn parse_expr_bp_inner(
                         continue;
                     }
                 };
+                if crate::syntax::parser::runtime_fragment() {
+                    if let Some((type_args, arguments)) = super::runtime_members::parse_generic_method_arguments(tokens, pos, arrow_span)? {
+                        lhs = Expr::new(ExprKind::Runtime(Box::new(
+                            crate::syntax::parser::ast::RuntimeExpr::GenericObjectMethod {
+                                object: lhs, method: member, type_args, arguments, nullsafe,
+                            }
+                        )), arrow_span);
+                        continue;
+                    }
+                }
                 // `$box->map<string>($f)` — a generic METHOD call that writes its type argument
                 // instead of leaving it to inference. Recognized exactly like the function form:
                 // a balanced argument list followed by `(`, which the comparison reading cannot
@@ -668,6 +698,15 @@ fn parse_expr_bp_inner(
             // Widen only the END so the span covers through the value expression;
             // the start stays on the operator token, keeping diagnostics anchored.
             let span = span.merge(rhs.span);
+            if crate::syntax::parser::runtime_fragment() && matches!(
+                lhs.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }
+            ) {
+                if let AssignmentOperator::Compound(op) = op {
+                    lhs = super::runtime_members::property_update(lhs,
+                        crate::syntax::parser::ast::RuntimeWrite::Assign { op: Some(op), value: rhs }, span);
+                    continue;
+                }
+            }
             if super::append_writes::is_null_append_property(&lhs) {
                 if matches!(op, AssignmentOperator::NullCoalesce) {
                     return Err(CompileError::new(lhs.span, "Cannot use [] for reading"));
@@ -1249,12 +1288,14 @@ fn parse_instanceof_target(
                 InstanceOfTarget::Expr(Box::new(inner))
             }
             _ => {
+                let name_start = *pos;
                 let name = parse_name(
                     tokens,
                     pos,
                     span,
                     "Expected class or interface name after 'instanceof'",
                 )?;
+                crate::syntax::parser::runtime_templates::record_reference(&name, tokens[name_start].1.span);
                 match generic_instanceof_arguments(tokens, pos) {
                     Some(end) => {
                         let (_, args) = crate::syntax::parser::stmt::parse_inherited_name_at(
@@ -1306,6 +1347,9 @@ fn parse_instanceof_target(
 /// a sequence this parser happens to accept more loosely than php-src does.
 fn generic_instanceof_arguments(tokens: &[SpannedToken], pos: &mut usize) -> Option<usize> {
     let end = crate::syntax::parser::stmt::type_arguments_end(tokens, *pos)?;
+    if crate::syntax::parser::runtime_fragment() {
+        return Some(end);
+    }
     match tokens.get(end).map(|(token, _)| token) {
         None
         | Some(Token::Semicolon)
@@ -1431,6 +1475,8 @@ fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {
         Token::Greater => Some((BinOp::Gt, 23, 24)),
         Token::LessEqual => Some((BinOp::LtEq, 23, 24)),
         Token::GreaterEqual => Some((BinOp::GtEq, 23, 24)),
+        // Preserve the interpreter's established ordering for eval fragment comparisons.
+        Token::Spaceship if crate::syntax::parser::runtime_fragment() => Some((BinOp::Spaceship, 23, 24)),
         Token::Spaceship => Some((BinOp::Spaceship, 21, 22)),
         Token::LessLess => Some((BinOp::ShiftLeft, 25, 26)),
         Token::GreaterGreater => Some((BinOp::ShiftRight, 25, 26)),

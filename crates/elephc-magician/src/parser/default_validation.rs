@@ -7,10 +7,10 @@
 //! Key details:
 //! - Constant expressions, arrays, calls, and class receivers are accepted conservatively.
 
-use super::*;
+use crate::eval_ir::{EvalArrayElement, EvalCallArg, EvalExpr};
 
 /// Returns whether an eval method parameter default can be materialized safely.
-pub(super) fn method_parameter_default_is_supported(default: &EvalExpr) -> bool {
+pub(crate) fn method_parameter_default_is_supported(default: &EvalExpr) -> bool {
     eval_constant_expression_default_is_supported(default)
 }
 
@@ -71,34 +71,6 @@ pub(super) fn eval_array_element_default_is_supported(element: &EvalArrayElement
         }
         EvalArrayElement::KeyReference { .. } => false,
     }
-}
-
-/// Returns whether a type list contains return-only standalone atoms.
-pub(super) fn type_variants_contain_standalone_return_only_atoms(
-    variants: &[EvalParameterTypeVariant],
-) -> bool {
-    variants.iter().any(|variant| {
-        matches!(
-            variant,
-            EvalParameterTypeVariant::Never | EvalParameterTypeVariant::Void
-        )
-    })
-}
-
-/// Returns whether the type position accepts standalone return-only atoms.
-pub(super) fn type_position_allows_return_only_atoms(position: EvalTypePosition) -> bool {
-    matches!(
-        position,
-        EvalTypePosition::FunctionReturn | EvalTypePosition::MethodReturn
-    )
-}
-
-/// Returns whether `self` and `parent` are legal in this type position.
-pub(super) fn type_position_allows_class_scope_atoms(position: EvalTypePosition) -> bool {
-    !matches!(
-        position,
-        EvalTypePosition::FunctionParameter | EvalTypePosition::FunctionReturn
-    )
 }
 
 /// Returns whether a class-like receiver is legal in a compile-time method default.

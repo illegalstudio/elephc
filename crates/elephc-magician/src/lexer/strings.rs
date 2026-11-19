@@ -5,7 +5,7 @@
 //! grammar already lowers to `EvalBinOp::Concat`.
 //!
 //! Called from:
-//! - `super::scan::Lexer::next_tokens()` for every `"` encountered in a fragment.
+//! - The projection of Chopper's quoted string tokens.
 //!
 //! Key details:
 //! - Escape handling covers PHP's simple, hexadecimal, and octal forms; `\$` still
@@ -18,7 +18,7 @@
 //! - Malformed offsets (`"$a[]"`, `"$a[ 0]"`, `"$a['k']"`) are refused, matching PHP's
 //!   parse errors rather than silently inventing a key.
 
-use super::scan::{is_ident_start, tokenize, Lexer};
+use super::decode::{is_ident_start, LiteralCursor};
 use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
 use elephc_chopper::scanner::{
@@ -27,7 +27,7 @@ use elephc_chopper::scanner::{
 };
 use elephc_builtin_contract::string_literal::{push_escaped_byte, push_literal_char};
 
-impl Lexer<'_> {
+impl LiteralCursor<'_> {
     /// Reads a double-quoted string literal starting at the opening quote.
     ///
     /// Returns exactly one `TokenKind::String` when the literal contains no
@@ -358,7 +358,7 @@ fn tokenize_interpolated_fragment(
     inner: &str,
     line: i64,
 ) -> Result<Vec<Token>, EvalParseError> {
-    let fragment = tokenize(inner)?;
+    let fragment = super::tokenize(inner)?;
     let mut part = vec![Token::new(TokenKind::LParen, line)];
     part.extend(
         fragment

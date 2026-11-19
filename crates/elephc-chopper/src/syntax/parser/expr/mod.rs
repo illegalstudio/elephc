@@ -15,6 +15,7 @@ mod calls;
 mod prefix;
 mod prefix_complex;
 mod pratt;
+mod runtime_members;
 
 pub use assignment_targets::plain_assignment_expression;
 pub(crate) use assignment_targets::{compound_assignment_expression, desugar_scoped_lvalue_incdec};

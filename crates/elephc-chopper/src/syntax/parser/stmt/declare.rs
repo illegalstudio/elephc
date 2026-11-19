@@ -42,6 +42,9 @@ pub(super) fn parse_declare(
         &Token::RParen,
         "Expected ')' after declare directives",
     )?;
+    if crate::syntax::parser::runtime_fragment() && strict_types.is_none() {
+        return Err(CompileError::new(span, "Expected declare(strict_types=0|1) in eval"));
+    }
 
     if strict_types.is_some() && !crate::syntax::parser::declare_context::allows_strict_types(declare_pos) {
         return Err(CompileError::new(
@@ -58,7 +61,9 @@ pub(super) fn parse_declare(
         // Applied only once the directive has passed every placement and form check, so a
         // rejected `declare` never leaves the rest of the file typed under it.
         if let Some(enabled) = strict_types {
-            crate::syntax::source::declare_strict_types(enabled || crate::syntax::source::current_strict_types());
+            let already_strict = !crate::syntax::parser::runtime_fragment()
+                && crate::syntax::source::current_strict_types();
+            crate::syntax::source::declare_strict_types(enabled || already_strict);
         }
         return Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span));
     }
@@ -168,6 +173,9 @@ fn parse_directives(
 
         if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Comma)) {
             break;
+        }
+        if crate::syntax::parser::runtime_fragment() {
+            return Err(CompileError::new(name_span, "Expected a single declare directive in eval"));
         }
         *pos += 1;
     }

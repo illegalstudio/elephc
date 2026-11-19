@@ -309,9 +309,25 @@ byte-preserving scanner for the PHP tokenizer APIs. The compiler lexer and PHP
 scanner share recognition of operators, identifier runs, numeric digits, and trivia. The
 compiler adapts those byte ranges to source-aware tokens and keeps its own
 literal token construction and numeric diagnostics. Chopper also recognizes
-string delimiters, braced interpolation expressions, and heredoc labels. The
-eval lexer shares the operator, digit, and quoted-string boundaries and builds
-the token shapes consumed by its EvalIR parser.
+string delimiters, braced interpolation expressions, and heredoc labels.
+
+For dynamic eval fragments, the Chopper scanner starts in PHP code mode and
+preserves offsets in the original string. It starts in HTML mode for included
+files and scans across opening and closing tags in one pass. Magician decodes
+runtime literal values, lowers the Chopper AST to EvalIR, and derives
+caller-scope metadata from the token stream. The tagless parser entry point retains implicit array keys and
+reference elements, the strict-types directive, and declaration source ranges.
+Magician resolves namespace aliases during lowering and attaches anonymous class
+declarations to their construction expressions. The AST retains unary plus and
+the operands of computed member access and writes so Magician controls numeric
+coercion, call argument binding, nullsafe evaluation, and write semantics.
+Declaration lowering retains attributes and property hook metadata for reflection.
+The runtime parser entry point also accepts assembled script tokens and concrete
+generic declarations with their original namespace and strict-types mode.
+For generic declarations, Chopper records the header and the token positions
+bound to each type parameter. Magician uses those positions to build the
+specialization template alongside the EvalIR prototype. The file adapter
+validates UTF-8 in code and retains the original bytes of inline HTML.
 
 The tokenizer bridge and Magician share the Rust API in
 `elephc_chopper::syntax::php_tokenizer`. It uses the scanner for every call. With

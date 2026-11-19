@@ -688,7 +688,7 @@ fn has_delayed_static_receiver(target: &Expr) -> bool {
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)
 /// and returns the position and operator of the first top-level assignment at nesting depth 0.
 /// Returns `None` if no assignment operator is found before a semicolon at depth 0.
-fn find_top_level_assignment(
+pub(super) fn find_top_level_assignment(
     tokens: &[SpannedToken],
     start: usize,
 ) -> Option<(usize, AssignmentOperator)> {
@@ -703,7 +703,7 @@ fn find_top_level_assignment(
             Token::RParen => paren_depth = paren_depth.saturating_sub(1),
             Token::LBracket => bracket_depth += 1,
             Token::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
-            Token::LBrace => brace_depth += 1,
+            Token::LBrace | Token::DollarBrace => brace_depth += 1,
             Token::RBrace => brace_depth = brace_depth.saturating_sub(1),
             Token::Semicolon if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;
@@ -725,7 +725,7 @@ fn find_top_level_assignment(
 ///
 /// Nested occurrences inside indexes or call arguments are ignored so expressions
 /// such as `$items[$i++] = 1` remain assignment statements with an effectful index.
-fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Option<(usize, bool)> {
+pub(super) fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Option<(usize, bool)> {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
@@ -737,7 +737,7 @@ fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Optio
             Token::RParen => paren_depth = paren_depth.saturating_sub(1),
             Token::LBracket => bracket_depth += 1,
             Token::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
-            Token::LBrace => brace_depth += 1,
+            Token::LBrace | Token::DollarBrace => brace_depth += 1,
             Token::RBrace => brace_depth = brace_depth.saturating_sub(1),
             Token::Semicolon if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;

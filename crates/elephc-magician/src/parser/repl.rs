@@ -8,7 +8,7 @@
 //! - Parsing never executes input. Expression wrapping is accepted only as one return.
 //! - EOF at the parser's actual failure cursor distinguishes continuation from bad syntax.
 
-use super::{cursor::assignment_op, parse_fragment, state::Parser};
+use super::{parse_fragment, state::FragmentInput};
 use crate::errors::EvalParseError;
 use crate::eval_ir::{EvalProgram, EvalStmt};
 use crate::lexer::{tokenize, TokenKind};
@@ -38,12 +38,14 @@ pub(crate) fn classify(source: &str) -> Input {
         return Input::Invalid { error: EvalParseError::UnsupportedConstruct, line: 1 };
     }
     let simple_assignment = tokens.first().is_some_and(|token| matches!(token.kind(), TokenKind::DollarIdent(_)))
-        && tokens.get(1).is_some_and(|token| assignment_op(token.kind()).is_some());
-    let mut parser = Parser::new(tokens, source.len());
-    match parser.parse_program() {
+        && tokens.get(1).is_some_and(|token| is_assignment_operator(token.kind()));
+    let parser = FragmentInput::new(tokens, source.len());
+    let parsed = super::with_parser_stack(|| super::lower_shared_program(&parser));
+    match parsed {
         Ok(program) => ready(source.to_string(), &program, simple_assignment),
-        Err(error) => {
-            let at_eof = matches!(parser.current(), TokenKind::Eof);
+        Err(failure) => {
+            let at_eof = failure.at_eof(&parser.tokens);
+            let error = failure.eval_error(&parser.tokens);
             // Permit the omitted final semicolon only if it completes the entire grammar.
             // Do not repair syntax before the failure cursor or execute a valid prefix.
             if at_eof && error == EvalParseError::ExpectedSemicolon {
@@ -59,10 +61,26 @@ pub(crate) fn classify(source: &str) -> Input {
             if at_eof && error != EvalParseError::UnsupportedConstruct {
                 Input::Incomplete
             } else {
-                Input::Invalid { error, line: parser.current_line() }
+                let line = match failure {
+                    super::SharedParseFailure::Syntax(diagnostic) => i64::from(diagnostic.span.line),
+                    _ => parser.token_lines.first().copied().unwrap_or(1),
+                };
+                Input::Invalid { error, line }
             }
         }
     }
+}
+
+/// Recognizes assignment spellings that can display a single variable's new value.
+fn is_assignment_operator(token: &TokenKind) -> bool {
+    matches!(
+        token,
+        TokenKind::Equal | TokenKind::PlusEqual | TokenKind::MinusEqual
+            | TokenKind::StarEqual | TokenKind::StarStarEqual | TokenKind::SlashEqual
+            | TokenKind::PercentEqual | TokenKind::AmpEqual | TokenKind::PipeEqual
+            | TokenKind::CaretEqual | TokenKind::LessLessEqual | TokenKind::GreaterGreaterEqual
+            | TokenKind::DotEqual
+    )
 }
 
 /// Displays simple assignment results by reading the assigned variable without repeating its RHS.

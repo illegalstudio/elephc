@@ -45,6 +45,7 @@ pub(in crate::syntax::parser::stmt) fn parse_interface_decl(
         "Expected interface name after 'interface'",
     )?;
 
+    let _type_scope = crate::syntax::parser::runtime_templates::TypeScope::enter();
     let type_params = parse_type_param_list(tokens, pos, span)?;
 
     let (extends, interface_args) = if *pos < tokens.len() && tokens[*pos].0 == Token::Extends {
@@ -77,6 +78,11 @@ pub(in crate::syntax::parser::stmt) fn parse_interface_decl(
         &Token::RBrace,
         "Expected '}' at end of interface",
     )?;
+    let span = if crate::syntax::parser::runtime_fragment() {
+        Span::with_end_from(span, tokens[*pos - 1].1.span)
+    } else {
+        span
+    };
 
     Ok(Stmt::new(
         StmtKind::InterfaceDecl {
@@ -104,6 +110,7 @@ pub(in crate::syntax::parser::stmt) fn parse_trait_decl(
 
     // A trait has no parent and implements nothing, so its type parameters are the whole of its
     // generic half.
+    let _type_scope = crate::syntax::parser::runtime_templates::TypeScope::enter();
     let type_params = parse_type_param_list(tokens, pos, span)?;
     let generics = crate::syntax::parser::ast::GenericDecl::new(type_params, Vec::new(), Vec::new());
 
@@ -111,6 +118,11 @@ pub(in crate::syntax::parser::stmt) fn parse_trait_decl(
     let (trait_uses, properties, methods, constants, _cases) =
         parse_class_like_body(tokens, pos, "trait", false)?;
     expect_token(tokens, pos, &Token::RBrace, "Expected '}' at end of trait")?;
+    let span = if crate::syntax::parser::runtime_fragment() {
+        Span::with_end_from(span, tokens[*pos - 1].1.span)
+    } else {
+        span
+    };
 
     Ok(Stmt::new(
         StmtKind::TraitDecl {
@@ -262,6 +274,9 @@ pub(in crate::syntax::parser::stmt) fn parse_class_like_body(
         }
 
         if tokens[*pos].0 == Token::Function {
+            if crate::syntax::parser::runtime_fragment() && modifiers.set_visibility.is_some() {
+                return Err(CompileError::runtime_unsupported(member_span, "Set visibility is only valid on properties"));
+            }
             if modifiers.is_readonly {
                 return Err(CompileError::new(
                     member_span,
@@ -294,7 +309,7 @@ pub(in crate::syntax::parser::stmt) fn parse_class_like_body(
 
         if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Variable(_))) {
             if !validation_only() && modifiers.is_static && modifiers.is_readonly {
-                return Err(CompileError::new(
+                return Err(CompileError::runtime_unsupported(
                     member_span,
                     "Static properties cannot be readonly",
                 ));
@@ -370,7 +385,7 @@ pub(in crate::syntax::parser::stmt) fn parse_class_like_body(
                 }
                 if !validation_only() {
                     if modifiers.is_static && hooks.any() {
-                        return Err(CompileError::new(
+                        return Err(CompileError::runtime_unsupported(
                             member_span,
                             "Cannot declare hooks for static property",
                         ));
@@ -382,7 +397,7 @@ pub(in crate::syntax::parser::stmt) fn parse_class_like_body(
                         ));
                     }
                     if hooks.is_virtual() && default.is_some() {
-                        return Err(CompileError::new(
+                        return Err(CompileError::runtime_unsupported(
                             member_span,
                             "Virtual properties cannot have a default value",
                         ));
@@ -403,7 +418,7 @@ pub(in crate::syntax::parser::stmt) fn parse_class_like_body(
                             ));
                         }
                         if modifiers.is_final {
-                            return Err(CompileError::new(
+                            return Err(CompileError::runtime_unsupported(
                                 member_span,
                                 "Cannot use the final modifier on an abstract property",
                             ));
@@ -594,7 +609,8 @@ pub(super) struct MemberModifiers {
 /// Consumes any matching modifier tokens and returns a `MemberModifiers` struct.
 /// Default visibility is `Public` if no visibility modifier is present.
 fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> Result<MemberModifiers, CompileError> {
-    let mut saw_modifier = false;
+    let modifier_start = *pos;
+    let mut var_modifier = None;
     let mut visibility = Visibility::Public;
     let mut set_visibility = None;
     let mut is_static = false;
@@ -608,7 +624,7 @@ fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> Result<Me
             tokens.get(*pos).map(|(t, _)| t),
             Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("var")
         ) {
-            saw_modifier = true;
+            var_modifier = Some(tokens[*pos].1.span);
             visibility = Visibility::Public;
             *pos += 1;
             continue;
@@ -622,7 +638,6 @@ fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> Result<Me
             _ => None,
         };
         if let Some(keyword) = visibility_keyword {
-            saw_modifier = true;
             let modifier_span = tokens[*pos].1.span;
             *pos += 1;
             if consume_set_marker(tokens, pos, modifier_span) {
@@ -637,22 +652,21 @@ fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> Result<Me
         }
         match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Static) => {
-                saw_modifier = true;
+                if is_static && crate::syntax::parser::runtime_fragment() {
+                    return Err(CompileError::runtime_unsupported(tokens[*pos].1.span, "Multiple static modifiers"));
+                }
                 is_static = true;
                 *pos += 1;
             }
             Some(Token::ReadOnly) => {
-                saw_modifier = true;
                 is_readonly = true;
                 *pos += 1;
             }
             Some(Token::Abstract) => {
-                saw_modifier = true;
                 is_abstract = true;
                 *pos += 1;
             }
             Some(Token::Final) => {
-                saw_modifier = true;
                 is_final = true;
                 *pos += 1;
             }
@@ -660,8 +674,13 @@ fn parse_member_modifiers(tokens: &[SpannedToken], pos: &mut usize) -> Result<Me
         }
     }
 
+    if let Some(span) = var_modifier {
+        if crate::syntax::parser::runtime_fragment() && *pos - modifier_start > 1 {
+            return Err(CompileError::runtime_unsupported(span, "The 'var' modifier cannot be combined with other modifiers"));
+        }
+    }
     Ok(MemberModifiers {
-        saw_modifier,
+        saw_modifier: *pos != modifier_start,
         visibility,
         set_visibility,
         is_static,
@@ -680,7 +699,7 @@ pub(crate) fn consume_set_marker(
     pos: &mut usize,
     modifier_span: Span,
 ) -> bool {
-    if !tokens.get(*pos).is_some_and(|(_, metadata)| {
+    if !crate::syntax::parser::runtime_fragment() && !tokens.get(*pos).is_some_and(|(_, metadata)| {
         metadata.span.line == modifier_span.end_line
             && metadata.span.col == modifier_span.end_column()
     }) {
@@ -715,6 +734,7 @@ fn parse_class_like_method(
     is_abstract: bool,
     is_final: bool,
 ) -> Result<(ClassMethod, Vec<ClassProperty>), CompileError> {
+    let method_start = tokens[*pos].1.span;
     *pos += 1; // consume 'function'
     // PHP `function &m()` returns a reference (alias) to the returned lvalue.
     let by_ref_return = matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::Ampersand));
@@ -739,6 +759,7 @@ fn parse_class_like_method(
     // A method may declare type parameters of its OWN, distinct from its class's: `map<U>` on a
     // `Box<T>` binds `T` when the class is instantiated and `U` when the method is called. The
     // list answers empty when there is no `<`, so an ordinary method costs one token peek.
+    let _type_scope = crate::syntax::parser::runtime_templates::TypeScope::enter();
     let type_params = parse_type_param_list(tokens, pos, span)?;
 
     expect_token(
@@ -774,7 +795,7 @@ fn parse_class_like_method(
         // TOKEN_PARSE accepts an abstract constructor's promoted properties; PHP rejects them
         // while compiling the declaration, after the parse phase.
         if !validation_only() && (is_abstract || !has_body) {
-            return Err(CompileError::new(
+            return Err(CompileError::runtime_unsupported(
                 span,
                 "Cannot declare promoted property in an abstract constructor",
             ));
@@ -792,6 +813,11 @@ fn parse_class_like_method(
         body
     } else {
         promoted_assignments.into_iter().chain(body).collect()
+    };
+    let span = if crate::syntax::parser::runtime_fragment() {
+        Span::with_end_from(method_start, tokens[*pos - 1].1.span)
+    } else {
+        span
     };
     Ok((
         ClassMethod {
@@ -897,7 +923,7 @@ fn parse_interface_body(
                 ));
             }
             if !validation_only() && *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
-                return Err(CompileError::new(
+                return Err(CompileError::runtime_unsupported(
                     member_span,
                     "Interface properties cannot have a default value",
                 ));
@@ -910,7 +936,7 @@ fn parse_interface_body(
                 parse_property_hooks(tokens, pos, member_span, &prop_name, type_expr.as_ref())?;
             if !validation_only() {
                 if !hook_accessors.is_empty() {
-                    return Err(CompileError::new(
+                    return Err(CompileError::runtime_unsupported(
                         member_span,
                         "Interface property hooks cannot have a body",
                     ));
@@ -922,7 +948,7 @@ fn parse_interface_body(
                     ));
                 }
                 if modifiers.is_static {
-                    return Err(CompileError::new(
+                    return Err(CompileError::runtime_unsupported(
                         member_span,
                         "Cannot declare hooks for static property",
                     ));
@@ -937,7 +963,11 @@ fn parse_interface_body(
             properties.push(ClassProperty {
                 name: prop_name,
                 visibility: Visibility::Public,
-                set_visibility: None,
+                set_visibility: if crate::syntax::parser::runtime_fragment() {
+                    modifiers.set_visibility
+                } else {
+                    None
+                },
                 type_expr,
                 hooks,
                 readonly: false,
@@ -957,6 +987,9 @@ fn parse_interface_body(
                 member_span,
                 "Interfaces may only contain method, property, or constant declarations",
             ));
+        }
+        if crate::syntax::parser::runtime_fragment() && modifiers.set_visibility.is_some() {
+            return Err(CompileError::runtime_unsupported(member_span, "Set visibility is only valid on properties"));
         }
         let (mut method, promoted_properties) = parse_class_like_method(
             tokens,
@@ -1015,7 +1048,7 @@ fn parse_constant_declarator_list(
         // reserves `class` for `Foo::class`; the grammar itself accepts the declaration.
         let const_name = match tokens.get(*pos).map(|(t, _)| t) {
             Some(Token::Class) if !validation_only() => {
-                return Err(CompileError::new(
+                return Err(CompileError::runtime_unsupported(
                     member_span,
                     "Cannot use 'class' as a class constant name",
                 ))
@@ -1044,7 +1077,9 @@ fn parse_constant_declarator_list(
             }
         };
         // PHP's parser accepts duplicate class constants; the compiler rejects them later.
-        if !validation_only() && constants.iter().any(|c: &ClassConst| c.name == const_name) {
+        if !validation_only() && !crate::syntax::parser::runtime_fragment()
+            && constants.iter().any(|c: &ClassConst| c.name == const_name)
+        {
             return Err(CompileError::new(
                 name_span,
                 &format!("Cannot redeclare {} constant {}", owner_kind, const_name),
@@ -1172,10 +1207,13 @@ fn parse_property_hooks(
         // Optional set-hook parameter list: `set(Type $value)` (the type is accepted but the
         // property type governs); the default parameter name is `$value`.
         let mut set_param = "value".to_string();
+        let mut set_param_type = None;
         if is_set && matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
             *pos += 1;
             if looks_like_typed_param(tokens, *pos) {
-                let _ = parse_type_expr(tokens, pos, hook_span)?;
+                set_param_type = Some(parse_type_expr(tokens, pos, hook_span)?);
+            } else if crate::syntax::parser::runtime_fragment() && prop_type.is_some() {
+                return Err(CompileError::runtime_unsupported(hook_span, "Typed property requires a typed set hook parameter"));
             }
             match tokens.get(*pos).map(|(t, _)| t) {
                 Some(Token::Variable(name)) => {
@@ -1228,11 +1266,17 @@ fn parse_property_hooks(
                 ))
             }
         };
+        let runtime_fragment = crate::syntax::parser::runtime_fragment();
+        let hook_span = if runtime_fragment {
+            Span::with_end_from(hook_span, tokens[*pos - 1].1.span)
+        } else {
+            hook_span
+        };
 
         if is_get {
             // PHP's parser accepts duplicate hooks; the compiler rejects them later.
             if !validation_only() && hooks.requires_get() {
-                return Err(CompileError::new(hook_span, "Duplicate get property hook"));
+                return Err(CompileError::runtime_unsupported(hook_span, "Duplicate get property hook"));
             }
             hooks.get = !get_by_ref;
             hooks.get_by_ref = get_by_ref;
@@ -1259,13 +1303,13 @@ fn parse_property_hooks(
             }
         } else {
             if get_by_ref {
-                return Err(CompileError::new(
+                return Err(CompileError::runtime_unsupported(
                     hook_span,
                     "Set property hook cannot return by reference",
                 ));
             }
             if !validation_only() && hooks.set {
-                return Err(CompileError::new(hook_span, "Duplicate set property hook"));
+                return Err(CompileError::runtime_unsupported(hook_span, "Duplicate set property hook"));
             }
             hooks.set = true;
             if let Some(body) = body {
@@ -1277,7 +1321,12 @@ fn parse_property_hooks(
                     is_abstract: false,
                     is_final: hook_is_final,
                     has_body: true,
-                    params: vec![(set_param, prop_type.cloned(), None, false)],
+                    params: vec![(
+                        set_param,
+                        if runtime_fragment { set_param_type } else { prop_type.cloned() },
+                        None,
+                        false,
+                    )],
                     param_attributes: vec![Vec::new()],
                     variadic: None,
                     variadic_by_ref: false,
@@ -1299,7 +1348,7 @@ fn parse_property_hooks(
         "Expected '}' at end of property hook block",
     )?;
     if !validation_only() && !hooks.any() {
-        return Err(CompileError::new(
+        return Err(CompileError::runtime_unsupported(
             span,
             "Expected property hook declaration",
         ));

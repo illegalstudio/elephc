@@ -28,6 +28,12 @@ pub enum CompileErrorKind {
     General,
     /// A builtin argument that AOT compilation needs as a compile-time literal was not one.
     AotLiteralRequired,
+    /// A statement or declaration reached a token other than its required semicolon.
+    ExpectedSemicolon,
+    /// A parameter or closure capture requires a variable name.
+    ExpectedVariable,
+    /// The runtime profile refuses the construct or declaration form.
+    UnsupportedRuntimeConstruct,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -64,6 +70,24 @@ impl CompileError {
             kind: CompileErrorKind::AotLiteralRequired,
             ..Self::new(span, message)
         }
+    }
+
+    /// Reports a missing statement terminator at the current token.
+    pub fn expected_semicolon(span: Span) -> Self {
+        Self {
+            kind: CompileErrorKind::ExpectedSemicolon,
+            ..Self::new(span, "Expected ';'")
+        }
+    }
+
+    /// Preserves a runtime refusal independently of the diagnostic text.
+    pub fn runtime_unsupported(span: Span, message: &str) -> Self {
+        Self { kind: CompileErrorKind::UnsupportedRuntimeConstruct, ..Self::new(span, message) }
+    }
+
+    /// Preserves the expected variable category for runtime diagnostics.
+    pub fn expected_variable(span: Span, message: &str) -> Self {
+        Self { kind: CompileErrorKind::ExpectedVariable, ..Self::new(span, message) }
     }
 
     /// Sets the file name and returns self for chaining.

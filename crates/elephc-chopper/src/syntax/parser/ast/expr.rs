@@ -11,7 +11,7 @@
 use crate::syntax::names::Name;
 use crate::syntax::span::Span;
 
-use super::{BinOp, Stmt, StmtKind, TypeExpr};
+use super::{BinOp, RuntimeExpr, Stmt, StmtKind, TypeExpr};
 
 // --- Expressions ---
 
@@ -23,7 +23,7 @@ pub struct Expr {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-/// One entry of an array literal that mixes spreads with explicit keys.
+/// One ordered entry in an array literal with runtime key assignment.
 ///
 /// PHP lets the three forms appear in any order in one literal -- `["a" => 1, ...$v, 2]` -- and
 /// the order is observable, because a spread's elements take the next free integer key at the
@@ -36,6 +36,10 @@ pub enum ArrayEntry {
     Keyed(Expr, Expr),
     /// A bare element, which takes the next free integer key.
     Value(Expr),
+    /// `&$place`, an implicit key with a reference to a writable place.
+    Reference(Expr),
+    /// `key => &$place`, an explicit key with a reference to a writable place.
+    KeyReference(Expr, Expr),
 }
 
 impl ArrayEntry {
@@ -47,16 +51,16 @@ impl ArrayEntry {
     /// and re-ordered, in thirty different places.
     pub fn exprs(&self) -> std::vec::IntoIter<&Expr> {
         match self {
-            Self::Spread(expr) | Self::Value(expr) => vec![expr].into_iter(),
-            Self::Keyed(key, value) => vec![key, value].into_iter(),
+            Self::Spread(expr) | Self::Value(expr) | Self::Reference(expr) => vec![expr].into_iter(),
+            Self::Keyed(key, value) | Self::KeyReference(key, value) => vec![key, value].into_iter(),
         }
     }
 
     /// Mutable counterpart of [`ArrayEntry::exprs`], for the rewriting passes.
     pub fn exprs_mut(&mut self) -> std::vec::IntoIter<&mut Expr> {
         match self {
-            Self::Spread(expr) | Self::Value(expr) => vec![expr].into_iter(),
-            Self::Keyed(key, value) => vec![key, value].into_iter(),
+            Self::Spread(expr) | Self::Value(expr) | Self::Reference(expr) => vec![expr].into_iter(),
+            Self::Keyed(key, value) | Self::KeyReference(key, value) => vec![key, value].into_iter(),
         }
     }
 
@@ -70,6 +74,8 @@ impl ArrayEntry {
             Self::Spread(expr) => Self::Spread(rewrite(expr)),
             Self::Value(expr) => Self::Value(rewrite(expr)),
             Self::Keyed(key, value) => Self::Keyed(rewrite(key), rewrite(value)),
+            Self::Reference(expr) => Self::Reference(rewrite(expr)),
+            Self::KeyReference(key, value) => Self::KeyReference(rewrite(key), rewrite(value)),
         }
     }
 
@@ -85,6 +91,8 @@ impl ArrayEntry {
             Self::Spread(expr) => Self::Spread(rewrite(expr)?),
             Self::Value(expr) => Self::Value(rewrite(expr)?),
             Self::Keyed(key, value) => Self::Keyed(rewrite(key)?, rewrite(value)?),
+            Self::Reference(expr) => Self::Reference(rewrite(expr)?),
+            Self::KeyReference(key, value) => Self::KeyReference(rewrite(key)?, rewrite(value)?),
         })
     }
 }
@@ -107,6 +115,8 @@ pub enum ExprKind {
     },
     BoolLiteral(bool),
     Null,
+    /// Syntax retained for interpretation before compiler-specific desugaring.
+    Runtime(Box<RuntimeExpr>),
     Negate(Box<Expr>),
     Not(Box<Expr>),
     BitNot(Box<Expr>),
@@ -141,9 +151,9 @@ pub enum ExprKind {
     },
     ArrayLiteral(Vec<Expr>),
     ArrayLiteralAssoc(Vec<(Expr, Expr)>),
-    /// An array literal that MIXES a spread with explicit keys, which neither of the two
-    /// nodes above can hold: `ArrayLiteral` has no place for a key and `ArrayLiteralAssoc`
-    /// has no place for a keyless spread. Produced only for that shape.
+    /// An array literal whose explicit and implicit keys must stay in source order until
+    /// evaluation. The compiler uses this when keys depend on a spread or the PHP profile.
+    /// Runtime fragments use it to pass each written element to the interpreter.
     ArrayLiteralMixed(Vec<ArrayEntry>),
     Match {
         subject: Box<Expr>,
@@ -332,6 +342,7 @@ pub enum ExprKind {
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 /// Magic constant.
 pub enum MagicConstant {
+    Line,
     Dir,
     File,
     Function,

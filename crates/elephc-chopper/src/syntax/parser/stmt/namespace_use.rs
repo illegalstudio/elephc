@@ -190,6 +190,11 @@ pub(super) fn parse_use_stmt(
     let mut all_imports = imports;
     while *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
         *pos += 1;
+        if crate::syntax::parser::runtime_fragment()
+            && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Function | Token::Const))
+        {
+            return Err(CompileError::expected_semicolon(tokens[*pos].1.span));
+        }
         let item_kind = if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
             *pos += 1;
             UseKind::Function
@@ -286,10 +291,16 @@ fn parse_group_use_items(
                 &Token::Comma,
                 "Expected ',' in group use declaration",
             )?;
+            if crate::syntax::parser::runtime_fragment()
+                && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RBrace))
+            {
+                break;
+            }
         }
 
+        let strict_kind = validation_only() || crate::syntax::parser::runtime_fragment();
         let kind = if *pos < tokens.len() && tokens[*pos].0 == Token::Function {
-            if validation_only() && default_kind != UseKind::Class {
+            if strict_kind && default_kind != UseKind::Class {
                 return Err(CompileError::new(
                     span,
                     "Grouped function/const imports cannot repeat the import kind",
@@ -298,7 +309,7 @@ fn parse_group_use_items(
             *pos += 1;
             UseKind::Function
         } else if *pos < tokens.len() && tokens[*pos].0 == Token::Const {
-            if validation_only() && default_kind != UseKind::Class {
+            if strict_kind && default_kind != UseKind::Class {
                 return Err(CompileError::new(
                     span,
                     "Grouped function/const imports cannot repeat the import kind",
@@ -330,7 +341,7 @@ fn parse_group_use_items(
             tokens, pos, span, name, kind,
         )?);
     }
-    if validation_only() && imports.is_empty() {
+    if (validation_only() || crate::syntax::parser::runtime_fragment()) && imports.is_empty() {
         return Err(CompileError::new(span, "Group use declaration cannot be empty"));
     }
     expect_token(

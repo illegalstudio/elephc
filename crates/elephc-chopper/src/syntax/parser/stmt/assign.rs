@@ -12,6 +12,8 @@ mod compound;
 mod list;
 mod locals;
 mod postfix;
+mod runtime_write;
+pub(super) use runtime_write::try_parse_runtime_write;
 mod simple;
 
 pub use list::{

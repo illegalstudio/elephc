@@ -76,6 +76,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     };
     let span = expr.span;
     let kind = match expr.kind {
+        kind @ ExprKind::Runtime(_) => kind,
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

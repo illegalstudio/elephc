@@ -12,7 +12,7 @@ use crate::syntax::parser::validation_only;
 use crate::syntax::errors::CompileError;
 use crate::syntax::lexer::{SpannedToken, Token};
 use crate::syntax::names::Name;
-use crate::syntax::parser::ast::{ArrayEntry, Expr, ExprKind, MagicConstant, StaticReceiver};
+use crate::syntax::parser::ast::{ArrayEntry, Expr, ExprKind, MagicConstant, RuntimeExpr, StaticReceiver};
 use crate::syntax::span::Span;
 
 use super::calls::{
@@ -98,6 +98,9 @@ pub(super) fn parse_prefix(
     }
 
     match &tokens[*pos].0 {
+        Token::Plus if crate::syntax::parser::runtime_fragment() => parse_unary(tokens, pos, span, |inner| {
+            ExprKind::Runtime(Box::new(RuntimeExpr::UnaryPlus(*inner)))
+        }, 35),
         Token::Plus => parse_unary(tokens, pos, span, |inner| {
             ExprKind::BinaryOp {
                 left: Box::new(Expr::new(ExprKind::IntLiteral(0), inner.span)),
@@ -109,7 +112,10 @@ pub(super) fn parse_prefix(
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
         Token::Tilde => parse_unary(tokens, pos, span, ExprKind::BitNot, 35),
         Token::At => parse_unary(tokens, pos, span, ExprKind::ErrorSuppress, 35),
-        Token::Print => parse_unary(tokens, pos, span, ExprKind::Print, 7),
+        Token::Print => {
+            let binding_power = if crate::syntax::parser::runtime_fragment() { 0 } else { 7 };
+            parse_unary(tokens, pos, span, ExprKind::Print, binding_power)
+        }
         Token::Throw => parse_unary(tokens, pos, span, ExprKind::Throw, 0),
         Token::Clone => parse_clone(tokens, pos, span),
         Token::True => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(true)),
@@ -206,7 +212,12 @@ pub(super) fn parse_prefix(
             ExprKind::StringLiteral("/".to_string()),
         ),
         Token::DunderLine => {
-            parse_simple(tokens, pos, span, ExprKind::IntLiteral(span.line as i64))
+            let kind = if crate::syntax::parser::runtime_fragment() {
+                ExprKind::MagicConstant(MagicConstant::Line)
+            } else {
+                ExprKind::IntLiteral(i64::from(span.line))
+            };
+            parse_simple(tokens, pos, span, kind)
         }
         Token::DunderDir => parse_simple(
             tokens,
@@ -312,6 +323,12 @@ pub(super) fn parse_prefix(
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Parent, "parent")
         }
         Token::New => parse_new_object(tokens, pos, span),
+        Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce
+            if crate::syntax::parser::runtime_fragment() =>
+        {
+            Ok(crate::syntax::parser::stmt::try_parse_value_include(tokens, pos)?
+                .expect("matched include keyword"))
+        }
         Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce if validation_only() => {
             // `include`/`require` are expressions in PHP's grammar; the compiler lowers
             // them only as statements.
@@ -572,6 +589,13 @@ fn parse_prefix_inc_dec(
         }
     }
     if let Ok((target, append_kind)) = operand {
+        if crate::syntax::parser::runtime_fragment() && matches!(
+            target.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }
+        ) {
+            return Ok(super::runtime_members::property_update(
+                target, crate::syntax::parser::ast::RuntimeWrite::IncDec { increment, prefix: true }, span,
+            ));
+        }
         if matches!(append_kind, super::pratt::PrefixIncrementTarget::Append) {
             if !increment {
                 return Err(CompileError::new(span,
@@ -664,7 +688,9 @@ fn parse_group_or_cast(
 ) -> Result<Expr, CompileError> {
     if let Some(cast_ty) = peek_cast(tokens, *pos) {
         *pos += 3;
-        let inner = parse_expr_bp(tokens, pos, 35)?;
+        // The interpreter's existing casts consume a full concatenation expression.
+        let binding_power = if crate::syntax::parser::runtime_fragment() { 27 } else { 35 };
+        let inner = parse_expr_bp(tokens, pos, binding_power)?;
         return Ok(Expr::new(
             ExprKind::Cast {
                 target: cast_ty,
@@ -737,6 +763,7 @@ fn parse_array_literal_with_terminator(
     // Non-empty when an explicit key must stay ordered with a spread or with a bare entry whose
     // implicit key depends on the selected PHP profile (negative integer keys before PHP 8.3).
     let mut mixed_elems: Vec<ArrayEntry> = Vec::new();
+    let keep_implicit_keys = crate::syntax::parser::runtime_fragment();
     let mut is_assoc = false;
     let mut first = true;
     let mut next_auto_key = 0i64;
@@ -777,7 +804,9 @@ fn parse_array_literal_with_terminator(
             *pos += 1;
             let inner = parse_expr(tokens, pos)?;
             let spread = Expr::new(ExprKind::Spread(Box::new(inner)), spread_span);
-            if is_assoc {
+            if keep_implicit_keys {
+                mixed_elems.push(ArrayEntry::Spread(spread));
+            } else if is_assoc {
                 // The literal already has explicit keys, so it becomes an entry list. The pairs
                 // collected so far have to move across with it: leaving them behind is what made
                 // `["c" => 8, ...$v]` come out as just the spread. Dropping the spread instead
@@ -787,6 +816,11 @@ fn parse_array_literal_with_terminator(
             } else {
                 elems.push(spread);
             }
+            first = false;
+            continue;
+        }
+        if keep_implicit_keys {
+            mixed_elems.push(parse_runtime_array_entry(tokens, pos)?);
             first = false;
             continue;
         }
@@ -849,6 +883,24 @@ fn parse_array_literal_with_terminator(
     } else {
         Ok(Expr::new(ExprKind::ArrayLiteral(elems), span))
     }
+}
+
+/// Parses a written runtime array entry without allocating a key or losing its reference mode.
+fn parse_runtime_array_entry(tokens: &[SpannedToken], pos: &mut usize) -> Result<ArrayEntry, CompileError> {
+    if matches!(tokens.get(*pos), Some((Token::Ampersand, _))) {
+        *pos += 1;
+        return parse_expr(tokens, pos).map(ArrayEntry::Reference);
+    }
+    let key_or_value = parse_expr(tokens, pos)?;
+    if !matches!(tokens.get(*pos), Some((Token::DoubleArrow, _))) {
+        return Ok(ArrayEntry::Value(key_or_value));
+    }
+    *pos += 1;
+    if matches!(tokens.get(*pos), Some((Token::Ampersand, _))) {
+        *pos += 1;
+        return Ok(ArrayEntry::KeyReference(key_or_value, parse_expr(tokens, pos)?));
+    }
+    Ok(ArrayEntry::Keyed(key_or_value, parse_expr(tokens, pos)?))
 }
 
 /// Rejects a by-reference array-literal element (`[&$x]`, `[$k => &$x]`, `array(&$x)`) with a

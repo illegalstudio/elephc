@@ -12,7 +12,7 @@ use crate::syntax::parser::validation_only;
 use crate::syntax::errors::CompileError;
 use crate::syntax::lexer::{SpannedToken, Token};
 use crate::syntax::parser::ast::{
-    AttributeGroup, ClassProperty, Expr, ExprKind, PropertyHooks, Stmt, StmtKind, TypeExpr,
+    AttributeGroup, ClassProperty, Expr, ExprKind, PropertyHooks, RuntimeExpr, RuntimeWrite, Stmt, StmtKind, TypeExpr,
     Visibility,
 };
 use crate::syntax::parser::expr::parse_expr;
@@ -78,6 +78,9 @@ pub(super) fn parse_method_params(
             )?;
             // Allow a trailing comma before the closing paren (PHP 8.0+).
             if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
+                if crate::syntax::parser::runtime_fragment() {
+                    return Err(CompileError::expected_variable(tokens[*pos].1.span, "Expected parameter after ','"));
+                }
                 break;
             }
         }
@@ -88,7 +91,7 @@ pub(super) fn parse_method_params(
         // through TOKEN_PARSE; both are rejected while COMPILING the declaration, so the
         // validation build must not fail them.
         if !validation_only() && variadic.is_some() {
-            return Err(CompileError::new(
+            return Err(CompileError::runtime_unsupported(
                 span,
                 "Variadic parameter must be the last parameter",
             ));
@@ -99,7 +102,7 @@ pub(super) fn parse_method_params(
             && promotion.is_some()
             && !method_name.eq_ignore_ascii_case("__construct")
         {
-            return Err(CompileError::new(
+            return Err(CompileError::runtime_unsupported(
                 span,
                 "Cannot declare promoted property outside a constructor",
             ));
@@ -123,7 +126,7 @@ pub(super) fn parse_method_params(
         };
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
             if !validation_only() && promotion.is_some() {
-                return Err(CompileError::new(
+                return Err(CompileError::runtime_unsupported(
                     span,
                     "Cannot declare variadic promoted property",
                 ));
@@ -139,7 +142,7 @@ pub(super) fn parse_method_params(
                     param_attributes.push(attributes);
                     *pos += 1;
                 }
-                _ => return Err(CompileError::new(span, "Expected variable after '...'")),
+                _ => return Err(CompileError::expected_variable(span, "Expected variable after '...'")),
             }
             continue;
         }
@@ -165,7 +168,7 @@ pub(super) fn parse_method_params(
                     span: property_span,
                 }) = promotion
                 {
-                    if !validation_only() && readonly && is_ref {
+                    if !validation_only() && !crate::syntax::parser::runtime_fragment() && readonly && is_ref {
                         return Err(CompileError::new(
                             ref_span.unwrap_or(property_span),
                             "Readonly promoted property cannot be by-reference",
@@ -191,7 +194,7 @@ pub(super) fn parse_method_params(
                         span: property_span,
                         attributes: attributes.clone(),
                     });
-                    promoted_assignments.push(promoted_property_assignment(&n, param_span));
+                    promoted_assignments.push(promoted_property_assignment(&n, is_ref, param_span));
                 }
                 param_attributes.push(attributes);
                 params.push((n, type_ann, default, is_ref));
@@ -269,7 +272,7 @@ fn parse_promoted_param_modifiers(
                 *pos += 1;
             }
             Token::Static => {
-                return Err(CompileError::new(
+                return Err(CompileError::runtime_unsupported(
                     token_span,
                     "Cannot use the static modifier on a parameter",
                 ))
@@ -308,7 +311,18 @@ fn parse_promoted_param_modifiers(
 /// Builds a synthetic `PropertyAssign` statement: `$this-><name> = $<name>` using the
 /// given variable name and span. The statement models the implicit assignment that
 /// PHP performs for a promoted constructor parameter.
-fn promoted_property_assignment(name: &str, span: Span) -> Stmt {
+fn promoted_property_assignment(name: &str, by_ref: bool, span: Span) -> Stmt {
+    if by_ref && crate::syntax::parser::runtime_fragment() {
+        let target = Expr::new(ExprKind::PropertyAccess {
+            object: Box::new(Expr::new(ExprKind::This, span)),
+            property: name.to_owned(),
+        }, span);
+        let write = Expr::new(ExprKind::Runtime(Box::new(RuntimeExpr::Write {
+            target,
+            operation: RuntimeWrite::BindReference(name.to_owned()),
+        })), span);
+        return Stmt::new(StmtKind::ExprStmt(write), span);
+    }
     Stmt::new(
         StmtKind::PropertyAssign {
             object: Box::new(Expr::new(ExprKind::This, span)),

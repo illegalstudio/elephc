@@ -55,6 +55,7 @@ pub(super) fn parse_function_decl(
     }
     *pos += 1;
 
+    let _type_scope = crate::syntax::parser::runtime_templates::TypeScope::enter();
     let type_params = parse_type_param_list(tokens, pos, span)?;
 
     expect_token(
@@ -76,6 +77,11 @@ pub(super) fn parse_function_decl(
     };
 
     let body = parse_block(tokens, pos)?;
+    let span = if crate::syntax::parser::runtime_fragment() {
+        Span::with_end_from(span, tokens[*pos - 1].1.span)
+    } else {
+        span
+    };
 
     Ok(Stmt::new(
         StmtKind::FunctionDecl {
@@ -172,6 +178,7 @@ fn parse_type_arguments(
             "Generic type parameters are not valid PHP",
         ));
     }
+    crate::syntax::parser::runtime_templates::record_extension(tokens[*pos].1.span);
     *pos += 1;
     let mut args = vec![parse_type_expr_nested(tokens, pos, span, closes)?];
     while *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
@@ -220,7 +227,9 @@ pub fn type_arguments_end(tokens: &[SpannedToken], pos: usize) -> Option<usize> 
     let mut probe = pos;
     let mut closes = AngleCloses::default();
     let span = tokens.get(pos)?.1.span;
-    let args = parse_type_arguments(tokens, &mut probe, span, &mut closes).ok()?;
+    let args = crate::syntax::parser::runtime_templates::lookahead(|| {
+        parse_type_arguments(tokens, &mut probe, span, &mut closes)
+    }).ok()?;
     if args.is_empty() || closes.pending > 0 {
         return None;
     }
@@ -237,7 +246,9 @@ pub fn parse_inherited_name(
     span: Span,
     message: &str,
 ) -> Result<(Name, Vec<TypeExpr>), CompileError> {
+    let name_start = *pos;
     let name = parse_name(tokens, pos, span, message)?;
+    crate::syntax::parser::runtime_templates::record_reference(&name, tokens[name_start].1.span);
     parse_inherited_name_at(tokens, pos, span, &name)
 }
 
@@ -291,6 +302,9 @@ pub fn parse_type_param_list(
             "Generic type parameters are not valid PHP",
         ));
     }
+    let header_start = *pos;
+    let track_header = crate::syntax::parser::runtime_fragment() && header_start > 0;
+    let mut parameter_spans = Vec::new();
     *pos += 1;
     // A bound may itself be a generic class (`<T : Box<int>>`), whose `>>` has to split the
     // same way it does inside a type argument list.
@@ -308,10 +322,15 @@ pub fn parse_type_param_list(
             }
         };
         if params.iter().any(|existing| existing.name == name) {
-            return Err(CompileError::new(
+            return Err(CompileError::runtime_unsupported(
                 span,
                 &format!("Duplicate type parameter '{}'", name),
             ));
+        }
+        if track_header {
+            let span = tokens[*pos].1.span;
+            crate::syntax::parser::runtime_templates::declare_parameter(&name, span);
+            parameter_spans.push(span);
         }
         *pos += 1;
         // `<T : Entity>` — the RFC's spelling for an upper bound. Unambiguous here because a
@@ -351,6 +370,18 @@ pub fn parse_type_param_list(
         &mut closes,
         "Expected '>' after type parameter list",
     )?;
+    if track_header {
+        if let Some((_, after)) = tokens.get(*pos) {
+            crate::syntax::parser::runtime_templates::record_header(
+                crate::syntax::parser::RuntimeTemplateHeader {
+                    name: tokens[header_start - 1].1.span,
+                    open: tokens[header_start].1.span,
+                    after: after.span,
+                    parameters: parameter_spans,
+                },
+            );
+        }
+    }
     Ok(params)
 }
 
@@ -554,6 +585,9 @@ fn type_starts_at(tokens: &[SpannedToken], index: usize) -> bool {
 /// the checker's `union_contains_void` still recognizes it as nullable. Pure non-null unions
 /// are returned unchanged.
 fn normalize_union_members(members: Vec<TypeExpr>) -> TypeExpr {
+    if crate::syntax::parser::runtime_fragment() && members.len() > 1 {
+        return TypeExpr::Union(members);
+    }
     let null_count = members
         .iter()
         .filter(|member| matches!(member, TypeExpr::Void))
@@ -656,6 +690,7 @@ fn parse_atomic_type_expr(
                 return Err(CompileError::new(tokens[*pos].1.span, "Generic type arguments are not valid PHP"));
             }
             if *pos < tokens.len() && tokens[*pos].0 == Token::Less {
+                crate::syntax::parser::runtime_templates::record_extension(tokens[*pos].1.span);
                 *pos += 1;
                 let first = parse_type_expr_nested(tokens, pos, span, closes)?;
                 // One argument is the indexed form `array<V>`; two is the associative
@@ -748,7 +783,11 @@ fn parse_atomic_type_expr(
         // folds a `null` union member back into the canonical `Nullable` shorthand.
         Some(Token::Null) => {
             *pos += 1;
-            Ok(TypeExpr::Void)
+            if crate::syntax::parser::runtime_fragment() {
+                Ok(TypeExpr::Named(Name::unqualified("null")))
+            } else {
+                Ok(TypeExpr::Void)
+            }
         }
         // Preserve `false` as a literal subtype so `$x === false` can remove only the false
         // member from `T|false` without incorrectly removing a full `bool` member. Its runtime
@@ -758,8 +797,13 @@ fn parse_atomic_type_expr(
             Ok(TypeExpr::False)
         }
         Some(Token::True) => {
+            let name = tokens[*pos].0.word_spelling(&tokens[*pos].1).unwrap_or("true");
             *pos += 1;
-            Ok(TypeExpr::Bool)
+            if crate::syntax::parser::runtime_fragment() {
+                Ok(TypeExpr::Named(Name::unqualified(name)))
+            } else {
+                Ok(TypeExpr::Bool)
+            }
         }
         // `self`, `static`, and `parent` are relative class types. They are kept symbolic here
         // (their concrete class is not known until inheritance/trait flattening) and resolved to
@@ -820,6 +864,7 @@ fn parse_named_type_expr(
 ) -> Result<TypeExpr, CompileError> {
     let name_start = *pos;
     let name = parse_name(tokens, pos, span, "Expected type name")?;
+    crate::syntax::parser::runtime_templates::record_reference(&name, tokens[name_start].1.span);
     if validation_only() && name.kind == crate::syntax::names::NameKind::Unqualified
         && name.parts.len() == 1
         && crate::syntax::parser::keyword_name::is_reserved_construct_name(&name.parts[0])
@@ -889,13 +934,16 @@ pub(super) fn parse_params(
             )?;
             // Allow a trailing comma before the closing paren (PHP 8.0+).
             if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
+                if crate::syntax::parser::runtime_fragment() {
+                    return Err(CompileError::expected_variable(tokens[*pos].1.span, "Expected parameter after ','"));
+                }
                 break;
             }
         }
         // PHP 8.0 parameter attributes (`function f(#[Sensitive] $s)`).
         let attributes = crate::syntax::parser::parse_attribute_lists(tokens, pos)?;
         if !validation_only() && variadic.is_some() {
-            return Err(CompileError::new(
+            return Err(CompileError::runtime_unsupported(
                 span,
                 "Variadic parameter must be the last parameter",
             ));
@@ -929,7 +977,7 @@ pub(super) fn parse_params(
                     param_attributes.push(attributes);
                     *pos += 1;
                 }
-                _ => return Err(CompileError::new(span, "Expected variable after '...'")),
+                _ => return Err(CompileError::expected_variable(span, "Expected variable after '...'")),
             }
             continue;
         }
@@ -1020,6 +1068,7 @@ fn parse_callable_signature(
     if validation_only() || *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
         return Ok(TypeExpr::Named(crate::syntax::names::Name::unqualified("callable")));
     }
+    crate::syntax::parser::runtime_templates::record_extension(tokens[*pos].1.span);
     *pos += 1;
     let mut params = Vec::new();
     if *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
@@ -1061,16 +1110,8 @@ pub(super) fn parse_name_list(
     let mut names = Vec::new();
     let mut type_args = Vec::new();
     loop {
-        if !name_starts_at(tokens, *pos) {
-            if names.is_empty() {
-                return Err(CompileError::new(span, first_error));
-            }
-            return Err(CompileError::new(
-                span,
-                "Expected name after ',' in declaration list",
-            ));
-        }
-        let (name, args) = parse_inherited_name(tokens, pos, span, first_error)?;
+        let error = if names.is_empty() { first_error } else { "Expected name after ',' in declaration list" };
+        let (name, args) = parse_inherited_name(tokens, pos, span, error)?;
         names.push(name);
         type_args.push(args);
 

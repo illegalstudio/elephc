@@ -12,7 +12,7 @@
 use super::keywords::{
     cast_id, is_label, is_label_start, is_whitespace, keyword_id,
 };
-use super::lexeme::{php_trivia, Trivia};
+use super::lexeme::{php_trivia, runtime_trivia, Trivia};
 use super::strings::{
     braced_interpolation, heredoc_closing, heredoc_opening, quoted_len, BracedInterpolation,
     HeredocProfile,
@@ -66,6 +66,7 @@ struct Lexer<'a> {
     i: usize,
     line: usize,
     mode: Mode,
+    runtime: bool,
     property: bool,
     depth: usize,
     frames: Vec<Frame>,
@@ -87,6 +88,7 @@ impl<'a> Lexer<'a> {
             i: 0,
             line: 1,
             mode: Mode::InlineHtml,
+            runtime: false,
             property: false,
             depth: 0,
             frames: Vec::new(),
@@ -120,8 +122,10 @@ impl<'a> Lexer<'a> {
                 self.i = before + 1;
             }
         }
-        self.validate_heredocs();
-        self.validate_halt_compiler();
+        if !self.runtime {
+            self.validate_heredocs();
+            self.validate_halt_compiler();
+        }
         (self.tokens, self.errors, self.warnings)
     }
 
@@ -355,7 +359,8 @@ impl<'a> Lexer<'a> {
             len: end - start,
             line: self.line,
         });
-        self.line += newline_count(&self.source[start..end]);
+        let text = &self.source[start..end];
+        self.line += if self.runtime { text.iter().filter(|&&byte| byte == b'\n').count() } else { newline_count(text) };
         if self.halt.is_some() && !is_trivia(token_id) {
             let remaining = self.halt.unwrap_or(0);
             if remaining <= 1 {
@@ -429,7 +434,8 @@ impl<'a> Lexer<'a> {
         let was_property = self.property;
         self.property = false;
 
-        if let Some((trivia, len)) = php_trivia(&self.source[self.i..]) {
+        let trivia_at = if self.runtime { runtime_trivia } else { php_trivia };
+        if let Some((trivia, len)) = trivia_at(&self.source[self.i..]) {
             let start = self.i;
             let end = start + len;
             let name = match trivia {
@@ -476,17 +482,19 @@ impl<'a> Lexer<'a> {
             return;
         }
 
-        if c == b'$' && self.source.get(self.i + 1).is_some_and(|b| is_label_start(*b)) {
+        if c == b'$' && self.source.get(self.i + 1).is_some_and(|&byte| {
+            self.name_start(byte) || (self.runtime && byte.is_ascii_digit())
+        }) {
             let start = self.i;
             let mut j = self.i + 1;
-            j += identifier_len(&self.source[j..]);
+            j += self.name_len(j);
             self.push(id("T_VARIABLE"), start, j);
             self.i = j;
             return;
         }
 
         if c.is_ascii_digit()
-            || (c == b'.' && self.source.get(self.i + 1).is_some_and(u8::is_ascii_digit))
+            || (!self.runtime && c == b'.' && self.source.get(self.i + 1).is_some_and(u8::is_ascii_digit))
         {
             let (token_id, end) = self.scan_number();
             self.push(token_id, self.i, end);
@@ -502,7 +510,7 @@ impl<'a> Lexer<'a> {
             self.scan_double_quoted(self.i, self.i);
             return;
         }
-        if matches!(c, b'b' | b'B')
+        if !self.runtime && matches!(c, b'b' | b'B')
             && self
                 .source
                 .get(self.i + 1)
@@ -516,7 +524,7 @@ impl<'a> Lexer<'a> {
             }
             return;
         }
-        if c == b'`' {
+        if !self.runtime && c == b'`' {
             self.push_byte(self.i);
             self.i += 1;
             self.mode = Mode::Backtick;
@@ -525,11 +533,11 @@ impl<'a> Lexer<'a> {
             return;
         }
 
-        if matches!(c, b'b' | b'B') && self.source.get(self.i + 1..self.i + 4) == Some(b"<<<") {
+        if !self.runtime && matches!(c, b'b' | b'B') && self.source.get(self.i + 1..self.i + 4) == Some(b"<<<") {
             self.scan_heredoc_open_at(self.i, self.i + 1);
             return;
         }
-        if c == b'<' && self.source.get(self.i + 1..self.i + 3) == Some(b"<<") {
+        if !self.runtime && c == b'<' && self.source.get(self.i + 1..self.i + 3) == Some(b"<<") {
             self.scan_heredoc_open();
             return;
         }
@@ -565,7 +573,7 @@ impl<'a> Lexer<'a> {
             return;
         }
 
-        if is_label_start(c) || c == b'\\' {
+        if self.name_start(c) || c == b'\\' {
             self.scan_name(was_property);
             return;
         }
@@ -596,28 +604,43 @@ impl<'a> Lexer<'a> {
         self.scan_operator_tail();
     }
 
+    /// Identifies the first byte of a name in the active source profile.
+    fn name_start(&self, byte: u8) -> bool {
+        is_label_start(byte) && (!self.runtime || byte.is_ascii())
+    }
+
+    /// Returns the length of a name segment in the active source profile.
+    fn name_len(&self, start: usize) -> usize {
+        let source = &self.source[start..];
+        if self.runtime {
+            source.iter().take_while(|&&byte| byte == b'_' || byte.is_ascii_alphanumeric()).count()
+        } else {
+            identifier_len(source)
+        }
+    }
+
     /// Scans identifiers, qualified names, and PHP's contextual keyword rewrites.
     fn scan_name(&mut self, was_property: bool) {
         let start = self.i;
         let mut j = self.i;
         let fully_qualified = self.source[j] == b'\\';
         if fully_qualified {
-            if !self.source.get(j + 1).is_some_and(|b| is_label_start(*b)) {
+            if !self.source.get(j + 1).is_some_and(|&byte| self.name_start(byte)) {
                 self.push(id("T_NS_SEPARATOR"), start, start + 1);
                 self.i += 1;
                 return;
             }
             j += 1;
         }
-        j += identifier_len(&self.source[j..]);
+        j += self.name_len(j);
         let mut qualified = false;
         while !was_property
             && self.source.get(j) == Some(&b'\\')
-            && self.source.get(j + 1).is_some_and(|b| is_label_start(*b))
+            && self.source.get(j + 1).is_some_and(|&byte| self.name_start(byte))
         {
             qualified = true;
             j += 1;
-            j += identifier_len(&self.source[j..]);
+            j += self.name_len(j);
         }
         let text = &self.source[start..j];
         if fully_qualified {
@@ -637,7 +660,7 @@ impl<'a> Lexer<'a> {
             return;
         }
 
-        if !was_property && text.eq_ignore_ascii_case(b"yield") {
+        if !self.runtime && !was_property && text.eq_ignore_ascii_case(b"yield") {
             let from = skip_trivia(self.source, j);
             if from > j
                 && self.source.get(from..from + 4).is_some_and(|s| s.eq_ignore_ascii_case(b"from"))
@@ -682,7 +705,7 @@ impl<'a> Lexer<'a> {
                 .is_some_and(|previous| is_halt_name_separator(previous.id));
         self.push(token_id, start, j);
         self.i = j;
-        if token_id == id("T_HALT_COMPILER") && !follows_name_separator {
+        if !self.runtime && token_id == id("T_HALT_COMPILER") && !follows_name_separator {
             self.halt = Some(3);
         }
     }
@@ -799,7 +822,9 @@ impl<'a> Lexer<'a> {
             }
         }
         let mut end = start + digits_len(&source[start..], 10);
-        if source.get(end) == Some(&b'.') {
+        if source.get(end) == Some(&b'.')
+            && (!self.runtime || source.get(end + 1).is_some_and(u8::is_ascii_digit))
+        {
             end += 1;
             end = end + digits_len(&source[end..], 10);
             end = scan_exponent(source, end);
@@ -1291,6 +1316,12 @@ fn validate_unicode_escapes(source: &[u8], start: usize, end: usize, errors: &mu
 /// Tokenizes one source buffer and returns lexical diagnostics for TOKEN_PARSE.
 pub(crate) fn scan(source: &[u8]) -> (Vec<Token>, Vec<LexError>, Vec<LexWarning>) {
     Lexer::new(source).run()
+}
+
+/// Scans source that starts inside a PHP block, as a runtime eval fragment does.
+pub(super) fn scan_runtime(source: &[u8], file: bool) -> (Vec<Token>, Vec<LexError>, Vec<LexWarning>) {
+    let mode = if file { Mode::InlineHtml } else { Mode::Php };
+    Lexer { mode, runtime: true, ..Lexer::new(source) }.run()
 }
 
 /// Formats a PHP parser diagnostic for one unexpected token and an expected literal.

@@ -12,6 +12,7 @@ mod expr;
 mod ffi;
 mod operators;
 mod oop;
+mod runtime;
 mod stmt;
 mod types;
 
@@ -24,6 +25,7 @@ pub use ffi::{
     c_width_type_names, is_c_width_type_name, CIntWidth, CType, ExternField, ExternParam, PackedField,
 };
 pub use operators::BinOp;
+pub use runtime::{MemberArguments, RuntimeClassMember, RuntimeClassReceiver, RuntimeExpr, RuntimeWrite};
 pub use oop::{
     Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl,
     PropertyHooks, TraitAdaptation, TraitUse, Visibility,

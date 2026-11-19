@@ -16,7 +16,7 @@
 //! - Malformed simple offsets are PHP parse errors (measured against PHP 8.5.6) and are
 //!   pinned as refusals so a future rewrite cannot start silently accepting them.
 
-use super::scan::tokenize;
+use super::tokenize;
 use super::TokenKind;
 use crate::errors::EvalParseError;
 
