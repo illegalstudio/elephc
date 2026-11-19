@@ -1345,8 +1345,206 @@ fn test_die_string_prints_message_and_exits_zero() {
 fn test_exit_weak_scalar_statuses() {
     assert!(!compile_and_run_capture("<?php exit(true);").success, "true exits 1");
     assert!(compile_and_run_capture("<?php exit(false);").success, "false exits 0");
-    assert!(compile_and_run_capture("<?php exit(null);").success, "null exits 0");
-    assert!(!compile_and_run_capture("<?php exit(1.5);").success, "float truncates to 1");
+    let null = compile_and_run_capture("<?php exit(null);");
+    assert!(null.success, "null exits 0");
+    assert!(
+        null.stderr.contains(
+            "Deprecated: exit(): Passing null to parameter #1 ($status) of type string|int is deprecated"
+        ),
+        "null status keeps PHP's deprecation: {}",
+        null.stderr
+    );
+    let fractional = compile_and_run_capture("<?php exit(1.5);");
+    assert!(!fractional.success, "float truncates to 1");
+    assert!(
+        fractional
+            .stderr
+            .contains("Deprecated: Implicit conversion from float 1.5 to int loses precision"),
+        "fractional status keeps PHP's precision deprecation: {}",
+        fractional.stderr
+    );
+    let integral = compile_and_run_capture("<?php exit(1.0);");
+    assert!(!integral.success, "integral float still selects its integer status");
+    assert!(
+        !integral.stderr.contains("Deprecated"),
+        "an exact integral float stays silent: {}",
+        integral.stderr
+    );
+}
+
+/// A boxed `mixed` status dispatches on its runtime tag like PHP's weak coercion.
+#[test]
+fn test_exit_mixed_scalar_statuses() {
+    let integer = compile_and_run_capture(
+        r#"<?php
+function stop(mixed $status): never { exit($status); }
+stop(3);
+"#,
+    );
+    assert_eq!(integer.status.code(), Some(3), "a boxed integer selects the exit code");
+
+    let string = compile_and_run_capture(
+        r#"<?php
+function stop(mixed $status): never { exit($status); }
+stop("bye");
+"#,
+    );
+    assert_eq!(string.stdout, "bye");
+    assert!(string.success);
+
+    let null = compile_and_run_capture(
+        r#"<?php
+function stop(mixed $status): never { exit($status); }
+stop(null);
+"#,
+    );
+    assert!(null.success);
+    assert!(
+        null.stderr.contains("Passing null to parameter #1 ($status) of type string|int is deprecated"),
+        "a boxed null keeps PHP's deprecation: {}",
+        null.stderr
+    );
+
+    let fractional = compile_and_run_capture(
+        r#"<?php
+function stop(mixed $status): never { exit($status); }
+stop(1.5);
+"#,
+    );
+    assert_eq!(fractional.status.code(), Some(1), "a boxed float truncates to its integer status");
+    assert!(
+        fractional.stderr.contains("Implicit conversion from float 1.5 to int loses precision"),
+        "a boxed fractional status keeps PHP's precision deprecation: {}",
+        fractional.stderr
+    );
+
+    // The everyday shape: a heterogeneous hash element reaches exit() as a boxed Mixed cell.
+    let hash_integer = compile_and_run_capture(
+        r#"<?php
+$values = ["code" => 3, "label" => "x"];
+exit($values["code"]);
+"#,
+    );
+    assert_eq!(hash_integer.status.code(), Some(3), "a boxed hash integer selects the exit code");
+
+    let hash_string = compile_and_run_capture(
+        r#"<?php
+$values = ["code" => 3, "label" => "bye"];
+exit($values["label"]);
+"#,
+    );
+    assert_eq!(hash_string.stdout, "bye");
+    assert!(hash_string.success);
+}
+
+/// A boxed non-scalar status raises PHP's catchable `TypeError` instead of terminating.
+#[test]
+fn test_exit_mixed_non_scalar_statuses_raise_type_error() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function stop(mixed $status): never { exit($status); }
+try { stop([1, 2]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { stop(new stdClass()); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo "done";
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "exit(): Argument #1 ($status) must be of type string|int, array given\n\
+exit(): Argument #1 ($status) must be of type string|int, stdClass given\n\
+done"
+    );
+}
+
+/// A strict call site rejects a boxed status tag that is not `string|int`.
+#[test]
+fn test_exit_strict_mixed_statuses_raise_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+function stop(mixed $status): never { exit($status); }
+try { stop(1.5); } catch (TypeError $e) { echo "float: ", $e->getMessage(), "\n"; }
+try { stop(true); } catch (TypeError $e) { echo "true: ", $e->getMessage(), "\n"; }
+try { stop(false); } catch (TypeError $e) { echo "false: ", $e->getMessage(), "\n"; }
+try { stop(null); } catch (TypeError $e) { echo "null: ", $e->getMessage(), "\n"; }
+stop("bye");
+"#,
+    );
+    assert_eq!(
+        out,
+        "float: exit(): Argument #1 ($status) must be of type string|int, float given\n\
+true: exit(): Argument #1 ($status) must be of type string|int, true given\n\
+false: exit(): Argument #1 ($status) must be of type string|int, false given\n\
+null: exit(): Argument #1 ($status) must be of type string|int, null given\n\
+bye"
+    );
+}
+
+/// A strict nullable integer status rejects `null` at the call rather than deprecating it.
+#[test]
+fn test_exit_strict_nullable_int_status_raises_type_error() {
+    let out = compile_and_run_capture(
+        r#"<?php
+declare(strict_types=1);
+function stop(?int $status): never { exit($status); }
+try { stop(null); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+stop(4);
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "exit(): Argument #1 ($status) must be of type string|int, null given\n"
+    );
+    assert_eq!(out.status.code(), Some(4));
+}
+
+/// A nullable integer status is a tagged scalar: null deprecates, an integer selects the code.
+#[test]
+fn test_exit_nullable_int_status() {
+    let integer = compile_and_run_capture(
+        r#"<?php
+function stop(?int $status): never { exit($status); }
+stop(4);
+"#,
+    );
+    assert_eq!(integer.status.code(), Some(4));
+
+    let null = compile_and_run_capture(
+        r#"<?php
+function stop(?int $status): never { exit($status); }
+stop(null);
+"#,
+    );
+    assert!(null.success);
+    assert!(
+        null.stderr.contains("Passing null to parameter #1 ($status) of type string|int is deprecated"),
+        "a nullable integer null keeps PHP's deprecation: {}",
+        null.stderr
+    );
+}
+
+/// Out-of-range and non-finite float statuses print their PHP string spelling instead of
+/// coercing, matching the weak-mode `string|int` coercion PHP applies.
+#[test]
+fn test_exit_weak_float_statuses_print_as_strings() {
+    for (source, expected) in [
+        ("<?php exit(1e300);", "1.0E+300"),
+        ("<?php exit(-1e300);", "-1.0E+300"),
+        ("<?php exit(INF);", "INF"),
+        ("<?php exit(-INF);", "-INF"),
+    ] {
+        let output = compile_and_run_capture(source);
+        assert_eq!(output.stdout, expected, "{source}");
+        assert!(output.success, "{source} exits 0 through the string path");
+    }
+    let nan = compile_and_run_capture("<?php exit(NAN);");
+    assert_eq!(nan.stdout, "NAN");
+    assert!(nan.success);
+    assert!(
+        nan.stderr.contains("Warning: unexpected NAN value was coerced to string"),
+        "NaN keeps PHP's coercion warning: {}",
+        nan.stderr
+    );
 }
 
 /// Strict `exit()` enforces `string|int`: weak-only scalar statuses raise a catchable TypeError.

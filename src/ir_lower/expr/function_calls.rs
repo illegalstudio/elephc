@@ -628,10 +628,19 @@ fn emit_builtin_call_value_with_target(
         )
     } else {
         let data = ctx.intern_function_name(name);
-        let immediate = if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
+        let construct_key = php_symbol_key(name.trim_start_matches('\\'));
+        let immediate = if construct_key == "eval" {
             Immediate::ProfiledData {
                 data,
                 strict_php: crate::strict_php::is_enabled(),
+            }
+        } else if matches!(construct_key.as_str(), "exit" | "die") {
+            // A statically known float/null/bool status is rejected before codegen in strict
+            // mode, but a boxed `mixed` status still needs the per-tag strict check at run
+            // time, so the call site's profile travels with the call.
+            Immediate::ProfiledData {
+                data,
+                strict_php: crate::source::current_strict_types(),
             }
         } else {
             Immediate::Data(data)

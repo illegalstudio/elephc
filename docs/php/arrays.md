@@ -399,6 +399,8 @@ matching PHP.
 Current limits: a reference element must name a variable. Referencing another
 container place (`[&$items[0]]`, `[&$object->prop]`), `$GLOBALS`, and a bare reference after a
 spread (`[...$items, &$value]`) are rejected with a compile-time diagnostic.
+Assigning a reference to a property the class does not declare
+(`$object->missing = &$value`) is rejected too: declare the property so its slot has a type.
 Appending a reference (`$array[] = &$value`, including nested appends) is also
 rejected: the writer would have to allocate the new key and bind its cell before
 the source read. Alias an existing element with `$b =& $a[0]` when that is the

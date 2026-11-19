@@ -33,6 +33,15 @@ fn bare_reference_after_spread_is_rejected() {
     );
 }
 
+/// Rejects reference assignment to a property the class does not declare.
+#[test]
+fn dynamic_property_reference_is_rejected() {
+    expect_error(
+        "<?php $o = new stdClass(); $o->p = &$value;",
+        "Reference assignment to a dynamic property is not supported",
+    );
+}
+
 /// Rejects a reference element that targets PHP's global symbol table.
 #[test]
 fn globals_reference_element_is_rejected() {

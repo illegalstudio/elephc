@@ -448,6 +448,16 @@ pub(super) fn check_ref_assign(
             if let Some(class) =
                 crate::types::checker::single_object_class_name(&object_ty)
             {
+                if checker
+                    .classes
+                    .get(&class)
+                    .is_some_and(|info| info.visible_property_index(property).is_none())
+                {
+                    return Err(CompileError::new(
+                        source.span,
+                        "Reference assignment to a dynamic property is not supported; declare the property on the class",
+                    ));
+                }
                 checker
                     .reference_property_promotions
                     .insert((class, property.clone()));

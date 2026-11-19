@@ -47,9 +47,9 @@ pub(super) fn check(
             if let Some(arg) = args.first() {
                 let ty = checker.infer_type(arg, env)?;
                 // PHP declares `string|int` and applies its weak scalar coercions to bool,
-                // float and null. Mixed/array/object dispatch needs a runtime type decision;
-                // static unsupported values keep a clear frontend diagnostic.
-                if !matches!(
+                // float and null. A boxed or nullable scalar value dispatches on its runtime
+                // tag; static unsupported values keep a clear frontend diagnostic.
+                let supported = matches!(
                     ty,
                     PhpType::Int
                         | PhpType::Str
@@ -57,7 +57,13 @@ pub(super) fn check(
                         | PhpType::False
                         | PhpType::Float
                         | PhpType::Void
-                ) {
+                        | PhpType::Mixed
+                ) || (matches!(ty, PhpType::Union(_))
+                    && matches!(
+                        ty.codegen_repr(),
+                        PhpType::Mixed | PhpType::TaggedScalar
+                    ));
+                if !supported {
                     return Err(CompileError::new(span, "exit() argument must be string or integer"));
                 }
             }
