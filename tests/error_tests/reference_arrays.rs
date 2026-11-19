@@ -32,3 +32,25 @@ fn bare_reference_after_spread_is_rejected() {
         "Reference array elements after a spread are not supported",
     );
 }
+
+/// Rejects a reference element that targets PHP's global symbol table.
+#[test]
+fn globals_reference_element_is_rejected() {
+    expect_error(
+        "<?php $refs = [&$GLOBALS];",
+        "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+    );
+}
+
+/// Rejects reference appends until the writer can allocate the new element key and cell.
+#[test]
+fn reference_append_is_rejected() {
+    expect_error(
+        "<?php $array = []; $value = 1; $array[] = &$value;",
+        "Reference append (`$array[] = &$value`) is not supported",
+    );
+    expect_error(
+        "<?php $array = [[1]]; $value = 1; $array[0][] = &$value;",
+        "Reference append (`$array[] = &$value`) is not supported",
+    );
+}

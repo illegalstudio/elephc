@@ -455,6 +455,37 @@ echo $dynamic($x);
     );
 }
 
+/// `call_user_func()` passes plain variables and reference cells by value.
+#[test]
+fn test_call_user_func_by_reference_parameter_passes_by_value() {
+    let output = compile_and_run_capture(
+        r#"<?php
+function set_value(&$value): void { $value = 99; }
+$plain = 1;
+call_user_func('set_value', $plain);
+echo $plain, "|";
+$array = [1, 2];
+$reference = &$array[1];
+call_user_func('set_value', $reference);
+echo $array[1], "|", $reference, "|";
+$boxed = 3;
+$arguments = [$boxed];
+call_user_func_array('set_value', $arguments);
+echo $boxed;
+"#,
+    );
+    assert_eq!(output.stdout, "1|2|2|3");
+    assert_eq!(
+        output
+            .stderr
+            .matches("set_value(): Argument #1 ($value) must be passed by reference, value given")
+            .count(),
+        3,
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
 /// A closure by-reference warning uses PHP's `{closure:file:line}` display name.
 #[test]
 fn test_call_user_func_closure_by_reference_warning_uses_php_name() {

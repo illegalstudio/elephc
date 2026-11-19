@@ -1065,7 +1065,26 @@ pub(crate) fn emit_runtime_data_fixed(
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
     out.push_str(".globl _diag_array_offset_on_null\n_diag_array_offset_on_null:\n    .ascii \"Warning: Trying to access array offset on null\\n\"\n");
-    out.push_str(".globl _diag_addcslashes_range\n_diag_addcslashes_range:\n    .ascii \"Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing\\n\"\n");
+    for (label, message) in [
+        (
+            "_diag_addcslashes_range_left",
+            crate::codegen_support::runtime::strings::ADDCSLASHES_LEFT_WARNING,
+        ),
+        (
+            "_diag_addcslashes_range_right",
+            crate::codegen_support::runtime::strings::ADDCSLASHES_RIGHT_WARNING,
+        ),
+        (
+            "_diag_addcslashes_range_increment",
+            crate::codegen_support::runtime::strings::ADDCSLASHES_INCREMENT_WARNING,
+        ),
+        (
+            "_diag_addcslashes_range_plain",
+            crate::codegen_support::runtime::strings::ADDCSLASHES_PLAIN_WARNING,
+        ),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     // -- curl_setopt()'s unsupported-option warning, split around the option number --
     // `__rt_curl_warn_unsupported_option` derives both `write()` lengths from the same
     // two constants the bytes below are built from, so the message and the immediates

@@ -699,18 +699,14 @@ fn emit_loaded_indexed_array_callback_call(
                 // `warn_indexed_nonreference_roots` already reported every mbstring variable
                 // root, including this named one; a second generic warning would duplicate it.
                 if !ctx.mbstring_variable_ref_warnings {
-                    by_reference::warn_indexed_ref_temporary(
-                        emitter, ctx, data, sig, index, &elem_ty, array_reg, elem_size,
-                    );
+                    by_reference::warn_indexed_ref_temporary(emitter, ctx, data, sig, index);
                 }
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
                 push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
                 emitter.label(&done_label);
             } else {
                 if !ctx.mbstring_variable_ref_warnings {
-                    by_reference::warn_indexed_ref_temporary(
-                        emitter, ctx, data, sig, index, &elem_ty, array_reg, elem_size,
-                    );
+                    by_reference::warn_indexed_ref_temporary(emitter, ctx, data, sig, index);
                 }
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
                 push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
@@ -1310,10 +1306,38 @@ fn push_loaded_indexed_array_ref_arg(
     let php_reference_label = ctx.next_label("invoker_php_reference");
     let temp_label = ctx.next_label("invoker_ref_temp");
     let done_label = ctx.next_label("invoker_ref_done");
+    let reference_path_label = ctx.next_label("invoker_ref_reference_path");
+    let by_value_owned_label = ctx.next_label("invoker_ref_by_value_owned");
+    let by_value_marker_label = ctx.next_label("invoker_ref_by_value_marker");
     let result_reg = abi::int_result_reg(emitter);
     let tag_reg = abi::secondary_scratch_reg(emitter);
 
     abi::emit_load_from_address(emitter, tag_reg, result_reg, 0);
+    // -- call_user_func-family invocations pass every argument by value --
+    let profile = abi::symbol_scratch_reg(emitter);
+    let profile_mask = abi::tertiary_scratch_reg(emitter);
+    abi::load_at_offset(emitter, profile, INVOKER_SCOPE_OFFSET);
+    abi::emit_load_int_immediate(emitter, profile_mask, CALLABLE_PROFILE_WARN_BY_REF);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("tst {profile}, {profile_mask}"));     // is this a call_user_func-family invocation?
+            emitter.instruction(&format!("b.eq {reference_path_label}"));       // ordinary dynamic calls keep writable storage
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {profile}, {profile_mask}"));    // is this a call_user_func-family invocation?
+            emitter.instruction(&format!("jz {reference_path_label}"));         // ordinary dynamic calls keep writable storage
+        }
+    }
+    emit_branch_if_invoker_ref_cell_tag(tag_reg, &by_value_marker_label, emitter);
+    abi::emit_call_label(emitter, "__rt_mixed_deref");                          // read a PHP reference cell for the by-value copy
+    abi::emit_call_label(emitter, "__rt_mixed_clone");                          // detach the copy from the caller's shared cell
+    abi::emit_jump(emitter, &by_value_owned_label);                             // wrap the independent copy in a temporary cell
+    emitter.label(&by_value_marker_label);
+    emit_box_loaded_invoker_ref_cell_value_as_mixed(emitter, ctx);              // materialize the marker's referenced value
+    emitter.label(&by_value_owned_label);
+    reference_args::push_owned_boxed_value(emitter, ctx, data, owner_index, target_ty);
+    abi::emit_jump(emitter, &done_label);
+    emitter.label(&reference_path_label);
     emit_branch_if_invoker_ref_cell_tag(tag_reg, &special_label, emitter);
     match emitter.target.arch {
         Arch::AArch64 => {

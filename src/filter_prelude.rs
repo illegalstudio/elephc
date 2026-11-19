@@ -117,13 +117,34 @@ pub(crate) fn filter_declarations(
         declarations.extend(input::declarations());
         declarations.extend(strict::declarations());
         declarations.extend(request::declarations(&config));
-        if initialize && web {
-            declarations.push(crate::synthetic_class::s_expr(
-                crate::synthetic_class::e_call(
-                    "__elephc_filter_initialize_request",
-                    vec![crate::synthetic_class::e_bool(true)],
-                ),
-            ));
+        if initialize {
+            if web {
+                declarations.push(crate::synthetic_class::s_expr(
+                    crate::synthetic_class::e_call(
+                        "__elephc_filter_initialize_request",
+                        vec![crate::synthetic_class::e_bool(true)],
+                    ),
+                ));
+            } else if config.name != request::FilterDefault::default().name {
+                // php-src reports the deprecated directive once at startup in every SAPI,
+                // including when no request filter ever runs in a CLI process.
+                declarations.push(crate::synthetic_class::s_expr(
+                    crate::synthetic_class::e_call(
+                        "__elephc_builtin_deprecated",
+                        vec![
+                            crate::synthetic_class::e_str(
+                                "The filter.default ini setting is deprecated",
+                            ),
+                            crate::synthetic_class::e_str("Unknown"),
+                            crate::synthetic_class::e_int(0),
+                        ],
+                    ),
+                ));
+                declarations.push(crate::synthetic_class::s_expr(crate::synthetic_class::e_assign(
+                    crate::synthetic_class::e_static_prop("__ElephcFilterState", "deprecated"),
+                    crate::synthetic_class::e_bool(true),
+                )));
+            }
         }
         declarations
     })

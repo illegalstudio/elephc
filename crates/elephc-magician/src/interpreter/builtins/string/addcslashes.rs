@@ -17,9 +17,20 @@ eval_builtin! {
 
 use super::super::super::*;
 
-/// The warning PHP emits for a descending character-list range.
-const ADDCSLASHES_RANGE_WARNING: &str =
+/// The warning PHP emits when a range marker has no character on its left.
+const ADDCSLASHES_LEFT_WARNING: &str =
+    "Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'\n";
+
+/// The warning PHP emits when a range marker has no character on its right.
+const ADDCSLASHES_RIGHT_WARNING: &str =
+    "Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'\n";
+
+/// The warning PHP emits when a range marker descends.
+const ADDCSLASHES_INCREMENT_WARNING: &str =
     "Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing\n";
+
+/// The warning PHP emits for a range marker it cannot classify further.
+const ADDCSLASHES_PLAIN_WARNING: &str = "Warning: addcslashes(): Invalid '..'-range\n";
 
 /// Evaluates PHP `addcslashes(...)` over one eval expression.
 pub(in crate::interpreter) fn eval_builtin_addcslashes(
@@ -46,34 +57,45 @@ pub(in crate::interpreter) fn eval_addcslashes_result(
     let characters = values.string_bytes(characters)?;
     let mut table = [false; 256];
     let mut index = 0usize;
-    let mut previous = None;
     while index < characters.len() {
         let current = characters[index];
-        if current == b'.'
-            && index + 2 < characters.len()
+        if index + 3 < characters.len()
             && characters[index + 1] == b'.'
-            && previous.is_some()
+            && characters[index + 2] == b'.'
+            && characters[index + 3] >= current
         {
-            let start = previous.expect("range start checked above");
-            let end = characters[index + 2];
-            if start <= end {
-                for byte in start..=end {
-                    table[usize::from(byte)] = true;
-                }
-            } else {
-                // A descending range is rejected as a range but every literal byte it
-                // spells is still escaped: the start (marked above), both dots and the
-                // end. PHP reports one warning per rejected range.
-                table[usize::from(b'.')] = true;
-                table[usize::from(end)] = true;
-                values.warning(ADDCSLASHES_RANGE_WARNING)?;
+            // php_charmask() reads the range as `current..characters[index + 3]`, so a
+            // three-dot list such as `H...o` starts the range at the first dot.
+            for byte in current..=characters[index + 3] {
+                table[usize::from(byte)] = true;
             }
-            index += 3;
-            previous = None;
+            index += 4;
+            continue;
+        }
+        if index + 1 < characters.len() && current == b'.' && characters[index + 1] == b'.' {
+            // The remaining diagnostics mirror php_charmask()'s ordered checks. The dot
+            // bytes are not added to the mask on this path; later iterations mark the
+            // second dot when it cannot open another marker.
+            if index == 0 {
+                values.warning(ADDCSLASHES_LEFT_WARNING)?;
+                index += 1;
+                continue;
+            }
+            if index + 2 >= characters.len() {
+                values.warning(ADDCSLASHES_RIGHT_WARNING)?;
+                index += 1;
+                continue;
+            }
+            if characters[index - 1] > characters[index + 2] {
+                values.warning(ADDCSLASHES_INCREMENT_WARNING)?;
+                index += 1;
+                continue;
+            }
+            values.warning(ADDCSLASHES_PLAIN_WARNING)?;
+            index += 1;
             continue;
         }
         table[usize::from(current)] = true;
-        previous = Some(current);
         index += 1;
     }
     let mut output = Vec::with_capacity(bytes.len().saturating_mul(4));

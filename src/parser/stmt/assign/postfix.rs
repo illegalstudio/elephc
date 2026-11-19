@@ -107,6 +107,15 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         *pos += 1;
         let source = parse_assignment_value_expr(tokens, pos)?;
         expect_semicolon(tokens, pos)?;
+        // An append needs a fresh element key before the source cell can be bound. The
+        // reference path only rewrites an existing element, so reject the form instead of
+        // silently rebinding the container itself to the source value.
+        if is_append {
+            return Err(CompileError::new(
+                span,
+                "Reference append (`$array[] = &$value`) is not supported",
+            ));
+        }
         return lower_postfix_reference_assignment(lhs_expr, source, span).map(Some);
     }
     let rhs = parse_assignment_value_expr(tokens, pos)?;

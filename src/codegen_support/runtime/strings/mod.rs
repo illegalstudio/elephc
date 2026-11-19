@@ -238,6 +238,11 @@ pub use str_split_count::emit_str_split_count;
 pub use addslashes::emit_addslashes;
 /// Emit addcslashes escaping helper.
 pub use addcslashes::emit_addcslashes;
+/// Character-list diagnostics shared with the fixed data section.
+pub(crate) use addcslashes::{
+    ADDCSLASHES_INCREMENT_WARNING, ADDCSLASHES_LEFT_WARNING, ADDCSLASHES_PLAIN_WARNING,
+    ADDCSLASHES_RIGHT_WARNING,
+};
 /// Emit addslashes escaping helper.
 pub use stripslashes::emit_stripslashes;
 /// Emit stripslashes unescaping helper.

@@ -110,6 +110,50 @@ fn test_addcslashes_descending_range_warns_and_keeps_literals() {
     );
 }
 
+/// Starts a `..` range at the first dot for php-src's three-dot `H...o` shape.
+#[test]
+fn test_addcslashes_three_dot_range_starts_at_the_first_dot() {
+    let out = compile_and_run(
+        r#"<?php echo addcslashes("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", "H...o");"#,
+    );
+    assert_eq!(
+        out,
+        r"\A\B\C\D\E\F\G\H\I\J\K\L\M\N\O\P\Q\R\S\T\U\V\W\X\Y\Z\a\b\c\d\e\f\g\h\i\j\k\l\m\n\opqrstuvwxyz"
+    );
+}
+
+/// Emits php-src's four `Invalid '..'-range` diagnostics in character-list order.
+#[test]
+fn test_addcslashes_range_diagnostics_match_php() {
+    let output = compile_and_run_capture(
+        r#"<?php
+echo addcslashes("abc", ".."), "|";
+echo addcslashes("abc", "a.."), "|";
+echo addcslashes("abc", "a..b..c"), "|";
+echo addcslashes("abc", "H..o..e"), "|";
+"#,
+    );
+    assert_eq!(output.stdout, r"abc|\abc|\a\b\c|\a\b\c|");
+    let left = output
+        .stderr
+        .find("no character to the left of '..'")
+        .expect("missing left-range diagnostic");
+    let right = output
+        .stderr
+        .find("no character to the right of '..'")
+        .expect("missing right-range diagnostic");
+    let plain = output
+        .stderr
+        .find("Invalid '..'-range in ")
+        .expect("missing plain range diagnostic");
+    let increment = output
+        .stderr
+        .find("'..'-range needs to be incrementing")
+        .expect("missing incrementing-range diagnostic");
+    assert!(left < right && right < plain && plain < increment, "stderr: {:?}", output.stderr);
+    assert_eq!(output.stderr.matches("Warning: addcslashes()").count(), 4);
+}
+
 /// A discarded addcslashes result still runs: its descending-range warning is observable
 /// output, so dead-code elimination must not remove the call.
 #[test]

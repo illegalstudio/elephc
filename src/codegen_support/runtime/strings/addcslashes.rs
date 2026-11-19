@@ -5,8 +5,9 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` through the strings module.
 //!
 //! Key details:
-//! - The helper builds a 256-byte escape table from the literal character list, expanding
-//!   ascending `a..z` ranges exactly like PHP and ignoring descending ranges.
+//! - The helper builds a 256-byte escape table from the literal character list with the same
+//!   byte-by-byte algorithm as php-src's `php_charmask()`, including its four `Invalid '..'`
+//!   diagnostics and the three-dot shape where the range starts at the first dot.
 //! - Escaped bytes use PHP's short C spellings for bell/backspace/tab/newline/vertical
 //!   tab/form feed/carriage return, octal `\\ooo` for other non-printable bytes, and a
 //!   backslash prefix for printable bytes.
@@ -17,9 +18,20 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// The runtime warning PHP emits when a character-list range descends.
-pub(crate) const ADDCSLASHES_RANGE_WARNING: &str =
+/// The runtime warning PHP emits when a range marker has no character on its left.
+pub(crate) const ADDCSLASHES_LEFT_WARNING: &str =
+    "Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'\n";
+
+/// The runtime warning PHP emits when a range marker has no character on its right.
+pub(crate) const ADDCSLASHES_RIGHT_WARNING: &str =
+    "Warning: addcslashes(): Invalid '..'-range, no character to the right of '..'\n";
+
+/// The runtime warning PHP emits when a range marker descends.
+pub(crate) const ADDCSLASHES_INCREMENT_WARNING: &str =
     "Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing\n";
+
+/// The runtime warning PHP emits for a range marker it cannot classify further.
+pub(crate) const ADDCSLASHES_PLAIN_WARNING: &str = "Warning: addcslashes(): Invalid '..'-range\n";
 
 /// Emits the `__rt_addcslashes` runtime helper for PHP's `addcslashes()`.
 pub fn emit_addcslashes(emitter: &mut Emitter) {
@@ -38,6 +50,7 @@ fn emit_addcslashes_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #352");                                    // reserve a byte lookup table, argument spills, and the frame footer
     emitter.instruction("stp x29, x30, [sp, #336]");                            // save the caller frame pointer and return address
     emitter.instruction("add x29, sp, #336");                                   // establish the helper frame pointer
+    emitter.instruction("str x19, [sp, #320]");                                 // save the callee-saved character-list cursor
     emitter.instruction("stp x1, x2, [sp, #256]");                              // save the input pointer and length across helper calls
     emitter.instruction("stp x3, x4, [sp, #272]");                              // save the character-list pointer and length
     emitter.instruction("mov x9, #0");                                          // zero the first table word
@@ -50,30 +63,27 @@ fn emit_addcslashes_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_addcslashes_zero_table");                    // clear the remaining table blocks
     emitter.instruction("ldr x3, [sp, #272]");                                  // reload the character-list pointer
     emitter.instruction("ldr x4, [sp, #280]");                                  // reload the character-list length
-    emitter.instruction("mov x5, #0");                                          // start scanning the character list at byte zero
-    emitter.instruction("mov x6, #-1");                                         // no preceding character exists before the first mask byte
-    emitter.instruction("mov w9, #0");                                          // start with no descending-range warnings
-    emitter.instruction("str w9, [sp, #288]");                                  // initialize the warning counter
-    emitter.label("__rt_addcslashes_mask_loop");
-    emitter.instruction("cmp x5, x4");                                          // has every character-list byte been scanned?
-    emitter.instruction("b.hs __rt_addcslashes_mask_done");                     // finish table construction
-    emitter.instruction("ldrb w7, [x3, x5]");                                   // load the current character-list byte
+    emitter.instruction("mov x19, #0");                                         // start scanning the character list at byte zero
     emitter.instruction("mov w15, #1");                                         // table entries are boolean markers, including for NUL
-    emitter.instruction("cmp w7, #46");                                         // is this byte the first dot of a range?
-    emitter.instruction("b.ne __rt_addcslashes_mask_single");                   // a non-dot byte marks one literal character
-    emitter.instruction("add x8, x5, #2");                                      // locate the range end byte after the two dots
-    emitter.instruction("cmp x8, x4");                                          // does the range end byte exist?
-    emitter.instruction("b.hs __rt_addcslashes_mask_single");                   // a trailing dot is a literal character
-    emitter.instruction("add x9, x5, #1");                                      // locate the second dot
-    emitter.instruction("ldrb w9, [x3, x9]");                                   // load the second dot byte
-    emitter.instruction("cmp w9, #46");                                         // is the second byte also a dot?
-    emitter.instruction("b.ne __rt_addcslashes_mask_single");                   // a single dot is a literal character
-    emitter.instruction("cmn x6, #1");                                          // is there a preceding range start character?
-    emitter.instruction("b.eq __rt_addcslashes_mask_single");                   // a leading range marker has no start character
-    emitter.instruction("ldrb w9, [x3, x8]");                                   // load the range end character
-    emitter.instruction("cmp w6, w9");                                          // is the range ascending?
-    emitter.instruction("b.hi __rt_addcslashes_skip_range");                    // PHP rejects descending ranges
-    emitter.instruction("mov w10, w6");                                         // start the inclusive range at its first character
+    emitter.label("__rt_addcslashes_mask_loop");
+    emitter.instruction("cmp x19, x4");                                         // has every character-list byte been scanned?
+    emitter.instruction("b.hs __rt_addcslashes_mask_done");                     // finish table construction
+    emitter.instruction("ldrb w7, [x3, x19]");                                  // load the current character-list byte
+    emitter.instruction("add x8, x19, #3");                                     // locate the candidate range end byte
+    emitter.instruction("cmp x8, x4");                                          // does the four-byte range shape fit?
+    emitter.instruction("b.hs __rt_addcslashes_mask_dot_check");                // a short tail cannot spell a range
+    emitter.instruction("add x9, x19, #1");                                     // locate the first dot after the range start
+    emitter.instruction("ldrb w9, [x3, x9]");                                   // load the byte after the range start
+    emitter.instruction("cmp w9, #46");                                         // is the next byte the first dot?
+    emitter.instruction("b.ne __rt_addcslashes_mask_dot_check");                // a non-dot byte cannot open a range
+    emitter.instruction("add x9, x19, #2");                                     // locate the second dot
+    emitter.instruction("ldrb w9, [x3, x9]");                                   // load the byte after the first dot
+    emitter.instruction("cmp w9, #46");                                         // is the next byte the second dot?
+    emitter.instruction("b.ne __rt_addcslashes_mask_dot_check");                // a single dot is not a range marker
+    emitter.instruction("ldrb w9, [x3, x8]");                                   // load the candidate range end character
+    emitter.instruction("cmp w9, w7");                                          // is the range ascending or singleton?
+    emitter.instruction("b.lo __rt_addcslashes_mask_dot_check");                // PHP rejects a descending range
+    emitter.instruction("mov w10, w7");                                         // start the inclusive range at the current byte
     emitter.label("__rt_addcslashes_range_loop");
     emitter.instruction("strb w15, [sp, x10]");                                 // mark this range character as escaped
     emitter.instruction("cmp w10, w9");                                         // has the range reached its final character?
@@ -81,40 +91,62 @@ fn emit_addcslashes_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add w10, w10, #1");                                    // advance to the next range character
     emitter.instruction("b __rt_addcslashes_range_loop");                       // mark the remaining range characters
     emitter.label("__rt_addcslashes_range_done");
-    emitter.instruction("add x5, x5, #3");                                      // skip the start character, both dots, and the end character
-    emitter.instruction("mov x6, #-1");                                         // the next range needs a fresh start character
+    emitter.instruction("add x19, x19, #4");                                    // skip the start, both dots, and the end byte
     emitter.instruction("b __rt_addcslashes_mask_loop");                        // continue scanning the character list
-    emitter.label("__rt_addcslashes_skip_range");
-    emitter.instruction("add x8, x5, #1");                                      // locate the first dot of the rejected range
-    emitter.instruction("ldrb w10, [x3, x8]");                                  // load the first dot as a literal character
-    emitter.instruction("strb w15, [sp, x10]");                                 // PHP still escapes the range syntax bytes
-    emitter.instruction("add x8, x5, #2");                                      // locate the second dot
-    emitter.instruction("ldrb w10, [x3, x8]");                                  // load the second dot as a literal character
-    emitter.instruction("strb w15, [sp, x10]");                                 // mark the second dot as escaped
-    emitter.instruction("strb w15, [sp, x9]");                                  // mark the range end character as escaped
-    emitter.instruction("ldr w10, [sp, #288]");                                 // load the descending-range warning count
-    emitter.instruction("add w10, w10, #1");                                    // count this rejected range
-    emitter.instruction("str w10, [sp, #288]");                                 // retain the updated warning count
-    emitter.instruction("add x5, x5, #3");                                      // skip the rejected range after marking its literals
-    emitter.instruction("mov x6, #-1");                                         // the next range needs a fresh start character
+    emitter.label("__rt_addcslashes_mask_dot_check");
+    emitter.instruction("cmp w7, #46");                                         // is the current byte a potential range marker?
+    emitter.instruction("b.ne __rt_addcslashes_mask_single");                   // a non-dot byte marks one literal character
+    emitter.instruction("add x9, x19, #1");                                     // locate the byte after the first dot
+    emitter.instruction("cmp x9, x4");                                          // does a byte follow the first dot?
+    emitter.instruction("b.hs __rt_addcslashes_mask_single");                   // a trailing dot is a literal character
+    emitter.instruction("ldrb w9, [x3, x9]");                                   // load the byte after the first dot
+    emitter.instruction("cmp w9, #46");                                         // is the second byte also a dot?
+    emitter.instruction("b.ne __rt_addcslashes_mask_single");                   // a single dot is a literal character
+    emitter.instruction("cbnz x19, __rt_addcslashes_dot_has_left");             // a range marker needs a character on its left
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_diag_addcslashes_range_left");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x2", ADDCSLASHES_LEFT_WARNING.len() as i64);
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_diag_warning"); // report a missing left range character
+    emitter.instruction("ldr x3, [sp, #272]");                                  // reload the character-list pointer after the call
+    emitter.instruction("ldr x4, [sp, #280]");                                  // reload the character-list length after the call
+    emitter.instruction("add x19, x19, #1");                                    // skip the rejected marker's first dot
+    emitter.instruction("b __rt_addcslashes_mask_loop");                        // continue scanning the character list
+    emitter.label("__rt_addcslashes_dot_has_left");
+    emitter.instruction("add x9, x19, #2");                                     // locate the byte after the second dot
+    emitter.instruction("cmp x9, x4");                                          // does a range end byte follow the marker?
+    emitter.instruction("b.lo __rt_addcslashes_dot_has_right");                 // the marker has both side characters
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_diag_addcslashes_range_right");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x2", ADDCSLASHES_RIGHT_WARNING.len() as i64);
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_diag_warning"); // report a missing right range character
+    emitter.instruction("ldr x3, [sp, #272]");                                  // reload the character-list pointer after the call
+    emitter.instruction("ldr x4, [sp, #280]");                                  // reload the character-list length after the call
+    emitter.instruction("add x19, x19, #1");                                    // skip the rejected marker's first dot
+    emitter.instruction("b __rt_addcslashes_mask_loop");                        // continue scanning the character list
+    emitter.label("__rt_addcslashes_dot_has_right");
+    emitter.instruction("ldrb w10, [x3, x9]");                                  // load the byte after the range marker
+    emitter.instruction("sub x9, x19, #1");                                     // locate the character before the marker
+    emitter.instruction("ldrb w11, [x3, x9]");                                  // load the character before the marker
+    emitter.instruction("cmp w11, w10");                                        // does the rejected marker descend?
+    emitter.instruction("b.ls __rt_addcslashes_dot_plain");                     // equal or ascending still is not a range
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_diag_addcslashes_range_increment");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x2", ADDCSLASHES_INCREMENT_WARNING.len() as i64);
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_diag_warning"); // report a descending range marker
+    emitter.instruction("ldr x3, [sp, #272]");                                  // reload the character-list pointer after the call
+    emitter.instruction("ldr x4, [sp, #280]");                                  // reload the character-list length after the call
+    emitter.instruction("add x19, x19, #1");                                    // skip the rejected marker's first dot
+    emitter.instruction("b __rt_addcslashes_mask_loop");                        // continue scanning the character list
+    emitter.label("__rt_addcslashes_dot_plain");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_diag_addcslashes_range_plain");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x2", ADDCSLASHES_PLAIN_WARNING.len() as i64);
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_diag_warning"); // report an unclassifiable range marker
+    emitter.instruction("ldr x3, [sp, #272]");                                  // reload the character-list pointer after the call
+    emitter.instruction("ldr x4, [sp, #280]");                                  // reload the character-list length after the call
+    emitter.instruction("add x19, x19, #1");                                    // skip the rejected marker's first dot
     emitter.instruction("b __rt_addcslashes_mask_loop");                        // continue scanning the character list
     emitter.label("__rt_addcslashes_mask_single");
     emitter.instruction("strb w15, [sp, x7]");                                  // mark this literal character as escaped
-    emitter.instruction("mov x6, x7");                                          // remember it as a possible range start
-    emitter.instruction("add x5, x5, #1");                                      // advance to the next character-list byte
+    emitter.instruction("add x19, x19, #1");                                    // advance to the next character-list byte
     emitter.instruction("b __rt_addcslashes_mask_loop");                        // scan the remaining character-list bytes
     emitter.label("__rt_addcslashes_mask_done");
-    emitter.instruction("ldr w9, [sp, #288]");                                  // load the descending-range warning count
-    emitter.instruction("cbz w9, __rt_addcslashes_no_range_warning");           // keep silent for valid or absent ranges
-    emitter.label("__rt_addcslashes_range_warning_loop");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_diag_addcslashes_range");
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x2", ADDCSLASHES_RANGE_WARNING.len() as i64);
-    crate::codegen_support::abi::emit_call_label(emitter, "__rt_diag_warning");  // report one descending-range warning
-    emitter.instruction("ldr w9, [sp, #288]");                                  // reload the warning count across the diagnostic call
-    emitter.instruction("sub w9, w9, #1");                                      // consume one reported range
-    emitter.instruction("str w9, [sp, #288]");                                  // retain the remaining warning count
-    emitter.instruction("cbnz w9, __rt_addcslashes_range_warning_loop");        // report every rejected range
-    emitter.label("__rt_addcslashes_no_range_warning");
     emitter.instruction("ldr x2, [sp, #264]");                                  // reload the input length for the worst-case reservation
     emitter.instruction("adds x9, x2, x2");                                     // compute twice the input length and record overflow
     emitter.instruction("b.cs __rt_addcslashes_size_overflow");                 // reject a wrapped destination size
@@ -197,6 +229,7 @@ fn emit_addcslashes_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x10");                                         // return the escaped result pointer
     emitter.instruction("sub x2, x9, x10");                                     // return the escaped result length
     emitter.instruction("bl __rt_concat_publish");                              // publish the written length for scratch-backed results
+    emitter.instruction("ldr x19, [sp, #320]");                                 // restore the callee-saved character-list cursor
     emitter.instruction("ldp x29, x30, [sp, #336]");                            // restore the caller frame pointer and return address
     emitter.instruction("add sp, sp, #352");                                    // release the helper frame
     emitter.instruction("ret");                                                 // return the escaped string pair
@@ -211,6 +244,8 @@ fn emit_addcslashes_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_addcslashes");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame base
+    emitter.instruction("push r12");                                            // preserve the callee-saved character-list cursor
+    emitter.instruction("push r13");                                            // preserve the callee-saved character-list pointer
     emitter.instruction("sub rsp, 352");                                        // reserve the byte lookup table, argument spills, and alignment
     emitter.instruction("mov QWORD PTR [rsp + 256], rdi");                      // save the input pointer across helper calls
     emitter.instruction("mov QWORD PTR [rsp + 264], rsi");                      // save the input length across helper calls
@@ -223,29 +258,26 @@ fn emit_addcslashes_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, 8");                                           // advance to the next table word
     emitter.instruction("cmp r8, 256");                                         // has the complete byte table been cleared?
     emitter.instruction("jb __rt_addcslashes_zero_table");                      // clear the remaining table words
-    emitter.instruction("mov rdx, QWORD PTR [rsp + 272]");                      // reload the character-list pointer
+    emitter.instruction("mov r13, QWORD PTR [rsp + 272]");                      // reload the character-list pointer
     emitter.instruction("mov rcx, QWORD PTR [rsp + 280]");                      // reload the character-list length
-    emitter.instruction("xor r8d, r8d");                                        // start scanning the character list at byte zero
-    emitter.instruction("mov r9, -1");                                          // no preceding character exists before the first mask byte
-    emitter.instruction("mov DWORD PTR [rsp + 288], 0");                        // initialize the warning counter
+    emitter.instruction("xor r12d, r12d");                                      // start scanning the character list at byte zero
     emitter.label("__rt_addcslashes_mask_loop");
-    emitter.instruction("cmp r8, rcx");                                         // has every character-list byte been scanned?
+    emitter.instruction("cmp r12, rcx");                                        // has every character-list byte been scanned?
     emitter.instruction("jae __rt_addcslashes_mask_done");                      // finish table construction
-    emitter.instruction("movzx eax, BYTE PTR [rdx + r8]");                      // load the current character-list byte
-    emitter.instruction("cmp al, 46");                                          // is this byte the first dot of a range?
-    emitter.instruction("jne __rt_addcslashes_mask_single");                    // a non-dot byte marks one literal character
-    emitter.instruction("lea r10, [r8 + 2]");                                   // locate the range end byte after the two dots
-    emitter.instruction("cmp r10, rcx");                                        // does the range end byte exist?
-    emitter.instruction("jae __rt_addcslashes_mask_single");                    // a trailing dot is a literal character
-    emitter.instruction("movzx r11d, BYTE PTR [rdx + r8 + 1]");                 // load the second dot byte
-    emitter.instruction("cmp r11b, 46");                                        // is the second byte also a dot?
-    emitter.instruction("jne __rt_addcslashes_mask_single");                    // a single dot is a literal character
-    emitter.instruction("cmp r9, -1");                                          // is there a preceding range start character?
-    emitter.instruction("je __rt_addcslashes_mask_single");                     // a leading range marker has no start character
-    emitter.instruction("movzx r11d, BYTE PTR [rdx + r10]");                    // load the range end character
-    emitter.instruction("cmp r9d, r11d");                                       // is the range ascending?
-    emitter.instruction("ja __rt_addcslashes_skip_range");                      // PHP rejects descending ranges
-    emitter.instruction("mov r10d, r9d");                                       // start the inclusive range at its first character
+    emitter.instruction("movzx eax, BYTE PTR [r13 + r12]");                     // load the current character-list byte
+    emitter.instruction("lea r10, [r12 + 3]");                                  // locate the candidate range end byte
+    emitter.instruction("cmp r10, rcx");                                        // does the four-byte range shape fit?
+    emitter.instruction("jae __rt_addcslashes_mask_dot_check");                 // a short tail cannot spell a range
+    emitter.instruction("movzx r11d, BYTE PTR [r13 + r12 + 1]");                // load the byte after the range start
+    emitter.instruction("cmp r11b, 46");                                        // is the next byte the first dot?
+    emitter.instruction("jne __rt_addcslashes_mask_dot_check");                 // a non-dot byte cannot open a range
+    emitter.instruction("movzx r11d, BYTE PTR [r13 + r12 + 2]");                // load the byte after the first dot
+    emitter.instruction("cmp r11b, 46");                                        // is the next byte the second dot?
+    emitter.instruction("jne __rt_addcslashes_mask_dot_check");                 // a single dot is not a range marker
+    emitter.instruction("movzx r11d, BYTE PTR [r13 + r10]");                    // load the candidate range end character
+    emitter.instruction("cmp r11d, eax");                                       // is the range ascending or singleton?
+    emitter.instruction("jb __rt_addcslashes_mask_dot_check");                  // PHP rejects a descending range
+    emitter.instruction("mov r10d, eax");                                       // start the inclusive range at the current byte
     emitter.label("__rt_addcslashes_range_loop");
     emitter.instruction("mov BYTE PTR [rsp + r10], 1");                         // mark this range character as escaped
     emitter.instruction("cmp r10d, r11d");                                      // has the range reached its final character?
@@ -253,36 +285,52 @@ fn emit_addcslashes_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10d, 1");                                         // advance to the next range character
     emitter.instruction("jmp __rt_addcslashes_range_loop");                     // mark the remaining range characters
     emitter.label("__rt_addcslashes_range_done");
-    emitter.instruction("add r8, 3");                                           // skip the start character, both dots, and the end character
-    emitter.instruction("mov r9, -1");                                          // the next range needs a fresh start character
+    emitter.instruction("add r12, 4");                                          // skip the start, both dots, and the end byte
     emitter.instruction("jmp __rt_addcslashes_mask_loop");                      // continue scanning the character list
-    emitter.label("__rt_addcslashes_skip_range");
-    emitter.instruction("lea r10, [r8 + 1]");                                   // locate the first dot of the rejected range
-    emitter.instruction("movzx eax, BYTE PTR [rdx + r10]");                     // load the first dot as a literal character
-    emitter.instruction("mov BYTE PTR [rsp + rax], 1");                         // PHP still escapes the range syntax bytes
-    emitter.instruction("lea r10, [r8 + 2]");                                   // locate the second dot
-    emitter.instruction("movzx eax, BYTE PTR [rdx + r10]");                     // load the second dot as a literal character
-    emitter.instruction("mov BYTE PTR [rsp + rax], 1");                         // mark the second dot as escaped
-    emitter.instruction("mov BYTE PTR [rsp + r11], 1");                         // mark the range end character as escaped
-    emitter.instruction("add DWORD PTR [rsp + 288], 1");                        // count this rejected range
-    emitter.instruction("add r8, 3");                                           // skip the rejected range after marking its literals
-    emitter.instruction("mov r9, -1");                                          // the next range needs a fresh start character
+    emitter.label("__rt_addcslashes_mask_dot_check");
+    emitter.instruction("cmp al, 46");                                          // is the current byte a potential range marker?
+    emitter.instruction("jne __rt_addcslashes_mask_single");                    // a non-dot byte marks one literal character
+    emitter.instruction("lea r10, [r12 + 1]");                                  // locate the byte after the first dot
+    emitter.instruction("cmp r10, rcx");                                        // does a byte follow the first dot?
+    emitter.instruction("jae __rt_addcslashes_mask_single");                    // a trailing dot is a literal character
+    emitter.instruction("cmp BYTE PTR [r13 + r10], 46");                        // is the second byte also a dot?
+    emitter.instruction("jne __rt_addcslashes_mask_single");                    // a single dot is a literal character
+    emitter.instruction("test r12, r12");                                       // does the range marker have a character on its left?
+    emitter.instruction("jz __rt_addcslashes_dot_no_left");                     // the marker starts the character list
+    emitter.instruction("lea r10, [r12 + 2]");                                  // locate the byte after the second dot
+    emitter.instruction("cmp r10, rcx");                                        // does a range end byte follow the marker?
+    emitter.instruction("jae __rt_addcslashes_dot_no_right");                   // the marker ends the character list
+    emitter.instruction("movzx r11d, BYTE PTR [r13 + r12 + 2]");                // load the byte after the range marker
+    emitter.instruction("movzx r10d, BYTE PTR [r13 + r12 - 1]");                // load the character before the marker
+    emitter.instruction("cmp r10d, r11d");                                      // does the rejected marker descend?
+    emitter.instruction("jbe __rt_addcslashes_dot_plain");                      // equal or ascending still is not a range
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_diag_addcslashes_range_increment");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "rsi", ADDCSLASHES_INCREMENT_WARNING.len() as i64);
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_diag_warning"); // report a descending range marker
+    emitter.instruction("jmp __rt_addcslashes_after_warning");                  // resume scanning after the diagnostic
+    emitter.label("__rt_addcslashes_dot_no_left");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_diag_addcslashes_range_left");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "rsi", ADDCSLASHES_LEFT_WARNING.len() as i64);
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_diag_warning"); // report a missing left range character
+    emitter.instruction("jmp __rt_addcslashes_after_warning");                  // resume scanning after the diagnostic
+    emitter.label("__rt_addcslashes_dot_no_right");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_diag_addcslashes_range_right");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "rsi", ADDCSLASHES_RIGHT_WARNING.len() as i64);
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_diag_warning"); // report a missing right range character
+    emitter.instruction("jmp __rt_addcslashes_after_warning");                  // resume scanning after the diagnostic
+    emitter.label("__rt_addcslashes_dot_plain");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_diag_addcslashes_range_plain");
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "rsi", ADDCSLASHES_PLAIN_WARNING.len() as i64);
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_diag_warning"); // report an unclassifiable range marker
+    emitter.label("__rt_addcslashes_after_warning");
+    emitter.instruction("mov rcx, QWORD PTR [rsp + 280]");                      // reload the character-list length after the call
+    emitter.instruction("add r12, 1");                                          // skip the rejected marker's first dot
     emitter.instruction("jmp __rt_addcslashes_mask_loop");                      // continue scanning the character list
     emitter.label("__rt_addcslashes_mask_single");
     emitter.instruction("mov BYTE PTR [rsp + rax], 1");                         // mark this literal character as escaped
-    emitter.instruction("mov r9, rax");                                         // remember it as a possible range start
-    emitter.instruction("add r8, 1");                                           // advance to the next character-list byte
+    emitter.instruction("add r12, 1");                                          // advance to the next character-list byte
     emitter.instruction("jmp __rt_addcslashes_mask_loop");                      // scan the remaining character-list bytes
     emitter.label("__rt_addcslashes_mask_done");
-    emitter.instruction("cmp DWORD PTR [rsp + 288], 0");                        // did the mask contain a descending range?
-    emitter.instruction("je __rt_addcslashes_no_range_warning");                // keep silent for valid or absent ranges
-    emitter.label("__rt_addcslashes_range_warning_loop");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_diag_addcslashes_range");
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "rsi", ADDCSLASHES_RANGE_WARNING.len() as i64);
-    crate::codegen_support::abi::emit_call_label(emitter, "__rt_diag_warning"); // report one descending-range warning
-    emitter.instruction("sub DWORD PTR [rsp + 288], 1");                        // consume one reported range
-    emitter.instruction("jne __rt_addcslashes_range_warning_loop");             // report every rejected range
-    emitter.label("__rt_addcslashes_no_range_warning");
     emitter.instruction("mov rdx, QWORD PTR [rsp + 264]");                      // reload the input length for the reservation
     emitter.instruction("mov rax, rdx");                                        // start computing the four-bytes-per-byte worst case
     emitter.instruction("add rax, rax");                                        // compute twice the input length
@@ -376,6 +424,9 @@ fn emit_addcslashes_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, r9");                                         // return the escaped result length start
     emitter.instruction("sub rdx, r10");                                        // compute the escaped result length
     emitter.instruction("call __rt_concat_publish");                            // publish the written length for scratch-backed results
+    emitter.instruction("add rsp, 352");                                        // release the byte lookup table and argument spills
+    emitter.instruction("pop r13");                                             // restore the callee-saved character-list pointer
+    emitter.instruction("pop r12");                                             // restore the callee-saved character-list cursor
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the escaped string pair

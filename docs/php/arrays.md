@@ -397,9 +397,36 @@ After `unset($first)` the cell has a single owner and the marker disappears,
 matching PHP.
 
 Current limits: a reference element must name a variable. Referencing another
-container place (`[&$items[0]]`, `[&$object->prop]`) and a bare reference after a
+container place (`[&$items[0]]`, `[&$object->prop]`), `$GLOBALS`, and a bare reference after a
 spread (`[...$items, &$value]`) are rejected with a compile-time diagnostic.
-Alias an existing element with `$b =& $a[0]` when that is the storage you need.
+Appending a reference (`$array[] = &$value`, including nested appends) is also
+rejected: the writer would have to allocate the new key and bind its cell before
+the source read. Alias an existing element with `$b =& $a[0]` when that is the
+storage you need.
+
+Reference elements also constrain later array operations:
+
+- Builtins that rebuild a table (`array_shift()`, `array_unshift()`, `sort()`,
+  `rsort()`, `usort()`, `shuffle()`, `array_splice()` and `array_reverse()`) do
+  not preserve reference-cell identity. Some reference-promoted storage shapes
+  are rejected at compile time by those builtins instead of being miscompiled.
+  Perform the rebuild before creating references, or rebuild into a fresh array.
+- `filter_var()` and array-walking `filter_var_array()` forms rebuild arrays and
+  drop reference bindings on their elements; see
+  [Filtering](filter.md#known-gaps).
+- `call_user_func_array()` over an argument array that contains reference
+  elements still forwards those cells to the callback. Ordinary values and
+  scalar reference variables are passed by value with PHP's warning; dereference
+  the argument array first when write-through must be avoided.
+- A nested bind (`$a[0][1] = &$value`) requires the parent element to already
+  hold an array; auto-vivifying an unknown parent is not supported. The bind may
+  also make `var_dump()` show the intermediate container with a `&` marker where
+  PHP shows an ordinary array. The aliasing itself is correct.
+- `unset($a[0][1])` after a nested reference bind is not supported; unset the
+  alias or rebuild the array.
+- `unset()` of a variable followed by a reference write (`unset($a);
+  $a['k'] = &$value;`) is not supported; initialize the destination as an array
+  first.
 
 ## Multi-dimensional arrays
 ```php

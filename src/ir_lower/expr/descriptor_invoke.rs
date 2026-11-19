@@ -396,9 +396,9 @@ pub(super) fn call_user_func_should_use_descriptor(
     if has_named_or_spread {
         return true;
     }
-    if call_user_func_has_incompatible_ref_marker_arg(ctx, args, sig) {
-        return false;
-    }
+    // A callback with by-reference parameters still goes through the descriptor invoker:
+    // `call_user_func*` binds every argument by value, so the invoker materializes a
+    // temporary cell instead of requiring caller storage to match the parameter layout.
     if sig.is_some_and(|sig| sig.ref_params.iter().any(|is_ref| *is_ref)) {
         return true;
     }
@@ -427,28 +427,6 @@ pub(super) fn call_user_func_should_use_descriptor(
         }
         _ => false,
     }
-}
-
-/// Returns true when direct descriptor ref markers cannot represent an argument.
-pub(super) fn call_user_func_has_incompatible_ref_marker_arg(
-    ctx: &LoweringContext<'_, '_>,
-    args: &[Expr],
-    sig: Option<&FunctionSig>,
-) -> bool {
-    let Some(sig) = sig else {
-        return false;
-    };
-    let regular_param_count = crate::types::call_args::regular_param_count(sig);
-    args.iter().enumerate().any(|(index, arg)| {
-        let variadic_reference = index >= regular_param_count && variadic_param_is_by_ref(sig);
-        if !sig.ref_params.get(index).copied().unwrap_or(false) && !variadic_reference {
-            return false;
-        }
-        let ExprKind::Variable(name) = &arg.kind else {
-            return false;
-        };
-        !invoker_ref_arg_storage_compatible(ctx, sig, index, name, arg.span)
-    })
 }
 
 /// Lowers `call_user_func()` into a descriptor invoke, reusing the evaluated callback.

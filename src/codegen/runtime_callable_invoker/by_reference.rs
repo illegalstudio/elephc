@@ -5,8 +5,9 @@
 //! - `crate::codegen::runtime_callable_invoker` while marshalling indexed arguments.
 //!
 //! Key details:
-//! - `call_user_func*` always passes by value. A callable with a by-reference parameter
-//!   therefore warns once per parameter that receives a temporary.
+//! - `call_user_func*` always passes by value, including reference cells and persistent
+//!   wrappers. A callable with a by-reference parameter therefore warns once per such
+//!   parameter and mutates only the invoker's temporary cell.
 //! - The warning decision is runtime state because one cached invoker serves both
 //!   `call_user_func*` and ordinary dynamic calls, which may pass a real variable reference.
 //! - The callable name comes from the descriptor; the parameter name comes from the signature.
@@ -16,16 +17,13 @@ use crate::codegen_support::callable_descriptor::{
     CALLABLE_DESC_NAME_LENGTH_OFFSET, CALLABLE_DESC_NAME_OFFSET,
 };
 
-/// Warns when an indexed `call_user_func*` argument is a temporary for a by-reference parameter.
+/// Warns when a `call_user_func*` argument targets a by-reference parameter.
 pub(super) fn warn_indexed_ref_temporary(
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
     sig: &FunctionSig,
     index: usize,
-    elem_ty: &PhpType,
-    array_reg: &str,
-    elem_size: usize,
 ) {
     let skip_label = ctx.next_label("invoker_byref_warning_skip");
     let warn_label = ctx.next_label("invoker_byref_warning");
@@ -49,37 +47,6 @@ pub(super) fn warn_indexed_ref_temporary(
                 "cmp {scope}, {CALLABLE_PROFILE_WARN_BY_REF}"
             ));                                                                 // is the by-reference warning requested?
             emitter.instruction(&format!("jne {skip_label}"));                  // ordinary dynamic calls keep their implicit references
-        }
-    }
-
-    // -- a typed element is never a reference cell; a Mixed element may hold one --
-    if elem_ty.codegen_repr() != PhpType::Mixed {
-        abi::emit_jump(emitter, &warn_label);
-    } else {
-        let cell = abi::int_result_reg(emitter);
-        let tag = abi::secondary_scratch_reg(emitter);
-        abi::emit_load_from_address(emitter, cell, array_reg, 24 + index * elem_size);
-        abi::emit_load_from_address(emitter, tag, cell, 0);
-        super::emit_branch_if_invoker_ref_cell_tag(tag, &skip_label, emitter);
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!("cmp {tag}, #11"));                // a managed PHP reference supplies writable storage
-                emitter.instruction(&format!("b.eq {skip_label}"));             // keep the existing reference cell
-                emitter.instruction(&format!("cmp {tag}, #7"));                 // only a boxed value can hide a persistent wrapper
-                emitter.instruction(&format!("b.ne {warn_label}"));             // ordinary values need the PHP warning
-                abi::emit_load_from_address(emitter, tag, cell, 16);
-                emitter.instruction(&format!("cmp {tag}, #1"));                 // flag one identifies a persistent reference
-                emitter.instruction(&format!("b.eq {skip_label}"));             // preserve its writable target
-            }
-            Arch::X86_64 => {
-                emitter.instruction(&format!("cmp {tag}, 11"));                 // a managed PHP reference supplies writable storage
-                emitter.instruction(&format!("je {skip_label}"));               // keep the existing reference cell
-                emitter.instruction(&format!("cmp {tag}, 7"));                  // only a boxed value can hide a persistent wrapper
-                emitter.instruction(&format!("jne {warn_label}"));              // ordinary values need the PHP warning
-                abi::emit_load_from_address(emitter, tag, cell, 16);
-                emitter.instruction(&format!("cmp {tag}, 1"));                  // flag one identifies a persistent reference
-                emitter.instruction(&format!("je {skip_label}"));               // preserve its writable target
-            }
         }
     }
 

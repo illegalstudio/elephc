@@ -599,7 +599,7 @@ fn check_descriptor_callable_target_call(
     env: &TypeEnv,
 ) -> Result<PhpType, CompileError> {
     let sig = checker.resolve_first_class_callable_sig(target, callback.span, env)?;
-    checker.check_known_callable_call_allowing_by_ref_spread(
+    checker.check_known_callable_call_by_value(
         &sig,
         callback_args,
         callback.span,
@@ -1507,7 +1507,7 @@ pub(crate) fn check_call_user_func_array(
             &arg_array_ty,
         )?;
         if let Some(elems) = static_args.as_deref() {
-            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+            let ret_ty = checker.check_known_callable_call_by_value(
                 &sig,
                 elems,
                 span,
@@ -1564,7 +1564,7 @@ pub(crate) fn check_call_user_func_array(
                 &arg_array_ty,
             )?;
             if let Some(elems) = static_args.as_deref() {
-                let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+                let ret_ty = checker.check_known_callable_call_by_value(
                     &sig,
                     elems,
                     span,
@@ -1651,7 +1651,7 @@ pub(crate) fn check_call_user_func_array(
                 )?;
             }
             if let Some(elems) = static_args.as_deref() {
-                let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+                let ret_ty = checker.check_known_callable_call_by_value(
                     &sig,
                     elems,
                     span,
@@ -1732,7 +1732,7 @@ pub(crate) fn check_call_user_func_array(
     if let Some(sig) = checker.resolve_expr_callable_sig(&args[0], env)? {
         validate_call_user_func_array_dynamic_arg_array(checker, &sig, &args[1], span, env)?;
         if let Some(elems) = static_args.as_deref() {
-            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+            let ret_ty = checker.check_known_callable_call_by_value(
                 &sig,
                 elems,
                 span,
@@ -1808,7 +1808,7 @@ pub(crate) fn check_call_user_func(
                 env,
             )?
         };
-        let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+        let ret_ty = checker.check_known_callable_call_by_value(
             &sig,
             &args[1..],
             span,
@@ -1850,7 +1850,7 @@ pub(crate) fn check_call_user_func(
             checker
                 .closure_return_types
                 .insert(var_name.clone(), sig.return_type.clone());
-            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+            let ret_ty = checker.check_known_callable_call_by_value(
                 &sig,
                 &args[1..],
                 span,
@@ -1861,7 +1861,7 @@ pub(crate) fn check_call_user_func(
         }
         if let Some(target) = checker.callable_array_targets.get(var_name).cloned() {
             let sig = checker.resolve_first_class_callable_sig(&target, args[0].span, env)?;
-            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+            let ret_ty = checker.check_known_callable_call_by_value(
                 &sig,
                 &args[1..],
                 span,
@@ -1906,7 +1906,7 @@ pub(crate) fn check_call_user_func(
         // container before its signature is read here.
         checker.promote_descriptor_variadic_container(cb_name.as_str())?;
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
-            let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+            let ret_ty = checker.check_known_callable_call_by_value(
                 &sig,
                 &args[1..],
                 span,
@@ -1934,7 +1934,7 @@ pub(crate) fn check_call_user_func(
         }
         let target = CallableTarget::Function(Name::from(cb_name.clone()));
         let sig = checker.resolve_first_class_callable_sig(&target, span, env)?;
-        let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+        let ret_ty = checker.check_known_callable_call_by_value(
             &sig,
             &args[1..],
             span,
@@ -1958,7 +1958,7 @@ pub(crate) fn check_call_user_func(
         return Ok(ret_ty);
     }
     if let Some(sig) = checker.resolve_expr_callable_sig(&args[0], env)? {
-        let ret_ty = checker.check_known_callable_call_allowing_by_ref_spread(
+        let ret_ty = checker.check_known_callable_call_by_value(
             &sig,
             &args[1..],
             span,

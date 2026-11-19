@@ -834,10 +834,16 @@ fn wrap_reference_element(span: Option<Span>, expr: Expr) -> Result<Expr, Compil
     let Some(marker) = span else {
         return Ok(expr);
     };
-    if !matches!(expr.kind, ExprKind::Variable(_)) {
+    let ExprKind::Variable(name) = &expr.kind else {
         return Err(CompileError::new(
             expr.span,
             "Reference array elements must reference a variable",
+        ));
+    };
+    if name == "GLOBALS" {
+        return Err(CompileError::new(
+            expr.span,
+            "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
         ));
     }
     Ok(Expr::new(

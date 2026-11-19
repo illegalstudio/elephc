@@ -427,6 +427,8 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // filter surface for it. That makes unrelated eval fixtures millions of assembly lines
     // and dominates their compile time. The fixture suite only needs the surface when the
     // source or resolved program actually names it; the filter/eval visibility tests do.
+    // The eval budgets in `.config/nextest.toml` are calibrated against this fixture-only
+    // skip: removing it expands those compiles, so adjust both together.
     let source_lower = source.to_ascii_lowercase();
     // `parse_str()` applies `filter.default` through the filter prelude, so a configured
     // filter setting requires the declarations even when the PHP source never names one.
@@ -1299,6 +1301,17 @@ pub(crate) fn compile_and_run(source: &str) -> String {
     compile_and_run_with_heap_size(source, 8_388_608)
 }
 
+/// Clears compiler INI overrides on every exit path, including a panicking compile.
+struct IniOverrideGuard;
+
+impl Drop for IniOverrideGuard {
+    /// Restores the thread-local and process-wide override slots after one fixture.
+    fn drop(&mut self) {
+        elephc::codegen::set_ini_overrides(Vec::new());
+        TEST_INI_OVERRIDES.with(|slot| slot.borrow_mut().clear());
+    }
+}
+
 /// Compiles and runs a fixture with compiler-level INI overrides, resetting them afterwards.
 pub(crate) fn compile_and_run_capture_with_ini(
     source: &str,
@@ -1306,10 +1319,8 @@ pub(crate) fn compile_and_run_capture_with_ini(
 ) -> ProgramOutput {
     TEST_INI_OVERRIDES.with(|slot| *slot.borrow_mut() = ini.to_vec());
     elephc::codegen::set_ini_overrides(ini.to_vec());
-    let output = compile_and_run_capture(source);
-    elephc::codegen::set_ini_overrides(Vec::new());
-    TEST_INI_OVERRIDES.with(|slot| slot.borrow_mut().clear());
-    output
+    let _guard = IniOverrideGuard;
+    compile_and_run_capture(source)
 }
 
 /// Compiles and runs a fixture with the same explicit regex capability as `--with-regex`.

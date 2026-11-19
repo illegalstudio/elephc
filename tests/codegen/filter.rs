@@ -663,6 +663,43 @@ var_dump(filter_has_var(INPUT_SERVER, "HOME"));
     assert_eq!(out, "NULL\nbool(true)\nbool(false)\n");
 }
 
+/// `variables_order` without `S` leaves CLI `$_SERVER` empty, as php-src does.
+#[test]
+fn test_filter_input_cli_server_storage_honors_variables_order() {
+    let out = compile_and_run_capture_with_ini(
+        r#"<?php
+var_dump(filter_input(INPUT_SERVER, "PHP_SELF"));
+var_dump($_SERVER);
+"#,
+        &[("variables_order".to_string(), "GPC".to_string())],
+    );
+    assert_eq!(out.stdout.trim(), "NULL\narray(0) {\n}");
+}
+
+/// A CLI binary compiled with `filter.default` reports php-src's startup deprecation.
+#[test]
+fn test_filter_default_deprecation_is_emitted_by_cli_builds() {
+    let directory = make_cli_test_dir("filter_default_cli_deprecation");
+    let php = directory.join("main.php");
+    fs::write(&php, "<?php echo \"ok\\n\";").unwrap();
+    let output = elephc_cli_command(&directory)
+        .args(["--ini", "filter.default=special_chars"])
+        .arg(&php)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let executed = Command::new(php.with_extension("")).output().unwrap();
+    assert_eq!(executed.stdout, b"ok\n");
+    assert!(
+        String::from_utf8_lossy(&executed.stderr).contains(
+            "Deprecated: The filter.default ini setting is deprecated in Unknown on line 0"
+        ),
+        "stderr: {}",
+        String::from_utf8_lossy(&executed.stderr)
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
 /// `filter_input_array(INPUT_ENV)` participates in the CLI raw snapshot trigger.
 #[test]
 fn test_filter_input_array_env_seeds_cli_raw_storage() {
