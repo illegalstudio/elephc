@@ -66,6 +66,25 @@ echo "eval sees: ", eval('return $a->nodeValue;'), "\n";
     );
 }
 
+/// An eval write through a local bound to a by-reference-returned property lands in the property
+/// cell instead of replacing the cell pointer held by the object slot (php: 6 for both shapes).
+#[test]
+fn test_eval_write_through_reference_returned_property_keeps_the_slot_cell() {
+    let out = compile_and_run(
+        r#"<?php
+class TypedRefBox { public int $number = 0; public function &numberRef() { return $this->number; } }
+class MixedRefBox { public mixed $number = 0; public function &numberRef() { return $this->number; } }
+$box = new TypedRefBox(); $number =& $box->numberRef();
+eval('$number = 5;');
+echo $box->number + 1, "\n";
+$mixed = new MixedRefBox(); $alias =& $mixed->numberRef();
+eval('$alias = 5;');
+echo $mixed->number + 1, "\n";
+"#,
+    );
+    assert_eq!(out, "6\n6\n");
+}
+
 /// Verifies a DOM tree keeps its attribute and text values in a program that links eval.
 #[test]
 fn test_eval_linked_program_reads_dom_attribute_and_text_values() {

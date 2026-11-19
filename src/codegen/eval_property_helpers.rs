@@ -68,31 +68,6 @@ struct EvalPropertySlot {
 }
 
 impl EvalPropertySlot {
-    /// Returns the byte offset of the typed-uninitialized marker, relative to the base the body
-    /// addresses: the second slot word for a plain slot, the value word of a reference cell.
-    fn marker_offset(&self) -> usize {
-        if self.is_reference {
-            self.offset
-        } else {
-            self.offset + 8
-        }
-    }
-
-    /// Returns the slot as the bridge body must address it once it holds the managed cell.
-    ///
-    /// A reference property keeps a cell pointer where a plain slot keeps the value. The cell's
-    /// payload is the slot's own layout at offset 0 (value word, then the second word), and its
-    /// typed-uninitialized marker is the VALUE word. Every body therefore replaces the object
-    /// pointer in its frame with the cell pointer (`emit_*_enter_reference_cell`) and addresses
-    /// this view, which differs from the slot only in its offset.
-    fn cell_view(&self) -> EvalPropertySlot {
-        let mut view = self.clone();
-        if view.is_reference {
-            view.offset = 0;
-        }
-        view
-    }
-
     /// Returns whether a failed scope check leaves the name to dynamic-property storage.
     ///
     /// php mangles a private property into its declaring class's own table entry, so a name the
@@ -1085,12 +1060,8 @@ fn emit_aarch64_get_slot_bodies(
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "get"));
-        if slot.is_reference {
-            emit_aarch64_enter_reference_cell(emitter, slot, false);
-        }
-        let view = slot.cell_view();
-        emit_aarch64_uninitialized_property_get_guard(module, emitter, data, &view, done_label);
-        emit_aarch64_box_property_slot(emitter, &view);
+        emit_aarch64_uninitialized_property_get_guard(module, emitter, data, slot, done_label);
+        emit_aarch64_box_property_slot(emitter, slot);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the declared property value
     }
 }
@@ -1105,12 +1076,8 @@ fn emit_x86_64_get_slot_bodies(
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "get"));
-        if slot.is_reference {
-            emit_x86_64_enter_reference_cell(emitter, slot, false);
-        }
-        let view = slot.cell_view();
-        emit_x86_64_uninitialized_property_get_guard(module, emitter, data, &view, done_label);
-        emit_x86_64_box_property_slot(emitter, &view);
+        emit_x86_64_uninitialized_property_get_guard(module, emitter, data, slot, done_label);
+        emit_x86_64_box_property_slot(emitter, slot);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the declared property value
     }
 }
@@ -1124,10 +1091,7 @@ fn emit_aarch64_initialized_slot_bodies(
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "is_initialized"));
-        if slot.is_reference {
-            emit_aarch64_enter_reference_cell(emitter, slot, false);
-        }
-        emit_aarch64_property_initialized_flag(emitter, &slot.cell_view());
+        emit_aarch64_property_initialized_flag(emitter, slot);
         emitter.instruction(&format!("b {}", done_label));                      // return after materializing the initialization flag
     }
 }
@@ -1141,10 +1105,7 @@ fn emit_x86_64_initialized_slot_bodies(
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "is_initialized"));
-        if slot.is_reference {
-            emit_x86_64_enter_reference_cell(emitter, slot, false);
-        }
-        emit_x86_64_property_initialized_flag(emitter, &slot.cell_view());
+        emit_x86_64_property_initialized_flag(emitter, slot);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after materializing the initialization flag
     }
 }
@@ -1162,13 +1123,13 @@ fn emit_aarch64_set_slot_bodies(
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "set"));
         if slot.is_reference {
-            emit_aarch64_enter_reference_cell(emitter, slot, true);
+            emit_aarch64_clear_reference_uninitialized(emitter, slot);
         }
         emit_aarch64_store_property_slot(
             module,
             emitter,
             data,
-            &slot.cell_view(),
+            slot,
             fail_label,
             callable_support,
         );
@@ -1190,13 +1151,13 @@ fn emit_x86_64_set_slot_bodies(
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, "set"));
         if slot.is_reference {
-            emit_x86_64_enter_reference_cell(emitter, slot, true);
+            emit_x86_64_clear_reference_uninitialized(emitter, slot);
         }
         emit_x86_64_store_property_slot(
             module,
             emitter,
             data,
-            &slot.cell_view(),
+            slot,
             fail_label,
             callable_support,
         );
@@ -1205,44 +1166,30 @@ fn emit_x86_64_set_slot_bodies(
     }
 }
 
-/// Replaces the object pointer in the helper frame with the slot's managed reference cell.
+/// Resets a typed-uninitialized marker in the slot's managed reference cell to zero.
 ///
-/// `clear_uninitialized` also resets a typed-uninitialized marker (the cell's value word) to zero,
-/// so a write that replaces the old value never releases the sentinel as if it were a pointer.
-fn emit_aarch64_enter_reference_cell(
-    emitter: &mut Emitter,
-    slot: &EvalPropertySlot,
-    clear_uninitialized: bool,
-) {
+/// The frame keeps the object pointer (the payload helpers follow the cell themselves), so a
+/// write that replaces the old value never releases the sentinel as if it were a pointer.
+fn emit_aarch64_clear_reference_uninitialized(emitter: &mut Emitter, slot: &EvalPropertySlot) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer
     emitter.instruction(&format!("ldr x9, [x9, #{}]", slot.offset));            // load the managed reference-cell pointer from the property slot
-    emitter.instruction("str x9, [sp, #16]");                                   // address the cell instead of the object from here on
-    if clear_uninitialized {
-        emitter.instruction("ldr x10, [x9]");                                   // load the cell value word
-        abi::emit_load_int_immediate(emitter, "x11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-        emitter.instruction("cmp x10, x11");                                    // is the owned reference still typed-uninitialized?
-        emitter.instruction("csel x10, xzr, x10, eq");                          // drop the marker so the old value is never released
-        emitter.instruction("str x10, [x9]");                                   // publish the cleared value word
-    }
+    emitter.instruction("ldr x10, [x9]");                                       // load the cell value word
+    abi::emit_load_int_immediate(emitter, "x11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("cmp x10, x11");                                        // is the owned reference still typed-uninitialized?
+    emitter.instruction("csel x10, xzr, x10, eq");                              // drop the marker so the old value is never released
+    emitter.instruction("str x10, [x9]");                                       // publish the cleared value word
 }
 
-/// Replaces the object pointer in the helper frame with the slot's managed reference cell.
-fn emit_x86_64_enter_reference_cell(
-    emitter: &mut Emitter,
-    slot: &EvalPropertySlot,
-    clear_uninitialized: bool,
-) {
+/// Resets a typed-uninitialized marker in the slot's managed reference cell to zero.
+fn emit_x86_64_clear_reference_uninitialized(emitter: &mut Emitter, slot: &EvalPropertySlot) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer
     emitter.instruction(&format!("mov r11, QWORD PTR [r11 + {}]", slot.offset)); // load the managed reference-cell pointer from the property slot
-    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // address the cell instead of the object from here on
-    if clear_uninitialized {
-        emitter.instruction("mov rax, QWORD PTR [r11]");                        // load the cell value word
-        abi::emit_load_int_immediate(emitter, "r10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-        emitter.instruction("xor edx, edx");                                    // zero replaces the typed-uninitialized marker
-        emitter.instruction("cmp rax, r10");                                    // is the owned reference still typed-uninitialized?
-        emitter.instruction("cmove rax, rdx");                                  // drop the marker so the old value is never released
-        emitter.instruction("mov QWORD PTR [r11], rax");                        // publish the cleared value word
-    }
+    emitter.instruction("mov rax, QWORD PTR [r11]");                            // load the cell value word
+    abi::emit_load_int_immediate(emitter, "r10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+    emitter.instruction("xor edx, edx");                                        // zero replaces the typed-uninitialized marker
+    emitter.instruction("cmp rax, r10");                                        // is the owned reference still typed-uninitialized?
+    emitter.instruction("cmove rax, rdx");                                      // drop the marker so the old value is never released
+    emitter.instruction("mov QWORD PTR [r11], rax");                            // publish the cleared value word
 }
 
 /// Emits an ARM64 boolean for one declared property's initialized state.
