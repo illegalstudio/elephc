@@ -330,12 +330,7 @@ fn emit_try(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // zero means the existing encoder must handle this value
     emitter.instruction("jz __rt_json_integer_tree_try_unsupported_x86");       // allocate only after the entire tree is admitted
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the exact byte count across allocation and writing
-    emitter.instruction("call __rt_heap_alloc");                                // allocate one exact output payload
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND)
-    ));                                                                         // materialize the transient string kind with the allocator marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // publish the transient string heap kind
+    elephc_memoir::strings::concat_scratch::emit_allocate_transient_string(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the output base across the recursive writer
     emitter.instruction("mov rsi, rax");                                        // pass the exact output base as the initial cursor
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the admitted root array

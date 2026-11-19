@@ -9,6 +9,7 @@
 //! - The bridge always sees raw bytes; this glue applies PHP's base64 option semantics.
 //! - GCM tags use owned heap storage transferred to the caller only for requested writeback.
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -37,16 +38,12 @@ fn emit_openssl_encrypt(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #16");                                     // CBC/ECB PKCS#7 needs at most one extra block
     emitter.instruction("str x9, [sp, #96]");                                   // save bridge output capacity
     emitter.instruction("mov x0, x9");                                          // heap allocation byte count
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp raw ciphertext allocation
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #88]");                                   // retain raw output pointer
     emitter.instruction("str xzr, [sp, #104]");                                 // initialize ciphertext output length
     emitter.instruction("str xzr, [sp, #112]");                                 // initialize tag output length
     emitter.instruction("mov x0, #16");                                         // maximum supported GCM tag capacity
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp tag allocation
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #136]");                                  // retain tag output pointer
 
     emitter.instruction("ldr x10, [sp, #80]");                                  // reload caller field block
@@ -146,22 +143,12 @@ fn emit_openssl_encrypt_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r9, 16");                                          // CBC/ECB PKCS#7 needs at most one extra block
     emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save bridge output capacity
     emitter.instruction("mov rax, r9");                                         // heap allocation byte count
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));                                                                         // materialize the owned-string heap-kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp raw ciphertext as owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // retain raw output pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize ciphertext output length
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize tag output length
     emitter.instruction("mov rax, 16");                                         // maximum supported GCM tag capacity
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));                                                                         // materialize the owned-string heap-kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp tag allocation as owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // retain tag output pointer
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload caller field block
@@ -286,9 +273,7 @@ fn emit_openssl_decrypt(emitter: &mut Emitter) {
     emitter.instruction("csel x9, x9, x10, hs");                                // allocate a non-null owner for empty plaintext
     emitter.instruction("str x9, [sp, #80]");                                   // save output capacity
     emitter.instruction("mov x0, x9");                                          // heap allocation byte count
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp plaintext allocation
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #72]");                                   // retain plaintext pointer
     emitter.instruction("str xzr, [sp, #88]");                                  // initialize plaintext output length
 
@@ -369,12 +354,7 @@ fn emit_openssl_decrypt_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_openssl_decrypt_capacity_linux_x86_64");
     emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save output capacity
     emitter.instruction("mov rax, r9");                                         // heap allocation byte count
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));                                                                         // materialize the owned-string heap-kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp plaintext as owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // retain plaintext pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize plaintext output length
 

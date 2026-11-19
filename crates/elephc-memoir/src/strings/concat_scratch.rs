@@ -696,3 +696,8 @@ fn emit_preg_cb_ensure_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the append site
 }
+
+/// Allocates an exact heap-backed result that string persistence may adopt later.
+pub fn emit_allocate_transient_string(emitter: &mut impl Emitter) {
+    crate::heap_alloc::emit_fresh_with_kind(emitter, crate::HeapKind::new(CONCAT_TEMP_HEAP_KIND));
+}
