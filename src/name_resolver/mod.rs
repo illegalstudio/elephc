@@ -70,7 +70,22 @@ pub(crate) fn resolve_with_additional_global_symbols(
     global_classes: &[&str],
 ) -> Result<Program, CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
-        resolve_on_compiler_stack(program, global_functions, global_classes)
+        resolve_on_compiler_stack(program, global_functions, global_classes, &[])
+    })
+}
+
+/// Resolves one file of a larger program that already declares `declared_functions`
+/// (canonical names), so an unqualified call in a namespace falls back to one of them as PHP
+/// does: `gfn()` inside `namespace App` means `App\gfn` when it exists, else the global `gfn`.
+///
+/// The autoload pass resolves each Composer file on its own; without these, a class file could
+/// not see a function its package declares in an `autoload.files` entry.
+pub(crate) fn resolve_with_declared_functions(
+    program: Program,
+    declared_functions: &[String],
+) -> Result<Program, CompileError> {
+    crate::compiler_stack::with_compiler_stack(|| {
+        resolve_on_compiler_stack(program, &[], &[], declared_functions)
     })
 }
 
@@ -79,11 +94,15 @@ fn resolve_on_compiler_stack(
     program: Program,
     global_functions: &[&str],
     global_classes: &[&str],
+    declared_functions: &[String],
 ) -> Result<Program, CompileError> {
     // Expose declaration groups without erasing lowered array-append boundaries.
     let program = crate::parser::declaration_groups::flatten_top_level_declaration_groups(program);
     let mut symbols = Symbols::default();
     symbols::collect_symbols(&program, None, &mut symbols);
+    for function in declared_functions {
+        symbols.functions.entry(php_symbol_key(function)).or_insert_with(|| function.clone());
+    }
     for function in global_functions {
         if !symbols.declares_function(function) {
             symbols.functions.insert(
