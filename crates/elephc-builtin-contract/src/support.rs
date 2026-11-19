@@ -424,11 +424,8 @@ mod tests {
         // the random prelude's `__elephc_call_strict_types` reader join the AOT registry,
         // `preg_last_error` and `preg_last_error_msg` add two more, as does the internal
         // `__elephc_set_memory_limit` setter.
-        // compiled and eval `ReflectionClass` builder calls two more. The seven ext/posix
-        // bridge builtins are ordinary PCNTL registry operations.
-        // and `preg_last_error` and `preg_last_error_msg` add two more.
         // The seven ext/posix bridge builtins are ordinary PCNTL registry operations.
-        assert_eq!(aot_registry, 842);
+        assert_eq!(aot_registry, 849);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
         // The two PHP-visible locale functions are prelude-provided.
@@ -492,7 +489,6 @@ mod tests {
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
         // the internal nl_langinfo helper, the random prelude's
         // `__elephc_call_strict_types` reader, and `__elephc_set_memory_limit`.
-        // Internal compiler surfaces and pending eval bindings remain unavailable.
         assert_eq!(unsupported, 524);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
