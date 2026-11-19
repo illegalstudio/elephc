@@ -685,6 +685,14 @@ impl Checker {
         // The enclosing body's walk repeats when this closure denies a view.
         let closure_scope = self.current_loop_storage_scope.clone();
         self.end_promotable_walk(&closure_scope);
+        // A by-value capture the body stores pointers into is a pointer word in the enclosing
+        // frame too, so a `null` it holds there stays address 0 and arrives as such.
+        for capture in captures {
+            if self.pointer_word_locals.contains(&(closure_scope.clone(), capture.clone())) {
+                self.pointer_word_locals
+                    .insert((previous_loop_storage_scope.clone(), capture.clone()));
+            }
+        }
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.closure_depth -= 1;
