@@ -401,13 +401,13 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
-        // Also includes the SimpleXML allocation and diagnostic adapters, and
+        // Also includes the SimpleXML allocation and diagnostic adapters,
         // `__elephc_reflection_class_build` / `__elephc_eval_reflection_class_build`, which
         // only compiled reflector getters call. The two internal libc setlocale helpers and
         // the internal nl_langinfo helper join the internal eval inventory, as does the
-        // random prelude's `__elephc_call_strict_types` reader, and the internal
-        // `parse_str()` query parser.
-        assert_eq!(eval_internal, 143);
+        // random prelude's `__elephc_call_strict_types` reader, the internal
+        // `parse_str()` query parser, and `__elephc_set_memory_limit`.
+        assert_eq!(eval_internal, 144);
         // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 382);
@@ -423,9 +423,9 @@ mod tests {
         // compiled and eval `ReflectionClass` builder calls two more. The seven ctype
         // contracts, two internal setlocale helpers, the internal nl_langinfo helper, and
         // the random prelude's `__elephc_call_strict_types` reader join the AOT registry,
-        // and `preg_last_error` and `preg_last_error_msg` add two more. The internal
-        // `parse_str()` query parser is an ordinary AOT registry operation.
-        assert_eq!(aot_registry, 843);
+        // `preg_last_error` and `preg_last_error_msg` add two more, as do the internal
+        // `__elephc_set_memory_limit` setter and the `parse_str()` query parser.
+        assert_eq!(aot_registry, 844);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep` and the filter surface), and name-resolver rewrites remain outside
         // the ordinary AOT registry. The two PHP-visible locale functions are prelude-provided.
@@ -486,9 +486,10 @@ mod tests {
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
-        // the internal nl_langinfo helper, and the random prelude's
-        // `__elephc_call_strict_types` reader and the internal `parse_str()` parser.
-        assert_eq!(unsupported, 525);
+        // the internal nl_langinfo helper, the random prelude's
+        // `__elephc_call_strict_types` reader, `__elephc_set_memory_limit`, and the
+        // internal `parse_str()` parser.
+        assert_eq!(unsupported, 526);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

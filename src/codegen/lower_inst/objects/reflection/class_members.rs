@@ -14,6 +14,18 @@ pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_nam
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let visible = |info: &crate::types::ClassInfo, resolved_name: &str, method: &str, is_static: bool| {
+        // Compiler-owned helpers are not part of the PHP surface, and php-src's internal URI
+        // classes do not expose their native destructor to reflection either.
+        let uri_internal = crate::uri_prelude::is_internal_uri_class(resolved_name);
+        if uri_internal
+            && (method.starts_with("__elephc_")
+                || matches!(
+                    crate::names::php_symbol_key(method).as_str(),
+                    "__destruct" | "__clone"
+                ))
+        {
+            return false;
+        }
         // Inherited builtin implementation methods stay hidden in subclasses too.
         let declaring = if is_static {
             info.static_method_declaring_classes.get(method)
@@ -107,8 +119,10 @@ pub(super) fn reflection_class_property_names(
         push_unique_property_name("name", &mut names, &mut seen);
     }
     for (name, _) in &info.properties {
-        if elephc_builtin_contract::lookup_class(class_name)
-            .is_some_and(|class| class.property_is_hidden(name))
+        if (name.starts_with("__elephc_")
+            && crate::uri_prelude::is_internal_uri_class(class_name))
+            || elephc_builtin_contract::lookup_class(class_name)
+                .is_some_and(|class| class.property_is_hidden(name))
         {
             continue;
         }
@@ -117,8 +131,10 @@ pub(super) fn reflection_class_property_names(
         }
     }
     for (name, _) in &info.static_properties {
-        if elephc_builtin_contract::lookup_class(class_name)
-            .is_some_and(|class| class.property_is_hidden(name))
+        if (name.starts_with("__elephc_")
+            && crate::uri_prelude::is_internal_uri_class(class_name))
+            || elephc_builtin_contract::lookup_class(class_name)
+                .is_some_and(|class| class.property_is_hidden(name))
         {
             continue;
         }

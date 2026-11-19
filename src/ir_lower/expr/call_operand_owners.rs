@@ -25,6 +25,7 @@ pub(super) fn begin_call_argument_evaluation(ctx: &mut LoweringContext<'_, '_>) 
             owners: Vec::new(),
             rooted_reference_value_views: std::collections::HashSet::new(),
             live_property_reference_arguments: false,
+            pending_property_type_guards: Vec::new(),
         },
     );
 }
@@ -256,6 +257,11 @@ fn finish_call_argument_evaluation_with(
         .pop()
         .expect("call argument evaluation scope must be balanced");
     debug_assert_eq!(scope.expression_depth, ctx.expression_depth);
+    // PHP evaluates the complete argument list before entering the callee, so property
+    // by-reference checks run here rather than beside their source argument.
+    for guard in &scope.pending_property_type_guards {
+        super::call_arg_coercion::emit_property_type_guard(ctx, guard);
+    }
     let mut intermediates = Vec::new();
     for owner in scope.owners.into_iter().rev() {
         unregister_owned_call_operand(ctx, owner.slot, owner.span);

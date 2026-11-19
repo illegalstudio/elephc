@@ -52,9 +52,17 @@ pub fn emit_heap_grow_tail(emitter: &mut Emitter) {
     emitter.instruction("adds x14, x13, x10");                                  // compute the tentative new bump offset with overflow detection
     emitter.instruction("b.cs __rt_heap_grow_tail_fail");                       // a wrapped bump offset cannot fit the configured heap
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_max");
-    emitter.instruction("ldr x15, [x15]");                                      // load the configured heap capacity for the extension check
-    emitter.instruction("cmp x14, x15");                                        // does the extended tail remain inside the configured heap?
-    emitter.instruction("b.hi __rt_heap_grow_tail_fail");                       // preserve fallback allocation when the tail has insufficient room
+    emitter.instruction("ldr x15, [x15]");                                      // load the reserved arena capacity for the extension check
+    emitter.instruction("cmp x14, x15");                                        // does the extended tail remain inside the reserved arena?
+    emitter.instruction("b.hi __rt_heap_grow_tail_fail");                       // preserve fallback allocation when the arena has insufficient room
+    // -- the extension also has to fit the live memory_limit budget, not just the arena --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_limit");
+    emitter.instruction("ldr x15, [x15]");                                      // load the runtime memory ceiling
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_gc_live");
+    emitter.instruction("ldr x16, [x16]");                                      // current live bytes before the tail grows
+    emitter.instruction("add x16, x16, x10");                                   // live bytes after adding the extension delta
+    emitter.instruction("cmp x16, x15");                                        // does the grown live total fit the runtime ceiling?
+    emitter.instruction("b.hi __rt_heap_grow_tail_fail");                       // no — fall back to an allocation that enforces the limit
 
     // -- publish the extension and update live-byte accounting --
     emitter.instruction("str x14, [x12]");                                      // publish the advanced bump offset after every guard has passed
@@ -110,9 +118,17 @@ fn emit_heap_grow_tail_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rcx, rdx");                                        // compute the tentative new bump offset with overflow detection
     emitter.instruction("jc __rt_heap_grow_tail_fail");                         // a wrapped bump offset cannot fit the configured heap
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_max");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity for the extension check
-    emitter.instruction("cmp rcx, r8");                                         // does the extended tail remain inside the configured heap?
-    emitter.instruction("ja __rt_heap_grow_tail_fail");                         // preserve fallback allocation when the tail has insufficient room
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the reserved arena capacity for the extension check
+    emitter.instruction("cmp rcx, r8");                                         // does the extended tail remain inside the reserved arena?
+    emitter.instruction("ja __rt_heap_grow_tail_fail");                         // preserve fallback allocation when the arena has insufficient room
+    // -- the extension also has to fit the live memory_limit budget, not just the arena --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_limit");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the runtime memory ceiling
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_gc_live");
+    emitter.instruction("mov r11, QWORD PTR [r11]");                            // current live bytes before the tail grows
+    emitter.instruction("add r11, rdx");                                        // live bytes after adding the extension delta
+    emitter.instruction("cmp r11, r8");                                         // does the grown live total fit the runtime ceiling?
+    emitter.instruction("ja __rt_heap_grow_tail_fail");                         // no — fall back to an allocation that enforces the limit
 
     // -- publish the extension and update live-byte accounting --
     emitter.instruction("mov QWORD PTR [r9], rcx");                             // publish the advanced bump offset after every guard has passed
@@ -200,7 +216,7 @@ mod tests {
                 let assembly = emitter.output();
 
                 assert!(assembly.contains("_heap_off"), "{name}, pic={pic}");
-                assert!(assembly.contains("_heap_max"), "{name}, pic={pic}");
+                assert!(assembly.contains("_heap_limit"), "{name}, pic={pic}");
                 assert!(assembly.contains("_gc_live"), "{name}, pic={pic}");
                 assert!(assembly.contains("_gc_peak"), "{name}, pic={pic}");
                 assert!(!assembly.contains("_gc_allocs"), "{name}, pic={pic}");

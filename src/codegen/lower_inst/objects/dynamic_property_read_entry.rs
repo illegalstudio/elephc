@@ -158,39 +158,12 @@ pub(super) fn emit_property_warning_fragment(ctx: &mut FunctionContext<'_>, byte
     abi::emit_call_label(ctx.emitter, if complete { "__rt_diag_warning" } else { "__rt_diag_warning_fragment" });
 }
 
-/// Appends PHP's ` in FILE on line N` suffix to the pending diagnostic.
+/// Publishes the source location the warning dispatcher appends to the displayed diagnostic.
 ///
-/// The static message fragment already sits in the warning buffer; these raw writes add the
-/// location PHP's CLI formatter reports for a statement in the main script. The caller finishes
-/// the diagnostic with its newline fragment so one warning is dispatched exactly once.
+/// The runtime writer owns the ` in FILE on line N` suffix so the same buffer can also hand a
+/// user error handler the message without it. The producer only records where the statement is;
+/// appending the suffix here would duplicate it in the default output.
 pub(super) fn emit_property_warning_location(ctx: &mut FunctionContext<'_>, line: u32) {
-    // Record where the message ends before the location suffix is appended. Warning
-    // dispatch hands PHP error handlers only that prefix, while the default output keeps
-    // the complete buffered line including ` in <file> on line <n>`.
-    let scratch = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_rt_diag_pending_len", 0);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_rt_diag_warning_message_len", 0);
-    emit_property_warning_fragment(ctx, b" in ", false);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x1", "_script_source_file");
-            abi::emit_load_symbol_to_reg(ctx.emitter, "x2", "_script_source_file_len", 0);
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rdi", "_script_source_file");
-            abi::emit_load_symbol_to_reg(ctx.emitter, "rsi", "_script_source_file_len", 0);
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
-    emit_property_warning_fragment(ctx, b" on line ", false);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), i64::from(line));
-    abi::emit_call_label(ctx.emitter, "__rt_itoa");
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the formatted line-number pointer to the warning fragment buffer
-        ctx.emitter.instruction("mov rsi, rdx");                                // pass the formatted line-number length to the warning fragment buffer
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
-    // Publish the real caller location for a user error handler.
     let scratch = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
@@ -243,15 +216,33 @@ pub(super) fn lower_const_dynamic_prop_get(
     if let Some(class_name) = magic_get_receiver_class(ctx, object, property)? {
         // `isset()`/`empty()` on a class with `__get` but no `__isset` find nothing and never
         // call `__get`: the probe answers null.
-        let skips_get = mode.skips_get_without_isset()
-            && !ctx.module.class_infos.get(class_name.trim_start_matches('\\')).is_some_and(
-                |info| info.methods.contains_key(&php_symbol_key("__isset")),
-            );
+        let has_isset = ctx
+            .module
+            .class_infos
+            .get(class_name.trim_start_matches('\\'))
+            .is_some_and(|info| info.methods.contains_key(&php_symbol_key("__isset")));
+        // A real per-instance hash entry answers before `__get`: only a name the hash does
+        // not hold is php's absent probe. Let the runtime plan below probe the hash.
+        let has_hash =
+            dynamic_property_hash_offset_for_class(ctx, &class_name, property)?.is_some();
+        let skips_get = mode.skips_get_without_isset() && !has_isset && !has_hash;
         if skips_get {
             emit_absent_probe_result(ctx, inst);
             return store_if_result(ctx, inst);
         }
-        return lower_magic_get_prop(ctx, inst, object, &class_name, property);
+        // A probe of a name the hash may hold must reach the runtime plan below before
+        // `__get`: a stored entry wins, and a miss is php's absent answer (or the magic
+        // accessor pair). `isset()` and `empty()` never call `__get` directly.
+        let probe_magic = mode.skips_get_without_isset()
+            || mode == PropertyFetchMode::Probe;
+        let probe_hash_precedes_get = has_hash
+            && (probe_magic || mode.uses_magic_get());
+        // A probe must keep its accessor pair: `empty()` and `isset()` ask `__isset` before
+        // `__get`, and a `??` Empty fetch does the same. Only a VALUE read goes straight to
+        // the getter here.
+        if !probe_hash_precedes_get && !probe_magic {
+            return lower_magic_get_prop(ctx, inst, object, &class_name, property);
+        }
     }
     // Same runtime-class rule as the `PropGet` sibling: a name php does not answer from a declared
     // slot on the STATIC class is decided per runtime class, kind and all.

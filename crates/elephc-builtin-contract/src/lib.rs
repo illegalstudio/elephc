@@ -38,6 +38,7 @@ mod core_constants;
 mod core_attributes;
 mod eval_profile;
 mod id;
+mod internal_final;
 mod module;
 mod object_operators;
 mod php_version;
@@ -69,6 +70,9 @@ pub use constant_deprecation::{
     ConstantDeprecation,
 };
 pub use id::BuiltinId;
+pub use internal_final::{
+    is_internal_readonly_class, INTERNAL_FINAL_CLASSES, INTERNAL_READONLY_CLASSES,
+};
 pub use core_functions::CORE_FUNCTION_NAMES;
 pub use core_constants::{core_environment_constant, EXECUTABLE_PATH_DEFAULT_KIND};
 pub use core_attributes::{core_attribute_flags, CORE_ATTRIBUTE_CONSTANTS, CORE_ATTRIBUTE_IS_REPEATABLE, CORE_ATTRIBUTE_TARGET_ALL};

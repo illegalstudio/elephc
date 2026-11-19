@@ -171,6 +171,39 @@ pub(crate) struct CallArgumentEvaluationScope {
     pub rooted_reference_value_views: HashSet<ValueId>,
     /// Direct native source functions can adopt the call's live property argument owners.
     pub live_property_reference_arguments: bool,
+    /// Property by-reference parameter checks read at their source position but raised only
+    /// after every argument has evaluated, matching PHP's entry-boundary `TypeError`.
+    pub pending_property_type_guards: Vec<PendingPropertyTypeGuard>,
+}
+
+/// One property by-reference argument check deferred until the complete argument list ran.
+///
+/// PHP evaluates every argument before entering the callee, so `f($box->text, later())`
+/// still runs `later()` before the incompatible property reference raises. A later argument
+/// can also rewrite the very property being passed (`f($box->text, $box->text = 5)`), and PHP
+/// checks the value that is current at the call boundary, not the one read at the argument's
+/// source position. Lowering therefore records the stabilized place and re-reads it when the
+/// call's post-evaluation pass runs; the accepted branch then retires the snapshot.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingPropertyTypeGuard {
+    /// Stabilized property place re-read at the call boundary for the conditional check.
+    pub place: Option<Expr>,
+    /// Complete diagnostic prefix through `must be of type T, `.
+    pub prefix: String,
+    /// Declared parameter type used for the dynamic `given` spelling.
+    pub expected: PhpType,
+    /// Whether the place is an UNTYPED property, whose current value PHP coerces weakly.
+    pub coerces_weakly: bool,
+    /// Boxed property-value snapshot inspected by the conditional check.
+    pub temp: Option<String>,
+    /// The callee's copy-in temporary, refreshed to the same call-boundary value.
+    pub callee_temp: Option<String>,
+    /// Storage representation of `callee_temp`.
+    pub callee_temp_ty: Option<PhpType>,
+    /// Source span for the throw.
+    pub span: Span,
+    /// Static diagnostic for the unconditional refusal.
+    pub unconditional_message: Option<String>,
 }
 
 /// Staging for one `$target = &call()`, recorded while its source expression is lowered.
@@ -187,6 +220,26 @@ pub(crate) struct ReferenceCallContext {
     pub(crate) staged: String,
     /// Whether a selected lowering actually adopted a cell into `staged`.
     pub(crate) adopted: bool,
+}
+
+/// One by-reference property argument awaiting its post-call write-back and type check.
+///
+/// PHP keeps a typed property's declaration when it becomes a reference: a callee that writes
+/// an incompatible value through `&$obj->prop` raises `TypeError` and leaves the property
+/// unchanged. elephc hands the callee a boxed `Mixed` temporary instead (the property's own
+/// slot has a different representation), so the caller records the temporary, the stabilized
+/// property target, and its declared type here and validates plus writes back after the call.
+pub(crate) struct ReferencePropertyGuard {
+    /// Synthetic `Mixed` local handed to the callee in place of the property.
+    pub temp: String,
+    /// Stabilized property target the callee's value is written back to.
+    pub place: Expr,
+    /// Declaring class name, as PHP prints it in the diagnostic.
+    pub class_name: String,
+    /// Property name, as PHP prints it in the diagnostic.
+    pub property: String,
+    /// Declared property type, or `None` for an untyped slot.
+    pub declared: Option<PhpType>,
 }
 
 /// A local bound to a pointer by-reference parameter, with the parameter's declared type.
@@ -348,6 +401,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     taken_owned_temp_values: HashSet<ValueId>,
     /// Nested owner ledgers for source-order call argument evaluation.
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
+    /// By-reference property writes awaiting their post-call declared-type check.
+    ///
+    /// Call sites snapshot the length before lowering their arguments and drain the entries
+    /// added afterwards once the call returns. Entries produced by surfaces that never drain
+    /// (a builtin, whose by-reference place lowering already owns the write) stay in the list
+    /// unread, which can only skip a check, never reject a compatible value.
+    pub(crate) reference_property_guards: Vec<ReferencePropertyGuard>,
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
     pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
     /// Native reference places whose raw and canonical mutation arms have already been selected.
@@ -391,8 +451,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// C struct layouts of the declared extern classes, read by `ptr<Class>` field accesses.
     pub extern_classes: &'m HashMap<String, ExternClassInfo>,
     /// Statically-decided access violations lowered to runtime `Error` throws,
-    /// keyed by the source span of the offending call/assignment.
-    pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
+    /// keyed by the owning body scope and the source span of the offending
+    /// call/assignment.
+    pub throw_access_sites: &'m HashMap<(String, Span), ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls in this source module.
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
     /// Source-body generator classification for closure literals.
@@ -618,7 +679,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         declared_trait_properties: &'m HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
         packed_classes: &'m HashMap<String, PackedClassInfo>,
         extern_classes: &'m HashMap<String, ExternClassInfo>,
-        throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
+        throw_access_sites: &'m HashMap<(String, Span), ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
         closure_generator_spans: &'m HashSet<Span>,
         array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
@@ -755,6 +816,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             scoped_write_scopes: Vec::new(),
             taken_owned_temp_values: HashSet::new(),
             call_argument_evaluation_scopes: Vec::new(),
+            reference_property_guards: Vec::new(),
             borrowed_string_call_operands: HashSet::new(),
             live_native_mutation_locals: HashMap::new(),
             string_offset_receivers: Vec::new(),
@@ -6086,6 +6148,16 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
 }
 
 impl LoweringContext<'_, '_> {
+    /// Returns the statically-decided throw site for `span` in the body currently lowered.
+    ///
+    /// The checker records each site with the scope that resolved it, because a trait body
+    /// is checked once per using class; looking the entry up by span alone would apply the
+    /// last class's decision to every class sharing that body.
+    pub(crate) fn throw_access_site(&self, span: Span) -> Option<&ThrowAccessInfo> {
+        self.throw_access_sites
+            .get(&(self.loop_storage_scope.clone(), span))
+    }
+
     /// Returns the PHP variable an operand was loaded from, for every load shape
     /// `load_local` emits, or `None` for any other value (a literal, a call result, a
     /// property read).

@@ -217,6 +217,7 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
     // `take(): Argument #1 ...` spelling instead of the generic `call()` fallback.
     let previous_description = is_user_function
         .then(|| ctx.call_description.replace(canonical.to_string()));
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
     if is_user_function {
         ctx.call_argument_evaluation_scopes.last_mut().expect("call argument scope")
@@ -280,6 +281,11 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
             Op::ExternCall.default_effects(),
             Some(expr.span),
         );
+        super::enum_argument_guards::drain_reference_property_guards(
+            ctx,
+            reference_property_guard_mark,
+            expr.span,
+        );
         // Extern string results are copied into independent PHP storage by the C ABI
         // adapter. Scalar and pointer results own no PHP argument storage either.
         release_owned_call_arg_temporaries(
@@ -316,6 +322,11 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
             ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
         );
         stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+        super::enum_argument_guards::drain_reference_property_guards(
+            ctx,
+            reference_property_guard_mark,
+            expr.span,
+        );
         release_owned_call_arg_temporaries_with_roots(
             ctx, &operands, Some(call.value), &return_alias, sig.as_ref(), &roots, expr.span,
         );
@@ -338,6 +349,11 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
             Op::EvalFunctionCall.default_effects(),
             Some(expr.span),
         );
+        super::enum_argument_guards::drain_reference_property_guards(
+            ctx,
+            reference_property_guard_mark,
+            expr.span,
+        );
         retire_call_argument_intermediates(ctx, &evaluation_intermediates);
         return call;
     }
@@ -350,6 +366,11 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
     let call = emit_builtin_call_value_with_target(
         ctx, canonical, operands, php_type, expr.span, eval_literal,
         positional_implode.then_some(crate::ir::RuntimeCallTarget::PositionalImplode),
+    );
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     unbox_raw_word_builtin_result(ctx, call, expr.span)

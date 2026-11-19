@@ -65,18 +65,20 @@ filter = 'test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subcla
 threads-required = "num-test-threads"
 
 # These five SimpleXML fixtures compile ONE catalog-sized program each, so they cannot be split
-# further. Green merge-queue runs measured them at 270-357s against the 360s bundle budget
-# (one such compile emits about 276 MB of assembly and takes about 210s on a loaded macOS
-# runner), and a slower runner evicted queue entries on that margin alone. Ten periods keep a
-# hang bounded; the fix for the cost itself is tracked in Code Journal plan 52bad3e9 (eval-catalog
+# further. One such compile emits about 276 MB of assembly and measured 1101s on a local macOS
+# host after the recent catalog growth, well past the previous 600s budget. Twenty-five periods
+# bound a hang; they also reserve the pool so the catalog compile does not share CPU with other
+# fixtures. The fix for the cost itself is tracked in Code Journal plan 52bad3e9 (eval-catalog
 # compile time). This must stay ahead of the bundle budget below: the first match wins.
 [[profile.default.overrides]]
 filter = 'binary(/^codegen_tests_/) and (test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(=codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_native_bundle) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
-slow-timeout = { period = "60s", terminate-after = 10 }
+slow-timeout = { period = "60s", terminate-after = 25 }
+threads-required = "num-test-threads"
 
 [[profile.ci.overrides]]
 filter = 'binary(/^codegen_tests_/) and (test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(=codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_native_bundle) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
-slow-timeout = { period = "60s", terminate-after = 10 }
+slow-timeout = { period = "60s", terminate-after = 25 }
+threads-required = "num-test-threads"
 
 # This probe lowers one deeply nested program on a deliberately small stack: a single
 # operation that reached 152s of its 180s budget on a loaded x86_64 runner.
@@ -87,6 +89,17 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 [[profile.ci.overrides]]
 filter = 'binary(embedder_stack_tests) and test(=eir_lowering_survives_the_nesting_limit_on_a_small_embedder_stack)'
 slow-timeout = { period = "60s", terminate-after = 5 }
+
+# The php-src ext/uri case bundle compiles the embedded Rust case table as 15 bundled programs
+# plus the isolation cases. It measures 100-320s locally and shares a shard with other codegen
+# tests on CI; give it a wider budget than the generic bundle override.
+[[profile.default.overrides]]
+filter = 'binary(/^codegen_tests_/) and test(=codegen::uri_php_src::test_uri_php_src_bundle)'
+slow-timeout = { period = "60s", terminate-after = 12 }
+
+[[profile.ci.overrides]]
+filter = 'binary(/^codegen_tests_/) and test(=codegen::uri_php_src::test_uri_php_src_bundle)'
+slow-timeout = { period = "60s", terminate-after = 12 }
 
 # A fixture bundle (tests/codegen/support/bundle.rs) compiles several opaque-eval programs as
 # one: one catalog compile per optimizer mode instead of one per fixture, but the run itself
@@ -161,6 +174,20 @@ slow-timeout = { period = "60s", terminate-after = 6 }
 # These opaque-eval families compile the whole builtin catalog and run under heap
 # diagnostics; measured 76-196s on a local macOS host and 100-170s on loaded Linux
 # shards. Give the families a bounded 300s allowance.
+# The opaque `codegen::eval*` families also lower the whole builtin catalog: one compile
+# emitted ~91 MB of assembly and spent most of its 324-430s in the assembler on a macOS host
+# after the declared-callable inventory growth. The three-period default cut off a different
+# member on each macOS eval shard. Keep a bounded twelve periods.
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'binary(/^codegen_tests_/) and test(/^codegen::eval/)'
+slow-timeout = { period = "60s", terminate-after = 12 }
+
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'binary(/^codegen_tests_/) and test(/^codegen::eval/)'
+slow-timeout = { period = "60s", terminate-after = 12 }
+
 # Native XML factory/accessor eval probes compile the same catalog. The constructorless
 # factory probe generated 249 MB of assembly and reached 180s before linking finished.
 # Include that workload here rather than giving each probe a separate timeout override.
@@ -185,11 +212,18 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 status-level = "slow"
 
 # OPcache probes compile eval-capable hosts and reached the 180s cap when
-# two catalog compiles shared a macOS runner. Reserve the worker pool for each
-# probe to serialize this compilation work within the shard.
+# two catalog compiles shared a macOS runner; one probe timed out twice at the
+# three-period default. Reserve the worker pool for each probe and give the
+# binary a bounded six periods on macOS.
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'binary_id(elephc::integration) and test(/^opcache_\w+::/)'
+slow-timeout = { period = "60s", terminate-after = 6 }
+
 [[profile.ci.overrides]]
 platform = 'cfg(target_os = "macos")'
 filter = 'binary_id(elephc::integration) and test(/^opcache_\w+::/)'
+slow-timeout = { period = "60s", terminate-after = 6 }
 threads-required = "num-test-threads"
 
 # One JUnit report per CI run, written under nextest's store dir, which is
@@ -235,6 +269,9 @@ path = "debug/libelephc_gmp.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_random.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_uri.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_mbstring.a"

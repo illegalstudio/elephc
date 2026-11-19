@@ -159,8 +159,10 @@ impl Checker {
                         // Error, so its call site is recorded and lowered to that throw
                         // before the constructor is entered (keeping `#0 {main}`).
                         if self.defers_private_constructor_to_runtime(&class_name) {
+                            let scope = self.current_loop_storage_scope.clone();
                             crate::types::checker::record_throw_access_site(
                                 &mut self.throw_access_sites,
+                                &scope,
                                 expr.span,
                                 crate::types::ThrowAccessInfo {
                                     span: expr.span,

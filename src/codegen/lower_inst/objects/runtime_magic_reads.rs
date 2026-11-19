@@ -213,7 +213,7 @@ fn emit_runtime_magic_accessor_args(
 }
 
 /// Loads a by-reference bool result and retires the transferred reference cell.
-fn preserve_and_release_reference_bool(ctx: &mut FunctionContext<'_>) {
+pub(super) fn preserve_and_release_reference_bool(ctx: &mut FunctionContext<'_>) {
     let result = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result);
     abi::emit_load_from_address(ctx.emitter, result, result, 0);

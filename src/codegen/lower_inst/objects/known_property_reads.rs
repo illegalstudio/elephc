@@ -140,7 +140,10 @@ pub(super) fn lower_prop_get_nonnull(
         return lower_stdclass_prop_get(ctx, inst, object, property);
     }
     if let Some(class_name) = magic_get_receiver_class(ctx, object, property)? {
-        return lower_magic_get_prop(ctx, inst, object, &class_name, property);
+        // A stored dynamic entry wins over `__get`; let the runtime plan probe the hash.
+        if dynamic_property_hash_offset_for_class(ctx, &class_name, property)?.is_none() {
+            return lower_magic_get_prop(ctx, inst, object, &class_name, property);
+        }
     }
     let mode = property_fetch_mode(inst);
     // An interface declares no properties, so a read the checker accepted on one went through a
@@ -801,19 +804,15 @@ pub(super) fn emit_scope_dynamic_property_hash_probe(
     warn_on_miss: bool,
 ) -> Result<()> {
     let target = ctx.emitter.target;
-    let (label, key_len) = ctx.data.add_string(property.as_bytes());
     let miss_label = ctx.next_label("scope_dynamic_prop_miss");
     let done_label = ctx.next_label("scope_dynamic_prop_done");
-    abi::emit_load_from_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(target, 0),
+    emit_scope_dynamic_property_hash_lookup(
+        ctx,
+        property,
         object_reg,
         hash_offset,
+        &miss_label,
     );
-    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &label);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &miss_label);
     match target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
@@ -830,6 +829,238 @@ pub(super) fn emit_scope_dynamic_property_hash_probe(
         emit_undefined_property_warning(ctx, class_name, property);
     }
     emit_boxed_null(ctx);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Looks up one literal name in a receiver's per-instance dynamic-property hash.
+///
+/// The receiver register survives the call. A missing entry jumps to `miss_label`; a present one
+/// falls through with the stored boxed Mixed cell in the hash getter's payload register.
+fn emit_scope_dynamic_property_hash_lookup(
+    ctx: &mut FunctionContext<'_>,
+    property: &str,
+    object_reg: &str,
+    hash_offset: usize,
+    miss_label: &str,
+) {
+    let target = ctx.emitter.target;
+    let (label, key_len) = ctx.data.add_string(property.as_bytes());
+    abi::emit_load_from_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(target, 0),
+        object_reg,
+        hash_offset,
+    );
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, miss_label);
+}
+
+/// Converts an `__isset()` return value into PHP truthiness in the integer result register.
+///
+/// PHP coerces the accessor's return value to bool; an unannotated `__isset()` may return an
+/// int, float, string, array, or object. Boxing routes every representation through the shared
+/// Mixed truthiness helper, and the temporary owns the boxed cell so it is released afterwards.
+fn emit_magic_isset_result_bool(
+    ctx: &mut FunctionContext<'_>,
+    target: &super::super::MethodCallTarget,
+) {
+    // A by-reference accessor is already converted from its reference cell to a plain bool
+    // and released by `preserve_and_release_reference_bool`.
+    if target.by_ref_return {
+        return;
+    }
+    super::mixed_property_reads::box_magic_result(ctx, target);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 8);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 8);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+}
+
+/// Answers `isset()` where a class keeps dynamic properties in a hash and declares `__isset`.
+///
+/// PHP answers a real hash entry first and only consults `__isset` for a name the hash does not
+/// hold. The accessor's answer is a presence bit, never the value itself: `false` means the name
+/// is unset, so the result is PHP null and the caller's nullness test answers false. A true answer
+/// boxes PHP `true`, which the caller reads as present. A by-reference `__isset` result is
+/// dereferenced and its transferred cell retired before the bit is tested.
+pub(super) fn emit_hash_or_magic_isset_read(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    class_name: &str,
+    property: &str,
+    hash_offset: Option<usize>,
+) -> Result<()> {
+    let target = resolve_method_call_target(ctx, class_name, "__isset", 2)?;
+    let done_label = ctx.next_label("hash_magic_isset_done");
+    let magic_label = ctx.next_label("hash_magic_isset_magic");
+    if let Some(hash_offset) = hash_offset {
+        let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+        ctx.load_value_to_reg(object, object_reg)?;
+        emit_scope_dynamic_property_hash_lookup(
+            ctx,
+            property,
+            object_reg,
+            hash_offset,
+            &magic_label,
+        );
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, x1");                          // return the boxed Mixed cell stored in the hash entry
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rax, rdi");                        // return the boxed Mixed cell stored in the hash entry
+            }
+        }
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        abi::emit_jump(ctx.emitter, &magic_label);
+    }
+
+    ctx.emitter.label(&magic_label);
+    emit_magic_get_args(ctx, object, property)?;
+    super::super::emit_resolved_method_call(ctx, &target)?;
+    if target.by_ref_return {
+        super::runtime_magic_reads::preserve_and_release_reference_bool(ctx);
+    }
+    emit_magic_isset_result_bool(ctx, &target);
+    let absent_label = ctx.next_label("hash_magic_isset_absent");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &absent_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&absent_label);
+    emit_boxed_null(ctx);
+    ctx.emitter.label(&done_label);
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+    store_if_result(ctx, inst)
+}
+
+/// Answers `empty()` where a class keeps dynamic properties in a hash and declares `__isset`.
+///
+/// A stored entry wins, including a stored `null` or `0`: `empty()` tests that value and never
+/// runs user code. On a miss, `__isset` decides; only a true answer reads `__get`, whose value
+/// `empty()` then tests. A class without `__get` answers null after a true `__isset`, matching
+/// PHP's empty-overloaded-property rule.
+pub(super) fn emit_hash_or_magic_empty_read(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    class_name: &str,
+    property: &str,
+    hash_offset: Option<usize>,
+) -> Result<()> {
+    let isset = resolve_method_call_target(ctx, class_name, "__isset", 2)?;
+    let get = ctx
+        .module
+        .class_infos
+        .get(class_name.trim_start_matches('\\'))
+        .is_some_and(|info| info.methods.contains_key(&php_symbol_key("__get")))
+        .then(|| resolve_method_call_target(ctx, class_name, "__get", 2))
+        .transpose()?;
+    let done_label = ctx.next_label("hash_magic_empty_done");
+    let magic_label = ctx.next_label("hash_magic_empty_magic");
+    if let Some(hash_offset) = hash_offset {
+        let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+        ctx.load_value_to_reg(object, object_reg)?;
+        emit_scope_dynamic_property_hash_lookup(
+            ctx,
+            property,
+            object_reg,
+            hash_offset,
+            &magic_label,
+        );
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, x1");                          // return the boxed Mixed cell stored in the hash entry
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rax, rdi");                        // return the boxed Mixed cell stored in the hash entry
+            }
+        }
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        abi::emit_jump(ctx.emitter, &magic_label);
+    }
+
+    ctx.emitter.label(&magic_label);
+    emit_magic_get_args(ctx, object, property)?;
+    super::super::emit_resolved_method_call(ctx, &isset)?;
+    if isset.by_ref_return {
+        super::runtime_magic_reads::preserve_and_release_reference_bool(ctx);
+    }
+    emit_magic_isset_result_bool(ctx, &isset);
+    let absent_label = ctx.next_label("hash_magic_empty_absent");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &absent_label);
+    match &get {
+        Some(get) => {
+            emit_magic_get_args(ctx, object, property)?;
+            super::super::emit_resolved_method_call(ctx, get)?;
+            super::mixed_property_reads::box_magic_result(ctx, get);
+        }
+        None => emit_boxed_null(ctx),
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&absent_label);
+    emit_boxed_null(ctx);
+    ctx.emitter.label(&done_label);
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+    store_if_result(ctx, inst)
+}
+
+/// Answers a value read where a class keeps dynamic properties in a hash and declares `__get`.
+///
+/// A stored entry wins; a miss calls `__get`. `??` also reaches this action, so a stored `0`
+/// answers `0` instead of falling through to the default.
+pub(super) fn emit_hash_or_magic_get_read(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    class_name: &str,
+    property: &str,
+    hash_offset: Option<usize>,
+) -> Result<()> {
+    let Some(hash_offset) = hash_offset else {
+        return lower_magic_get_prop(ctx, inst, object, class_name, property);
+    };
+    let magic_label = ctx.next_label("hash_magic_read_magic");
+    let done_label = ctx.next_label("hash_magic_read_done");
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    emit_scope_dynamic_property_hash_lookup(
+        ctx,
+        property,
+        object_reg,
+        hash_offset,
+        &magic_label,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
+        }
+    }
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&magic_label);
+    lower_magic_get_prop(ctx, inst, object, class_name, property)?;
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -962,9 +1193,32 @@ pub(super) fn emit_dynamic_plan_read(
         // php calls `__get` on this runtime class and the name is a constant here, so the arm
         // makes the real call. `lower_magic_get_prop` is the same lowering a receiver whose STATIC
         // class declares the accessor already takes, so the two agree by construction.
-        PropertyRuntimeAction::MagicGet => {
-            lower_magic_get_prop(ctx, inst, object, &arm.class_name, property)
-        }
+        // A probe on a class with both a dynamic hash and `__isset`: an existing entry wins,
+        // a missing one is the accessor's answer.
+        PropertyRuntimeAction::MagicRead { hash_offset } => emit_hash_or_magic_get_read(
+            ctx,
+            inst,
+            object,
+            &arm.class_name,
+            property,
+            *hash_offset,
+        ),
+        PropertyRuntimeAction::MagicIsset { hash_offset } => emit_hash_or_magic_isset_read(
+            ctx,
+            inst,
+            object,
+            &arm.class_name,
+            property,
+            *hash_offset,
+        ),
+        PropertyRuntimeAction::MagicEmpty { hash_offset } => emit_hash_or_magic_empty_read(
+            ctx,
+            inst,
+            object,
+            &arm.class_name,
+            property,
+            *hash_offset,
+        ),
         // A silent probe would consult `__isset`, which has no codegen call site in this phase. It
         // answers php null rather than a slot so that the deferral can only lose a value, never
         // expose storage.
@@ -972,6 +1226,9 @@ pub(super) fn emit_dynamic_plan_read(
             emit_dynamic_property_miss_result(ctx, inst);
             store_if_result(ctx, inst)
         }
+        PropertyRuntimeAction::RefuseRuntimeName { .. } => Err(CodegenIrError::invalid_module(
+            "property read resolved to a runtime-name refusal",
+        )),
         PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
             "property dispatch handed a refusal arm to its action emitter",
         )),

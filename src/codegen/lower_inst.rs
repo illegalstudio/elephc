@@ -416,6 +416,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PropSet => objects::lower_prop_set(ctx, &inst),
         Op::PropUnset => objects::lower_prop_unset(ctx, &inst),
         Op::DynamicPropSet => objects::lower_dynamic_prop_set(ctx, &inst),
+        Op::ReferenceArgumentTypeError => {
+            objects::lower_reference_argument_type_error(ctx, &inst)
+        }
         Op::DynamicPropUnset => objects::lower_dynamic_prop_unset_runtime(ctx, &inst),
         Op::InstanceOf => objects::lower_instanceof(ctx, &inst),
         Op::InstanceOfDynamic => objects::lower_instanceof_dynamic(ctx, &inst),

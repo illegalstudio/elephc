@@ -466,6 +466,7 @@ pub enum RuntimeFnId {
     ElephcOpcacheRtSwap,
     ElephcReflectionClassBuild,
     ElephcEvalReflectionClassBuild,
+    ElephcSetMemoryLimit,
     ElephcPtrGet,
     ElephcPtrIsNull,
     ElephcPtrReadString,
@@ -1701,6 +1702,12 @@ impl RuntimeFnId {
             // pure read would let the optimizer fold two `ini_set()` calls into one, or
             // drop one whose result is discarded — which is the common spelling.
             RuntimeFnId::ElephcOpcacheRtSwap => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
+            // The live `memory_limit` ceiling is process-wide heap state: every later
+            // allocation observes the new value, so this neither folds nor hoists, and it
+            // reads the reserved arena capacity to clamp an unlimited request.
+            RuntimeFnId::ElephcSetMemoryLimit => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
             ),
             // Also a WRITE: it latches a restart on the process-wide cache. Its result is
@@ -3665,6 +3672,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtSwap => "__elephc_opcache_rt_swap",
             RuntimeFnId::ElephcReflectionClassBuild => "__elephc_reflection_class_build",
             RuntimeFnId::ElephcEvalReflectionClassBuild => "__elephc_eval_reflection_class_build",
+            RuntimeFnId::ElephcSetMemoryLimit => "__elephc_set_memory_limit",
             RuntimeFnId::ElephcPtrGet => "__elephc_ptr_get",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",
