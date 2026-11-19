@@ -411,10 +411,12 @@ Reference elements also constrain later array operations:
 - `array_shift()`, `array_unshift()`, `array_reverse()`, `array_merge()`,
   `sort()`, `rsort()` and `shuffle()` preserve reference-cell identity. The
   user-comparator sorts (`usort()`, `uasort()`, `uksort()`) and `array_splice()`
-  do not accept reference-promoted hash storage; they report a named
-  unsupported-feature error instead of detaching the cells. `array_values()` and
-  the slicing helpers return detached snapshots rather than PHP's references.
-  Perform the reorder before creating references, or rebuild into a fresh array.
+  refuse a concrete reference-promoted hash with a named unsupported-feature
+  error instead of detaching the cells. When the same hash is reached through a
+  boxed `array &$a` receiver, `array_splice()` currently returns an empty array
+  and leaves the storage unchanged. `array_values()` and the slicing helpers
+  return detached snapshots rather than PHP's references. Perform the reorder
+  before creating references, or rebuild into a fresh array.
 - `call_user_func_array()` applies the callback parameter's own passing mode to
   each argument: a by-value parameter receives a copy of the current value, and a
   by-reference parameter writes through to the referenced variable, matching PHP.
