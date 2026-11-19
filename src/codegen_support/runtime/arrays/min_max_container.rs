@@ -44,6 +44,13 @@ pub fn emit_min_max_mixed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: min_max_mixed ---");
     emitter.label_global("__rt_min_max_mixed");
+    emitter.instruction("cbz x0, __rt_mmm_packed");                             // a null container is reduced by the indexed path
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the runtime storage kind
+    emitter.instruction("cmp x9, #3");                                          // kind 3 = a promoted-list view that is hash storage at run time
+    emitter.instruction("b.ne __rt_mmm_packed");                                // anything else is indexed storage
+    emitter.instruction("b __rt_min_max_hash");                                 // reduce its values through the hash walk (tail jump, same registers)
+    emitter.label("__rt_mmm_packed");
 
     // Frame (96 bytes): [0]=array [8]=length [16]=cursor [24]=want_max
     //                   [32..48]=best tag/lo/hi [56..72]=candidate tag/lo/hi [80]=x29/x30
@@ -122,6 +129,13 @@ fn emit_min_max_mixed_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: min_max_mixed ---");
     emitter.label_global("__rt_min_max_mixed");
+    emitter.instruction("test rdi, rdi");                                       // is the container pointer null?
+    emitter.instruction("jz __rt_mmm_packed_x86");                              // a null container is reduced by the indexed path
+    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // load the uniform heap-kind header word
+    emitter.instruction("and eax, 0xff");                                       // isolate the runtime storage kind
+    emitter.instruction("cmp eax, 3");                                          // kind 3 = a promoted-list view that is hash storage at run time
+    emitter.instruction("je __rt_min_max_hash");                                // reduce its values through the hash walk (tail jump, same registers)
+    emitter.label("__rt_mmm_packed_x86");
 
     // Frame (80 bytes below rbp): [-8]=array [-16]=length [-24]=cursor [-32]=want_max
     //                            [-40..-56]=best tag/lo/hi [-64..-80]=candidate tag/lo/hi
