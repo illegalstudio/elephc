@@ -352,19 +352,33 @@ fn try_compile_source_to_asm_with_capabilities(
     TestLinkRequirements,
 ) {
     elephc::compiler_stack::with_compiler_stack(|| {
-        try_compile_source_to_asm_with_defines_repr_inner(
-            source,
-            dir,
-            defines,
-            heap_size,
-            gc_stats,
-            counters,
-            heap_debug,
-            null_repr,
-            with_regex,
-            with_native_reference_validation,
-            php_version,
-        )
+        // Mirrors the CLI default (`closed_world::Mode::Auto`): the program is compiled as a
+        // closed world, and only when it still needs the interpreter -- a computed eval or
+        // include of the project's own, or a bridge `closed_world_bridge_reasons` names -- is it
+        // compiled again with the interpreter linked, as `closed_world::rerun_with_interpreter`
+        // does for the CLI. Compiling every fixture with the interpreter linked exercised a
+        // build the CLI never produces for these programs (a dynamic `new` of a builtin
+        // Throwable bound its `previous` wrongly there).
+        for closed_world in [true, false] {
+            let compiled = try_compile_source_to_asm_with_defines_repr_inner(
+                source,
+                dir,
+                defines,
+                heap_size,
+                gc_stats,
+                counters,
+                heap_debug,
+                null_repr,
+                with_regex,
+                with_native_reference_validation,
+                php_version,
+                closed_world,
+            );
+            if let Some(compiled) = compiled {
+                return compiled;
+            }
+        }
+        unreachable!("an interpreter-linked compile always produces a result")
     })
 }
 
@@ -382,12 +396,14 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     with_regex: bool,
     with_native_reference_validation: bool,
     php_version: elephc::php_version::PhpVersion,
-) -> (
+    closed_world: bool,
+) -> Option<(
     std::result::Result<String, elephc::codegen::CodegenIrError>,
     String,
     TestLinkRequirements,
-) {
+)> {
     elephc::codegen::set_null_repr(null_repr);
+    elephc::closed_world::set_enabled(closed_world);
     let frontend_phase = fixture_phase_timing("frontend");
     elephc::codegen::set_compile_profile(php_version, false);
     let synthetic_main = dir.join("test.php");
@@ -418,6 +434,13 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         elephc::resolver::resolve_collecting_includes_with_defines_and_sources(ast, dir, defines)
             .expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
+    // Mirrors `pipeline::compile`'s early `Mode::Auto` check on the program as the user wrote it.
+    if closed_world
+        && (elephc::closed_world::project_computed_eval(&resolved, &[]).is_some()
+            || elephc::closed_world::project_computed_include(&resolved, &[]).is_some())
+    {
+        return None;
+    }
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
     // the harness seeds `set_linked_extensions` from the same bits so
@@ -445,7 +468,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     if mysqli_used {
         linked_php_surfaces.push("mysqli".to_string());
     }
-    elephc::codegen::set_linked_extensions(linked_php_surfaces);
+    elephc::codegen::set_linked_extensions(linked_php_surfaces.clone());
     let resolved = elephc::tz_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::list_id_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::var_export_prelude::inject_if_used(resolved, &mut prelude_inventory);
@@ -499,6 +522,27 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let locale_used = elephc::locale_prelude::program_uses_locale(&resolved);
     let resolved = elephc::locale_prelude::inject_if_used(resolved, locale_used, target().platform);
     let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    // Mirrors `pipeline::compile`'s `session-prelude` phase: the PHP CLI SAPI ships ext/session,
+    // so the whole session surface joins every program and reachability prunes what it never
+    // names. It is not decoration: the surface calls `unserialize()`, which opens the SPL,
+    // DateTime and Reflection gates of the checker, so the CLI always compiles with those builtin
+    // classes registered (91 emitted classes for a four-line program) and with the descriptor
+    // invokers they bring. A harness without it compiled a smaller world, and programs that pass
+    // through the CLI crashed or leaked only here.
+    let session_reached_unseen =
+        elephc::session_prelude::unseen_source_may_call_sessions(&resolved, &prelude_inventory);
+    let resolved = elephc::session_prelude::inject_cli_session_surface(
+        resolved,
+        false,
+        php_version,
+        &elephc::codegen_support::ini_overrides(),
+        &synthetic_main,
+        &mut prelude_inventory,
+        false,
+    );
+    linked_php_surfaces.push("session".to_string());
+    // Mirrors `pipeline::compile`'s `version-prelude` phase.
+    let resolved = elephc::version_prelude::inject_if_used(resolved, php_version, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     // Mirrors `pipeline::compile`: the entry file's own interface declarations travel
     // neither the resolver's include stripping nor the autoload pass, so this is the only
@@ -517,10 +561,28 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
             defines,
         )
         .expect("autoload failed");
+    let mut resolved = resolved;
+    // Mirrors `pipeline::compile`: a closed world has no interpreter scope for
+    // `extract(..., EXTR_REFS)` and answers `new ReflectionParameter(...)` itself.
+    if closed_world {
+        elephc::closed_world_extract_refs::rewrite(&mut resolved);
+        if elephc::reflection_parameter_prelude::rewrite(&mut resolved) {
+            let mut combined = elephc::reflection_parameter_prelude::declarations();
+            combined.append(&mut resolved);
+            resolved = combined;
+        }
+    }
     let resolved = elephc::assert_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::throwable_string_prelude::inject(resolved, &mut prelude_inventory);
+    // Mirrors `pipeline::compile`: callable wrappers for the builtins a string literal names
+    // (closed world only), forced as a group because lowering reaches them through a string.
+    let resolved = elephc::builtin_callable_prelude::inject_if_used(resolved, &mut prelude_inventory)
+        .expect("builtin callable prelude injection failed");
     let resolved = elephc::sodium_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::password_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    // Mirrors `pipeline::compile`: the hash and random gates read the autoloaded program again.
+    let resolved = elephc::hash_prelude::inject_late_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::random_prelude::inject_late_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_edge_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::array_gradual_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::dom_html_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
@@ -554,6 +616,9 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP after autoloading and
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
+    // Mirrors `pipeline::compile`: the timezone gate again, for a use only an autoloaded file makes.
+    let resolved = elephc::tz_prelude::inject_late_if_used(resolved, &mut prelude_inventory)
+        .expect("late timezone prelude injection failed");
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::lazy_static_defaults::apply(resolved);
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
@@ -563,6 +628,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // runs failed here with "Call to undefined function".
     // Mirrors `pipeline::compile`: a `static` captured by reference becomes a hidden global.
     let resolved = elephc::static_ref_capture::rewrite_captured_statics(resolved);
+    let resolved = elephc::conditional_functions::hoist_autoload_callback_function_marks(resolved);
     let resolved =
         elephc::conditional_functions::bind_conditional_declarations(resolved, target());
     let resolved = elephc::conditional_classes::hoist_unique_conditional_class_likes(resolved);
@@ -576,20 +642,27 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         })
         .expect("type check failed");
     set_fixture_linked_extensions(&check_result.required_libraries);
+    // Mirrors `pipeline::compile`: ONE analysis, built from the program entering the post-check
+    // passes and the checker's own signatures and class hierarchy, drives all four passes. The
+    // free `optimize::*` wrappers rebuild it per pass from the already-rewritten program and
+    // without that metadata, so exception-flow decisions differed from the CLI's.
+    let post_typecheck_optimizer = elephc::optimize::PostTypecheckOptimizer::new_with_type_metadata(
+        &resolved,
+        &check_result.functions,
+        &check_result.classes,
+        &check_result.interfaces,
+    );
+    let optimized = post_typecheck_optimizer.propagate(
+        resolved,
+        check_result.mixed_storage_local_names(),
+        check_result.buffer_read_sites.clone(),
+    );
     let optimized =
-        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
-    let optimized = elephc::optimize::prune_constant_control_flow(
-        optimized,
-        check_result.local_binding_decision_spans(),
-    );
-    let optimized = elephc::optimize::normalize_control_flow(
-        optimized,
-        check_result.local_binding_decision_spans(),
-    );
-    let optimized = elephc::optimize::eliminate_dead_code(
-        optimized,
-        check_result.local_binding_decision_spans(),
-    );
+        post_typecheck_optimizer.prune(optimized, check_result.local_binding_decision_spans());
+    let optimized =
+        post_typecheck_optimizer.normalize(optimized, check_result.local_binding_decision_spans());
+    let optimized = post_typecheck_optimizer
+        .eliminate_dead_code(optimized, check_result.local_binding_decision_spans());
     // The Throwable string helpers are called from lowering only, like an export.
     let mut empty_roots: HashSet<String> = elephc::throwable_string_prelude::FUNCTIONS
         .iter()
@@ -607,6 +680,9 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // rooted whenever they were injected, because the lowering names their bodies
     // without leaving a declaration-level call edge for reachability to follow.
     let mut forced_groups = HashSet::default();
+    if session_reached_unseen {
+        forced_groups.insert(elephc::session_prelude::SESSION_PRELUDE_GROUP.to_string());
+    }
     if prelude_inventory.groups.contains_key("array_merge") {
         forced_groups.insert("array_merge".to_string());
     }
@@ -615,6 +691,12 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         .contains_key(elephc::backend_gap_prelude::BACKEND_GAP_GROUP)
     {
         forced_groups.insert(elephc::backend_gap_prelude::BACKEND_GAP_GROUP.to_string());
+    }
+    if prelude_inventory
+        .groups
+        .contains_key(elephc::builtin_callable_prelude::GROUP)
+    {
+        forced_groups.insert(elephc::builtin_callable_prelude::GROUP.to_string());
     }
     if prelude_inventory
         .groups
@@ -683,6 +765,19 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // has to be told so -- otherwise an `include_once` of an autoloaded file redeclares it here
     // while the CLI answers "already included", and the two disagree on the same program.
     elephc::autoload::record_compile_time_inclusions(&mut ir_module, &optimized, &autoloaded_files);
+    if closed_world {
+        // Mirrors `pipeline::compile`: a runtime include is answered from the compiled-source
+        // table, and whatever still needs the bridge sends the build to the interpreter.
+        if elephc::ir_lower::module_has_dynamic_include(&ir_module) {
+            ir_module.closed_includes = Some(elephc::closed_world::include_table(&ir_module));
+        }
+        if !elephc::ir_lower::closed_world_bridge_reasons(&ir_module).is_empty()
+            || elephc::closed_world::project_computed_eval(&optimized, &[]).is_some()
+            || elephc::closed_world::project_computed_include(&optimized, &[]).is_some()
+        {
+            return None;
+        }
+    }
     if with_regex {
         ir_module.required_runtime_features.regex = true;
     }
@@ -701,9 +796,13 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // Mirror `pipeline::backend`: report the bridges this fixture actually links to
     // `extension_loaded()` / `get_loaded_extensions()`. Extension folding happens during
     // instruction lowering, so the seed has to land before `generate_user_asm_*`.
-    elephc::codegen::set_linked_extensions(test_linked_extensions(
-        &check_result.required_libraries,
-    ));
+    let mut linked_extensions = test_linked_extensions(&check_result.required_libraries);
+    for surface in &linked_php_surfaces {
+        if !linked_extensions.iter().any(|existing| existing == surface) {
+            linked_extensions.push(surface.clone());
+        }
+    }
+    elephc::codegen::set_linked_extensions(linked_extensions);
     let exported_functions = HashMap::default();
     // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
     // the linear-scan allocator (default) and the stack fallback.
@@ -740,7 +839,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         elephc::codegen::link_requirements_for_runtime_features(runtime_features),
     );
     // user assembly is already platform-correct (emitters handle platform at emit time)
-    (user_asm, runtime_asm, link_requirements)
+    Some((user_asm, runtime_asm, link_requirements))
 }
 
 /// Mirrors the production bridge-to-extension projection before fixture code generation.

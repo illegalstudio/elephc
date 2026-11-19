@@ -33,7 +33,7 @@ pub(crate) const METHOD: &str = "make";
 
 /// Rewrites every positional two-argument `new ReflectionParameter(...)` into a call of the
 /// helper; returns whether it rewrote any.
-pub(crate) fn rewrite(program: &mut Program) -> bool {
+pub fn rewrite(program: &mut Program) -> bool {
     let mut rewrote = false;
     walk_nodes_mut(program, &mut |node| {
         let NodeMut::Expr(expr) = node else { return };
@@ -55,7 +55,7 @@ pub(crate) fn rewrite(program: &mut Program) -> bool {
 }
 
 /// Returns the `__ElephcReflectionParameter` class declaration.
-pub(crate) fn declarations() -> Program {
+pub fn declarations() -> Program {
     php_semantics_declarations(|| {
         let by_offset = e_call("is_int", vec![e_var("param")]);
         let matches = e_ternary(

@@ -70,7 +70,7 @@ pub(crate) use expr::runtime_call_string_is_fresh;
 #[allow(unused_imports)] // used by the binary's pipeline only
 pub(crate) use program::module_runs_interpreted_code;
 #[allow(unused_imports)] // used by the binary's pipeline only
-pub(crate) use program::{closed_world_bridge_reasons, module_has_dynamic_include};
+pub use program::{closed_world_bridge_reasons, module_has_dynamic_include};
 
 use std::fmt;
 use std::path::Path;

@@ -26,7 +26,7 @@ use crate::parser::ast::{BinOp, Expr, ExprKind, Program, Stmt, StmtKind};
 const EXTR_REFS: i64 = 256;
 
 /// Rewrites every by-reference `extract()` statement of `program`'s function bodies.
-pub(crate) fn rewrite(program: &mut Program) {
+pub fn rewrite(program: &mut Program) {
     walk_nodes_mut(program, &mut |node| match node {
         NodeMut::Stmt(stmt) => match &mut stmt.kind {
             StmtKind::FunctionDecl { body, .. } => rewrite_body(body),

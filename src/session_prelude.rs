@@ -17,10 +17,10 @@ use crate::web_prelude::PhpVersion;
 
 /// Reachability group retained because the PHP session extension is present in the CLI profile,
 /// even when session calls are made only from source the compiler loads dynamically.
-pub(crate) const SESSION_PRELUDE_GROUP: &str = "session";
+pub const SESSION_PRELUDE_GROUP: &str = "session";
 
 /// Injects the standard session surface into the CLI profile; `--web` already owns it.
-pub(crate) fn inject_cli_session_surface(
+pub fn inject_cli_session_surface(
     program: Program,
     web: bool,
     php_version: PhpVersion,
@@ -61,7 +61,7 @@ pub(crate) fn inject_cli_session_surface(
 /// A program with none of them reaches only the session functions it names, and declaration
 /// reachability keeps exactly those; forcing the group regardless compiled ~150 session
 /// functions into `<?php echo 'ok';`.
-pub(crate) fn unseen_source_may_call_sessions(
+pub fn unseen_source_may_call_sessions(
     program: &Program,
     inventory: &PreludeInventory,
 ) -> bool {

@@ -12,6 +12,23 @@
 use crate::support::*;
 use std::fs;
 
+/// The fixture pipeline compiles the world the CLI does: the PHP CLI SAPI ships ext/session, so
+/// the session surface is part of every program (which is also what opens the SPL / DateTime /
+/// Reflection gates of the checker). A mixed receiver call over a class table that lacked them
+/// crashed only under `compile_and_run` (`_rt_mixed_deref`), never through the CLI.
+#[test]
+fn fixture_pipeline_carries_the_cli_session_surface() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder { public string $text = 'kept'; public function &readText(): string { return $this->text; } }
+function read(mixed $holder): string { $text = $holder->readText(); $holder->text = 'changed'; return $text; }
+var_dump(extension_loaded('session'));
+echo read(new Holder()), "\n";
+"#,
+    );
+    assert_eq!(out, "bool(true)\nkept\n");
+}
+
 /// `new $name(...$args)` dispatches through `crc32(strtolower($name))` once it has enough
 /// candidates. Every class must still be reached under any spelling of its name, with named and
 /// spread arguments planned per class, and a non-string name must keep the generic path.

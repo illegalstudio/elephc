@@ -485,7 +485,7 @@ fn reasons_runtime_kind(id: &RuntimeFnId) -> &'static str {
 ///
 /// A closed-world build (`--closed-world`) must link no interpreter, so the pipeline calls this
 /// right after lowering and refuses the build with these lines instead of linking it silently.
-pub(crate) fn closed_world_bridge_reasons(module: &Module) -> Vec<String> {
+pub fn closed_world_bridge_reasons(module: &Module) -> Vec<String> {
     BRIDGE_REASONS.with(|reasons| *reasons.borrow_mut() = Some(Vec::new()));
     let features = lowered_runtime_features_with(module, true);
     let raw = BRIDGE_REASONS
@@ -1128,7 +1128,7 @@ fn is_mbstring_mime_callable_name(name: &str) -> bool {
 }
 
 /// Whether any lowered body contains a runtime `include`/`require` (an internal dynamic include).
-pub(crate) fn module_has_dynamic_include(module: &Module) -> bool {
+pub fn module_has_dynamic_include(module: &Module) -> bool {
     all_lowered_functions(module).any(|function| {
         function.instructions.iter().any(|inst| {
             matches!(

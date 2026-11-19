@@ -299,7 +299,10 @@ pub(super) fn lower_callable_descriptor_invoke(
 fn lower_shared_mixed_descriptor_invoke(
     ctx: &mut FunctionContext<'_>, inst: &Instruction, callable: ValueId, arguments: ValueId,
 ) -> Result<()> {
-    ctx.shared.callable_argument_normalizer = true;
+    // Through the method, not the field: a codegen worker's chunk state is dropped after its text
+    // is merged, so a flag raised directly never reached the emission decision and the program
+    // called an undefined `_eir_callable_argument_normalizer`.
+    ctx.shared.require_callable_argument_normalizer();
     ctx.load_value_to_result(callable)?;
     abi::emit_call_label(ctx.emitter, super::CALLABLE_ARGUMENT_NORMALIZER);
     let descriptor = abi::nested_call_reg(ctx.emitter);

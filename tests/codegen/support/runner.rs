@@ -79,6 +79,14 @@ struct TestBridgeStaticlib {
 
 /// Lists bridge staticlibs that codegen fixtures may link through `extra_link_libs`.
 const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
+    // The session surface every CLI build carries (`session_prelude::inject_cli_session_surface`)
+    // reaches the web bridge's session state, so a fixture naming a session function links it.
+    TestBridgeStaticlib {
+        lib_name: "elephc_web",
+        package: "elephc-web",
+        apple_libraries: &[],
+        php_extensions: &["session"],
+    },
     TestBridgeStaticlib {
         lib_name: "elephc_tidy",
         package: "elephc-tidy",

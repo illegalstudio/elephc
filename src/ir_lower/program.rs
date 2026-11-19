@@ -69,7 +69,7 @@ pub(super) use runtime_features::include_lowered_runtime_features;
 #[allow(unused_imports)] // used by the binary's pipeline only
 pub(crate) use runtime_features::module_runs_interpreted_code;
 #[allow(unused_imports)] // used by the binary's pipeline only
-pub(crate) use runtime_features::{closed_world_bridge_reasons, module_has_dynamic_include};
+pub use runtime_features::{closed_world_bridge_reasons, module_has_dynamic_include};
 pub(super) use function_declarations::{
     close_function_global_names_over_calls, collect_function_global_names,
 };
