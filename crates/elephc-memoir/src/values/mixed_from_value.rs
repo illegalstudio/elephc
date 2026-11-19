@@ -95,7 +95,7 @@ pub fn emit_mixed_from_value(emitter: &mut impl Emitter) {
     emitter.instruction("str x10, [x0]");                                       // store the runtime value tag at mixed[0]
     emitter.instruction("ldp x11, x12, [sp, #8]");                              // reload the normalized payload words
     emitter.instruction("stp x11, x12, [x0, #8]");                              // store the payload words at mixed[8] and mixed[16]
-    emitter.emit_mixed_resource_publication();
+    super::resource_weak::emit_publish(emitter, 24, "__rt_mixed_from_value_done");
     emitter.label("__rt_mixed_from_value_done");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate the stack frame
@@ -235,7 +235,7 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the low payload word at mixed[8]
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the normalized high payload word after ownership helpers completed
     emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // store the high payload word at mixed[16]
-    emitter.emit_mixed_resource_publication();
+    super::resource_weak::emit_publish(emitter, 32, "__rt_mixed_from_value_done");
     emitter.label("__rt_mixed_from_value_done");
     emitter.instruction("add rsp, 32");                                         // release the temporary payload spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning

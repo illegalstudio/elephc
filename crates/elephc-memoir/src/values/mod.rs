@@ -26,6 +26,7 @@ pub mod deep_cleanup;
 pub mod native_reference_source_retirement;
 pub mod hash_write_guard;
 pub mod mixed_from_value;
+pub mod resource_weak;
 pub mod mixed_reference;
 
 pub mod mixed_unbox;
