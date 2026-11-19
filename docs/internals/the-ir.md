@@ -1235,7 +1235,7 @@ Builtin calls use the checker's result recorded for their call span.
 | `ClosureCall` | descriptor/local callable, args | return type | target effect summary or conservative |
 | `ExprCall` | runtime callee expression, args | return type | conservative dynamic callable effects |
 | `FirstClassCallableNew` | target metadata, optional object receiver | `I64` callable descriptor | `alloc_heap`, `refcount_op` |
-| `CallableArrayNew` | receiver/class/function parts | callable descriptor or array | `alloc_heap`, `refcount_op` |
+| `CallableArrayNew` | target metadata, optional object receiver | `I64` callable descriptor flagged as an array callable | `alloc_heap`, `refcount_op` |
 | `CallableDescriptorInvoke` | descriptor, normalized mixed args | `Heap(Mixed)` or typed value | descriptor effect summary |
 | `PipeCall` | value, callable | callable return | evaluates value before callable invocation |
 
