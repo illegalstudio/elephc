@@ -200,20 +200,22 @@ echo $f("42", FILTER_VALIDATE_INT);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Percent escapes in URL credentials accept both hexadecimal digits, including a leading
-/// letter (`%AF`), as php-src's `is_userinfo_valid` does.
+/// URL userinfo escapes follow php-src's `is_userinfo_valid`: the first escape digit must be
+/// decimal, the second may be any hex digit, so `%4A` is valid and `%AF` is not.
 #[test]
-fn test_filter_validate_url_accepts_hex_escaped_userinfo() {
+fn test_filter_validate_url_userinfo_escapes_match_php() {
     let out = compile_and_run(
         r#"<?php
-$url = "http://user%AF@example.com/";
-echo filter_var($url, FILTER_VALIDATE_URL) === $url ? "ok" : "no";
-echo "|";
-$url = "http://user%41@example.com/";
-echo filter_var($url, FILTER_VALIDATE_URL) === $url ? "ok" : "no";
+function ok(string $url): string {
+    return filter_var($url, FILTER_VALIDATE_URL) === $url ? "ok" : "no";
+}
+echo ok("http://user%AF@example.com/"), "|";
+echo ok("http://user%4A@example.com/"), "|";
+echo ok("http://user%41@example.com/"), "|";
+echo ok("http://user%af@example.com/");
 "#,
     );
-    assert_eq!(out, "ok|ok");
+    assert_eq!(out, "no|ok|ok|no");
 }
 
 /// Verifies the sanitizer map and the deprecated string sanitizer.
@@ -431,6 +433,31 @@ var_dump(filter_var("x", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => "/[/
         "stderr: {:?}",
         output.stderr
     );
+}
+
+/// `D`, `A` and NUL-containing subjects keep PHP's byte-exact PCRE2 semantics.
+#[test]
+fn test_filter_regexp_anchors_and_nul_subjects_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+function ok(string $value, string $pattern): string {
+    return filter_var($value, FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => $pattern]]) === false ? "0" : "1";
+}
+echo ok("foo\n", "/^foo$/");
+echo ok("foo\n", "/^foo$/D");
+echo ok("foo", "/^foo$/D");
+echo ok("evilbar", "/foo|bar/A");
+echo ok("bar", "/foo|bar/A");
+echo ok("safe\0junk", "/^safe$/");
+echo ok("foo\nbar", "/^foo$/m");
+echo preg_match('/^safe$/', "safe\0junk");
+echo ok("foo\n", "/foo$\n/");
+echo ok("foo\n", "/\\Afoo(?-m:$)/m");
+echo ok("foo\nbar", "/\\Afoo(?-m:$)/m");
+echo ok("foo\nbar", "/\\Afoo(?m:$)/");
+"#,
+    );
+    assert_eq!(out, "101010101101");
 }
 
 /// `add_empty` is a weak `bool` parameter: arrays/objects are rejected before any body
@@ -941,6 +968,22 @@ TypeError: filter_var(): Argument #2 ($filter) must be of type int, string given
 int(42)\n\
 bool(false)\n\
 int(257)\n"
+    );
+}
+
+/// Engine argument coercion rejects a bad `options` argument before the filter id lookup.
+#[test]
+fn test_filter_options_type_error_precedes_unknown_filter_warning() {
+    let out = compile_and_run(
+        r#"<?php
+try { filter_var("x", 999, new stdClass); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { filter_input(INPUT_GET, "x", 999, new stdClass); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "filter_var(): Argument #3 ($options) must be of type array|int, stdClass given\n\
+filter_input(): Argument #4 ($options) must be of type array|int, stdClass given\n"
     );
 }
 

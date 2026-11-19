@@ -35,6 +35,17 @@ fn filter_var_decl() -> Stmt {
                 e_int(2),
                 e_str("filter"),
             ])),
+            s_assign("state", crate::synthetic_class::e_array(vec![
+                crate::synthetic_class::e_cast(crate::parser::ast::CastType::Int, e_var("filter")),
+                e_const("FILTER_REQUIRE_SCALAR"),
+                e_null(),
+            ])),
+            s_expr(e_call("__elephc_filter_parse_options", vec![
+                e_var("options"),
+                e_var("state"),
+                e_str("filter_var"),
+                e_int(3),
+            ])),
             s_if(
                 e_not(e_call("__elephc_filter_filter_exists", vec![e_var("filter")])),
                 vec![
@@ -49,17 +60,6 @@ fn filter_var_decl() -> Stmt {
                 vec![],
                 None,
             ),
-            s_assign("state", crate::synthetic_class::e_array(vec![
-                crate::synthetic_class::e_cast(crate::parser::ast::CastType::Int, e_var("filter")),
-                e_const("FILTER_REQUIRE_SCALAR"),
-                e_null(),
-            ])),
-            s_expr(e_call("__elephc_filter_parse_options", vec![
-                e_var("options"),
-                e_var("state"),
-                e_str("filter_var"),
-                e_int(3),
-            ])),
             s_expr(e_call("__elephc_filter_check_flags", vec![
                 crate::synthetic_class::e_cast(crate::parser::ast::CastType::Int, crate::synthetic_class::e_index(e_var("state"), e_int(1))),
                 e_str("filter_var"),

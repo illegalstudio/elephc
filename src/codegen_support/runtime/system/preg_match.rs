@@ -80,7 +80,10 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // pass null-terminated subject
     emitter.instruction("mov x2, #1");                                          // request only the full-match pair
     emitter.instruction(&format!("add x3, sp, #{}", match_pair_off));           // receive one fixed signed-64-bit offset pair
-    emitter.instruction("mov x4, #0");                                          // use default execution flags
+    emitter.instruction(&format!("str xzr, [sp, #{}]", match_pair_off));        // start the REG_STARTEND range at byte zero
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_len_off));        // load the explicit subject length
+    emitter.instruction(&format!("str x9, [sp, #{}]", match_pair_off + 8));     // bound the match at the final subject byte, NULs included
+    emitter.instruction("mov x4, #128");                                        // REG_STARTEND keeps every subject byte in range
     super::preg_error_state::emit_exec_call(emitter);                           // execute without exposing PCRE2-owned layouts
     emitter.instruction(&format!("str x0, [sp, #{}]", regexec_result_off));     // save regexec result
 
@@ -177,7 +180,11 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // pass subject C string to regexec
     emitter.instruction(&format!("ldr x2, [sp, #{}]", nmatch_off));             // request one regmatch slot for every capture group
     emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass dynamic fixed offset-pair buffer
-    emitter.instruction("mov x4, #0");                                          // use default execution flags
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", regmatches_ptr_off));     // load the capture pair vector
+    emitter.instruction("str xzr, [x9]");                                       // start the REG_STARTEND range at byte zero
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_len_off));       // load the explicit subject length
+    emitter.instruction("str x10, [x9, #8]");                                   // bound the match at the final subject byte, NULs included
+    emitter.instruction("mov x4, #128");                                        // REG_STARTEND keeps every subject byte in range
     super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize every requested offset pair
     emitter.instruction(&format!("str x0, [sp, #{}]", regexec_result_off));     // save regexec status across cleanup
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
@@ -321,7 +328,10 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass the null-terminated subject C string as the second regexec() argument
     emitter.instruction("mov edx, 1");                                          // request only the full-match pair
     emitter.instruction(&format!("lea rcx, [rsp + {}]", match_pair_off));       // receive one fixed signed-64-bit offset pair
-    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", match_pair_off)); // start the REG_STARTEND range at byte zero
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", subject_len_off)); // load the explicit subject length
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", match_pair_off + 8)); // bound the match at the final subject byte, NULs included
+    emitter.instruction("mov r8d, 128");                                        // REG_STARTEND keeps every subject byte in range
     super::preg_error_state::emit_exec_call(emitter);                           // execute without exposing PCRE2-owned layouts
     emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // preserve the regexec() result code across the mandatory regfree() cleanup call
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
@@ -404,7 +414,11 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass subject C string to regexec
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every capture group
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic fixed offset-pair buffer
-    emitter.instruction("xor r8d, r8d");                                        // use default execution flags
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load the capture pair vector
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // start the REG_STARTEND range at byte zero
+    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", subject_len_off)); // load the explicit subject length
+    emitter.instruction("mov QWORD PTR [r10 + 8], r11");                        // bound the match at the final subject byte, NULs included
+    emitter.instruction("mov r8d, 128");                                        // REG_STARTEND keeps every subject byte in range
     super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize every requested offset pair
     emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // save regexec status across regfree
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle

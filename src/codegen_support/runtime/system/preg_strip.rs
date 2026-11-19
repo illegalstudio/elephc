@@ -125,8 +125,18 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
     emitter.label("__rt_preg_strip_flag_x");
     emitter.instruction("cmp w9, #120");                                        // check for 'x' extended modifier
-    emitter.instruction("b.ne __rt_preg_strip_skip_flag");                      // ignore unsupported trailing modifiers for now
+    emitter.instruction("b.ne __rt_preg_strip_flag_D");                         // try the end-only anchor modifier
     emitter.instruction("orr x3, x3, #0x2000");                                 // record the private PCRE2_EXTENDED flag for the shim
+    emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
+    emitter.label("__rt_preg_strip_flag_D");
+    emitter.instruction("cmp w9, #68");                                         // check for 'D' dollar-end-only modifier
+    emitter.instruction("b.ne __rt_preg_strip_flag_A");                         // try the anchored modifier
+    emitter.instruction("orr x3, x3, #0x8000");                                 // record the private PCRE2_DOLLAR_ENDONLY flag for the shim
+    emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
+    emitter.label("__rt_preg_strip_flag_A");
+    emitter.instruction("cmp w9, #65");                                         // check for 'A' anchored modifier
+    emitter.instruction("b.ne __rt_preg_strip_skip_flag");                      // ignore unsupported trailing modifiers for now
+    emitter.instruction("orr x3, x3, #0x10000");                                // record the private PCRE2_ANCHORED flag for the shim
     emitter.label("__rt_preg_strip_save_flag");
     emitter.instruction("str x3, [sp, #16]");                                   // save accumulated PCRE2 POSIX flags
     emitter.label("__rt_preg_strip_skip_flag");
@@ -239,8 +249,18 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
     emitter.label("__rt_preg_strip_flag_x_linux_x86_64");
     emitter.instruction("cmp r8d, 120");                                        // detect the trailing 'x' extended modifier
-    emitter.instruction("jne __rt_preg_strip_skip_flag_linux_x86_64");          // ignore unsupported trailing modifiers for now
+    emitter.instruction("jne __rt_preg_strip_flag_D_linux_x86_64");             // try the end-only anchor modifier
     emitter.instruction("or rcx, 0x2000");                                      // record the private PCRE2_EXTENDED flag for the shim
+    emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
+    emitter.label("__rt_preg_strip_flag_D_linux_x86_64");
+    emitter.instruction("cmp r8d, 68");                                         // detect the trailing 'D' dollar-end-only modifier
+    emitter.instruction("jne __rt_preg_strip_flag_A_linux_x86_64");             // try the anchored modifier
+    emitter.instruction("or rcx, 0x8000");                                      // record the private PCRE2_DOLLAR_ENDONLY flag for the shim
+    emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
+    emitter.label("__rt_preg_strip_flag_A_linux_x86_64");
+    emitter.instruction("cmp r8d, 65");                                         // detect the trailing 'A' anchored modifier
+    emitter.instruction("jne __rt_preg_strip_skip_flag_linux_x86_64");          // ignore unsupported trailing modifiers for now
+    emitter.instruction("or rcx, 0x10000");                                     // record the private PCRE2_ANCHORED flag for the shim
 
     emitter.label("__rt_preg_strip_skip_flag_linux_x86_64");
     emitter.instruction("sub r9, 1");                                           // move the reverse scan cursor one byte closer to the opening delimiter

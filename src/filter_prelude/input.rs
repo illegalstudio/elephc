@@ -545,6 +545,17 @@ fn filter_input_decl() -> Stmt {
             s_assign("filter", e_call("__elephc_filter_int_arg", vec![
                 e_var("filter"), e_str("filter_input"), e_int(3), e_str("filter"),
             ])),
+            s_assign("state", e_array(vec![
+                e_cast(CastType::Int, e_var("filter")),
+                e_const("FILTER_REQUIRE_SCALAR"),
+                e_null(),
+            ])),
+            s_expr_call("__elephc_filter_parse_options", vec![
+                e_var("options"),
+                e_var("state"),
+                e_str("filter_input"),
+                e_int(4),
+            ]),
             s_if(
                 e_not(e_call("__elephc_filter_filter_exists", vec![e_var("filter")])),
                 vec![
@@ -559,17 +570,6 @@ fn filter_input_decl() -> Stmt {
                 vec![],
                 None,
             ),
-            s_assign("state", e_array(vec![
-                e_cast(CastType::Int, e_var("filter")),
-                e_const("FILTER_REQUIRE_SCALAR"),
-                e_null(),
-            ])),
-            s_expr_call("__elephc_filter_parse_options", vec![
-                e_var("options"),
-                e_var("state"),
-                e_str("filter_input"),
-                e_int(4),
-            ]),
             s_expr_call("__elephc_filter_check_flags", vec![
                 e_cast(CastType::Int, e_index(e_var("state"), e_int(1))),
                 e_str("filter_input"),

@@ -11,6 +11,9 @@
 #define ELEPHC_PCRE2_GLOBAL_NEXT (1u << 16)
 /* Private compile flag. pcre2posix has no PCRE2_EXTENDED bit (REG_EXTENDED is 0). */
 #define ELEPHC_PCRE2_EXTENDED 0x2000
+/* Private compile flags for PHP modifiers pcre2posix does not expose. */
+#define ELEPHC_PCRE2_DOLLAR_ENDONLY 0x8000
+#define ELEPHC_PCRE2_ANCHORED 0x10000
 /* Private exec statuses for PCRE2 match errors POSIX has no code for. They sit above
  * every REG_* value so PHP's PREG_RECURSION_LIMIT_ERROR and PREG_BAD_UTF8_OFFSET_ERROR
  * survive the opaque ABI. */
@@ -92,6 +95,8 @@ static int elephc_pcre2_compile_with_options(
     if ((cflags & REG_UTF) != 0) options |= PCRE2_UTF;
     if ((cflags & REG_UCP) != 0) options |= PCRE2_UCP;
     if ((cflags & REG_UNGREEDY) != 0) options |= PCRE2_UNGREEDY;
+    if ((cflags & ELEPHC_PCRE2_DOLLAR_ENDONLY) != 0) options |= PCRE2_DOLLAR_ENDONLY;
+    if ((cflags & ELEPHC_PCRE2_ANCHORED) != 0) options |= PCRE2_ANCHORED;
 
     preg->re_cflags = cflags;
     preg->re_pcre2_code = NULL;
