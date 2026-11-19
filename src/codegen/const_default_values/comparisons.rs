@@ -9,6 +9,8 @@
 //!   cases, and a case compared with a non-enum is false only under `===`/`!==`.
 //! - Enum cases read by either operand stay ordered reads beside the boolean, as for branches.
 //! - Loose comparisons that need PHP's numeric-string or cross-type rules decline.
+//! - The executable path (`PHP_BINARY`) is a run-time string, so a comparison with a string
+//!   literal declines.
 
 use super::*;
 
@@ -52,6 +54,10 @@ fn values_equal(left: &ConstDefaultValue, right: &ConstDefaultValue, strict: boo
                 _ => None,
             }
         }
+        // The executable path is a string known only at run time, so it neither equals nor differs
+        // from a string literal here.
+        (String(_), Scalar { kind: CONST_DEFAULT_EXECUTABLE_PATH, .. })
+        | (Scalar { kind: CONST_DEFAULT_EXECUTABLE_PATH, .. }, String(_)) => None,
         (String(_), Scalar { .. }) | (Scalar { .. }, String(_)) => strict.then_some(false),
         _ => None,
     }

@@ -221,6 +221,7 @@ fn compare(
     }
 }
 
+/// Builds the `E::name` enum-case expression used as a comparison operand.
 fn case(name: &str) -> ExprKind {
     ExprKind::ScopedConstantAccess { receiver: StaticReceiver::Named("E".into()), name: name.into() }
 }
@@ -282,4 +283,24 @@ fn scalar_comparison_defaults_follow_php_type_rules_on_all_targets() {
     assert_eq!(check(ExprKind::Null, BinOp::StrictEq, ExprKind::Null), Some(true));
     assert_eq!(check(ExprKind::Null, BinOp::StrictEq, ExprKind::BoolLiteral(false)), Some(false));
     assert_eq!(check(ExprKind::Null, BinOp::Eq, ExprKind::BoolLiteral(false)), None);
+}
+
+/// `PHP_BINARY` is a string only known at run time: a comparison with a string literal must decline,
+/// while a comparison with a type that is never a string stays decidable under `===`.
+#[test]
+fn executable_path_comparison_defaults_decline_string_operands_on_all_targets() {
+    for target in ["macos-aarch64", "linux-x86_64"] {
+        let module = comparison_module(target);
+        let path = || ExprKind::ConstRef("PHP_BINARY".into());
+        let string = |value: &str| ExprKind::StringLiteral(value.into());
+        for op in [BinOp::StrictEq, BinOp::StrictNotEq, BinOp::Eq, BinOp::NotEq] {
+            assert!(compare(&module, path(), op.clone(), string("/opt/app")).is_none(), "{target}: path {op:?} string");
+            assert!(compare(&module, string("/opt/app"), op.clone(), path()).is_none(), "{target}: string {op:?} path");
+        }
+        assert_eq!(
+            compare(&module, path(), BinOp::StrictEq, ExprKind::IntLiteral(1)).map(|c| c.0),
+            Some(false), "{target}",
+        );
+        assert!(compare(&module, path(), BinOp::Eq, ExprKind::IntLiteral(1)).is_none(), "{target}");
+    }
 }
