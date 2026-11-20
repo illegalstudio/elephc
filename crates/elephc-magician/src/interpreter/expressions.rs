@@ -37,14 +37,14 @@ pub(in crate::interpreter) use evaluation::eval_array_union_result;
 pub(in crate::interpreter) use evaluation::initialize_native_throwable_source;
 use evaluation::*;
 pub(in crate::interpreter) use null_coalesce_assign::{
-    eval_assign,
+    eval_assign, eval_release_pending_return,
     eval_array_append, eval_array_append_reference_bind, eval_array_append_result,
     eval_array_reference_bind, eval_by_ref_return, eval_reference_bind_result,
     eval_store_value_in_lvalue, eval_update_element_once,
     eval_var_reference_bind,
 };
 use null_coalesce_assign::{
-    eval_compound_assign, eval_null_coalesce_assign, eval_postfix_inc_dec,
+    eval_compound_assign, eval_expr_is_call_shaped, eval_null_coalesce_assign, eval_postfix_inc_dec,
 };
 
 /// Evaluates one expression to an opaque runtime-cell handle.
@@ -250,9 +250,23 @@ pub(in crate::interpreter) fn eval_owned_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let value = eval_expr_with_result_ownership(expr, context, scope, values, true)?;
+    // A by-reference callee used by value: php hands the caller a copy. Its `return` left the
+    // reference pending (retained) for a binder that never came, so give it back and separate
+    // the result from the storage it names, as for a property read.
+    let by_ref_call = if eval_expr_is_call_shaped(expr) {
+        match context.take_pending_return_reference() {
+            Some((target, referenced)) => {
+                eval_release_pending_return(context, values, target, referenced)?;
+                true
+            }
+            None => false,
+        }
+    } else {
+        false
+    };
     if value.is_borrowed() {
         copy_scope_value(value, context, values)
-    } else if eval_owned_result_may_share_storage(expr) {
+    } else if by_ref_call || eval_owned_result_may_share_storage(expr) {
         detach_owned_storage_cell(value, context, values)
     } else {
         Ok(value)

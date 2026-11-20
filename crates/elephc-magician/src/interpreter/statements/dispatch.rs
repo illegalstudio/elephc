@@ -645,8 +645,14 @@ pub(in crate::interpreter) fn execute_stmt(
             let result = eval_discarded_core_expr(expr, context, scope, values)?;
             let warned = warn_eval_discarded_call(expr, context, values);
             let released = release_expr_result(result, context, values);
+            // A by-reference callee whose result is thrown away leaves its reference pending.
+            let unclaimed = match context.take_pending_return_reference() {
+                Some((target, value)) => eval_release_pending_return(context, values, target, value),
+                None => Ok(()),
+            };
             warned?;
             released?;
+            unclaimed?;
             Ok(EvalControl::None)
         }
     }

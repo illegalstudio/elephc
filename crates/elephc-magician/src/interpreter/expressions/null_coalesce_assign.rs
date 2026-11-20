@@ -639,14 +639,33 @@ pub(in crate::interpreter) fn eval_by_ref_return(
         other => other,
     };
     let retained = values.retain(value)?;
-    if let Some(unclaimed) = context.set_pending_return_reference(target, retained) {
-        eval_release_value(context, values, unclaimed)?;
+    if let Some((unclaimed_target, unclaimed)) = context.set_pending_return_reference(target, retained) {
+        eval_release_pending_return(context, values, unclaimed_target, unclaimed)?;
     }
     Ok(EvalControl::Return(value))
 }
 
+/// Gives back a by-reference return nobody bound: the value's retain and, for a property target,
+/// the owner's retain taken when the return was recorded.
+pub(in crate::interpreter) fn eval_release_pending_return(
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    target: EvalReferenceTarget,
+    value: RuntimeCellHandle,
+) -> Result<(), EvalStatus> {
+    let owner = match target {
+        EvalReferenceTarget::ObjectProperty { object, .. } => Some(object),
+        _ => None,
+    };
+    let released = eval_release_value(context, values, value);
+    match owner {
+        Some(object) => released.and(eval_release_value(context, values, object)),
+        None => released,
+    }
+}
+
 /// Returns whether one expression is a CALL, whose reference comes from the callee's `return`.
-fn eval_expr_is_call_shaped(expr: &EvalExpr) -> bool {
+pub(in crate::interpreter) fn eval_expr_is_call_shaped(expr: &EvalExpr) -> bool {
     matches!(
         expr,
         EvalExpr::Call { .. }

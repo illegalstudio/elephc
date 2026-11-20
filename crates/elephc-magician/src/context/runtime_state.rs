@@ -851,10 +851,8 @@ impl ElephcEvalContext {
         &mut self,
         target: EvalReferenceTarget,
         value: RuntimeCellHandle,
-    ) -> Option<RuntimeCellHandle> {
-        self.pending_return_reference
-            .replace((target, value))
-            .map(|(_, value)| value)
+    ) -> Option<(EvalReferenceTarget, RuntimeCellHandle)> {
+        self.pending_return_reference.replace((target, value))
     }
 
     /// Takes the reference a by-reference `return` produced, handing its ownership to the caller.

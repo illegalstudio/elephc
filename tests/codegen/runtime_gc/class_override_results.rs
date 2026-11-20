@@ -48,6 +48,7 @@ for ($i = 0; $i < 3; $i++) {
     echo json_encode($copy), '|', json_encode($object->data), "\n";
     unset($copy);
 }
+$object->items(1, 2, 3, 4, 5, 6, 7, 8);
 $direct = $object->items(1, 2, 3, 4, 5, 6, 7, 8);
 echo count($direct), '|'; unset($direct);
 ClassReferenceChild::$staticData = ['a' => 1, 'b' => 2];
