@@ -61,6 +61,28 @@ pub unsafe extern "C" fn __elephc_eval_scope_binding_type_v1(
     }).unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
+/// Stages checked logical evidence independently from physical storage or inferred local constraints.
+///
+/// # Safety
+/// The scope and both UTF-8 ranges remain live for this call.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_scope_source_type_v1(
+    scope: *mut ElephcEvalScope, name_ptr: *const u8, name_len: u64,
+    type_ptr: *const u8, type_len: u64, flags: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        let Some(scope) = scope.as_mut() else { return EvalStatus::RuntimeFatal.code(); };
+        let Ok(name) = abi_name_to_string(name_ptr, name_len) else { return EvalStatus::RuntimeFatal.code(); };
+        let Some(ty) = super::native_methods::native_callable_type_from_abi(
+            type_ptr, type_len, super::native_methods::NativeCallableTypePosition::LocalBinding,
+        ) else { return EvalStatus::RuntimeFatal.code(); };
+        use elephc_semantics::native_local_contract::{SOURCE_DECLARED, SOURCE_ARRAY_CONTENTS, SOURCE_FLAGS};
+        if flags & !SOURCE_FLAGS != 0 { return EvalStatus::RuntimeFatal.code(); }
+        scope.prepare_native_source(name, ty, flags & SOURCE_DECLARED != 0, flags & SOURCE_ARRAY_CONTENTS != 0);
+        EvalStatus::Ok.code()
+    }).unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
 /// Copies a producer contract onto independent canonical storage without running PHP.
 ///
 /// # Safety

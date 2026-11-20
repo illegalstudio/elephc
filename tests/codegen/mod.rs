@@ -34,6 +34,7 @@ mod cli;
 mod repl;
 mod php_only;
 mod strict_semantics;
+mod strict_profiles_public;
 mod strict_initialization;
 mod strict_indexing;
 mod strict_nullability;

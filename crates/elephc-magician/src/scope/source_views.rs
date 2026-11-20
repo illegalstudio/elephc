@@ -2,7 +2,7 @@
 //! Tracks binding-local producer snapshots and predicate-derived views independently of contracts.
 //!
 //! Called from:
-//! - Assignment, parameter/capture binding, reference promotion and Mixed guard consumers.
+//! - Native snapshot imports, assignments, parameter/capture binding and Mixed guard consumers.
 //!
 //! Key details:
 //! - Binding generations and weak canonical write observations retire stale shared facts.
@@ -11,6 +11,13 @@
 use super::{ElephcEvalScope, LocalSourceView, LocalArgumentSource};
 
 impl ElephcEvalScope {
+    /// Stages checked evidence for exactly the following native value publication.
+    pub(crate) fn prepare_native_source(&mut self, name: String,
+        ty: crate::eval_ir::EvalParameterType, declared: bool, contents: bool,
+    ) {
+        self.pending_native_sources.insert(name, (ty, declared, contents));
+    }
+
     /// Records a current source view without adding it to the enforced local contracts.
     pub(crate) fn record_local_source_view(&mut self, name: String, ty: crate::eval_ir::EvalParameterType, epoch: u64) {
         if let Some(entry) = self.entry(&name).filter(|entry| entry.flags().is_visible()) {
@@ -67,4 +74,37 @@ impl ElephcEvalScope {
         self.local_source_view(name, context)
     }
 
+}
+
+#[cfg(test)]
+mod native_source_tests {
+    use super::*;
+    use crate::{eval_ir::{generic_type, parameter_type}, scope::ScopeCellOwnership,
+        context::ElephcEvalContext, value::RuntimeCellHandle};
+    use elephc_generics::Type;
+
+    /// Native source facts attach to the imported generation without pinning inferred whole-value kinds.
+    #[test]
+    fn strict_native_source_imports_keep_roles_and_expire_on_replacement() {
+        let mut scope=ElephcEvalScope::new();
+        let context=ElephcEvalContext::new();
+        let cell=RuntimeCellHandle::from_raw(8usize as *mut crate::value::RuntimeCell);
+        let schema=Type::Apply("array".into(),vec![Type::atom("int"),Type::atom("int")]);
+        let ty=parameter_type(&schema);
+        scope.prepare_native_source("inferred".into(),ty.clone(),false,true);
+        scope.set_from_aot("inferred",cell,ScopeCellOwnership::Borrowed);
+        assert_eq!(scope.local_source_view("inferred",&context).map(generic_type),Some(schema.clone()));
+        assert!(scope.local_type("inferred").is_none() && scope.inferred_local_type("inferred").is_none());
+        assert!(scope.array_local_type("inferred").is_some());
+        scope.set("inferred",cell,ScopeCellOwnership::Borrowed);
+        assert!(scope.local_source_view("inferred",&context).is_none());
+        scope.prepare_native_source("declared".into(),ty.clone(),true,false);
+        scope.set_from_aot("declared",cell,ScopeCellOwnership::Borrowed);
+        assert_eq!(scope.local_type("declared"),Some(&ty));
+        scope.prepare_native_source("mixedOnly".into(),ty,false,false);
+        scope.set_from_aot("mixedOnly",cell,ScopeCellOwnership::Borrowed);
+        assert!(scope.array_local_type("mixedOnly").is_none());
+        assert!(scope.retire_native_snapshots().is_empty());
+        assert!(scope.local_source_view("mixedOnly",&context).is_none());
+    }
 }

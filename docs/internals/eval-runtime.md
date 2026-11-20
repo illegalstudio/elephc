@@ -767,6 +767,21 @@ profile decoder is shared by context installation, native hooks and disk-cache
 identity checks.
 
 
+Native snapshot imports distinguish three `EvalBindingRole` values:
+`Contract` preserves the existing inferred local-kind constraint, `Source`
+transports checked source evidence, and `DeclaredSource` also retains an explicit
+local declaration. The checker records source types at the eval call site;
+EIR lowering publishes them only for a present native binding. These decisions
+participate in the optimizer's protected names and spans.
+
+`__elephc_eval_scope_source_type_v1` stages the full logical type before the
+value flush. `set_from_aot` consumes that metadata and stamps the source with
+the newly imported binding generation and current write epoch. Shared
+`SOURCE_DECLARED` and `SOURCE_ARRAY_CONTENTS` flags separate declaration
+validation from conditional inferred-array contents. Neither source transport
+nor inferred contents adds an inferred whole-binding `Locals` constraint.
+Native snapshot retirement removes the transient source facts.
+
 Logical source snapshots belong to scope bindings and evaluated arguments. A
 snapshot may contain optional per-key entry evidence for a literal argument array;
 this evidence is separate from its inferred homogeneous content constraint. Stored
@@ -1094,3 +1109,20 @@ retire them after replacements, member effects, calls or shared writes. Getter,
 magic and ArrayAccess results remain separate values and require their own local
 narrowing. Prepared mutable receivers consult reached facts after RHS effects.
 Member reference binds validate the original source before hidden alias setup.
+
+
+## Public strict profile acceptance
+
+All sixteen semantic guarantees are admitted by the compiler and interpreter.
+Native source imports use their own EIR role and preserve full structural terms;
+only inferred local-kind contracts use the reduced canonical kind representation.
+Mixed and ArrayTypes native imports, independent content versus binding policies,
+source generation retirement, all five target emitters and the complete public
+CLI example are covered by focused regression tests.
+
+Native descriptor `self` and `static` results also preserve their declaration
+scopes. The receiver-bound descriptor plus opaque-eval fixture compares ownership
+with permissive execution: both currently retain three blocks (384 bytes). This
+profile-independent ownership investigation remains separate from source metadata
+and is tracked in Code Journal task `97836066`; it is not a clean-heap fixture.
+The native array import and complete umbrella examples require clean heaps.

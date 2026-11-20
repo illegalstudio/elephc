@@ -203,10 +203,10 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
             let _ = write!(out, " slots[{},{}]", first.as_raw(), second.as_raw());
         }
         Immediate::EvalScopeStore(metadata) => {
-            let crate::ir::EvalScopeStoreImmediate { name, contract } = &**metadata;
+            let crate::ir::EvalScopeStoreImmediate { name, contract, role } = &**metadata;
             let value = data.global_names.get(name.as_raw() as usize)
                 .map(String::as_str).unwrap_or("<unknown>");
-            let _ = write!(out, " scope[{}:{:?}] origin={contract:?}", name.as_raw(), value);
+            let _ = write!(out, " scope[{}:{:?}] origin={contract:?} role={role:?}", name.as_raw(), value);
         }
         Immediate::EvalBindingCopy { source, destination, owner } => {
             let _ = write!(out, " source[{}] destination[{}] owner[{}]",

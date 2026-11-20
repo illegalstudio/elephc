@@ -1,5 +1,5 @@
 //! Purpose:
-//! Publishes live native object binding contracts before interpreted scope writes.
+//! Publishes native storage constraints and checked source evidence before eval snapshots.
 //!
 //! Called from:
 //! - Native local snapshot flushing around eval boundaries.
@@ -7,6 +7,7 @@
 //! Key details:
 //! - A future object slot with a zero occupant does not establish a local binding contract.
 //! - Existing object and reference occupants retain their assignment-time validation.
+//! - Source roles retain full logical terms without enabling inferred local-kind constraints.
 
 use super::*;
 
@@ -17,8 +18,10 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_bind_local_type
     let Some(Immediate::EvalScopeStore(metadata)) = &inst.immediate else {
         return Err(CodegenIrError::invalid_module("eval binding type requires checked metadata"));
     };
+    let source = metadata.role != crate::ir::EvalBindingRole::Contract;
     let contract = match &metadata.contract {
-        Some(ty) => eval_native_php_type_spec(ty, false)
+        Some(ty) => (if source { crate::types::native_type_spec::logical_type_spec(ty, false) }
+            else { eval_native_php_type_spec(ty, false) })
             .ok_or_else(|| CodegenIrError::invalid_module("eval binding type has no native contract spelling"))?,
         None => "mixed".to_string(),
     };
@@ -32,7 +35,17 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_bind_local_type
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), name_len as i64);
     abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), &ty);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), ty_len as i64);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_binding_type_v1");
+    let setter = if source {
+        use elephc_semantics::native_local_contract::{SOURCE_DECLARED, SOURCE_ARRAY_CONTENTS};
+        let declared = if metadata.role == crate::ir::EvalBindingRole::DeclaredSource { SOURCE_DECLARED } else { 0 };
+        let contents = if ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayTypes) {
+            SOURCE_ARRAY_CONTENTS
+        } else { 0 };
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 5),
+            (declared | contents) as i64);
+        "__elephc_eval_scope_source_type_v1"
+    } else { "__elephc_eval_scope_binding_type_v1" };
+    let symbol = ctx.emitter.target.extern_symbol(setter);
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
     if inst.op == Op::EvalScopeStartBinding {

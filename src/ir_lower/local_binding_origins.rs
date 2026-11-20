@@ -76,6 +76,7 @@ fn start_producer(ctx: &mut LoweringContext<'_, '_>, name: &str, contract: PhpTy
         ctx.emit_void(Op::EvalScopeStartBinding, Vec::new(),
             Some(Immediate::EvalScopeStore(Box::new(crate::ir::EvalScopeStoreImmediate {
                 name, contract: crate::semantics::conversions::inferred_binding_contract(&contract),
+                role: crate::ir::EvalBindingRole::Contract,
             }))), Op::EvalScopeStartBinding.default_effects(), Some(span));
     });
 }

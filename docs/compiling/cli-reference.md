@@ -604,14 +604,34 @@ The shared option catalog resolves independent `--strict-<feature>` requests.
 An explicit `--no-strict-<feature>` overrides the umbrella in either argument
 order. Repeating an explicit feature option uses the last value.
 
-Integration is in progress. This build accepts the existing strict-locals and
-strict-opcache rules plus strict-dynamic-code, strict-bools, strict-arithmetic,
-strict-overflow, strict-strings, strict-coercions, strict-casts, strict-comparisons,
-strict-array-keys, strict-initialization, strict-indexing and strict-nullability.
-The remaining strict-mixed and strict-array-types guarantees,
-including the complete umbrella, fail explicitly until their enforcement is
-complete. Eval embedding entry points reject execution with those profiles too. The [implementation plan](https://github.com/illegalstudio/elephc/issues/2347)
-tracks the remaining work.
+All sixteen guarantees are available individually and through `--strict`:
+locals, coercions, overflow, arithmetic, casts, bools, comparisons, nullability,
+mixed, strings, array-types, array-keys, initialization, indexing, dynamic-code
+and opcache. The same resolved profile reaches compiler, eval, runtime and cache
+boundaries. `--strict-mixed` requires narrowing dynamic producers before an
+incompatible consumer. `--strict-array-types` retains array content contracts
+separately from the binding's outer value kind. Intentional `mixed` and union
+declarations preserve their explicit openness.
+
+See [the complete strict example](../../examples/strict-mode/main.php).
+
+### Dynamic values and array contents
+
+`--strict-mixed` checks the source alternatives before an operation uses a dynamic
+value. A compatible current occupant alone does not prove that an explicitly
+`mixed` producer has been narrowed. Use predicates such as `is_int()` or
+`is_array()` on the reached path. Source evidence crosses calls and `eval`
+boundaries separately from the physical storage representation.
+
+`--strict-array-types` retains the key and element contracts established by a
+successful array producer. Empty arrays acquire content contracts when their
+first elements are stored. An explicit `array<mixed>` or union element type
+allows intentional heterogeneous contents. These checks cover element writes,
+mutating builtins and references; they do not enable `--strict-locals`.
+
+A typed array declaration continues to constrain its contents independently of
+these inferred-array rules. `--strict-array-keys` separately controls exact key
+identity and accepted key kinds.
 
 ### Non-null values
 

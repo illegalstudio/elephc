@@ -235,11 +235,16 @@ impl Instruction {
     }
 }
 
+/// Selects binding enforcement independently from transient source evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvalBindingRole { Contract, Source, DeclaredSource }
+
 /// Source name and producer contract carried out of line to preserve compact EIR instructions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalScopeStoreImmediate {
     pub name: DataId,
     pub contract: Option<PhpType>,
+    pub role: EvalBindingRole,
 }
 
 /// Literal or metadata operand attached to an opcode.

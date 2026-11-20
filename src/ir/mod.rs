@@ -42,7 +42,7 @@ pub use function::{
     LocalSlotId,
 };
 pub use instr::{
-    BuiltinId, CheckedNumericChainImmediate, EvalScopeStoreImmediate, CmpPredicate, CoreBuiltinOp, GcControlOp, Immediate,
+    BuiltinId, CheckedNumericChainImmediate, EvalBindingRole, EvalScopeStoreImmediate, CmpPredicate, CoreBuiltinOp, GcControlOp, Immediate,
     InstId, Instruction, IterStartMetadata, MixedNumericOp, Op, PassOrigin, PhpTypePredicate,
     PropertyFetchMode, RuntimeId,
 };

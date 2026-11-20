@@ -176,6 +176,7 @@ pub struct ElephcEvalScope {
     array_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_storage_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_binding_types: HashMap<String, crate::eval_ir::EvalParameterType>,
+    pending_native_sources: HashMap<String, (crate::eval_ir::EvalParameterType, bool, bool)>,
     native_detached_names: HashSet<String>,
     aot_visible_names: HashSet<String>,
     global_aliases: HashMap<String, String>,
@@ -197,6 +198,7 @@ impl ElephcEvalScope {
             array_local_types: HashMap::new(),
             native_storage_types: HashMap::new(),
             native_binding_types: HashMap::new(),
+            pending_native_sources: HashMap::new(),
             native_detached_names: HashSet::new(),
             aot_visible_names: HashSet::new(),
             global_aliases: HashMap::new(),
@@ -327,7 +329,16 @@ impl ElephcEvalScope {
         let previous = self.entries.get(&name).copied().filter(|entry| {
             entry.flags().is_visible() && entry.flags().ownership == ScopeCellOwnership::Owned
         }).map(ScopeEntry::cell);
-        self.set(name, cell, ownership);
+        self.set(name.clone(), cell, ownership);
+        if let Some((ty, declared, contents)) = self.pending_native_sources.remove(&name) {
+            if declared { self.declare_local_type(name.clone(), ty.clone()); }
+            else if contents {
+                if let Some(schema) = crate::eval_ir::array_contents_type(crate::eval_ir::generic_type(&ty)) {
+                    self.infer_array_local_type(name.clone(), crate::eval_ir::parameter_type(&schema));
+                }
+            }
+            self.record_local_source_view(name, ty, crate::context::ElephcEvalContext::current_source_view_epoch());
+        }
         // Native reload acquired its own lease. Republishing that same address must
         // retire the former scope owner instead of losing it when the flags change.
         previous
@@ -657,6 +668,7 @@ impl ElephcEvalScope {
         self.projection_source_views.clear();
         self.local_argument_sources.clear();
         self.native_binding_types.clear();
+        self.pending_native_sources.clear();
         self.aot_visible_names.clear();
         self.reference_targets.clear();
         self.entries

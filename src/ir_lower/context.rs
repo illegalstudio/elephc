@@ -2612,7 +2612,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let contract = self.semantic_profile.contains(crate::semantics::StrictFeature::Locals)
             .then(|| crate::semantics::conversions::inferred_binding_contract(&self.builder.value_php_type(value.value))).flatten();
         self.emit_void(Op::EvalScopeSet, vec![scope.value, value.value],
-            Some(Immediate::EvalScopeStore(Box::new(crate::ir::EvalScopeStoreImmediate { name: name_data, contract }))),
+            Some(Immediate::EvalScopeStore(Box::new(crate::ir::EvalScopeStoreImmediate { name: name_data, contract, role: crate::ir::EvalBindingRole::Contract }))),
             Op::EvalScopeSet.default_effects(), span);
         crate::ir_lower::expr::unpin_in_flight_owners(self, owners, at);
     }

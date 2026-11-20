@@ -13,6 +13,26 @@ use crate::{ir::{Builder, Function, Immediate, IrHeapKind, IrType, LocalSlotId, 
 
 /// Exposes current owned value bindings through the canonical reference snapshot protocol.
 pub(super) fn prepare_eval_bindings(ctx: &mut super::context::LoweringContext<'_, '_>, span: crate::span::Span) {
+    let mut sources = ctx.local_store_contracts.eval_sources.iter()
+        .filter(|((scope, at, name), _)| scope == &ctx.loop_storage_scope && *at == span
+            && ctx.local_slots.get(name).is_some_and(|slot|
+                ctx.builder.local_kind(*slot) == crate::ir::LocalKind::PhpLocal)
+            && !crate::names::is_generated_local_name(name))
+        .map(|((_, _, name), (ty, declared))| (name.clone(), ty.clone(), *declared))
+        .collect::<Vec<_>>();
+    sources.sort_by(|left, right| left.0.cmp(&right.0));
+    for (name, ty, declared) in sources {
+        let slot = ctx.local_slots[&name];
+        super::local_binding_state::when_native_bound(ctx, slot, span, |ctx| {
+            ctx.declare_eval_scope_local();
+            let name = ctx.intern_global_name(&name);
+            ctx.emit_void(Op::EvalScopeBindLocalType, Vec::new(),
+                Some(Immediate::EvalScopeStore(Box::new(crate::ir::EvalScopeStoreImmediate {
+                    name, contract: Some(ty), role: if declared { crate::ir::EvalBindingRole::DeclaredSource }
+                        else { crate::ir::EvalBindingRole::Source },
+                }))), Op::EvalScopeBindLocalType.default_effects(), Some(span));
+        });
+    }
     let mut names = ctx.local_slots.keys().filter(|name| {
         !crate::names::is_generated_local_name(name)
             && ctx.local_store_contracts.get(&(ctx.loop_storage_scope.clone(), span, (*name).clone()))
@@ -36,7 +56,7 @@ pub(super) fn prepare_eval_bindings(ctx: &mut super::context::LoweringContext<'_
             let name = ctx.intern_global_name(&name);
             ctx.emit_void(Op::EvalScopeBindLocalType, Vec::new(),
                 Some(Immediate::EvalScopeStore(Box::new(crate::ir::EvalScopeStoreImmediate {
-                    name, contract: Some(contract.ty),
+                    name, contract: Some(contract.ty), role: crate::ir::EvalBindingRole::Contract,
                 }))), Op::EvalScopeBindLocalType.default_effects(), Some(span));
         });
     }
@@ -70,7 +90,8 @@ pub(super) fn lower_requested(module: &mut Module) -> Result<(), super::Lowering
             has_binding_copy |= instruction.op == Op::EvalScopeCopyBindingType;
             has_binding_origin |= matches!(instruction.op, Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding);
             let contract = match &instruction.immediate {
-                Some(Immediate::EvalScopeStore(metadata)) => metadata.contract.as_ref(),
+                Some(Immediate::EvalScopeStore(metadata))
+                    if metadata.role == crate::ir::EvalBindingRole::Contract => metadata.contract.as_ref(),
                 _ if instruction.op == Op::BindLocalRefContract => Some(&instruction.result_php_type),
                 _ if instruction.op == Op::EvalScopeCopyBindingType =>
                     crate::semantics::conversions::inferred_binding_contract(&instruction.result_php_type)

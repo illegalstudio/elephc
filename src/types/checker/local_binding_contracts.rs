@@ -45,6 +45,17 @@ impl Checker {
     /// Captures initialized binding origins before an opaque eval can widen their views.
     pub(crate) fn record_eval_binding_contracts(&mut self, env: &TypeEnv, span: Span) {
         for (name, actual) in env {
+            if self.semantic_source_mode != crate::source::SourceMode::Internal
+                && [StrictFeature::Mixed, StrictFeature::ArrayTypes].iter()
+                    .any(|feature| self.semantic_profile.contains(*feature)) {
+                let original = self.local_binding_origin(name, actual);
+                let original = if crate::types::native_type_spec::logical_type(&original, false).is_some() {
+                    original
+                } else { PhpType::Mixed };
+                self.local_store_contracts.eval_sources.insert(
+                    (self.current_loop_storage_scope.clone(), span, name.clone()),
+                    (original, self.typed_local_names.contains_key(name)));
+            }
             if self.record_local_reference_contract(name, actual, span) {
                 let key = (self.current_loop_storage_scope.clone(), span, name.clone());
                 if let Some(contract) = self.local_store_contracts.get(&key) {

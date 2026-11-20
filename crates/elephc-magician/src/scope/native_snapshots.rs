@@ -19,6 +19,8 @@ impl ElephcEvalScope {
         for name in names {
             self.native_storage_types.remove(&name);
             self.native_binding_types.remove(&name);
+            self.pending_native_sources.remove(&name);
+            self.local_source_views.remove(&name);
             self.native_detached_names.remove(&name);
             self.reference_targets.remove(&name);
             if let Some(entry) = self.entries.remove(&name) { removed.push(entry); }

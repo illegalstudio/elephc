@@ -338,6 +338,12 @@ elephc --define DEBUG app.php
 # Reject elephc extensions in every physical PHP file (.lfc stays extension-enabled)
 elephc --php-only app.php
 
+# Enable every strict semantic guarantee
+elephc --strict app.php
+
+# Keep the other strict rules while allowing implicit string conversion
+elephc --strict --no-strict-strings app.php
+
 # Make an incompatible local retype a compile error instead of a warning
 elephc --strict-locals app.php
 

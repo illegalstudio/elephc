@@ -77,9 +77,10 @@ pub(crate) fn lower_main(
     let web = module.web;
     let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
     function.flags.is_main = true;
-    function.flags.tracks_local_binding_state = check_result.semantic_profile.contains(
-        elephc_semantics::StrictFeature::Locals) || check_result.semantic_profile.contains(
-        elephc_semantics::StrictFeature::Initialization);
+    function.flags.tracks_local_binding_state = [elephc_semantics::StrictFeature::Locals,
+        elephc_semantics::StrictFeature::Initialization, elephc_semantics::StrictFeature::Mixed,
+        elephc_semantics::StrictFeature::ArrayTypes].iter()
+        .any(|feature| check_result.semantic_profile.contains(*feature));
     let all_global_var_names = collect_global_var_names(program);
     let mut function_global_names =
         crate::ir_lower::program::collect_function_global_names(program);
@@ -1935,8 +1936,9 @@ fn lower_body_into_function(
     });
     function.flags.tracks_local_binding_state = super::scope_introspection::body_needs_binding_presence(body)
         || (semantic_profile.contains(elephc_semantics::StrictFeature::Initialization) && !function.flags.is_internal)
-        || (semantic_profile.contains(
-        elephc_semantics::StrictFeature::Locals) && !function.flags.is_internal
+        || ([elephc_semantics::StrictFeature::Locals, elephc_semantics::StrictFeature::Mixed,
+        elephc_semantics::StrictFeature::ArrayTypes].iter().any(|feature| semantic_profile.contains(*feature))
+        && !function.flags.is_internal
         && (crate::ir_lower::body_contains_eval_call(body)
             || local_store_contracts.has_runtime_origins_in_scope(&loop_storage_scope)));
     let mut builder = Builder::new(function);

@@ -136,3 +136,99 @@ fn strict_native_registration_array_members_reflection_and_owners() {
     assert_eq!(String::from_utf8_lossy(&output.stdout),"array:array:I1:S1","{stderr}");
     assert!(stderr.contains("HEAP DEBUG: leak summary: clean"),"{stderr}");
 }
+
+/// Actual public profiles preserve logical native producer and declared array input contracts in opaque eval.
+#[cfg(any(all(target_os="macos",target_arch="aarch64"),all(target_os="linux",any(target_arch="x86_64",target_arch="aarch64"))))]
+#[test]
+fn strict_public_profiles_native_eval_logical_inputs_and_contents() {
+    let fragment="$values=nativePromiseValues();try{echo $values[0]+1;}catch(TypeError $error){echo '?';} \
+        try{$items[]='bad';}catch(TypeError $error){echo 'L';} \
+        $object=new NativeContentsPromise();try{$object->items[]='bad';}catch(TypeError $error){echo 'I';} \
+        try{NativeContentsPromise::$cached[]='bad';}catch(TypeError $error){echo 'S';} \
+        echo count($items),count($object->items),count(NativeContentsPromise::$cached),':'; \
+        try{$inferred[]='allowed by mixed';}catch(TypeError $error){echo 'A';} \
+        echo count($inferred);$inferred='open';echo ':',$inferred;";
+    let escaped=fragment.replace('\\',"\\\\").replace('\'',"\\'");
+    let source=format!("<?php class NativeContentsPromise{{public array<int> $items=[1];public static array<int> $cached=[2];}} \
+        function nativePromiseValues():array<int>{{return [3];}} array<int> $items=[1];$inferred=[1]; \
+        $code=$argc>0?'{escaped}':'';eval($code);");
+    let mut failures=Vec::new();
+    for feature in [StrictFeature::Mixed,StrictFeature::ArrayTypes] {
+        let profile=SemanticProfile::PERMISSIVE.with(feature,true);
+        assert!(crate::semantics::pending_guarantees(profile).is_empty());
+        let module=super::semantic_sources::lower_capturing_arguments(&source,Target::detect_host(),profile,true,SourceMode::Php);
+        let output=super::native_module::run(&module);
+        let stderr=String::from_utf8_lossy(&output.stderr);
+        let expected=if feature==StrictFeature::Mixed {"4LIS111:2:open"} else {"4LIS111:A1:open"};
+        let stdout=String::from_utf8_lossy(&output.stdout);
+        if !output.status.success() || stdout!=expected || !stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("{feature:?}: {:?}: expected={expected}; stdout={stdout}; {stderr}",output.status));
+        }
+    }
+    assert!(failures.is_empty(),"{}",failures.join("\n"));
+}
+
+/// Native descriptors retain callable receiver and self/static result domains across opaque eval.
+#[cfg(any(all(target_os="macos",target_arch="aarch64"),all(target_os="linux",any(target_arch="x86_64",target_arch="aarch64"))))]
+#[test]
+fn strict_public_mixed_native_descriptor_bound_result_scopes() {
+    let fragment="$made=$factory();$late=$staticFactory();echo get_class($made),':',get_class($late);";
+    let escaped=fragment.replace('\\',"\\\\").replace('\'',"\\'");
+    let source=format!("<?php class NativeScopedFactory{{public function make():self{{return new self();}} \
+        public static function create():static{{return new static();}}}}class NativeScopeChild extends NativeScopedFactory{{}} \
+        $object=new NativeScopedFactory();$factory=$object->make(...);$staticFactory=NativeScopeChild::create(...); \
+        $code=$argc>0?'{escaped}':'';eval($code);");
+    let mut baseline=None;
+    for profile in [SemanticProfile::PERMISSIVE,
+        SemanticProfile::PERMISSIVE.with(StrictFeature::Mixed,true)] {
+        assert!(crate::semantics::pending_guarantees(profile).is_empty());
+        let module=super::semantic_sources::lower_capturing_arguments(&source,Target::detect_host(),profile,true,SourceMode::Php);
+        let output=super::native_module::run(&module);
+        let stderr=String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(),"{:?}: stdout={}; {stderr}",output.status,String::from_utf8_lossy(&output.stdout));
+        assert_eq!(String::from_utf8_lossy(&output.stdout),"NativeScopedFactory:NativeScopeChild","{stderr}");
+        // This test rejects profile-specific retention independently from baseline descriptor ownership.
+        let heap=stderr.lines().find(|line|line.starts_with("HEAP DEBUG: leak summary:"))
+            .expect("heap-debug execution reports its ownership summary").to_string();
+        if let Some(expected)=&baseline { assert_eq!(&heap,expected,"{stderr}"); }
+        else { baseline=Some(heap); }
+    }
+}
+
+/// Public profiles and their example lower through each supported emitter without staged admission.
+#[test]
+fn strict_public_profiles_examples_emit_on_every_target() {
+    for (source,profile) in [
+        (include_str!("../../../examples/strict-mode/main.php"),SemanticProfile::all()),
+        (include_str!("../../../examples/strict-mixed/main.php"),SemanticProfile::PERMISSIVE.with(StrictFeature::Mixed,true)),
+    ] {
+        let program=crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        for name in ["macos-aarch64","ios-arm64","ios-sim-arm64","linux-aarch64","linux-x86_64"] {
+            let target=Target::parse(name).unwrap();
+            let checked=crate::types::check_with_target_and_options(&program,target,
+                crate::types::CheckOptions{semantic_profile:profile,..Default::default()},
+                &crate::generics::GenericContext::default()).unwrap();
+            let module=crate::ir_lower::lower_program(&program,&checked,target,false).unwrap();
+            crate::ir::validate_module(&module).unwrap();
+            crate::codegen::generate_user_asm_from_ir(&module,false,false).unwrap();
+        }
+    }
+}
+
+/// Native source snapshots retain their own role and shared ABI on every supported target.
+#[test]
+fn strict_native_source_snapshot_roles_emit_on_every_target() {
+    let source="<?php $items=[1];$code=$argc>0?'echo count($items);':'';eval($code);";
+    for feature in [StrictFeature::Mixed,StrictFeature::ArrayTypes] {
+        for name in ["macos-aarch64","ios-arm64","ios-sim-arm64","linux-aarch64","linux-x86_64"] {
+            let profile=SemanticProfile::PERMISSIVE.with(feature,true);
+            let module=super::semantic_sources::lower_capturing_arguments(source,Target::parse(name).unwrap(),profile,false,SourceMode::Php);
+            crate::ir::validate_module(&module).unwrap();
+            assert!(module.functions.iter().flat_map(|function| &function.instructions).any(|instruction|
+                matches!(&instruction.immediate,Some(crate::ir::Immediate::EvalScopeStore(metadata))
+                    if metadata.role==crate::ir::EvalBindingRole::Source)));
+            let assembly=crate::codegen::generate_user_asm_from_ir(&module,false,false).unwrap();
+            assert!(assembly.contains("__elephc_eval_scope_source_type_v1"),"{feature:?}: {name}");
+        }
+    }
+}

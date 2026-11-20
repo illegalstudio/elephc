@@ -2,13 +2,20 @@
 //! Shares versioned native local-origin metadata layouts across compiler and eval boundaries.
 //!
 //! Called from:
-//! - Generated local descriptors and the no-PHP scope contract-copy ABI.
+//! - Generated local descriptors, native source imports and the no-PHP scope contract-copy ABI.
 //!
 //! Key details:
 //! - Records borrow immutable UTF-8 ranges and contain no runtime value owners.
 //! - Local descriptors preserve the existing four-word declaration callback prefix.
 
 pub const ABI_VERSION: usize = 1;
+
+/// The imported source is an explicit whole-binding declaration.
+pub const SOURCE_DECLARED: u64 = 1;
+/// Inferred array contents are retained independently from whole-binding kinds.
+pub const SOURCE_ARRAY_CONTENTS: u64 = 2;
+/// Accepted flags of the version-one native source import ABI.
+pub const SOURCE_FLAGS: u64 = SOURCE_DECLARED | SOURCE_ARRAY_CONTENTS;
 
 /// Immutable generated local descriptor following the shared declaration prefix.
 #[repr(C)]

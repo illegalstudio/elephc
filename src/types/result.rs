@@ -70,6 +70,7 @@ pub(crate) struct LocalCopyContract {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LocalStoreContracts {
     stores: HashMap<(String, Span, String), LocalStoreContract>,
+    pub(crate) eval_sources: HashMap<(String, Span, String), (PhpType, bool)>,
     pub(crate) copies: HashMap<(String, Span, String), LocalCopyContract>,
     pub(crate) origins: HashMap<(String, Span, String), PhpType>,
     entry_origins: HashMap<(String, String), LocalEntryOrigin>,
@@ -388,6 +389,7 @@ impl CheckResult {
             .chain(self.local_retype_sites.keys())
             .chain(self.mixed_storage_store_sites.keys())
             .chain(self.local_store_contracts.origins.keys().map(|(_, span, _)| span))
+            .chain(self.local_store_contracts.eval_sources.keys().map(|(_, span, _)| span))
             .chain(
                 self.boxed_reference_promotion_sites
                     .keys()
@@ -412,6 +414,7 @@ impl CheckResult {
             .values()
             .flatten()
             .chain(self.local_store_contracts.origins.keys().map(|(_, _, name)| name))
+            .chain(self.local_store_contracts.eval_sources.keys().map(|(_, _, name)| name))
             .cloned()
             .collect()
     }

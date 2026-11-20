@@ -131,7 +131,8 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
                 }
             }
             if let Some(Immediate::EvalScopeStore(metadata)) = &inst.immediate {
-                if metadata.contract.as_ref().is_some_and(|contract|
+                if metadata.role == crate::ir::EvalBindingRole::Contract
+                    && metadata.contract.as_ref().is_some_and(|contract|
                     crate::semantics::conversions::inferred_binding_contract(contract).as_ref() != Some(contract)) {
                     return Err(ValidationError::InvalidLocalReferenceContract(InstId::from_raw(index as u32)));
                 }
@@ -147,10 +148,8 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
                     return Err(ValidationError::UnexpectedImmediate(InstId::from_raw(index as u32)));
                 }
             }
-            if matches!(inst.op, Op::BindLocalRefContract | Op::EvalScopeBindingType | Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding | Op::EvalScopeEndBinding | Op::EvalScopeCopyBindingType) || matches!(&inst.immediate,
-                Some(Immediate::EvalScopeStore(metadata)) if metadata.contract.is_some()) {
-                required |= elephc_semantics::StrictFeature::Locals.bit();
-            }
+            required |= eval_scope_owners::required_binding_feature(
+                InstId::from_raw(index as u32), inst, module.semantic_profile)?;
             if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::CheckedNumericCast(_)
                 | crate::ir::RuntimeCallTarget::CheckedRadixInt))) {
                 required |= elephc_semantics::StrictFeature::Casts.bit();

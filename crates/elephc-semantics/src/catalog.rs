@@ -43,13 +43,14 @@ features! {
     Opcache = 15 => "strict-opcache", "Throw when invalidating AOT-frozen code";
 }
 
-/// Features integrated across compiler and eval entry points in this development build.
-/// Existing local and OPcache contracts retain their current scope while stronger rules land.
+/// Guarantees admitted by both compiler and eval entry points.
+/// New catalog entries remain fail-closed until their bit is included here.
 pub const INTEGRATED_FEATURE_BITS: u64 = StrictFeature::Locals.bit() | StrictFeature::Bools.bit()
     | StrictFeature::DynamicCode.bit() | StrictFeature::Opcache.bit() | StrictFeature::Arithmetic.bit()
     | StrictFeature::Overflow.bit() | StrictFeature::Strings.bit() | StrictFeature::Coercions.bit()
     | StrictFeature::Casts.bit() | StrictFeature::Comparisons.bit() | StrictFeature::ArrayKeys.bit()
-    | StrictFeature::Initialization.bit() | StrictFeature::Indexing.bit() | StrictFeature::Nullability.bit();
+    | StrictFeature::Initialization.bit() | StrictFeature::Indexing.bit() | StrictFeature::Nullability.bit()
+    | StrictFeature::Mixed.bit() | StrictFeature::ArrayTypes.bit();
 
 /// User-facing metadata for one strict feature.
 #[derive(Clone, Copy, Debug)]

@@ -106,16 +106,20 @@ mod tests {
         }
     }
 
-    /// Incomplete feature integration is visible to library callers as well as the CLI.
+    /// Every public guarantee and the umbrella enter the real library checker.
     #[test]
-    fn strict_profile_pending_features_are_not_silent_library_noops() {
-        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Mixed, true);
-        let error = crate::types::check_with_target_and_options(&Vec::new(),
-            crate::codegen::platform::Target::detect_host(),
-            crate::types::CheckOptions { semantic_profile: profile, ..Default::default() },
-            &crate::generics::GenericContext::default()).unwrap_err();
-        assert!(error.message.contains("strict-mixed"));
+    fn strict_profile_public_features_are_admitted_by_the_library_checker() {
+        for profile in FEATURES.iter().map(|spec| SemanticProfile::PERMISSIVE.with(spec.feature, true))
+            .chain(std::iter::once(SemanticProfile::all())) {
+            assert!(pending_guarantees(profile).is_empty());
+            let checked = crate::types::check_with_target_and_options(&Vec::new(),
+                crate::codegen::platform::Target::detect_host(),
+                crate::types::CheckOptions { semantic_profile: profile, ..Default::default() },
+                &crate::generics::GenericContext::default()).unwrap();
+            assert_eq!(checked.semantic_profile, profile);
+        }
     }
+
 }
 
 #[cfg(test)]

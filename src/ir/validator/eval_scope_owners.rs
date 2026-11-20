@@ -15,6 +15,29 @@ pub(super) fn has_scope_owner(function: &Function) -> bool {
     function.locals.iter().any(|local| local.kind == kind)
 }
 
+/// Selects the semantic owner of checked binding effects without coupling source evidence to Locals.
+pub(super) fn required_binding_feature(id: InstId, inst: &Instruction,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<u64, ValidationError> {
+    use elephc_semantics::StrictFeature;
+    if let Some(Immediate::EvalScopeStore(metadata)) = &inst.immediate {
+        if metadata.role != crate::ir::EvalBindingRole::Contract {
+            if inst.op != Op::EvalScopeBindLocalType || metadata.contract.as_ref().is_none_or(|ty|
+                crate::types::native_type_spec::logical_type(ty, false).is_none()) {
+                return Err(ValidationError::UnexpectedImmediate(id));
+            }
+            return Ok(if profile.contains(StrictFeature::Mixed) { StrictFeature::Mixed.bit() }
+                else { StrictFeature::ArrayTypes.bit() });
+        }
+    }
+    Ok(if matches!(inst.op, Op::BindLocalRefContract | Op::EvalScopeBindingType
+        | Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding | Op::EvalScopeEndBinding
+        | Op::EvalScopeCopyBindingType) || matches!(&inst.immediate,
+            Some(Immediate::EvalScopeStore(metadata)) if metadata.contract.is_some()) {
+        StrictFeature::Locals.bit()
+    } else { 0 })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -33,7 +56,7 @@ mod tests {
                     builder.position_at_end(entry);
                     builder.emit(Op::EvalScopeStartBinding, vec![],
                         Some(Immediate::EvalScopeStore(Box::new(crate::ir::EvalScopeStoreImmediate {
-                            name: crate::ir::DataId::from_raw(0), contract: None,
+                            name: crate::ir::DataId::from_raw(0), contract: None, role: crate::ir::EvalBindingRole::Contract,
                         }))), IrType::Void, PhpType::Void, Ownership::NonHeap);
                     builder.terminate(Terminator::Return { value: None });
                 }

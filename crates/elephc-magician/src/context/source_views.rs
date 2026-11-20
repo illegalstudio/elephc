@@ -37,7 +37,10 @@ pub(super) struct SourceWriteEpoch {
 
 impl ElephcEvalContext {
     /// Stamps a source snapshot after its expression effects have finished.
-    pub(crate) fn source_view_epoch(&self) -> u64 { SOURCE_VIEW_EPOCH.load(Ordering::Relaxed) }
+    pub(crate) fn source_view_epoch(&self) -> u64 { Self::current_source_view_epoch() }
+
+    /// Stamps a native import before an interpreter activation exists.
+    pub(crate) fn current_source_view_epoch() -> u64 { SOURCE_VIEW_EPOCH.load(Ordering::Relaxed) }
 
     /// Retires projection facts before an operation can mutate physical members or execute user code.
     pub(crate) fn invalidate_member_source_views(&mut self) {

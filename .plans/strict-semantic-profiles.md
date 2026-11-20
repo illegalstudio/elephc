@@ -5,15 +5,15 @@
 - [x] Adopt the detailed boundary defaults from the approved implementation plan.
 - [x] Add the shared semantic contract and resolve CLI requests once.
 - [x] Rename the existing PHP-only option and its maintained integration surfaces.
-- [ ] Propagate the immutable profile through compiler phases and runtime contexts.
+- [x] Propagate the immutable profile through compiler phases and runtime contexts.
 - [x] Complete strict-dynamic-code source, execution, and REPL boundaries.
 - [x] Implement numeric rules, checked conversions, and catchable integer overflow.
 - [x] Implement stable bindings, boolean conditions, comparisons, and string rules.
-- [ ] Implement nullability, mixed/union narrowing, and initialization checks.
-- [ ] Implement exact array keys, element contracts, and checked reads.
-- [ ] Complete builtin, callable, reference, eval, and host-boundary parity.
-- [ ] Complete cache partitioning, optimizer guards, focused tests, and examples.
-- [ ] Publish the complete umbrella only when every advertised guarantee is enforced.
+- [x] Implement nullability, mixed/union narrowing, and initialization checks.
+- [x] Implement exact array keys, element contracts, and checked reads.
+- [x] Complete builtin, callable, reference, eval, and host-boundary parity.
+- [x] Complete cache partitioning, optimizer guards, focused tests, and examples.
+- [x] Publish the complete umbrella only when every advertised guarantee is enforced.
 
 Analysis baseline: `cdab890c65048707e6c5f3220d5077b78b5ab49b` on
 `feat/strict-mode`. This document retains the approved contract and tracks implementation.
@@ -3210,3 +3210,17 @@ Possible member effects, user/native functions, methods, constructors, descripto
 Baseline82f7be72 reproduces unvalidated member binds, missed physical property narrowing and GLOBALS setup/guard access. Candidatee93b6317 catches the native storage-scope helper's mutable-context requirement. Final53cdac20 passes12 exact interpreter controls plus the default build, diff/assembly-comment and source-stability checks (16 gates). Coverage includes both dispatch modes, successful narrowed references, alias/call/root invalidation, normalized/exact-key identity, non-repeatable getters, computed/nested write proofs, authorization/effect ordering and prior nested contents. The TypeExpr import cleanup from274 now compiles without new warnings beyond the recorded baseline.
 
 The next step is the completed public-profile candidate: applicable actual native Mixed/ArrayTypes eval, native source/content imports, callable declaration scopes, umbrella CLI behavior, all5 emitters, cache/optimizer/examples/docs checks. Only demonstrated failures should extend that acceptance work.
+
+### Verified276: complete public strict profiles and native source imports
+
+All sixteen independently selectable guarantees are now admitted by both the public checker and Magician. The umbrella includes the full catalog, explicit exceptions keep their established precedence and PHP-only syntax remains independent. The final example demonstrates narrowed mixed inputs, typed arrays and explicit formatting; its numeric union return also supports individual profiles without silently enabling overflow checking. Exact byte-preserving key behavior remains documented and covered by the dedicated array-key example.
+
+Native eval imports now distinguish Contract, Source and DeclaredSource in the existing EIR scope metadata. Checked source terms are staged before the value flush, then attached to the actual imported binding generation and write epoch. Shared version-one flags separate full explicit declarations from conditional inferred-array contents. These source facts contain no PHP owners and do not install an inferred whole-binding Locals restriction. Mixed-only imports permit heterogeneous inferred-array writes; ArrayTypes retains their contents while allowing a later whole-binding string assignment without Locals.
+
+Native main/function frames enable the existing binding-presence protocol for the applicable eval profiles. Checker source decisions participate in protected optimizer names and spans. EIR validation applies canonical kind reduction only to Contract, validates full logical Source terms separately and requires their own feature owner. Source snapshot retirement removes their transient views.
+
+Final evidence spans queue33fa31c8 and c6ee8824, with identical Rust source digests across the final example-only correction: the default build, both native array/source profiles with clean heaps, ten source-ABI emissions across five supported targets, descriptor self/static results with permissive ownership parity, the public example on all five targets, all sixteen individual CLI flags, umbrella with EIR optimization on/off, native umbrella heap cleanup and hygiene checks pass (16 final gates). Queue3d3c776c also passes CLI override/PHP-only/legacy-name checks, cache parity, literal-eval optimization parity and the complete builtin exporter/regeneration/audit sequence. Regeneration produces no changes to the builtin registries or generated pages; final audits pass unchanged. Local execution covers the host and all five emitters; the full local suite was not run.
+
+The native bound-method descriptor plus opaque-eval control retains the same three blocks (384 bytes) in permissive and Mixed execution. Its current-profile parity is verified, not a clean-heap claim. This separate ownership family was already tracked by Code Journal task97836066, which now contains the new reproduction; historical merge-base attribution remains unverified. It is not unfinished strict-profile implementation work.
+
+All implementation and requested documentation/example work is complete. No push or pull request was requested.

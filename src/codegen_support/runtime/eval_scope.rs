@@ -266,7 +266,7 @@ fn emit_aarch64_eval_scope_get(emitter: &mut Emitter) {
 /// keeps that surface link-complete while reporting success.
 fn emit_aarch64_eval_scope_native_type(emitter: &mut Emitter) {
     for name in ["__elephc_eval_scope_copy_binding_type_v1", "__elephc_eval_scope_binding_type_v1",
-        "__elephc_eval_scope_native_type_v1"] {
+        "__elephc_eval_scope_native_type_v1", "__elephc_eval_scope_source_type_v1"] {
         label_c_global(emitter, name);
         emitter.instruction(&format!("mov x0, #{}", EVAL_STATUS_OK));           // each C entry owns its return across runtime function pruning
         emitter.instruction("ret");                                             // return success without requiring an interpreter context
@@ -503,7 +503,7 @@ fn emit_x86_64_eval_scope_get(emitter: &mut Emitter) {
 /// Emits the x86_64 scope-only native-type validator stub.
 fn emit_x86_64_eval_scope_native_type(emitter: &mut Emitter) {
     for name in ["__elephc_eval_scope_copy_binding_type_v1", "__elephc_eval_scope_binding_type_v1",
-        "__elephc_eval_scope_native_type_v1"] {
+        "__elephc_eval_scope_native_type_v1", "__elephc_eval_scope_source_type_v1"] {
         label_c_global(emitter, name);
         emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_OK));           // each C entry owns its return across runtime function pruning
         emitter.instruction("ret");                                             // return success without requiring an interpreter context
