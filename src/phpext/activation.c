@@ -14,6 +14,8 @@ extern uintptr_t ep_replacement_owner_count
 extern const uintptr_t *ep_replacement_owners[]
     __asm__("_elephc_phpext_replacement_owners");
 
+extern uint32_t elephc_phpext_native_owner_count(const uintptr_t *object);
+
 typedef void (*ep_native_function)(const zval *const *);
 static pthread_mutex_t ep_native_lock = PTHREAD_MUTEX_INITIALIZER;
 static unsigned char *ep_template;
@@ -372,14 +374,6 @@ static const char *ep_infrastructure_error(uintptr_t status)
     }
 }
 
-/* Read the compact runtime refcount without depending on its private allocation header type. */
-static uint32_t ep_native_refcount(const uintptr_t *object)
-{
-    uint32_t refcount;
-    memcpy(&refcount, (const unsigned char *)object - 12, sizeof(refcount));
-    return refcount & UINT32_C(0x7fffffff);
-}
-
 /* Count every adapter pin for one native identity across the synchronous export stack. */
 static size_t ep_replacement_pin_count(const uintptr_t *object)
 {
@@ -484,7 +478,7 @@ const uintptr_t *elephc_php_stale_finally_replacement(
         for (size_t j = base; j < count; j++) {
             if (owners[j] == root) { pins++; }
         }
-        if (ep_native_refcount(root) != pins) { continue; }
+        if (elephc_phpext_native_owner_count(root) != pins) { continue; }
 
         ep_retired_host_exception *retired[EP_HOST_PREDECESSOR_LIMIT];
         size_t retired_count = 0;
@@ -769,7 +763,7 @@ void elephc_php_discard_exception(const uintptr_t *object)
     }
     size_t pins = ep_replacement_pin_count(object);
     bool transient = call->discard_chain_transient
-        && ep_native_refcount(object) == pins + 1;
+        && elephc_phpext_native_owner_count(object) == pins + 1;
     call->discard_chain_transient = transient;
     for (size_t i = 0; i < call->host_predecessor_count; i++) {
         ep_host_predecessor *predecessor = &call->host_predecessors[i];

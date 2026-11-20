@@ -14,3 +14,6 @@ pub mod zval;
 
 pub mod cstr_scratch;
 pub mod replacement_owners;
+
+mod native_array_slots;
+pub mod native_variable;

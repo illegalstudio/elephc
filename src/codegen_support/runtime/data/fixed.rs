@@ -1076,12 +1076,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_glob_handles", 2048, target));
     out.push_str(&comm_directive("_stream_read_filters", 256, target));
     out.push_str(&comm_directive("_stream_write_filters", 256, target));
-    out.push_str(&comm_directive("_stream_filter_buf", 65536, target));
-    // 64KB scratch used by length-growing stream filters (convert.base64-encode,
-    // convert.quoted-printable-encode). The filter encodes into the scratch and
-    // then memcpy()s back into the caller's buffer, capping input at 49152 bytes
-    // so the 4/3 base64 expansion still fits the scratch.
-    out.push_str(&comm_directive("_stream_grow_scratch", 65536, target));
+    elephc_memoir::buffers::stream_scratch::append_data(&mut out, &target);
     out.push_str(&comm_directive("_zstream_handles", 2048, target));
     out.push_str(&comm_directive("_zlib_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_zlib_close_fn", 8, target));

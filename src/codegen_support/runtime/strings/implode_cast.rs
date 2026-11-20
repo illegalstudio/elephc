@@ -10,6 +10,7 @@
 //! - The prefix owner is visible to exception unwinding while user code runs.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::strings::concat_checkpoint::PrefixCheckpoint;
 
 /// Emits a borrowed-box conversion entry that preserves pending join bytes across PHP callbacks.
 pub(super) fn emit_implode_element_cast(emitter: &mut Emitter) {
@@ -48,11 +49,12 @@ pub(super) fn emit_implode_element_cast(emitter: &mut Emitter) {
     abi::emit_jump(emitter, "__rt_implode_cast_done");
 
     emitter.label("__rt_implode_cast_object");
-    elephc_memoir::strings::concat_cursor::emit_read(emitter, len);
-    abi::store_at_offset(emitter, len, 16);
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, ptr);
-    abi::emit_call_label(emitter, "__rt_str_persist");
-    abi::store_at_offset(emitter, ptr, 24);
+    let prefix = match emitter.target.arch {
+        Arch::AArch64 => PrefixCheckpoint { length: "[sp, #32]", owner: "[sp, #24]" },
+        Arch::X86_64 => PrefixCheckpoint { length: "[rbp - 16]", owner: "[rbp - 24]" },
+    };
+    prefix.emit_capture(emitter);
+    prefix.emit_save(emitter, "__rt_implode_cast_prefix_saved");
     abi::emit_frame_slot_address(emitter, owner, 24);
     abi::emit_push_call_operand_owner(emitter, owner, false);
     abi::load_at_offset(emitter, result, 8);
@@ -71,17 +73,7 @@ pub(super) fn emit_implode_element_cast(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, ptr, 32);
     abi::store_at_offset(emitter, len, 40);
     abi::emit_pop_call_operand_owner(emitter);
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
-    let arg2 = abi::int_arg_reg_name(emitter.target, 2);
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, arg0);
-    abi::load_at_offset(emitter, arg1, 24);
-    abi::load_at_offset(emitter, arg2, 16);
-    abi::emit_call_label(emitter, &emitter.target.extern_symbol("memcpy"));
-    abi::load_at_offset(emitter, result, 16);
-    elephc_memoir::strings::concat_cursor::emit_write(emitter, result);
-    abi::load_at_offset(emitter, result, 24);
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    prefix.emit_restore(emitter, "__rt_implode_cast_prefix_copy", "__rt_implode_cast_prefix_restored");
     abi::load_at_offset(emitter, ptr, 32);
     abi::load_at_offset(emitter, len, 40);
     emitter.label("__rt_implode_cast_done");
@@ -103,8 +95,8 @@ mod tests {
             let asm = emitter.output();
             let publish = asm.find("__rt_cleanup_call_operand_owner").unwrap();
             let invoke = asm.find("__rt_sprintf_mixed_to_string").unwrap();
-            let restore = asm.find("memcpy").unwrap();
-            let release = asm.find("__rt_heap_free_safe").unwrap();
+            let restore = asm.find("__rt_implode_cast_prefix_copy:").unwrap();
+            let release = asm.find("__rt_decref_any").unwrap();
             assert!(publish < invoke && invoke < restore && restore < release, "{name}: {asm}");
             assert!(asm.contains("__rt_mixed_cast_string"), "{name}: scalar fallback");
         }

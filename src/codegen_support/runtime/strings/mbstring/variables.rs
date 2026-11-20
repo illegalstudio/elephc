@@ -12,10 +12,9 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Exports uniform C signatures for array COW, boxed values, strings, and release.
 pub(super) fn emit(emitter: &mut Emitter) {
+    elephc_memoir::interop::native_variable::emit_mbstring_accessors(emitter);
     let arm = emitter.target.arch == Arch::AArch64;
     for (name, helper) in [
-        ("elephc_mbstring_variable_array_unique_v1", "__rt_array_ensure_unique"),
-        ("elephc_mbstring_variable_hash_unique_v1", "__rt_hash_ensure_unique"),
         ("elephc_mbstring_variable_reference_new_v1", "__rt_reference_cell_new"),
     ] {
         emitter.label_global(&emitter.target.extern_symbol(name));

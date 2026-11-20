@@ -14,5 +14,7 @@ mod native_host;
 mod plan;
 
 pub use live::{Container, LiveFailure, LiveHost, LiveValue, convert_live};
-pub(crate) use native_host::hash_child;
+pub(crate) use native_host::{
+    elephc_mbstring_variable_array_count_v1, elephc_mbstring_variable_heap_shape_v1, hash_child, indexed_child,
+};
 pub use plan::VariablePlan;

@@ -86,17 +86,7 @@ pub fn emit_array_set_mixed(emitter: &mut impl Emitter) {
     emitter.instruction("ldr x11, [sp, #40]");                                  // reload the original logical length for extension checks
     emitter.instruction("cmp x9, x11");                                         // did the write extend beyond the old logical length?
     emitter.instruction("b.lo __rt_array_set_mixed_done");                      // overwrites leave the logical length unchanged
-    emitter.instruction("mov x12, x11");                                        // start zero-filling gaps at the old logical end
-    emitter.label("__rt_array_set_mixed_extend_loop");
-    emitter.instruction("cmp x12, x9");                                         // have all gap slots before the target been initialized?
-    emitter.instruction("b.ge __rt_array_set_mixed_store_len");                 // stop before touching the written slot
-    emitter.instruction("add x13, x10, #24");                                   // compute the indexed-array data base for this gap slot
-    emitter.instruction("str xzr, [x13, x12, lsl #3]");                         // initialize the gap slot to null
-    emitter.instruction("add x12, x12, #1");                                    // advance to the next gap slot
-    emitter.instruction("b __rt_array_set_mixed_extend_loop");                  // continue zero-filling until the target slot is reached
-    emitter.label("__rt_array_set_mixed_store_len");
-    emitter.instruction("add x12, x9, #1");                                     // compute the new logical length
-    emitter.instruction("str x12, [x10]");                                      // publish the extended indexed-array length
+    super::packed_slots::emit_publish_mixed_extension(emitter, "__rt_array_set_mixed", false);
     emitter.instruction("b __rt_array_set_mixed_done");                         // finish after extending the array
 
     emitter.label("__rt_array_set_mixed_drop");
@@ -175,16 +165,7 @@ fn emit_array_set_mixed_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the original logical length for extension checks
     emitter.instruction("cmp r9, r11");                                         // did the write extend beyond the old logical length?
     emitter.instruction("jb __rt_array_set_mixed_done");                        // overwrites leave the logical length unchanged
-    emitter.instruction("mov r8, r11");                                         // start zero-filling gaps at the old logical end
-    emitter.label("__rt_array_set_mixed_extend_loop");
-    emitter.instruction("cmp r8, r9");                                          // have all gap slots before the target been initialized?
-    emitter.instruction("jae __rt_array_set_mixed_store_len");                  // stop before touching the written slot
-    emitter.instruction("mov QWORD PTR [r10 + 24 + r8 * 8], 0");                // initialize the gap slot to null
-    emitter.instruction("add r8, 1");                                           // advance to the next gap slot
-    emitter.instruction("jmp __rt_array_set_mixed_extend_loop");                // continue zero-filling until the target slot is reached
-    emitter.label("__rt_array_set_mixed_store_len");
-    emitter.instruction("lea r8, [r9 + 1]");                                    // compute the new logical length
-    emitter.instruction("mov QWORD PTR [r10], r8");                             // publish the extended indexed-array length
+    super::packed_slots::emit_publish_mixed_extension(emitter, "__rt_array_set_mixed", false);
     emitter.instruction("jmp __rt_array_set_mixed_done");                       // finish after extending the array
 
     emitter.label("__rt_array_set_mixed_drop");

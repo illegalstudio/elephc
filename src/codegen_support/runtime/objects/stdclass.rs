@@ -23,6 +23,20 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
+    /// The active empty-object path reserves and publishes its two-byte result on every target.
+    #[test]
+    fn empty_stdclass_json_reserves_literal_storage_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_json_encode_stdclass(&mut emitter);
+            let asm = emitter.output();
+            let reserve = asm.find("__rt_strbuf_reserve_temp").unwrap();
+            let store = asm.find(if name == "linux-x86_64" { "mov WORD PTR [rax]" } else { "strh w9, [x0]" }).unwrap();
+            let publish = asm.find("__rt_concat_publish").unwrap();
+            assert!(reserve < store && store < publish, "{name}: {asm}");
+        }
+    }
+
     /// Both property-hash entries preserve stdClass entry points and the runtime hash allocator ABI.
     #[test]
     fn property_hash_entries_and_allocator_arguments_cover_all_targets() {
@@ -101,7 +115,7 @@ pub fn emit_stdclass_get(emitter: &mut Emitter) {
 /// PHP's `json_encode($obj)` produces `{}` for an empty stdClass even though
 /// the underlying hash is empty (the assoc encoder defaults empty hashes to
 /// `[]`). This wrapper inspects the hash count: empty → emit the literal
-/// `{}` into the concat buffer, non-empty → tail-call the standard assoc
+/// `{}` through checked string storage, non-empty → tail-call the standard assoc
 /// encoder, which already handles the string-keyed case as `{...}`.
 pub fn emit_json_encode_stdclass(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -163,7 +177,7 @@ pub fn emit_stdclass_set(emitter: &mut Emitter) {
 /// ARM64 code emitter for `__rt_json_encode_stdclass`.
 ///
 /// Reads hash entry count at `[x0]`. Zero entries → emits `"{}"` directly
-/// into `_concat_buf` and returns `(ptr, len)` via string ABI. Non-zero
+/// through checked string storage and returns `(ptr, len)` via string ABI. Non-zero
 /// entries → tail-calls `__rt_json_encode_assoc`.
 fn emit_json_encode_stdclass_aarch64(emitter: &mut Emitter) {
     emitter.blank();
@@ -176,21 +190,7 @@ fn emit_json_encode_stdclass_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_json_encode_assoc");                            // non-empty stdClass → defer to the assoc encoder, which emits {"k":v,...}
 
     emitter.label("__rt_json_encode_stdclass_empty");
-    // Emit the literal "{}" into _concat_buf at the current offset and
-    // return (ptr, len) for the active string-result ABI.
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
-    emitter.instruction("ldr x10, [x9]");                                       // x10 = current concat-buffer offset
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x11");
-    emitter.instruction("add x12, x11, x10");                                   // x12 = output write pointer for this encoder call
-    emitter.instruction("mov w13, #123");                                       // ASCII '{'
-    emitter.instruction("strb w13, [x12]");                                     // write '{' at the output position
-    emitter.instruction("mov w13, #125");                                       // ASCII '}'
-    emitter.instruction("strb w13, [x12, #1]");                                 // write '}' immediately after '{'
-    emitter.instruction("add x10, x10, #2");                                    // advance the concat-buffer offset by the two emitted bytes
-    emitter.instruction("str x10, [x9]");                                       // persist the new offset for any subsequent encoder
-    emitter.instruction("mov x1, x12");                                         // result string pointer
-    emitter.instruction("mov x2, #2");                                          // result string length
-    emitter.instruction("ret");                                                 // return (ptr, len) to the caller via the ABI string registers
+    elephc_memoir::strings::staged_concat::emit_return_two_bytes(emitter, *b"{}");
 }
 
 /// ARM64 code emitter for `__rt_stdclass_new`.
@@ -470,7 +470,7 @@ fn emit_mixed_property_set_aarch64(emitter: &mut Emitter) {
 /// x86_64 code emitter for `__rt_json_encode_stdclass`.
 ///
 /// Reads hash entry count at `[rax]`. Zero entries → emits `"{}"` directly
-/// into `_concat_buf` and returns `(rax, rdx)` via string ABI. Non-zero
+/// through checked string storage and returns `(rax, rdx)` via string ABI. Non-zero
 /// entries → tail-calls `__rt_json_encode_assoc`.
 fn emit_json_encode_stdclass_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -483,17 +483,7 @@ fn emit_json_encode_stdclass_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // empty hash?
     emitter.instruction("jne __rt_json_encode_assoc");                          // non-empty → defer to the assoc encoder
 
-    // Empty hash: emit "{}" into _concat_buf and return (rax, rdx).
-    elephc_memoir::strings::concat_cursor::emit_read(emitter, "r10");             // r10 = current concat-buffer offset
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r11");                    // r11 = base of the concat buffer
-    emitter.instruction("add r11, r10");                                        // r11 = output write pointer for this encoder call
-    emitter.instruction("mov BYTE PTR [r11], 123");                             // write '{' at the output position
-    emitter.instruction("mov BYTE PTR [r11 + 1], 125");                         // write '}' immediately after '{'
-    emitter.instruction("add r10, 2");                                          // advance the concat-buffer offset by the two emitted bytes
-    elephc_memoir::strings::concat_cursor::emit_write(emitter, "r10");            // persist the new offset for any subsequent encoder
-    emitter.instruction("mov rax, r11");                                        // result string pointer in the leading x86_64 string register
-    emitter.instruction("mov rdx, 2");                                          // result string length in the paired x86_64 string register
-    emitter.instruction("ret");                                                 // return (ptr, len) to the caller via the ABI string registers
+    elephc_memoir::strings::staged_concat::emit_return_two_bytes(emitter, *b"{}");
 }
 
 /// x86_64 code emitter for `__rt_stdclass_new`.

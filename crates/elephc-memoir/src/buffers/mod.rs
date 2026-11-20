@@ -38,6 +38,7 @@ pub use use_after_free::emit_buffer_use_after_free;
 pub mod output;
 pub mod offset_pairs;
 pub mod diagnostic_buffer;
+pub mod stream_scratch;
 pub mod stream_state;
 
 pub mod native_words;

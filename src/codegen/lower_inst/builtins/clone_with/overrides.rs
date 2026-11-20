@@ -225,15 +225,6 @@ fn emit_entry_reference_probe(
             abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-            ctx.emitter.instruction(&format!("cbz x4, {probe_done}"));          // a key with no entry of its own carries no reference metadata
-            ctx.emitter.instruction("mov x6, x4");                              // hold the matching entry address across the payload loads
-            ctx.emitter.instruction("ldr x3, [x6, #24]");                       // x3 = the entry's value_lo, its managed reference cell when tagged 11
-            ctx.emitter.instruction("ldr x5, [x6, #40]");                       // x5 = the entry's value tag
-            ctx.emitter.instruction("cmp x5, #11");                             // is this entry a member of a PHP reference set?
-            ctx.emitter.instruction(&format!("b.ne {probe_done}"));             // ordinary entry values are by-value overrides
-            ctx.emitter.instruction("ldr w10, [x3, #-12]");                     // load the shared reference cell's owner count
-            ctx.emitter.instruction("cmp w10, #1");                             // does anything besides this entry still own the cell?
-            ctx.emitter.instruction(&format!("b.hi {reject}"));                 // shared cell ownership preserves PHP reference identity
         }
         Arch::X86_64 => {
             ctx.load_string_value_to_regs(name, "rax", "rdx")?;
@@ -241,18 +232,9 @@ fn emit_entry_reference_probe(
             ctx.emitter.instruction("mov rsi, rax");                            // move the normalized key low word into the hash lookup ABI register
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
-            ctx.emitter.instruction("test r8, r8");                             // a key with no entry of its own carries no reference metadata
-            ctx.emitter.instruction(&format!("jz {probe_done}"));               // absent keys reach the ordinary dynamic-property arms
-            ctx.emitter.instruction("mov r10, r8");                             // hold the matching entry address across the payload loads
-            ctx.emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");           // rcx = the entry's value_lo, its managed reference cell when tagged 11
-            ctx.emitter.instruction("mov r9, QWORD PTR [r10 + 40]");            // r9 = the entry's value tag
-            ctx.emitter.instruction("cmp r9, 11");                              // is this entry a member of a PHP reference set?
-            ctx.emitter.instruction(&format!("jne {probe_done}"));              // ordinary entry values are by-value overrides
-            ctx.emitter.instruction("mov r10d, DWORD PTR [rcx - 12]");          // load the shared reference cell's owner count
-            ctx.emitter.instruction("cmp r10d, 1");                             // does anything besides this entry still own the cell?
-            ctx.emitter.instruction(&format!("ja {reject}"));                   // shared cell ownership preserves PHP reference identity
         }
     }
+    elephc_memoir::values::hash_bucket::emit_branch_if_shared_reference(ctx.emitter, probe_done, reject);
     Ok(())
 }
 

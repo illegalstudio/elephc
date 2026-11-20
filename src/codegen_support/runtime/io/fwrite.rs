@@ -16,7 +16,7 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
-const FILTER_BUF_SIZE: i64 = 65536;
+use elephc_memoir::buffers::stream_scratch::CAPACITY as FILTER_BUF_SIZE;
 
 /// fwrite: write a payload to a descriptor, applying a write filter if present.
 /// Input:  AArch64 x0 = fd, x1 = pointer, x2 = length
@@ -77,7 +77,7 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("b.gt __rt_fwrite_direct");                             // oversized payloads are written unfiltered
 
     // -- copy the payload into the filter scratch --
-    abi::emit_symbol_address(emitter, "x4", "_stream_filter_buf");
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "x4");
     emitter.instruction("mov x5, #0");                                          // copy index
     emitter.label("__rt_fwrite_copy");
     emitter.instruction("cmp x5, x2");                                          // copied every byte?
@@ -221,7 +221,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jg __rt_fwrite_direct_x86");                           // oversized payloads are written unfiltered
 
     // -- copy the payload into the filter scratch --
-    abi::emit_symbol_address(emitter, "r8", "_stream_filter_buf");              // filter scratch base
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "r8");              // filter scratch base
     emitter.instruction("xor r9, r9");                                          // copy index
     emitter.label("__rt_fwrite_copy_x86");
     emitter.instruction("cmp r9, rdx");                                         // copied every byte?

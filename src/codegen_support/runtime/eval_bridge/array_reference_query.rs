@@ -24,7 +24,6 @@
 use super::*;
 
 /// Runtime tag marking a hash entry whose `value_lo` is a managed reference cell.
-const REFERENCE_CELL_VALUE_TAG: i64 = 11;
 
 /// Runtime tag of an associative array payload inside a boxed Mixed cell.
 const ASSOC_ARRAY_TAG: i64 = 5;
@@ -62,15 +61,9 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_normalize_key");                          // x1/x2 = normalized key low/high words
     emitter.instruction("ldr x0, [sp, #24]");                                   // x0 = the hash table to probe
     emitter.instruction("bl __rt_hash_get");                                    // x4 = matching entry address, zero on a miss
-    emitter.instruction("cbz x4, __elephc_eval_array_entry_ref_no");            // a key with no entry of its own carries no reference metadata
-    emitter.instruction("mov x6, x4");                                          // hold the entry address across the payload loads
-    emitter.instruction("ldr x3, [x6, #24]");                                   // x3 = value_lo, the entry's managed reference cell when tagged 11
-    emitter.instruction("ldr x5, [x6, #40]");                                   // x5 = the entry's value tag
-    emitter.instruction(&format!("cmp x5, #{REFERENCE_CELL_VALUE_TAG}"));       // is this entry a member of a PHP reference set?
-    emitter.instruction("b.ne __elephc_eval_array_entry_ref_no");               // ordinary entry values are by-value overrides
-    emitter.instruction("ldr w10, [x3, #-12]");                                 // load the shared reference cell's owner count
-    emitter.instruction("cmp w10, #1");                                         // does anything besides this entry still own the cell?
-    emitter.instruction("b.hi __elephc_eval_array_entry_ref_yes");              // shared cell ownership preserves PHP reference identity
+    elephc_memoir::values::hash_bucket::emit_branch_if_shared_reference(
+        emitter, "__elephc_eval_array_entry_ref_no", "__elephc_eval_array_entry_ref_yes",
+    );
     emitter.label("__elephc_eval_array_entry_ref_no");
     emitter.instruction("mov x0, xzr");                                         // report an ordinary by-value override entry
     emitter.instruction("b __elephc_eval_array_entry_ref_ret");                 // fall into the shared epilogue
@@ -104,16 +97,9 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rax");                                        // move the normalized key low word into the lookup ABI register
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // rdi = the hash table to probe
     emitter.instruction("call __rt_hash_get");                                  // r8 = matching entry address, zero on a miss
-    emitter.instruction("test r8, r8");                                         // a key with no entry of its own carries no reference metadata
-    emitter.instruction("jz __elephc_eval_array_entry_ref_no_x86");             // absent keys are ordinary by-value overrides
-    emitter.instruction("mov r10, r8");                                         // hold the entry address across the payload loads
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");                       // rcx = value_lo, the entry's managed reference cell when tagged 11
-    emitter.instruction("mov r9, QWORD PTR [r10 + 40]");                        // r9 = the entry's value tag
-    emitter.instruction(&format!("cmp r9, {REFERENCE_CELL_VALUE_TAG}"));        // is this entry a member of a PHP reference set?
-    emitter.instruction("jne __elephc_eval_array_entry_ref_no_x86");            // ordinary entry values are by-value overrides
-    emitter.instruction("mov r10d, DWORD PTR [rcx - 12]");                      // load the shared reference cell's owner count
-    emitter.instruction("cmp r10d, 1");                                         // does anything besides this entry still own the cell?
-    emitter.instruction("ja __elephc_eval_array_entry_ref_yes_x86");            // shared cell ownership preserves PHP reference identity
+    elephc_memoir::values::hash_bucket::emit_branch_if_shared_reference(
+        emitter, "__elephc_eval_array_entry_ref_no_x86", "__elephc_eval_array_entry_ref_yes_x86",
+    );
     emitter.label("__elephc_eval_array_entry_ref_no_x86");
     emitter.instruction("xor eax, eax");                                        // report an ordinary by-value override entry
     emitter.instruction("jmp __elephc_eval_array_entry_ref_ret_x86");           // fall into the shared epilogue

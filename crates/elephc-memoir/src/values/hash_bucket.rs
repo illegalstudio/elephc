@@ -88,3 +88,46 @@ pub fn emit_link_new_bucket(emitter: &mut impl Emitter, prefix: &str, linked: &s
         }
     }
 }
+
+/// Replaces an occupied entry before the previous owner can run its destructor.
+pub fn emit_replace_and_release(emitter: &mut impl Emitter, release: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [x12, #24]");                          // hold the displaced owner's pointer across publication
+            emit_publish_payload(emitter);
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r14, QWORD PTR [r12 + 24]");               // hold the displaced owner's pointer across publication
+            emit_publish_payload(emitter);
+            emitter.instruction("mov rax, r14");                                // pass the displaced owner in the runtime result register
+        }
+    }
+    emitter.emit_call_label(release);
+}
+
+/// Branches when a hash lookup found a cell with more owners than the bucket itself.
+///
+/// The hash lookup leaves the entry pointer in x4 or r8, with zero for a missing key.
+pub fn emit_branch_if_shared_reference(emitter: &mut impl Emitter, absent: &str, shared: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbz x4, {absent}"));                  // a missing key cannot own a reference
+            emitter.instruction("ldr x5, [x4, #40]");                           // load the stored payload tag
+            emitter.instruction("cmp x5, #11");                                 // check for the managed reference-cell tag
+            emitter.instruction(&format!("b.ne {absent}"));                     // other entries carry values
+            emitter.instruction("ldr x3, [x4, #24]");                           // load the managed cell pointer
+            emitter.instruction("ldr w10, [x3, #-12]");                         // read its unadjusted physical owner count
+            emitter.instruction("cmp w10, #1");                                 // count owners beyond the entry itself
+            emitter.instruction(&format!("b.hi {shared}"));                     // preserve a reference used by another owner
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test r8, r8");                                 // a missing key cannot own a reference
+            emitter.instruction(&format!("jz {absent}"));                       // leave the probe false on a missing key
+            emitter.instruction("cmp QWORD PTR [r8 + 40], 11");                 // check for the managed reference-cell tag
+            emitter.instruction(&format!("jne {absent}"));                      // other entries carry values
+            emitter.instruction("mov rcx, QWORD PTR [r8 + 24]");                // load the managed cell pointer
+            emitter.instruction("cmp DWORD PTR [rcx - 12], 1");                 // count owners beyond the entry itself
+            emitter.instruction(&format!("ja {shared}"));                       // preserve a reference used by another owner
+        }
+    }
+}
