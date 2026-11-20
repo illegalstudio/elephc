@@ -162,15 +162,29 @@ pub fn dynamic_wrapper_prelude_callees(name: &str) -> &'static [&'static str] {
 }
 
 /// Returns every compiler prelude function a builtin's callable wrapper may call directly: the
-/// runtime-selected wrapper callees, and the XML and GMP helpers their lowerings forward to.
+/// semantic requirements, runtime-selected wrapper callees, and XML and GMP forwarding helpers.
 ///
 /// A wrapper can only be built when all of them are declared, which happens when the program
 /// calls the builtin or names it as a literal where a declared `callable` keeps the string.
 pub fn callable_wrapper_prelude_helpers(name: &str) -> Vec<&'static str> {
     let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
     let mut helpers = dynamic_wrapper_prelude_callees(&key).to_vec();
+    if let Some(definition) = lookup(&key) {
+        if let crate::builtins::semantics::BuiltinRequirements::Static(requirements) =
+            definition.spec.semantics.requirements
+        {
+            helpers.extend(requirements.iter().filter_map(|requirement| match requirement {
+                crate::builtins::semantics::BuiltinRequirement::PreludeHelper(helper) => {
+                    Some(*helper)
+                }
+                _ => None,
+            }));
+        }
+    }
     helpers.extend_from_slice(crate::builtins::xml::prelude_helpers_for(&key));
     helpers.extend(crate::builtins::gmp::prelude_helpers_for(&key));
+    helpers.sort_unstable();
+    helpers.dedup();
     helpers
 }
 
@@ -788,6 +802,14 @@ mod tests {
             names_vec, sorted_vec,
             "names() must return sorted order for deterministic assembly layout"
         );
+    }
+
+    /// Semantic prelude requirements also gate runtime-selected callable wrappers.
+    #[test]
+    fn callable_wrapper_helpers_include_semantic_requirements() {
+        let helpers = callable_wrapper_prelude_helpers("settype");
+        assert!(helpers.contains(&crate::object_cast_prelude::CAST_HELPER));
+        assert!(helpers.contains(&crate::object_cast_prelude::DYNAMIC_CAST_HELPER));
     }
 
     /// Verifies the derived arity error mirrors the legacy "<name>() takes …" messages.

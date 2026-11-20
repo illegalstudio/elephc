@@ -1176,7 +1176,7 @@ fn runtime_builtin_descriptor_cases_at_arity(
                 .extern_decls
                 .iter()
                 .any(|decl| php_symbol_key(&decl.name) == php_symbol_key(name))
-            || !crate::builtins::registry::dynamic_wrapper_prelude_callees(name)
+            || !crate::builtins::registry::callable_wrapper_prelude_helpers(name)
                 .iter()
                 .all(|callee| {
                     ctx.module
