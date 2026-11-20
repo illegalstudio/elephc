@@ -654,7 +654,8 @@ proc_close($process);
 
 /// A file spec's path goes through PHP's stream wrappers: `php://stdout`, `php://fd/1`,
 /// `file://` URLs, `data:` payloads and `php://temp` reach the child as descriptors, and
-/// the streams PHP cannot cast fail with its warnings.
+/// the streams PHP cannot cast fail with its warnings. A `data:` URL ignores the spec's
+/// mode, as php-src's rfc2397 wrapper does: a `'w'` spec still hands the child its payload.
 #[test]
 fn test_proc_open_file_specs_open_stream_urls() {
     let out = compile_and_run_capture(
@@ -666,6 +667,7 @@ foreach ([
     ['echo url', [1 => ['file', 'file://' . $path, 'w']]],
     ['cat', [0 => ['file', 'data:text/plain;base64,ZGF0YQo=', 'r'], 1 => ['file', 'php://stdout', 'w']]],
     ['cat', [0 => ['file', 'data:,a+b%21%0A', 'r'], 1 => ['file', 'php://stdout', 'w']]],
+    ['cat', [0 => ['file', 'data:,written%0A', 'w'], 1 => ['file', 'php://stdout', 'w']]],
     ['echo temp', [1 => ['file', 'php://temp', 'w']]],
     ['true', [1 => ['file', 'php://memory', 'w']]],
     ['true', [0 => ['file', 'data:text,x', 'r']]],
@@ -681,7 +683,7 @@ unlink($path);
     );
     assert_eq!(
         out.stdout,
-        "stdout\n0\nfd\n0\n0\ndata\n0\na b!\n0\n0\nfalse\nfalse\nfalse\nfalse\nurl\n"
+        "stdout\n0\nfd\n0\n0\ndata\n0\na b!\n0\nwritten\n0\n0\nfalse\nfalse\nfalse\nfalse\nurl\n"
     );
     for warning in [
         "Warning: proc_open(): Cannot represent a stream of type MEMORY as a File Descriptor",
