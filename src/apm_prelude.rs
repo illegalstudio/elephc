@@ -41,9 +41,10 @@ const MESSENGER_HANDLE: &str = "handleMessage";
 /// The event the worker builds for a message whose handling failed.
 const MESSENGER_FAILED_EVENT: &str = "Symfony\\Component\\Messenger\\Event\\WorkerMessageFailedEvent";
 
-/// The local holding the open transaction's token in a wrapped body.
+/// The stem of the local holding the open transaction's token in a wrapped
+/// body; the local itself is `generated_local_name`d, so PHP code cannot see it.
 const TOKEN_VAR: &str = "__elephc_apm_txn";
-/// The local the rethrown exception is caught into.
+/// The stem of the local the rethrown exception is caught into.
 const ERROR_VAR: &str = "__elephc_apm_error";
 
 /// What a transaction outside HTTP is named after, by kind: a message, a
@@ -269,19 +270,21 @@ fn same_name(a: &str, b: &str) -> bool {
 /// finally { \elephc_probe_txn_end($__elephc_apm_txn, 0); }
 /// ```
 fn wrap(body: Vec<Stmt>, name: Expr) -> Vec<Stmt> {
+    let token = crate::names::generated_local_name(TOKEN_VAR);
+    let error = crate::names::generated_local_name(ERROR_VAR);
     vec![
-        s_assign(TOKEN_VAR, e_call("\\elephc_probe_txn_begin", vec![name])),
+        s_assign(&token, e_call("\\elephc_probe_txn_begin", vec![name])),
         s_try(
             body,
             vec![(
                 vec!["\\Throwable"],
-                Some(ERROR_VAR),
+                Some(&error),
                 vec![
-                    s_expr(e_call("\\elephc_probe_txn_fail", vec![e_var(TOKEN_VAR)])),
-                    s_throw(e_var(ERROR_VAR)),
+                    s_expr(e_call("\\elephc_probe_txn_fail", vec![e_var(&token)])),
+                    s_throw(e_var(&error)),
                 ],
             )],
-            Some(vec![s_expr(e_call("\\elephc_probe_txn_end", vec![e_var(TOKEN_VAR), e_int(0)]))]),
+            Some(vec![s_expr(e_call("\\elephc_probe_txn_end", vec![e_var(&token), e_int(0)]))]),
         ),
     ]
 }
@@ -400,5 +403,21 @@ mod tests {
         let after = calls(&inject(resolved(source), &targets, true).expect("no error"));
         assert!(after.contains("TXN App\\\\Jobs\\\\Import::run"), "{after}");
         assert!(after.contains("TXN App\\\\Jobs\\\\process_batch"), "{after}");
+    }
+
+    /// The wrap's locals are compiler-generated, so `get_defined_vars()`,
+    /// `compact()` and eval cannot see them (#2397).
+    #[test]
+    fn wrap_locals_are_hidden_from_php() {
+        let body = wrap(Vec::new(), e_str("TXN job"));
+        let StmtKind::Assign { name, .. } = &body[0].kind else {
+            panic!("the wrap opens with the token assignment: {body:?}");
+        };
+        assert!(crate::names::is_generated_local_name(name), "{name}");
+        let StmtKind::Try { catches, .. } = &body[1].kind else {
+            panic!("the wrap's second statement is its try: {body:?}");
+        };
+        let error = catches[0].variable.as_deref().expect("the catch binds the error");
+        assert!(crate::names::is_generated_local_name(error), "{error}");
     }
 }
