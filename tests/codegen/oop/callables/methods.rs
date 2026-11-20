@@ -89,11 +89,12 @@ echo $value;
     assert_eq!(out, "6");
 }
 
-/// Tests that a closure alias (two variables holding the same closure) correctly propagates
-/// by-ref parameter modifications when invoked via `call_user_func`.
+/// `call_user_func()` cannot pass a value argument by reference: PHP 8 reports the
+/// by-reference warning and leaves the caller's variable unchanged, even through a closure
+/// alias.
 #[test]
-fn test_call_user_func_closure_alias_preserves_by_ref_params() {
-    let out = compile_and_run(
+fn test_call_user_func_closure_alias_warns_on_by_ref_parameter() {
+    let output = compile_and_run_capture(
         r#"<?php
 $f = function (&$x) {
     $x = $x + 1;
@@ -104,7 +105,12 @@ call_user_func($g, $value);
 echo $value;
 "#,
     );
-    assert_eq!(out, "6");
+    assert_eq!(output.stdout, "5");
+    assert!(
+        output.stderr.contains("must be passed by reference"),
+        "missing by-reference warning: {}",
+        output.stderr
+    );
 }
 
 /// Tests that an instance method called directly with multiple by-ref array parameters

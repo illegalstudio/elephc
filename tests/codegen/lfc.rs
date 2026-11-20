@@ -105,7 +105,7 @@ fn compile_lfc_eval_project_and_run(
     // Opaque eval retains timezone, tokenizer and compression-backed Phar methods.
     let mut checker_libraries = vec![
         "elephc_tz".to_string(), "elephc_tokenizer".to_string(), "elephc_filter".to_string(),
-        "z".to_string(), "bz2".to_string(),
+        "elephc_uri".to_string(), "z".to_string(), "bz2".to_string(),
     ];
     if target().platform == Platform::MacOS {
         checker_libraries.push("iconv".to_string());

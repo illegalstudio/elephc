@@ -92,6 +92,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["filter"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_uri",
+        package: "elephc-uri",
+        php_extensions: &["uri"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_tls",
         package: "elephc-tls",
         php_extensions: &["openssl"],

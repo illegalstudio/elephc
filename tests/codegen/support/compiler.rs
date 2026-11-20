@@ -623,6 +623,20 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         elephc::ir_lower::enable_native_reference_validation(&mut ir_module)
             .expect("native reference declaration validators must be valid EIR");
     }
+    // Mirror `pipeline::backend`: the eval catalog exposes the PHP 8.5 URI classes, so the
+    // interpreter's compiled method bodies need the URI bridge even when no AOT source names it.
+    if check_result
+        .required_libraries
+        .iter()
+        .any(|library| library == "elephc_magician")
+        && php_version >= elephc::php_version::PhpVersion::Php85
+        && !check_result
+            .required_libraries
+            .iter()
+            .any(|library| library == "elephc_uri")
+    {
+        check_result.required_libraries.push("elephc_uri".to_string());
+    }
     // Mirror `pipeline::backend`: Core/mbstring INI overrides reach the shared request
     // configuration only when the program uses the shared runtime. This is what makes
     // `ini_get('filter.default_flags')` report the fixture `--INI--` value.
@@ -688,6 +702,7 @@ fn set_fixture_linked_extensions(libraries: &[String]) {
             "elephc_pdo" => Some("PDO"),
             "elephc_crypto" => Some("hash"),
             "elephc_filter" => Some("filter"),
+            "elephc_uri" => Some("uri"),
             "elephc_bcmath" => Some("bcmath"),
             "elephc_gmp" => Some("gmp"),
             "elephc_random" => Some("random"),
