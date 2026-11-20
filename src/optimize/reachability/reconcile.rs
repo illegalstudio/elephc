@@ -11,6 +11,8 @@
 //! - Shared virtual methods retain identical slots along every live inheritance lineage.
 //! - Bridge runtimes are recomputed apart from link identity, so a pruned call that needed a
 //!   bridge runtime stops enabling it even when a native call keeps the library linked.
+//! - Libraries a builtin callable reference requires are never dropped: the usage scan sees
+//!   only direct calls, so it cannot prove such a reference died with its declaration.
 
 use std::collections::{HashMap, HashSet};
 
@@ -450,7 +452,15 @@ fn recompute_required_libraries(
         .values()
         .filter_map(|signature| signature.library.clone())
         .collect();
+    let callable_libraries: HashSet<&str> = check
+        .callable_builtin_libraries
+        .iter()
+        .map(String::as_str)
+        .collect();
     check.required_libraries.retain(|library| {
+        if callable_libraries.contains(library.as_str()) {
+            return true;
+        }
         let removed_builtin_requirement = original_builtin_libraries.contains(library)
             && !remaining_builtin_libraries.contains(library)
             && !remaining_extern_libraries.contains(library);
@@ -464,7 +474,8 @@ fn recompute_required_libraries(
     let required = &check.required_libraries;
     check.runtime_bridge_libraries.retain(|library| {
         let removed_runtime_requirement = original.runtime_bridges.contains(library)
-            && !remaining.runtime_bridges.contains(library);
+            && !remaining.runtime_bridges.contains(library)
+            && !callable_libraries.contains(library.as_str());
         required.contains(library) && !removed_runtime_requirement
     });
 }

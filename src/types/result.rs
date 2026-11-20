@@ -198,6 +198,13 @@ pub struct CheckResult {
     /// A library missing here was required only for extension identity by calls that
     /// lower natively; EIR feature discovery remains authoritative for surviving calls.
     pub runtime_bridge_libraries: Vec<String>,
+    /// Libraries required by builtins named as callable values (`name(...)`, a string
+    /// callback, or a literal kept by a declared `callable`).
+    ///
+    /// The reachability usage scan sees only direct calls, so it cannot prove that a callable
+    /// reference died with a pruned declaration; reconciliation keeps these libraries, and
+    /// their bridge runtimes, linked.
+    pub callable_builtin_libraries: Vec<String>,
     pub warnings: Vec<CompileWarning>,
     /// Statically-decided access violations lowered to runtime exception throws,
     /// keyed by the owning body scope and the source span of the offending
