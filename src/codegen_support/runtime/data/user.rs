@@ -1730,10 +1730,17 @@ pub(crate) fn emit_runtime_data_user(
                     .map(|prop_index| {
                         let (_, declaring_class) =
                             class_info.property_slot_owner(prop_index, class_name);
+                        // A user subclass of a Reflection class inherits the builtin's public
+                        // `name`/`class`, whose value lives in the hidden `__name`/`__class` slot
+                        // (the real slot is never written): read the row from the backing slot.
+                        let value_index = reflection_public_backing_index(
+                            classes, class_info, class_name, prop_index,
+                        )
+                        .unwrap_or(prop_index);
                         (
                             mangled_property_slot_name(class_info, class_name, prop_index),
-                            class_info.property_slot_offset(prop_index),
-                            serialized_property_tag(classes, class_info, class_name, prop_index),
+                            class_info.property_slot_offset(value_index),
+                            serialized_property_tag(classes, class_info, class_name, value_index),
                             all_class_id_by_name
                                 .get(declaring_class)
                                 .copied()
@@ -4801,6 +4808,34 @@ fn var_dump_descriptor_rows(
             })
         })
         .collect()
+}
+
+/// The slot index backing the public `name`/`class` row of a user subclass of a built-in
+/// Reflection class, or `None` for any other property.
+fn reflection_public_backing_index(
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
+    class_info: &ClassInfo,
+    class_name: &str,
+    prop_index: usize,
+) -> Option<usize> {
+    let prop_name = &class_info.properties.get(prop_index)?.0;
+    if !matches!(prop_name.as_str(), "name" | "class") {
+        return None;
+    }
+    let declaring = class_info
+        .property_declaring_classes
+        .get(prop_name)
+        .map(String::as_str)
+        .unwrap_or(class_name);
+    if !REFLECTION_CLASS_NAMES.contains(&declaring) {
+        return None;
+    }
+    let backing = crate::types::checker::reflection_virtual_property_backing_in(
+        declaring,
+        prop_name,
+        |c| classes.get(c).and_then(|info| info.parent.clone()),
+    )?;
+    class_info.visible_property_index(backing)
 }
 
 /// Returns whether `prop_name` is one of the compiler-only private backing slots elephc
