@@ -79,13 +79,18 @@ fn binary_pair_supported(op: EvalBinOp, left: &Type, right: &Type,
 ) -> bool {
     if object_pair_supported(op, left, right, context) { return true; }
     if op == EvalBinOp::Add && array_source(left) && array_source(right) { return true; }
-    if op == EvalBinOp::Concat { return string_context_source(left, context) && string_context_source(right, context); }
-    let accepts = |ty| match op {
-        EvalBinOp::BitAnd | EvalBinOp::BitOr | EvalBinOp::BitXor
-            | EvalBinOp::ShiftLeft | EvalBinOp::ShiftRight => scalar_atom(ty,
-                &["int", "float", "bool", "false", "true", "null", "void"]),
-        _ => scalar_atom(ty, &["int", "float", "string", "bool", "false", "true", "null", "void"]),
-    };
+    if op == EvalBinOp::Concat {
+        if context.semantic_profile().contains(StrictFeature::Strings) {
+            return *left == Type::atom("string") && *right == Type::atom("string");
+        }
+        return string_context_source(left, context) && string_context_source(right, context);
+    }
+    if let Some(rule) = numeric_domains::operator(op).and_then(|operator|
+        elephc_semantics::numeric_domains::operand_rule(context.semantic_profile(), operator)) {
+        return scalar_source_kind(left).is_some_and(|kind| rule.domain.allows(kind))
+            && scalar_source_kind(right).is_some_and(|kind| rule.domain.allows(kind));
+    }
+    let accepts = |ty| scalar_atom(ty, &["int", "float", "string", "bool", "false", "true", "null", "void"]);
     accepts(left) && accepts(right)
 }
 
@@ -209,4 +214,20 @@ fn scalar_target_kinds(ty: &Type) -> elephc_semantics::conversions::AllowedKinds
         Type::Atom(name) if matches!(name.as_str(), "true" | "false") => A::EMPTY,
         _ => scalar_source_kind(ty).map_or(A::EMPTY, A::one),
     }
+}
+
+/// Applies the selected unary signature to logical kinds while preserving reviewed native handlers.
+pub(super) fn unary_source_supported(op: EvalUnaryOp, ty: &Type, context: &ElephcEvalContext) -> bool {
+    use elephc_semantics::{conversions::ValueKind as K, numeric_domains::NumericOperator as N};
+    if op == EvalUnaryOp::BitNot && operator_class(ty, context)
+        .and_then(|class| class.operators).is_some_and(|operators| operators.bit_not.is_some()) { return true; }
+    if matches!(op, EvalUnaryOp::Plus | EvalUnaryOp::Negate)
+        && object_pair_supported(if op == EvalUnaryOp::Plus { EvalBinOp::Add } else { EvalBinOp::Sub },
+            &Type::atom("int"), ty, context) { return true; }
+    let Some(kind) = scalar_source_kind(ty) else { return false; };
+    let operator = if op == EvalUnaryOp::BitNot { N::BitNot } else { N::Unary };
+    if let Some(rule) = elephc_semantics::numeric_domains::operand_rule(context.semantic_profile(), operator) {
+        return rule.domain.allows(kind);
+    }
+    op != EvalUnaryOp::BitNot || matches!(kind, K::Integer | K::Float | K::String)
 }

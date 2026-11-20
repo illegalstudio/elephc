@@ -88,8 +88,7 @@ pub(super) fn unary(op: EvalUnaryOp, expr: &EvalExpr, context: &mut ElephcEvalCo
         let operand = whole_source(sources[0].as_ref());
         if op != EvalUnaryOp::LogicalNot {
             mixed_source_proofs::require_source(&operand, "unary operations", context, values,
-                |ty, _| matches!(ty, Type::Atom(name) if matches!(name.as_str(),
-                    "int" | "float" | "string" | "bool" | "true" | "false" | "null" | "void")))?;
+                |ty, context| mixed_source_proofs::unary_source_supported(op, ty, context))?;
         }
         let value = eval_unary_value(op, operands[0], context, values)?;
         let source = if op == EvalUnaryOp::LogicalNot { Type::atom("bool") }

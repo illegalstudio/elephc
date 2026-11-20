@@ -12,7 +12,7 @@ use super::*;
 use elephc_semantics::{conversions::ValueKind, numeric_domains::{self as policy, NumericOperator, IntegerBitOp}};
 
 /// Maps existing eval operators into the same language signatures used by the compiler.
-fn operator(op: EvalBinOp) -> Option<NumericOperator> {
+pub(super) fn operator(op: EvalBinOp) -> Option<NumericOperator> {
     Some(match op {
         EvalBinOp::Add | EvalBinOp::Sub | EvalBinOp::Mul => NumericOperator::Arithmetic,
         EvalBinOp::Div => NumericOperator::Division, EvalBinOp::Mod => NumericOperator::Modulo,
