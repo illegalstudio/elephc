@@ -143,10 +143,9 @@ fn emit_runtime_callable_invoker_named(
     // internal `ext/uri` prelude classes are exempt, as their direct calls are: PHP coerces a
     // `null` there with a deprecation. Whether the invoker checks keys its cache entry.
     let internal_callee = current_class.is_some_and(crate::uri_prelude::is_internal_uri_class);
-    let scalar_guards = invoker_scalar_guards(
-        ctx, sig, php_return_status && !internal_callee, guard_callee,
-    );
-    let scalar_guarded = scalar_guards.is_some();
+    let scalar_guards = invoker_scalar_guards(ctx, sig, php_return_status, guard_callee, internal_callee);
+    // 0: no checks, 1: checks, 2: strict-mode checks only (an internal URI method).
+    let scalar_guarded = scalar_guards.as_ref().map_or(0, |guards| if guards.strict_only { 2 } else { 1 });
     let guard_callee = scalar_guards.as_ref().and_then(|guards| guards.callee.clone());
     if let Some(label) = ctx.shared.runtime_callable_invoker(
         sig, captures, owns_string_return, php_return_status, &defaults, scalar_guarded,
@@ -189,6 +188,7 @@ fn invoker_scalar_guards(
     sig: &FunctionSig,
     php_return_status: bool,
     callee: Option<&str>,
+    strict_only: bool,
 ) -> Option<crate::codegen::runtime_callable_invoker::InvokerScalarGuards> {
     if !php_return_status {
         return None;
@@ -199,13 +199,14 @@ fn invoker_scalar_guards(
     if guarded.is_empty() {
         return None;
     }
-    if guarded.iter().any(|ty| matches!(ty, PhpType::Int | PhpType::Float)) {
+    if !strict_only && guarded.iter().any(|ty| matches!(ty, PhpType::Int | PhpType::Float)) {
         super::scalar_param_guard::emit_invoker_numeric_param_helpers(ctx);
     }
     Some(crate::codegen::runtime_callable_invoker::InvokerScalarGuards {
         stringable: super::objects::classify_named_target(ctx, "Stringable"),
         eval_bridge: ctx.module.required_runtime_features.eval_bridge,
         callee: callee.map(str::to_string),
+        strict_only,
     })
 }
 

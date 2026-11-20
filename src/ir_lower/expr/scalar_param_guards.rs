@@ -22,7 +22,10 @@
 //!   with PHP's single `int`-to-`float` widening.
 //! - User calls only (a `call_description` is set): builtins carry `declared_params: false`
 //!   and extern calls clear `call_description`, so neither is ever guarded. Methods of the
-//!   internal `ext/uri` prelude classes are skipped too: PHP coerces `null` for them.
+//!   internal `ext/uri` prelude classes are skipped in coercive mode (PHP coerces `null` for
+//!   them) and checked without a "called in" suffix under `strict_types=1`.
+//! - A method whose overrides (subclasses, implementors) declare a different parameter is not
+//!   checked: the guard only knows the receiver's static class, PHP binds the selected method.
 //! - `?T`, unions, `mixed` and a `T $p = null` default stay accepting `null`.
 //! - The checker records each such argument (`CheckResult::scalar_guard_arg_sites`) so the AST
 //!   optimizer keeps the call `may_throw`; both sides share `types::param_binding`'s predicates.
@@ -216,16 +219,18 @@ pub(super) fn guarded_scalar_param(
     source: GuardSource,
 ) -> Option<PhpType> {
     let description = ctx.call_description.as_deref()?;
-    // The `ext/uri` classes are internal in PHP, so a `null` argument is coerced with a
-    // deprecation rather than refused, and a refusal carries no "called in" suffix. Their
-    // prelude methods keep the binding they had before this guard existed.
-    if description
-        .rsplit_once("::")
-        .is_some_and(|(class, _)| crate::uri_prelude::is_internal_uri_class(class))
-    {
+    // The `ext/uri` classes are internal in PHP: in coercive mode a `null` argument is coerced
+    // with a deprecation rather than refused, so their prelude methods keep the binding they
+    // had before this guard existed. `strict_types=1` checks them like any callee.
+    if is_internal_uri_callee(description) && !crate::source::current_strict_types() {
         return None;
     }
     let declared = crate::types::param_binding::runtime_scalar_guard_param(sig, index)?;
+    // The check uses the signature lowering resolved from the receiver's static class, but PHP
+    // binds the method the object selects at run time: an override may accept more.
+    if !overrides_keep_scalar_param(ctx, description, index, declared) {
+        return None;
+    }
     if !matches!(
         ctx.builder.value_type(value),
         IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)
@@ -244,6 +249,51 @@ pub(super) fn guarded_scalar_param(
         GuardSource::Skip => false,
     };
     needed.then(|| declared.clone())
+}
+
+/// Returns whether `description` (`Class::method`) names a method of an internal URI class.
+fn is_internal_uri_callee(description: &str) -> bool {
+    description
+        .rsplit_once("::")
+        .is_some_and(|(class, _)| crate::uri_prelude::is_internal_uri_class(class))
+}
+
+/// Returns whether the method `description` names (`Declaring::method`) is the one PHP binds
+/// at run time for every receiver the call can see, so its parameter check is exact.
+///
+/// The check only knows the receiver's static class. When a subclass, or another class
+/// implementing the interface, overrides the method, PHP checks the selected override instead:
+/// a wider parameter (`mixed`, `?string`, a union) accepts values the declaring method refuses,
+/// and even an identical one names its own class in the `TypeError`. Such a call is left
+/// unchecked. A plain function (no `::`) has no overrides.
+fn overrides_keep_scalar_param(
+    ctx: &LoweringContext<'_, '_>,
+    description: &str,
+    index: usize,
+    declared: &PhpType,
+) -> bool {
+    let Some((declaring, method)) = description.rsplit_once("::") else {
+        return true;
+    };
+    let declaring_key = crate::names::php_symbol_key(declaring);
+    let method_key = crate::names::php_symbol_key(method);
+    let is_declaring = |class: &str| crate::names::php_symbol_key(class) == declaring_key;
+    ctx.classes.iter().all(|(class_name, info)| {
+        let related = super::property_access::class_extends_class(ctx, class_name, declaring)
+            || info.interfaces.iter().any(|interface| is_declaring(interface));
+        if !related {
+            return true;
+        }
+        let selected = [
+            (info.methods.get(&method_key), info.method_impl_classes.get(&method_key)),
+            (info.static_methods.get(&method_key), info.static_method_impl_classes.get(&method_key)),
+        ];
+        selected.into_iter().all(|(sig, implementation)| match sig {
+            None => true,
+            Some(sig) => implementation.map_or(is_declaring(class_name), |class| is_declaring(class))
+                && crate::types::param_binding::runtime_scalar_guard_param(sig, index) == Some(declared),
+        })
+    })
 }
 
 /// Returns whether positional argument lowering at the current depth leaves guarded operands
@@ -312,10 +362,16 @@ pub(super) fn guard_scalar_param(
     }).count() + 1;
     let callable = ctx.call_description.clone().unwrap_or_default();
     let source_path = ctx.source_path().unwrap_or("unknown").to_string();
-    // PHP's "called in" names the line where the call starts, not the argument's line.
+    // PHP's "called in" names the line where the call starts, not the argument's line. An
+    // internal method's refusal (a URI method under `strict_types=1`) has no such suffix.
     let line = ctx.call_site_span.map_or(span.line, |call| call.line);
+    let called_in = if is_internal_uri_callee(&callable) {
+        String::new()
+    } else {
+        format!(", called in {source_path} on line {line}")
+    };
     let encoded = format!(
-        "{mode}{release}\u{1f}{}(): Argument #{argument} (${}) must be of type {}, \u{1f} given, called in {source_path} on line {line}",
+        "{mode}{release}\u{1f}{}(): Argument #{argument} (${}) must be of type {}, \u{1f} given{called_in}",
         guard_callee_label(ctx, &callable),
         sig.params[index].0,
         crate::types::diagnostic_names::php_type_name(&declared),

@@ -23,6 +23,7 @@ pub(super) fn lower_instance_callable_call_user_func(
 ) -> Option<LoweredValue> {
     let result_type = static_callable_return_type(ctx, &callback);
     let signature = instance_callable_signature(&callback).cloned();
+    let guard_description = super::closure_calls::instance_callable_guard_description(ctx, &callback);
     let callback = lower_expr(ctx, callback_expr);
     Some(emit_rooted_expr_call(
         ctx,
@@ -31,6 +32,7 @@ pub(super) fn lower_instance_callable_call_user_func(
         callback_args,
         result_type,
         expr.span,
+        guard_description,
     ))
 }
 
@@ -46,12 +48,13 @@ pub(super) fn emit_rooted_expr_call(
     args: &[Expr],
     result_type: PhpType,
     span: Span,
+    guard_description: Option<String>,
 ) -> LoweredValue {
     let result_staging = prepublish_call_result(ctx, &result_type, span);
     let (callback, callback_owner) = root_owned_call_operand(ctx, callback, span);
     let mut operands = vec![callback.value];
     let reference_property_guard_mark = ctx.reference_property_guards.len();
-    operands.extend(lower_args_with_signature(ctx, signature, args));
+    operands.extend(super::closure_calls::lower_bound_method_args(ctx, signature, args, guard_description, span));
     let conversion_roots = root_unpublished_argument_conversions(ctx, &mut operands[1..], span);
     // `ExprCall` can dispatch a first-class `__construct` callable; publish the invocation
     // site's `strict_types` after the arguments are evaluated.
@@ -152,7 +155,7 @@ pub(super) fn lower_call_user_func_from_lowered_callback(
         return lower_call_user_func_descriptor_invoke_from_value(ctx, callback, args, sig, expr);
     }
     if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
-        return emit_rooted_expr_call(ctx, callback, None, args, PhpType::Mixed, expr.span);
+        return emit_rooted_expr_call(ctx, callback, None, args, PhpType::Mixed, expr.span, None);
     }
     let callback = coerce_descriptor_invoker_mixed_value(ctx, callback, expr.span);
     lower_call_user_func_descriptor_invoke_from_value(ctx, callback, args, sig, expr)
