@@ -690,5 +690,3 @@ remaining guarantees stay gated. Two future Coercions property-reference probe
 files remain unregistered and outside109. Continue with their actual native
 execution and remaining conversion/cast/Locals admission work, then the approved
 nullability/mixed/initialization and exact-array guarantees.
-
-

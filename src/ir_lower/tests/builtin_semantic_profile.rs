@@ -40,4 +40,3 @@ fn strict_profile_builtin_inputs_reach_direct_and_callable_lowering_on_all_targe
         }
     }
 }
-

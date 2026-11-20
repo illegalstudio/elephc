@@ -25,4 +25,3 @@ function throwingForeachKey(): mixed { echo 'E'; throw new RuntimeException('key
 try { foreach ($hash[throwingForeachKey()] as &$value) { echo 'X'; } }
 catch (RuntimeException $error) { echo 'T|'; unset($error); }
 unset($value);
-

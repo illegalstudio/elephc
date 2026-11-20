@@ -218,4 +218,3 @@ fn declared_type_allows_null(declared_type: &EvalParameterType) -> bool {
                 .iter()
                 .any(|variant| matches!(variant, EvalParameterTypeVariant::Mixed)))
 }
-

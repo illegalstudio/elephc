@@ -34,4 +34,3 @@ fn test_strict_literal_eval_independent_native_copy_origins() {
         }
     }
 }
-

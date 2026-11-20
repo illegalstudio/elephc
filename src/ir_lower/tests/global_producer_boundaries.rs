@@ -69,4 +69,3 @@ fn global_producer_boundaries_opaque_scope_values_and_owners() {
         }
     }
 }
-

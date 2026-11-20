@@ -76,4 +76,3 @@ fn conditional_untyped_parameters_keep_open_entry_contracts() {
         }
     }
 }
-

@@ -62,4 +62,3 @@ fn try_lower_with_capture(source: &str, target: Target, profile: SemanticProfile
     if optimize { crate::ir_passes::optimize_module(&mut module); }
     Ok(module)
 }
-

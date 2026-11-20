@@ -201,4 +201,3 @@ TypeError status2 before result publication, preserve the output slot and borrow
 input, and transfer the pending Throwable correctly. The new five-target emitter
 unit and native regression pass, along with three boundary/owner controls, the
 compiler build, architecture gate, assembly comment checks and diff hygiene.
-
