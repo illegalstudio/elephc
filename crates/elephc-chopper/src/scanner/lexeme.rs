@@ -18,12 +18,7 @@ pub fn identifier_len(source: &[u8]) -> usize {
 /// Returns the byte length of a run of digits, allowing underscores between digits.
 #[inline]
 pub fn digits_len(source: &[u8], radix: u32) -> usize {
-    let valid = |byte: &u8| match radix {
-        2 => matches!(byte, b'0' | b'1'),
-        8 => matches!(byte, b'0'..=b'7'),
-        16 => byte.is_ascii_hexdigit(),
-        _ => byte.is_ascii_digit(),
-    };
+    let valid = |&byte: &u8| digit_in_radix(byte, radix);
     if !source.first().is_some_and(valid) {
         return 0;
     }
@@ -36,6 +31,17 @@ pub fn digits_len(source: &[u8], radix: u32) -> usize {
         } else {
             return end;
         }
+    }
+}
+
+/// Recognizes a single ASCII digit for the PHP-supported bases.
+#[inline]
+pub(super) fn digit_in_radix(byte: u8, radix: u32) -> bool {
+    match radix {
+        2 => matches!(byte, b'0' | b'1'),
+        8 => matches!(byte, b'0'..=b'7'),
+        16 => byte.is_ascii_hexdigit(),
+        _ => byte.is_ascii_digit(),
     }
 }
 

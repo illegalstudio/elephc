@@ -1,110 +1,115 @@
 //! Purpose:
-//! Owns the main PHP token scanning loop and dispatches literal-specific scanners.
-//! Skips whitespace/comments and emits structural, operator, keyword, and literal tokens.
+//! Projects Chopper byte scanner events to the token representation used by the compiler.
 //!
 //! Called from:
-//! - `crate::syntax::lexer::tokenize()`.
+//! - The syntax lexer entry points for source files and TOKEN_PARSE validation.
 //!
 //! Key details:
-//! - Multi-character operators and PHP opening tags must be recognized before shorter prefixes.
+//! - Source coordinates count Unicode scalars and identify the physical source file.
+//! - The scanner determines token boundaries. Literal decoding preserves the
+//!   compiler's current representation of interpolated strings.
 
 use super::cursor::Cursor;
 use super::literals;
 use super::token::{spanned, SpannedToken, Token, TokenMetadata};
+use crate::scanner::{scan_compiler, CompilerLexeme, CompilerOutput, Operator};
 use crate::syntax::errors::CompileError;
+use crate::syntax::span::Span;
 use crate::syntax::source::SourceMode;
-use crate::scanner::{compiler_trivia_len, identifier_start, operator, Operator};
 
-/// Scans the full PHP source into a stream of syntax tokens with source metadata.
-///
-/// Requires `<?php` as the first five characters. Dispatches to `literals` for
-/// strings (which may contain interpolation), heredoc/nowdoc, numbers, variables,
-/// and keywords. Returns `Token::Eof` at end-of-input.
-///
-/// # Errors
-/// Returns `CompileError` when PHP mode lacks its opening tag, LFC contains a
-/// physical PHP tag at a code boundary, or either mode contains invalid syntax.
-pub fn scan_tokens(
-    source: &str,
-    mode: SourceMode,
-) -> Result<Vec<SpannedToken>, CompileError> {
-    scan_tokens_in_source(source, mode, 0)
-}
-
-/// Tokenizes one physical source while assigning a disambiguating source identity to its spans.
+/// Tokenizes one source while assigning a physical source identity to its spans.
 pub(super) fn scan_tokens_in_source(
     source: &str,
     mode: SourceMode,
     source_id: u32,
 ) -> Result<Vec<SpannedToken>, CompileError> {
-    // A leading UTF-8 byte-order mark (U+FEFF) is ignored, matching editors that save PHP
-    // files as BOM-prefixed UTF-8; stripping it keeps the `<?php` open tag at the start.
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
-    let mut cursor = Cursor::new_in_source(source, source_id);
-    let mut tokens = Vec::new();
-
-    let span = cursor.span();
-    if mode.requires_open_tag() {
-        cursor.skip_bytes(compiler_trivia_len(cursor.remaining().as_bytes()));
-        let span = cursor.span();
-        if cursor.remaining().starts_with("<?php") {
-            cursor.skip_ascii(5);
-            tokens.push(spanned(Token::OpenTag, span));
-        } else {
-            return Err(CompileError::new(span, "Expected '<?php' at start of file"));
-        }
-    } else {
-        tokens.push(spanned(Token::OpenTag, span));
+    let projection = scan_compiler(
+        source.as_bytes(),
+        mode.requires_open_tag(),
+        mode == SourceMode::Lfc,
+        crate::syntax::parser::validation_only(),
+        Projection { cursor: Cursor::new_in_source(source, source_id), tokens: Vec::new(), error: None },
+    );
+    let Projection { mut cursor, mut tokens, error } = projection;
+    if let Some(error) = error {
+        return Err(error);
     }
-
-    loop {
-        cursor.skip_bytes(compiler_trivia_len(cursor.remaining().as_bytes()));
-
-        if cursor.is_eof() {
-            tokens.push(spanned(Token::Eof, cursor.span()));
-            break;
-        }
-
-        let span = cursor.span();
-        let remaining = cursor.remaining();
-        if matches!(mode, SourceMode::Lfc)
-            && (remaining.starts_with("<?php") || remaining.starts_with("?>"))
-        {
-            return Err(CompileError::new(
-                span,
-                "PHP opening and closing tags are not valid in .lfc source files",
-            ));
-        } else if remaining.starts_with('"') {
-            // Double-quoted strings may contain interpolation ($var)
-            let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
-            tokens.extend(string_tokens);
-        } else if remaining.starts_with("<<<") {
-            // Heredoc/nowdoc — may contain interpolation ($var) for heredoc
-            cursor.skip_ascii(3);
-            let heredoc_tokens = literals::scan_heredoc(&mut cursor)?;
-            tokens.extend(heredoc_tokens);
-        } else {
-            let starts_word = remaining.as_bytes().first().copied().is_some_and(identifier_start);
-            let token = scan_token(&mut cursor, remaining.as_bytes())?;
-            let end = cursor.span();
-            let span = crate::syntax::span::Span::with_end_from(span, end);
-            let metadata = if starts_word && !matches!(token, Token::Identifier(_)) {
-                let consumed_len = remaining.len() - cursor.remaining().len();
-                let source_spelling = &remaining[..consumed_len];
-                if token.canonical_word_spelling() == Some(source_spelling) {
-                    TokenMetadata::new(span)
-                } else {
-                    TokenMetadata::with_source_spelling(span, source_spelling)
-                }
-            } else {
-                TokenMetadata::new(span)
-            };
-            tokens.push((token, metadata));
-        }
-    }
-
+    cursor.skip_bytes(cursor.remaining().len());
+    tokens.push(spanned(Token::Eof, cursor.span()));
     super::qualified_names::identify_reserved_name_segments(&mut tokens);
     Ok(tokens)
+}
+
+/// Tracks physical positions and produces one syntax token stream.
+struct Projection<'a> {
+    cursor: Cursor<'a>,
+    tokens: Vec<SpannedToken>,
+    error: Option<CompileError>,
+}
+
+impl CompilerOutput for Projection<'_> {
+    /// Materializes one scanner event and stops at the first compiler diagnostic.
+    fn emit(&mut self, lexeme: CompilerLexeme, start: usize, end: usize) -> Option<usize> {
+        self.cursor.skip_bytes(start - self.cursor.position());
+        match self.project(lexeme, end - start) {
+            Ok(()) => Some(self.cursor.position()),
+            Err(error) => {
+                self.error = Some(error);
+                None
+            }
+        }
+    }
+}
+
+impl Projection<'_> {
+    /// Converts a bounded lexeme or decodes a string body opened by the byte scanner.
+    fn project(&mut self, lexeme: CompilerLexeme, len: usize) -> Result<(), CompileError> {
+        let span = self.cursor.span();
+        let text = &self.cursor.remaining()[..len];
+        self.cursor.skip_bytes(len);
+        let token = match lexeme {
+            CompilerLexeme::OpenTag => {
+                self.tokens.push(spanned(Token::OpenTag, span));
+                return Ok(());
+            }
+            CompilerLexeme::MissingOpenTag => {
+                return Err(CompileError::new(span, "Expected '<?php' at start of file"));
+            }
+            CompilerLexeme::ForbiddenTag => {
+                return Err(CompileError::new(
+                    span,
+                    "PHP opening and closing tags are not valid in .lfc source files",
+                ));
+            }
+            CompilerLexeme::DoubleQuoted => {
+                self.tokens.extend(literals::decode_double_quoted_body(&mut self.cursor, span)?);
+                return Ok(());
+            }
+            CompilerLexeme::Heredoc => {
+                self.tokens.extend(literals::scan_heredoc(&mut self.cursor)?);
+                return Ok(());
+            }
+            CompilerLexeme::Attribute => Token::AttrOpen,
+            CompilerLexeme::Variable => literals::variable_token(&text[1..], &self.cursor)?,
+            CompilerLexeme::Word => literals::word_token(text),
+            CompilerLexeme::Number(kind) => literals::number_token(text, kind, span, &self.cursor)?,
+            CompilerLexeme::SingleQuoted { terminated } => literals::single_quoted_token(text, terminated, span)?,
+            CompilerLexeme::Operator(operator) => operator_token(operator),
+            CompilerLexeme::Byte(byte) => byte_token(byte, span)?,
+        };
+        let span = Span::with_end_from(span, self.cursor.span());
+        let metadata = if matches!(lexeme, CompilerLexeme::Word)
+            && !matches!(token, Token::Identifier(_))
+            && token.canonical_word_spelling() != Some(text)
+        {
+            TokenMetadata::with_source_spelling(span, text)
+        } else {
+            TokenMetadata::new(span)
+        };
+        self.tokens.push((token, metadata));
+        Ok(())
+    }
 }
 
 /// Converts a lexical operator into the corresponding compiler token.
@@ -148,30 +153,8 @@ fn operator_token(operator: Operator) -> Token {
     }
 }
 
-/// Dispatches one token to Chopper's operator scanner or a compiler literal adapter.
-fn scan_token(cursor: &mut Cursor, remaining: &[u8]) -> Result<Token, CompileError> {
-    let Some(&byte) = remaining.first() else { return Ok(Token::Eof); };
-    if identifier_start(byte) {
-        return literals::scan_keyword(cursor);
-    }
-    match byte {
-        b'$' => return literals::scan_variable(cursor),
-        b'\'' => return literals::scan_single_string(cursor),
-        b'0'..=b'9' => return literals::scan_number(cursor),
-        b'.' if remaining.get(1).is_some_and(u8::is_ascii_digit) => {
-            return literals::scan_dot_float(cursor);
-        }
-        _ => {}
-    }
-    if let Some((op, len)) = operator(remaining) {
-        cursor.skip_ascii(len);
-        return Ok(operator_token(op));
-    }
-    if remaining.starts_with(b"#[") {
-        cursor.skip_ascii(2);
-        return Ok(Token::AttrOpen);
-    }
-
+/// Converts punctuation or reports an unexpected source byte at its original position.
+fn byte_token(byte: u8, span: Span) -> Result<Token, CompileError> {
     let token = match byte {
         b';' => Token::Semicolon,
         b',' => Token::Comma,
@@ -200,10 +183,9 @@ fn scan_token(cursor: &mut Cursor, remaining: &[u8]) -> Result<Token, CompileErr
         b'.' => Token::Dot,
         b'@' => Token::At,
         _ => return Err(CompileError::new(
-            cursor.span(),
+            span,
             &format!("Unexpected character: '{}'", char::from(byte)),
         )),
     };
-    cursor.skip_ascii(1);
     Ok(token)
 }

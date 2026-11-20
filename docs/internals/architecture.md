@@ -305,12 +305,13 @@ deliberately keeps the object at that path for debuggers to follow), and
 `dsymutil` names its bundle after the binary it is given.
 
 The compiler re-exports its lexer, parser, AST, source profiles, spans, and names
-from `elephc_chopper::syntax`. The `elephc_chopper::scanner` module supplies the
-byte-preserving scanner for the PHP tokenizer APIs. The compiler lexer and PHP
-scanner share recognition of operators, identifier runs, numeric digits, and trivia. The
-compiler adapts those byte ranges to source-aware tokens and keeps its own
-literal token construction and numeric diagnostics. Chopper also recognizes
-string delimiters, braced interpolation expressions, and heredoc labels.
+from `elephc_chopper::syntax`. The `elephc_chopper::scanner` module runs the
+same byte scanner for the compiler, the PHP tokenizer APIs, and Magician. The
+scanner keeps the token boundary rules for each source profile. The compiler
+projects recognized lexemes to syntax tokens, attaches source spans, and decodes
+literals with its existing diagnostics. The PHP tokenizer keeps trivia and the
+original byte ranges. The compiler's double-quote and heredoc decoders consume
+their literal bodies and return the offset where the shared scanner resumes.
 
 For dynamic eval fragments, the Chopper scanner starts in PHP code mode and
 preserves offsets in the original string. It starts in HTML mode for included
@@ -332,8 +333,8 @@ validates UTF-8 in code and retains the original bytes of inline HTML.
 
 The tokenizer bridge and Magician share the Rust API in
 `elephc_chopper::syntax::php_tokenizer`. It uses the scanner for every call. With
-`TOKEN_PARSE`, it enters a scoped validation mode on the same parser, including
-the lexer and prechecks for the normalized view. The mode discards each parsed
+`TOKEN_PARSE`, it scans the normalized validation view through the same scanner
+and enters a scoped mode on the shared parser. The mode discards each parsed
 statement and collects PHP diagnostics and semi-reserved-word feedback.
 
 The full parser-enabled engine can be measured with

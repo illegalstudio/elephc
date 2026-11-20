@@ -1,6 +1,6 @@
 //! Purpose:
-//! Scans PHP variables, identifiers, keywords, constants, and compiler-extension words.
-//! Applies case-sensitive and keyword-specific token classification after collecting text.
+//! Projects PHP variables and words to compiler tokens.
+//! Applies case-sensitive and keyword-specific token classification to scanned text.
 //!
 //! Called from:
 //! - `crate::syntax::lexer::scan` through `crate::syntax::lexer::literals`.
@@ -11,7 +11,6 @@
 use super::super::cursor::Cursor;
 use super::super::token::Token;
 use crate::syntax::errors::CompileError;
-use crate::scanner::identifier_len;
 
 /// Returns true if `c` may continue a PHP identifier: an ASCII alphanumeric, `_`, or any
 /// non-ASCII character. Matches PHP's `[a-zA-Z0-9_\x80-\xff]*` continuation class.
@@ -19,16 +18,8 @@ pub(in crate::syntax::lexer) fn is_ident_continue(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || !c.is_ascii()
 }
 
-/// Scans a PHP variable (`$name`), consuming the leading `$` and collecting the
-/// identifier name. Returns `Token::This` for `$this`, or `Token::Variable(name)`
-/// otherwise. Leaves the cursor positioned after the last valid identifier character.
-pub(in crate::syntax::lexer) fn scan_variable(cursor: &mut Cursor) -> Result<Token, CompileError> {
-    cursor.advance();
-    let remaining = cursor.remaining();
-    let len = identifier_len(remaining.as_bytes());
-    let name = &remaining[..len];
-    cursor.skip_identifier(name);
-
+/// Projects a variable name, with the cursor after the lexeme for diagnostics.
+pub(in crate::syntax::lexer) fn variable_token(name: &str, cursor: &Cursor) -> Result<Token, CompileError> {
     if name.is_empty() {
         // `$$name` / `${expr}` are variable variables: the variable name is computed at runtime.
         // elephc allocates locals to fixed compile-time slots and has no per-frame variable-name
@@ -49,136 +40,126 @@ pub(in crate::syntax::lexer) fn scan_variable(cursor: &mut Cursor) -> Result<Tok
     Ok(Token::Variable(name.to_owned()))
 }
 
-/// Scans a PHP keyword, built-in constant, magic constant, or identifier.
-/// Collects alphanumeric+underscore characters, then classifies the word against
-/// case-insensitive magic constants (`__DIR__`, `__FILE__`, etc.), case-sensitive
-/// built-in constants (`INF`, `NAN`, `PHP_INT_MAX`, `M_PI`, etc.), keywords
-/// (`if`, `while`, `function`, etc.), and falls back to `Token::Identifier`.
-/// Leaves the cursor positioned after the word.
-pub(in crate::syntax::lexer) fn scan_keyword(cursor: &mut Cursor) -> Result<Token, CompileError> {
-    let remaining = cursor.remaining();
-    let len = identifier_len(remaining.as_bytes());
-    let word = &remaining[..len];
-    cursor.skip_identifier(word);
-
+/// Classifies a scanned word, including constants and compiler-specific keywords.
+pub(in crate::syntax::lexer) fn word_token(word: &str) -> Token {
     if word.eq_ignore_ascii_case("__DIR__") {
-        return Ok(Token::DunderDir);
+        return Token::DunderDir;
     }
     if word.eq_ignore_ascii_case("__FILE__") {
-        return Ok(Token::DunderFile);
+        return Token::DunderFile;
     }
     if word.eq_ignore_ascii_case("__LINE__") {
-        return Ok(Token::DunderLine);
+        return Token::DunderLine;
     }
     if word.eq_ignore_ascii_case("__FUNCTION__") {
-        return Ok(Token::DunderFunction);
+        return Token::DunderFunction;
     }
     if word.eq_ignore_ascii_case("__CLASS__") {
-        return Ok(Token::DunderClass);
+        return Token::DunderClass;
     }
     if word.eq_ignore_ascii_case("__METHOD__") {
-        return Ok(Token::DunderMethod);
+        return Token::DunderMethod;
     }
     if word.eq_ignore_ascii_case("__NAMESPACE__") {
-        return Ok(Token::DunderNamespace);
+        return Token::DunderNamespace;
     }
     if word.eq_ignore_ascii_case("__TRAIT__") {
-        return Ok(Token::DunderTrait);
+        return Token::DunderTrait;
     }
 
     match word {
-        "INF" => return Ok(Token::Inf),
-        "NAN" => return Ok(Token::Nan),
-        "PHP_INT_MAX" => return Ok(Token::PhpIntMax),
-        "PHP_INT_MIN" => return Ok(Token::PhpIntMin),
-        "PHP_FLOAT_MAX" => return Ok(Token::PhpFloatMax),
-        "M_PI" => return Ok(Token::MPi),
-        "M_E" => return Ok(Token::ME),
-        "M_SQRT2" => return Ok(Token::MSqrt2),
-        "M_PI_2" => return Ok(Token::MPi2),
-        "M_PI_4" => return Ok(Token::MPi4),
-        "M_LOG2E" => return Ok(Token::MLog2e),
-        "M_LOG10E" => return Ok(Token::MLog10e),
-        "PHP_FLOAT_MIN" => return Ok(Token::PhpFloatMin),
-        "PHP_FLOAT_EPSILON" => return Ok(Token::PhpFloatEpsilon),
-        "STDIN" => return Ok(Token::Stdin),
-        "STDOUT" => return Ok(Token::Stdout),
-        "STDERR" => return Ok(Token::Stderr),
-        "PHP_EOL" => return Ok(Token::PhpEol),
-        "PHP_OS" => return Ok(Token::PhpOs),
-        "DIRECTORY_SEPARATOR" => return Ok(Token::DirectorySeparator),
+        "INF" => return Token::Inf,
+        "NAN" => return Token::Nan,
+        "PHP_INT_MAX" => return Token::PhpIntMax,
+        "PHP_INT_MIN" => return Token::PhpIntMin,
+        "PHP_FLOAT_MAX" => return Token::PhpFloatMax,
+        "M_PI" => return Token::MPi,
+        "M_E" => return Token::ME,
+        "M_SQRT2" => return Token::MSqrt2,
+        "M_PI_2" => return Token::MPi2,
+        "M_PI_4" => return Token::MPi4,
+        "M_LOG2E" => return Token::MLog2e,
+        "M_LOG10E" => return Token::MLog10e,
+        "PHP_FLOAT_MIN" => return Token::PhpFloatMin,
+        "PHP_FLOAT_EPSILON" => return Token::PhpFloatEpsilon,
+        "STDIN" => return Token::Stdin,
+        "STDOUT" => return Token::Stdout,
+        "STDERR" => return Token::Stderr,
+        "PHP_EOL" => return Token::PhpEol,
+        "PHP_OS" => return Token::PhpOs,
+        "DIRECTORY_SEPARATOR" => return Token::DirectorySeparator,
         _ => {}
     }
 
     match word.to_ascii_lowercase().as_str() {
-        "and" => Ok(Token::And),
-        "or" => Ok(Token::Or),
-        "xor" => Ok(Token::Xor),
-        "instanceof" => Ok(Token::InstanceOf),
-        "echo" => Ok(Token::Echo),
-        "if" => Ok(Token::If),
-        "ifdef" => Ok(Token::IfDef),
-        "else" => Ok(Token::Else),
-        "elseif" => Ok(Token::ElseIf),
-        "while" => Ok(Token::While),
-        "for" => Ok(Token::For),
-        "break" => Ok(Token::Break),
-        "continue" => Ok(Token::Continue),
-        "function" => Ok(Token::Function),
-        "return" => Ok(Token::Return),
-        "yield" => Ok(Token::Yield),
-        "true" => Ok(Token::True),
-        "false" => Ok(Token::False),
-        "null" => Ok(Token::Null),
-        "do" => Ok(Token::Do),
-        "foreach" => Ok(Token::Foreach),
-        "as" => Ok(Token::As),
-        "try" => Ok(Token::Try),
-        "catch" => Ok(Token::Catch),
-        "finally" => Ok(Token::Finally),
-        "throw" => Ok(Token::Throw),
-        "extends" => Ok(Token::Extends),
-        "implements" => Ok(Token::Implements),
-        "interface" => Ok(Token::Interface),
-        "abstract" => Ok(Token::Abstract),
-        "final" => Ok(Token::Final),
-        "print" => Ok(Token::Print),
-        "switch" => Ok(Token::Switch),
-        "case" => Ok(Token::Case),
-        "default" => Ok(Token::Default),
-        "match" => Ok(Token::Match),
-        "include" => Ok(Token::Include),
-        "include_once" => Ok(Token::IncludeOnce),
-        "require" => Ok(Token::Require),
-        "require_once" => Ok(Token::RequireOnce),
-        "fn" => Ok(Token::Fn),
-        "use" => Ok(Token::Use),
-        "namespace" => Ok(Token::Namespace),
-        "const" => Ok(Token::Const),
-        "global" => Ok(Token::Global),
-        "declare" => Ok(Token::Declare),
-        "enddeclare" => Ok(Token::EndDeclare),
-        "endif" => Ok(Token::EndIf),
-        "endwhile" => Ok(Token::EndWhile),
-        "endfor" => Ok(Token::EndFor),
-        "endforeach" => Ok(Token::EndForeach),
-        "endswitch" => Ok(Token::EndSwitch),
-        "goto" => Ok(Token::Goto),
-        "static" => Ok(Token::Static),
-        "self" => Ok(Token::Self_),
-        "trait" => Ok(Token::Trait),
-        "parent" => Ok(Token::Parent),
-        "insteadof" => Ok(Token::InsteadOf),
-        "class" => Ok(Token::Class),
-        "enum" => Ok(Token::Enum),
-        "new" => Ok(Token::New),
-        "clone" => Ok(Token::Clone),
-        "public" => Ok(Token::Public),
-        "protected" => Ok(Token::Protected),
-        "private" => Ok(Token::Private),
-        "readonly" => Ok(Token::ReadOnly),
-        "extern" => Ok(Token::Extern),
-        "packed" => Ok(Token::Packed),
-        _ => Ok(Token::Identifier(word.to_owned())),
+        "and" => Token::And,
+        "or" => Token::Or,
+        "xor" => Token::Xor,
+        "instanceof" => Token::InstanceOf,
+        "echo" => Token::Echo,
+        "if" => Token::If,
+        "ifdef" => Token::IfDef,
+        "else" => Token::Else,
+        "elseif" => Token::ElseIf,
+        "while" => Token::While,
+        "for" => Token::For,
+        "break" => Token::Break,
+        "continue" => Token::Continue,
+        "function" => Token::Function,
+        "return" => Token::Return,
+        "yield" => Token::Yield,
+        "true" => Token::True,
+        "false" => Token::False,
+        "null" => Token::Null,
+        "do" => Token::Do,
+        "foreach" => Token::Foreach,
+        "as" => Token::As,
+        "try" => Token::Try,
+        "catch" => Token::Catch,
+        "finally" => Token::Finally,
+        "throw" => Token::Throw,
+        "extends" => Token::Extends,
+        "implements" => Token::Implements,
+        "interface" => Token::Interface,
+        "abstract" => Token::Abstract,
+        "final" => Token::Final,
+        "print" => Token::Print,
+        "switch" => Token::Switch,
+        "case" => Token::Case,
+        "default" => Token::Default,
+        "match" => Token::Match,
+        "include" => Token::Include,
+        "include_once" => Token::IncludeOnce,
+        "require" => Token::Require,
+        "require_once" => Token::RequireOnce,
+        "fn" => Token::Fn,
+        "use" => Token::Use,
+        "namespace" => Token::Namespace,
+        "const" => Token::Const,
+        "global" => Token::Global,
+        "declare" => Token::Declare,
+        "enddeclare" => Token::EndDeclare,
+        "endif" => Token::EndIf,
+        "endwhile" => Token::EndWhile,
+        "endfor" => Token::EndFor,
+        "endforeach" => Token::EndForeach,
+        "endswitch" => Token::EndSwitch,
+        "goto" => Token::Goto,
+        "static" => Token::Static,
+        "self" => Token::Self_,
+        "trait" => Token::Trait,
+        "parent" => Token::Parent,
+        "insteadof" => Token::InsteadOf,
+        "class" => Token::Class,
+        "enum" => Token::Enum,
+        "new" => Token::New,
+        "clone" => Token::Clone,
+        "public" => Token::Public,
+        "protected" => Token::Protected,
+        "private" => Token::Private,
+        "readonly" => Token::ReadOnly,
+        "extern" => Token::Extern,
+        "packed" => Token::Packed,
+        _ => Token::Identifier(word.to_owned()),
     }
 }

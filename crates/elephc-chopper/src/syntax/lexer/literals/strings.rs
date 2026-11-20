@@ -16,7 +16,7 @@ use crate::syntax::parser::validation_only;
 use crate::syntax::span::Span;
 use crate::scanner::{
     braced_expression_len, braced_interpolation, decode_single_quoted, heredoc_closing,
-    heredoc_opening, quoted_len, BracedInterpolation, HeredocOpeningError, HeredocProfile,
+    heredoc_opening, BracedInterpolation, HeredocOpeningError, HeredocProfile,
     InterpolationComment, InterpolationError,
 };
 
@@ -78,14 +78,13 @@ impl EscapeInput for StringInput<'_> {
     }
 }
 
-/// Scan a double-quoted string with interpolation support.
+/// Decodes a double-quoted body after the shared scanner recognizes its opening quote.
 /// Returns one or more tokens: for `"Hello $name!"` it returns
 /// `("Hello " . Variable("name") . "!")` (parenthesized, with Dot tokens for concatenation).
-pub(in crate::syntax::lexer) fn scan_double_string_interpolated(
+pub(in crate::syntax::lexer) fn decode_double_quoted_body(
     cursor: &mut Cursor,
+    span: Span,
 ) -> Result<Vec<SpannedToken>, CompileError> {
-    let span = cursor.span();
-    cursor.advance(); // opening "
     interpolate(cursor, span, Some('"'), MissingEscape::Error)
 }
 
@@ -396,13 +395,14 @@ fn tokenize_fragment(inner: &str, span: Span) -> Result<Vec<SpannedToken>, Compi
         .collect())
 }
 
-/// Scans a single-quoted PHP string, handling `\'` and `\\` escape sequences.
-/// Advances past the opening `'` and stops at the closing `'`. Returns
-/// `Token::StringLiteral` with the unescaped content, or an error on EOF.
-pub(in crate::syntax::lexer) fn scan_single_string(cursor: &mut Cursor) -> Result<Token, CompileError> {
-    let span = cursor.span();
-    let raw_content = &cursor.remaining()[1..];
-    let Some(len) = quoted_len(raw_content.as_bytes(), b'\'') else {
+/// Decodes one single-quoted lexeme or diagnoses a missing closing quote.
+pub(in crate::syntax::lexer) fn single_quoted_token(
+    text: &str,
+    terminated: bool,
+    span: Span,
+) -> Result<Token, CompileError> {
+    let raw_content = &text[1..];
+    if !terminated {
         if validation_only() {
             let content = raw_content.lines().next().unwrap_or("");
             return Err(CompileError::new(
@@ -411,10 +411,8 @@ pub(in crate::syntax::lexer) fn scan_single_string(cursor: &mut Cursor) -> Resul
             ));
         }
         return Err(CompileError::new(span, "Unterminated string literal"));
-    };
-    let value = decode_single_quoted(&raw_content[..len - 1]);
-    cursor.skip_bytes(1 + len);
-    Ok(Token::StringLiteral(value))
+    }
+    Ok(Token::StringLiteral(decode_single_quoted(&raw_content[..raw_content.len() - 1])))
 }
 
 /// Scan a heredoc or nowdoc string.

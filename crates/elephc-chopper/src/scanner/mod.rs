@@ -2,7 +2,7 @@
 //! Scans PHP source into byte-preserving tokens and lexical diagnostics.
 //!
 //! Called from:
-//! - The shared PHP tokenizer API used by the native bridge and Magician.
+//! - The compiler, Magician, and the shared PHP tokenizer API.
 //!
 //! Key details:
 //! - Zend token boundaries and IDs come from the shared PHP 8.5 token catalog.
@@ -16,11 +16,14 @@ mod keywords;
 mod lex;
 mod lexeme;
 mod names;
+mod numbers;
 mod operators;
 mod strings;
 pub use keywords::is_label_start as identifier_start;
 pub use lex::{LexError, LexWarning};
 pub use lexeme::{compiler_trivia_len, digits_len, identifier_len};
+pub(crate) use lex::{scan_compiler, CompilerLexeme, CompilerOutput};
+pub(crate) use numbers::NumberKind;
 pub use names::token_name;
 pub use operators::{operator, Operator};
 pub use strings::{

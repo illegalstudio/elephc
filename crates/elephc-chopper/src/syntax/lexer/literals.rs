@@ -12,6 +12,6 @@ mod identifiers;
 mod numbers;
 mod strings;
 
-pub(super) use identifiers::{scan_keyword, scan_variable};
-pub(super) use numbers::{scan_dot_float, scan_number};
-pub(super) use strings::{scan_double_string_interpolated, scan_heredoc, scan_single_string};
+pub(super) use identifiers::{variable_token, word_token};
+pub(super) use numbers::number_token;
+pub(super) use strings::{decode_double_quoted_body, scan_heredoc, single_quoted_token};

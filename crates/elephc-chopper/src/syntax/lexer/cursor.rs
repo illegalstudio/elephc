@@ -141,15 +141,9 @@ impl<'a> Cursor<'a> {
         self.pos += len;
     }
 
-    /// Advances past an identifier on the current line while counting UTF-8 characters.
-    #[inline]
-    pub(super) fn skip_identifier(&mut self, identifier: &str) {
-        self.pos += identifier.len();
-        self.col += if identifier.is_ascii() {
-            identifier.len()
-        } else {
-            identifier.chars().count()
-        };
+    /// Returns the consumed source offset so a literal decoder can resume the scanner.
+    pub(super) fn position(&self) -> usize {
+        self.pos
     }
 
     /// Returns true if the cursor has reached the end of source.
@@ -159,12 +153,8 @@ impl<'a> Cursor<'a> {
 
     /// Returns the slice of source from the current position to the end, as a `&str`.
     ///
-    /// THIS MUST STAY O(1). `scan` calls it several times per token — to test for `<?php`,
-    /// `//`, `/*`, `#[`, `?->`, `??`, a heredoc opener and so on — so any cost proportional to
-    /// the REMAINING source makes tokenizing quadratic in file size. It used to re-run
-    /// `str::from_utf8` over the whole tail on every call, which validates every byte: a 555 KB
-    /// file spent 7.6 s in the tokenizer, and doubling the input quadrupled the time. Slicing a
-    /// `&str` that was validated once instead makes it a pointer adjustment.
+    /// Projection and literal decoding call this for each lexeme and escape.
+    /// Slicing the original validated `&str` keeps each lookup constant time.
     ///
     /// The public constructor takes `&str`, so the source is valid UTF-8 by construction and
     /// `pos` always lands on a character boundary — `advance` consumes whole codepoints. The

@@ -1,18 +1,20 @@
 //! Purpose:
-//! Implements Zend-compatible byte tokenization without an external PHP grammar dependency.
+//! Runs the byte scanner for compiler input, runtime fragments, and PHP tokens.
 //!
 //! Called from:
-//! - `super::scan` for the shared PHP scanner.
+//! - `super::scan`, `super::scan_runtime`, and the compiler syntax projection.
 //!
 //! Key details:
-//! - Every source byte belongs to exactly one token; offsets, lengths and Zend lines are exact.
+//! - The PHP tokenizer preserves every source byte and Zend line numbers.
+//! - The compiler receives lexemes directly and applies its source-span and trivia rules.
 //! - Inline HTML, open/close tags, heredoc/nowdoc bodies and interpolation retain Zend boundaries.
 //! - Malformed input remains tokenizable without TOKEN_PARSE; lexical errors are reported separately.
 
 use super::keywords::{
     cast_id, is_label, is_label_start, is_whitespace, keyword_id,
 };
-use super::lexeme::{php_trivia, runtime_trivia, Trivia};
+use super::lexeme::{compiler_trivia_len, php_trivia, runtime_trivia, Trivia};
+use super::numbers::{numeric_prefix, scan_number, Number, NumberKind, NumberProfile};
 use super::strings::{
     braced_interpolation, heredoc_closing, heredoc_opening, quoted_len, BracedInterpolation,
     HeredocProfile,
@@ -60,13 +62,53 @@ struct Frame {
     depth: usize,
 }
 
+/// A boundary recognized by the scanner for the compiler's syntax token projection.
+pub(crate) enum CompilerLexeme {
+    OpenTag,
+    MissingOpenTag,
+    ForbiddenTag,
+    Attribute,
+    Variable,
+    Word,
+    Number(NumberKind),
+    SingleQuoted { terminated: bool },
+    DoubleQuoted,
+    Heredoc,
+    Operator(Operator),
+    Byte(u8),
+}
+
+/// Receives lexemes on the compiler path without allocating a second token stream.
+pub(crate) trait CompilerOutput {
+    /// Selects the compiler path only for its projection type.
+    const ACTIVE: bool = true;
+
+    /// Emits syntax tokens and returns the consumed end, or stops scanning on an error.
+    ///
+    /// Double-quote and heredoc events give the decoder the opening delimiter.
+    /// The decoder returns the physical end after consuming the rest of the literal.
+    fn emit(&mut self, lexeme: CompilerLexeme, start: usize, end: usize) -> Option<usize>;
+}
+
+impl CompilerOutput for () {
+    const ACTIVE: bool = false;
+
+    /// The native PHP and runtime builds collect the original PHP tokens directly.
+    fn emit(&mut self, _: CompilerLexeme, _: usize, _: usize) -> Option<usize> {
+        unreachable!("compiler projection is inactive")
+    }
+}
+
 /// The scanner state over one immutable source buffer.
-struct Lexer<'a> {
+struct Lexer<'a, C> {
     source: &'a [u8],
     i: usize,
     line: usize,
     mode: Mode,
     runtime: bool,
+    forbid_tags: bool,
+    number_profile: NumberProfile,
+    compiler: C,
     property: bool,
     depth: usize,
     frames: Vec<Frame>,
@@ -80,15 +122,18 @@ struct Lexer<'a> {
     warnings: Vec<LexWarning>,
 }
 
-impl<'a> Lexer<'a> {
+impl<'a, C: CompilerOutput> Lexer<'a, C> {
     /// Creates a scanner for one source buffer.
-    fn new(source: &'a [u8]) -> Self {
+    fn new(source: &'a [u8], compiler: C) -> Self {
         Self {
             source,
             i: 0,
             line: 1,
             mode: Mode::InlineHtml,
             runtime: false,
+            forbid_tags: false,
+            number_profile: NumberProfile::Zend,
+            compiler,
             property: false,
             depth: 0,
             frames: Vec::new(),
@@ -103,8 +148,8 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Runs the scanner to completion and returns its tokens and lexical diagnostics.
-    fn run(mut self) -> (Vec<Token>, Vec<LexError>, Vec<LexWarning>) {
+    /// Runs the shared scanner until it reaches EOF or the compiler reports an error.
+    fn run(&mut self) {
         while self.i < self.source.len() {
             if self.halt_done {
                 let start = self.i;
@@ -122,11 +167,10 @@ impl<'a> Lexer<'a> {
                 self.i = before + 1;
             }
         }
-        if !self.runtime {
+        if !C::ACTIVE && !self.runtime {
             self.validate_heredocs();
             self.validate_halt_compiler();
         }
-        (self.tokens, self.errors, self.warnings)
     }
 
     /// Validates `__halt_compiler ( ) ;` for TOKEN_PARSE.
@@ -378,6 +422,11 @@ impl<'a> Lexer<'a> {
         self.push(i64::from(byte), start, start + 1);
     }
 
+    /// Advances by the bytes consumed by the compiler projection.
+    fn emit_compiler(&mut self, lexeme: CompilerLexeme, end: usize) {
+        self.i = self.compiler.emit(lexeme, self.i, end).unwrap_or(self.source.len());
+    }
+
     /// Scans inline HTML up to the next open tag, emitting one coalesced T_INLINE_HTML.
     fn scan_inline_html(&mut self) {
         let start = self.i;
@@ -428,41 +477,57 @@ impl<'a> Lexer<'a> {
         self.mode = Mode::Php;
     }
 
+    /// Emits trivia for the public tokenizer or runtime without clearing member-name context.
+    fn scan_php_trivia(&mut self) -> bool {
+        let trivia_at = if self.runtime { runtime_trivia } else { php_trivia };
+        let Some((trivia, len)) = trivia_at(&self.source[self.i..]) else {
+            return false;
+        };
+        let start = self.i;
+        let end = start + len;
+        let name = match trivia {
+            Trivia::Whitespace => "T_WHITESPACE",
+            Trivia::LineComment => "T_COMMENT",
+            Trivia::BlockComment => {
+                let text = &self.source[start..end];
+                if !text.ends_with(b"*/") {
+                    self.errors.push(LexError {
+                        pos: start,
+                        message: format!("Unterminated comment starting line {}", self.line),
+                    });
+                }
+                if text.starts_with(b"/**") && text.get(3).is_some_and(|&byte| is_whitespace(byte)) {
+                    "T_DOC_COMMENT"
+                } else {
+                    "T_COMMENT"
+                }
+            }
+        };
+        self.push(id(name), start, end);
+        self.i = end;
+        true
+    }
+
     /// Scans one PHP-mode token (or starts a string body).
     fn scan_php(&mut self) {
-        let c = self.source[self.i];
-        let was_property = self.property;
-        self.property = false;
-
-        let trivia_at = if self.runtime { runtime_trivia } else { php_trivia };
-        if let Some((trivia, len)) = trivia_at(&self.source[self.i..]) {
-            let start = self.i;
-            let end = start + len;
-            let name = match trivia {
-                Trivia::Whitespace => "T_WHITESPACE",
-                Trivia::LineComment => "T_COMMENT",
-                Trivia::BlockComment => {
-                    let text = &self.source[start..end];
-                    if !text.ends_with(b"*/") {
-                        self.errors.push(LexError {
-                            pos: start,
-                            message: format!("Unterminated comment starting line {}", self.line),
-                        });
-                    }
-                    if text.starts_with(b"/**") && text.get(3).is_some_and(|&byte| is_whitespace(byte)) {
-                        "T_DOC_COMMENT"
-                    } else {
-                        "T_COMMENT"
-                    }
-                }
-            };
-            self.push(id(name), start, end);
-            self.i = end;
-            self.property = was_property;
+        if C::ACTIVE {
+            let tail = &self.source[self.i..];
+            let trivia = compiler_trivia_len(tail);
+            if trivia != 0 {
+                self.i += trivia;
+                return;
+            }
+            if self.forbid_tags && (tail.starts_with(b"<?php") || tail.starts_with(b"?>")) {
+                self.emit_compiler(CompilerLexeme::ForbiddenTag, self.i);
+                return;
+            }
+        } else if self.scan_php_trivia() {
             return;
         }
+        let c = self.source[self.i];
+        let was_property = std::mem::take(&mut self.property);
 
-        if c == b'?' && self.source.get(self.i + 1) == Some(&b'>') {
+        if !C::ACTIVE && c == b'?' && self.source.get(self.i + 1) == Some(&b'>') {
             let start = self.i;
             let mut end = self.i + 2;
             if self.source.get(end) == Some(&b'\r') && self.source.get(end + 1) == Some(&b'\n') {
@@ -477,28 +542,41 @@ impl<'a> Lexer<'a> {
         }
 
         if c == b'#' && self.source.get(self.i + 1) == Some(&b'[') {
-            self.push(id("T_ATTRIBUTE"), self.i, self.i + 2);
-            self.i += 2;
+            if C::ACTIVE {
+                self.emit_compiler(CompilerLexeme::Attribute, self.i + 2);
+            } else {
+                self.push(id("T_ATTRIBUTE"), self.i, self.i + 2);
+                self.i += 2;
+            }
             return;
         }
 
-        if c == b'$' && self.source.get(self.i + 1).is_some_and(|&byte| {
+        if c == b'$' && (C::ACTIVE || self.source.get(self.i + 1).is_some_and(|&byte| {
             self.name_start(byte) || (self.runtime && byte.is_ascii_digit())
-        }) {
+        })) {
             let start = self.i;
-            let mut j = self.i + 1;
-            j += self.name_len(j);
-            self.push(id("T_VARIABLE"), start, j);
-            self.i = j;
+            let end = start + 1 + self.name_len(start + 1);
+            if C::ACTIVE {
+                self.emit_compiler(CompilerLexeme::Variable, end);
+            } else {
+                self.push(id("T_VARIABLE"), start, end);
+                self.i = end;
+            }
             return;
         }
 
         if c.is_ascii_digit()
             || (!self.runtime && c == b'.' && self.source.get(self.i + 1).is_some_and(u8::is_ascii_digit))
         {
-            let (token_id, end) = self.scan_number();
-            self.push(token_id, self.i, end);
-            self.i = end;
+            let number = scan_number(&self.source[self.i..], self.number_profile);
+            let end = self.i + number.len;
+            if C::ACTIVE {
+                self.emit_compiler(CompilerLexeme::Number(number.kind), end);
+            } else {
+                let token_id = self.number_token_id(number);
+                self.push(token_id, self.i, end);
+                self.i = end;
+            }
             return;
         }
 
@@ -507,10 +585,14 @@ impl<'a> Lexer<'a> {
             return;
         }
         if c == b'"' {
-            self.scan_double_quoted(self.i, self.i);
+            if C::ACTIVE {
+                self.emit_compiler(CompilerLexeme::DoubleQuoted, self.i + 1);
+            } else {
+                self.scan_double_quoted(self.i, self.i);
+            }
             return;
         }
-        if !self.runtime && matches!(c, b'b' | b'B')
+        if !C::ACTIVE && !self.runtime && matches!(c, b'b' | b'B')
             && self
                 .source
                 .get(self.i + 1)
@@ -524,7 +606,7 @@ impl<'a> Lexer<'a> {
             }
             return;
         }
-        if !self.runtime && c == b'`' {
+        if !C::ACTIVE && !self.runtime && c == b'`' {
             self.push_byte(self.i);
             self.i += 1;
             self.mode = Mode::Backtick;
@@ -533,16 +615,20 @@ impl<'a> Lexer<'a> {
             return;
         }
 
-        if !self.runtime && matches!(c, b'b' | b'B') && self.source.get(self.i + 1..self.i + 4) == Some(b"<<<") {
+        if !C::ACTIVE && !self.runtime && matches!(c, b'b' | b'B') && self.source.get(self.i + 1..self.i + 4) == Some(b"<<<") {
             self.scan_heredoc_open_at(self.i, self.i + 1);
             return;
         }
         if !self.runtime && c == b'<' && self.source.get(self.i + 1..self.i + 3) == Some(b"<<") {
-            self.scan_heredoc_open();
+            if C::ACTIVE {
+                self.emit_compiler(CompilerLexeme::Heredoc, self.i + 3);
+            } else {
+                self.scan_heredoc_open();
+            }
             return;
         }
 
-        if c == b'(' {
+        if !C::ACTIVE && c == b'(' {
             if self.scan_cast() {
                 return;
             }
@@ -551,14 +637,14 @@ impl<'a> Lexer<'a> {
             return;
         }
 
-        if c == b'{' {
+        if !C::ACTIVE && c == b'{' {
             self.push_byte(self.i);
             self.i += 1;
             self.depth += 1;
             return;
         }
 
-        if c == b'}' {
+        if !C::ACTIVE && c == b'}' {
             self.push_byte(self.i);
             self.i += 1;
             if self.depth > 0 {
@@ -573,12 +659,12 @@ impl<'a> Lexer<'a> {
             return;
         }
 
-        if self.name_start(c) || c == b'\\' {
+        if self.name_start(c) || (!C::ACTIVE && c == b'\\') {
             self.scan_name(was_property);
             return;
         }
 
-        if c == b'&'
+        if !C::ACTIVE && c == b'&'
             && !self
                 .source
                 .get(self.i + 1)
@@ -622,6 +708,11 @@ impl<'a> Lexer<'a> {
     /// Scans identifiers, qualified names, and PHP's contextual keyword rewrites.
     fn scan_name(&mut self, was_property: bool) {
         let start = self.i;
+        if C::ACTIVE {
+            // The syntax parser retains individual namespace segments and their spans.
+            self.emit_compiler(CompilerLexeme::Word, start + self.name_len(start));
+            return;
+        }
         let mut j = self.i;
         let fully_qualified = self.source[j] == b'\\';
         if fully_qualified {
@@ -782,12 +873,20 @@ impl<'a> Lexer<'a> {
     fn scan_operator_tail(&mut self) {
         let start = self.i;
         if let Some((op, len)) = operator(&self.source[start..]) {
-            self.push(op.php_id(), start, start + len);
-            self.i += len;
-            self.property = matches!(op, Operator::Arrow | Operator::QuestionArrow);
+            if C::ACTIVE {
+                self.emit_compiler(CompilerLexeme::Operator(op), start + len);
+            } else {
+                self.push(op.php_id(), start, start + len);
+                self.i += len;
+                self.property = matches!(op, Operator::Arrow | Operator::QuestionArrow);
+            }
             return;
         }
         let byte = self.source[start];
+        if C::ACTIVE {
+            self.emit_compiler(CompilerLexeme::Byte(byte), start + 1);
+            return;
+        }
         if is_bad_character(byte) {
             self.errors.push(LexError {
                 pos: start,
@@ -800,65 +899,34 @@ impl<'a> Lexer<'a> {
         self.i = start + 1;
     }
 
-    /// Scans one number and returns its token ID and exclusive end offset.
-    fn scan_number(&mut self) -> (i64, usize) {
-        let start = self.i;
-        let source = self.source;
-        if source[start] == b'.' {
-            let end = start + 1 + digits_len(&source[start + 1..], 10);
-            let end = scan_exponent(source, end);
-            return (id("T_DNUMBER"), end);
-        }
-        if source[start] == b'0' {
-            if let Some((radix, digits_start)) = numeric_prefix(source, start) {
-                let end = digits_start + digits_len(&source[digits_start..], radix);
-                let value = parse_digits(&source[digits_start..end], radix);
-                let token_id = if value.is_some_and(|v| v <= i64::MAX as u128) {
-                    id("T_LNUMBER")
-                } else {
-                    id("T_DNUMBER")
-                };
-                return (token_id, end);
+    /// Classifies one scanned number using PHP's integer size and octal rules.
+    fn number_token_id(&mut self, number: Number) -> i64 {
+        let digits = &self.source[self.i..self.i + number.len];
+        let value = match number.kind {
+            NumberKind::Float => return id("T_DNUMBER"),
+            NumberKind::Prefixed(radix) => parse_digits(&digits[2..], radix),
+            NumberKind::LegacyOctal if digits.iter().any(|b| matches!(b, b'8' | b'9')) => {
+                self.errors.push(LexError { pos: self.i, message: "Invalid numeric literal".into() });
+                parse_digits(digits, 10)
             }
-        }
-        let mut end = start + digits_len(&source[start..], 10);
-        if source.get(end) == Some(&b'.')
-            && (!self.runtime || source.get(end + 1).is_some_and(u8::is_ascii_digit))
-        {
-            end += 1;
-            end = end + digits_len(&source[end..], 10);
-            end = scan_exponent(source, end);
-            return (id("T_DNUMBER"), end);
-        }
-        if let Some(exponent_end) = exponent_end(source, end) {
-            return (id("T_DNUMBER"), exponent_end);
-        }
-        let digits: Vec<u8> = source[start..end].iter().copied().filter(|b| *b != b'_').collect();
-        let legacy_octal = digits.len() > 1 && digits[0] == b'0';
-        let invalid_octal = legacy_octal && digits.iter().any(|b| matches!(b, b'8' | b'9'));
-        if legacy_octal && !invalid_octal {
-            let value = parse_digits(&digits, 8);
-            if value.is_none_or(|v| v > i64::MAX as u128) {
-                return (id("T_DNUMBER"), end);
-            }
-            return (id("T_LNUMBER"), end);
-        }
-        if invalid_octal {
-            self.errors.push(LexError { pos: start, message: "Invalid numeric literal".into() });
-        }
-        let value = parse_digits(&digits, 10);
-        let token_id = if value.is_some_and(|v| v <= i64::MAX as u128) {
+            NumberKind::LegacyOctal => parse_digits(digits, 8),
+            NumberKind::Decimal => parse_digits(digits, 10),
+        };
+        if value.is_some_and(|v| v <= i64::MAX as u128) {
             id("T_LNUMBER")
         } else {
             id("T_DNUMBER")
-        };
-        (token_id, end)
+        }
     }
 
     /// Scans a single-quoted string, including an optional binary prefix, as one token.
     fn scan_single_quoted(&mut self, start: usize, quote: usize) {
         let len = quoted_len(&self.source[quote + 1..], b'\'');
         let j = len.map_or(self.source.len(), |len| quote + 1 + len);
+        if C::ACTIVE {
+            self.emit_compiler(CompilerLexeme::SingleQuoted { terminated: len.is_some() }, j);
+            return;
+        }
         self.push(
             id(if len.is_some() { "T_CONSTANT_ENCAPSED_STRING" } else { "T_ENCAPSED_AND_WHITESPACE" }),
             start,
@@ -1315,13 +1383,40 @@ fn validate_unicode_escapes(source: &[u8], start: usize, end: usize, errors: &mu
 
 /// Tokenizes one source buffer and returns lexical diagnostics for TOKEN_PARSE.
 pub(crate) fn scan(source: &[u8]) -> (Vec<Token>, Vec<LexError>, Vec<LexWarning>) {
-    Lexer::new(source).run()
+    let mut lexer = Lexer::new(source, ());
+    lexer.run();
+    (lexer.tokens, lexer.errors, lexer.warnings)
 }
 
-/// Scans source that starts inside a PHP block, as a runtime eval fragment does.
+/// Scans runtime source starting in PHP code for eval or HTML for included files.
 pub(super) fn scan_runtime(source: &[u8], file: bool) -> (Vec<Token>, Vec<LexError>, Vec<LexWarning>) {
     let mode = if file { Mode::InlineHtml } else { Mode::Php };
-    Lexer { mode, runtime: true, ..Lexer::new(source) }.run()
+    let mut lexer = Lexer { mode, runtime: true, number_profile: NumberProfile::Runtime, ..Lexer::new(source, ()) };
+    lexer.run();
+    (lexer.tokens, lexer.errors, lexer.warnings)
+}
+
+/// Scans compiler source and streams its syntax projection to the supplied output.
+pub(crate) fn scan_compiler<C: CompilerOutput>(
+    source: &[u8],
+    requires_open_tag: bool,
+    forbid_tags: bool,
+    validation: bool,
+    compiler: C,
+) -> C {
+    let number_profile = if validation { NumberProfile::Validation } else { NumberProfile::Compiler };
+    let mut lexer = Lexer { mode: Mode::Php, forbid_tags, number_profile, ..Lexer::new(source, compiler) };
+    if requires_open_tag {
+        lexer.i = compiler_trivia_len(source);
+        if !source[lexer.i..].starts_with(b"<?php") {
+            lexer.emit_compiler(CompilerLexeme::MissingOpenTag, lexer.i);
+            return lexer.compiler;
+        }
+    }
+    let tag_end = lexer.i + if requires_open_tag { 5 } else { 0 };
+    lexer.emit_compiler(CompilerLexeme::OpenTag, tag_end);
+    lexer.run();
+    lexer.compiler
 }
 
 /// Formats a PHP parser diagnostic for one unexpected token and an expected literal.
@@ -1376,24 +1471,11 @@ fn skip_trivia(source: &[u8], mut at: usize) -> usize {
 /// Scans the numeric prefix Zend accepts as a `T_NUM_STRING` offset inside interpolation.
 #[inline(never)]
 fn scan_offset_number(source: &[u8], start: usize) -> usize {
-    if source.get(start) == Some(&b'0') {
-        if let Some((radix, digits_start)) = numeric_prefix(source, start) {
-            return digits_start + digits_len(&source[digits_start..], radix);
-        }
+    if let Some(radix) = numeric_prefix(&source[start..], false) {
+        let digits_start = start + 2;
+        return digits_start + digits_len(&source[digits_start..], radix);
     }
     start + digits_len(&source[start..], 10)
-}
-
-/// Returns the prefix radix and first digit offset for `0x`, `0b` and `0o`.
-fn numeric_prefix(source: &[u8], start: usize) -> Option<(u32, usize)> {
-    let marker = *source.get(start + 1)?;
-    let digit = *source.get(start + 2)?;
-    match marker {
-        b'x' | b'X' if digit.is_ascii_hexdigit() => Some((16, start + 2)),
-        b'b' | b'B' if matches!(digit, b'0' | b'1') => Some((2, start + 2)),
-        b'o' | b'O' if matches!(digit, b'0'..=b'7') => Some((8, start + 2)),
-        _ => None,
-    }
 }
 
 /// Parses underscore-free digit text in the given radix.
@@ -1404,24 +1486,6 @@ fn parse_digits(digits: &[u8], radix: u32) -> Option<u128> {
         value = value.checked_mul(u128::from(radix))?.checked_add(u128::from(digit))?;
     }
     Some(value)
-}
-
-/// Returns the exclusive end of an exponent when one is present and valid.
-fn exponent_end(source: &[u8], at: usize) -> Option<usize> {
-    if !source.get(at).is_some_and(|b| matches!(b, b'e' | b'E')) {
-        return None;
-    }
-    let mut j = at + 1;
-    if source.get(j).is_some_and(|b| matches!(b, b'+' | b'-')) {
-        j += 1;
-    }
-    let end = j + digits_len(&source[j..], 10);
-    (end > j).then_some(end)
-}
-
-/// Scans an exponent when present.
-fn scan_exponent(source: &[u8], at: usize) -> usize {
-    exponent_end(source, at).unwrap_or(at)
 }
 
 /// Case-insensitive prefix helper used by asymmetric-visibility detection.
