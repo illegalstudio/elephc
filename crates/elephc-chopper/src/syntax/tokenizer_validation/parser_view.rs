@@ -8,8 +8,6 @@
 //! - Every view byte keeps a source offset so diagnostics and identifier feedback stay exact.
 //! - Inline HTML, tags, casts and interpolation are rewritten without changing line numbers.
 
-use std::cell::OnceCell;
-
 use super::*;
 
 /// Builds the PHP-only parser view, its source map and any error in a normalized reference.
@@ -17,6 +15,7 @@ pub(super) fn parser_view<T: SourceToken>(
     source: &[u8],
     tokens: &[T],
     end_pos: usize,
+    reference_delimiters: &OnceCell<Vec<Option<usize>>>,
 ) -> (String, Vec<u32>, Option<ReferenceError>) {
     let mut view = Vec::with_capacity(source.len() + 8);
     let mut map = Vec::with_capacity(source.len() + 8);
@@ -33,8 +32,6 @@ pub(super) fn parser_view<T: SourceToken>(
     // followed by a single-statement body, and which closing tokens proved that.
     let mut control_parens: Vec<bool> = Vec::new();
     let mut control_close = vec![false; tokens.len()];
-    // Build the delimiter map only if a normalized reference target needs it.
-    let reference_closes = OnceCell::new();
     let mut reference_error: Option<ReferenceError> = None;
     while index < tokens.len() {
         let token = &tokens[index];
@@ -87,7 +84,16 @@ pub(super) fn parser_view<T: SourceToken>(
             brackets.last().copied(),
             parens.last().copied(),
             braces.last().copied(),
-            || {
+            |arrow| {
+                if arrow.is_some_and(|arrow| {
+                    arrow_starts_function_body(
+                        tokens,
+                        arrow,
+                        reference_delimiters.get_or_init(|| delimiter_pairs(tokens)),
+                    )
+                }) {
+                    return false;
+                }
                 let Some(target) = next_significant_index(tokens, index) else { return false; };
                 let target_id = tokens[target].id();
                 if target_id != i64::from(b'(') && target_id != tok::T_READONLY {
@@ -98,7 +104,7 @@ pub(super) fn parser_view<T: SourceToken>(
                         source,
                         tokens,
                         target,
-                        reference_closes.get_or_init(|| delimiter_close_indices(tokens)),
+                        reference_delimiters.get_or_init(|| delimiter_pairs(tokens)),
                         previous_significant == i64::from(b'='),
                         end_pos,
                     );
@@ -622,11 +628,9 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
     enclosing_bracket: Option<usize>,
     enclosing_paren: Option<usize>,
     enclosing_brace: Option<usize>,
-    reference_value: impl FnOnce() -> bool,
+    reference_value: impl FnOnce(Option<usize>) -> bool,
 ) -> bool {
-    let ampersand = tokens[index].id() == tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
-        || tokens[index].id() == tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG;
-    if !ampersand {
+    if !is_reference_marker(tokens[index].id()) {
         return false;
     }
     if previous_significant == i64::from(b'=') {
@@ -635,7 +639,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
         if enclosing_paren.is_some_and(|open| paren_is_declaration_parameters(tokens, open)) {
             return false;
         }
-        return reference_value();
+        return reference_value(None);
     }
     if [tok::T_FUNCTION, tok::T_AS, tok::T_YIELD].contains(&previous_significant) {
         return true;
@@ -650,7 +654,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
             enclosing_bracket,
             enclosing_paren,
             enclosing_brace,
-        ) && reference_value();
+        ) && reference_value(Some(arrow));
     }
     if previous_significant != i64::from(b'(') && previous_significant != i64::from(b',')
         && previous_significant != i64::from(b'[')
@@ -662,7 +666,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
     if previous_significant == i64::from(b'[') {
         if let Some(open) = enclosing_bracket {
             if bracket_opens_array_literal(tokens, open) {
-                return reference_value();
+                return reference_value(None);
             }
         }
         return false;
@@ -673,7 +677,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
                 && delimiter_is_outside(open, enclosing_paren)
                 && delimiter_is_outside(open, enclosing_brace)
             {
-                return reference_value();
+                return reference_value(None);
             }
         }
     }
@@ -689,7 +693,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
     // and silently approve invalid PHP. Declaration and capture lists keep their marker
     // unconditionally because the parser still validates the following parameter or capture.
     if [tok::T_ARRAY, tok::T_LIST].contains(&tokens[before].id()) {
-        return reference_value();
+        return reference_value(None);
     }
     if [tok::T_FUNCTION, tok::T_FN, tok::T_USE].contains(&tokens[before].id()) {
         return true;
@@ -702,6 +706,72 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
             .is_some_and(|prior| tokens[prior].id() == tok::T_FUNCTION);
     }
     false
+}
+
+/// Identifies either Zend token form of an ampersand.
+fn is_reference_marker(id: i64) -> bool {
+    matches!(id, tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG | tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG)
+}
+
+/// Distinguishes a `fn(...) =>` inside an array from the array's key/value separator.
+///
+/// Only the adjacent header is inspected. A parenthesized return type is skipped through
+/// the delimiter map, so nested groups do not make repeated arrow checks rescan the body.
+fn arrow_starts_function_body<T: SourceToken>(
+    tokens: &[T],
+    arrow: usize,
+    pairs: &[Option<usize>],
+) -> bool {
+    let Some(mut cursor) = previous_significant_index(tokens, arrow) else { return false; };
+    if ends_arrow_parameter_list(tokens, cursor, pairs) {
+        return true;
+    }
+    loop {
+        let id = tokens[cursor].id();
+        if id == i64::from(b':') {
+            return previous_significant_index(tokens, cursor)
+                .is_some_and(|close| ends_arrow_parameter_list(tokens, close, pairs));
+        }
+        if id == i64::from(b')') {
+            let Some(open) = pairs[cursor].filter(|&open| tokens[open].id() == i64::from(b'(')) else {
+                return false;
+            };
+            cursor = open;
+        } else if !is_declaration_type_token(id)
+            && !is_reference_marker(id)
+            && id != i64::from(b'?')
+            && id != i64::from(b'|')
+        {
+            return false;
+        }
+        let Some(before) = previous_significant_index(tokens, cursor) else { return false; };
+        cursor = before;
+    }
+}
+
+/// Checks the parameter close and the optional return-reference marker before its opener.
+fn ends_arrow_parameter_list<T: SourceToken>(
+    tokens: &[T],
+    close: usize,
+    pairs: &[Option<usize>],
+) -> bool {
+    if tokens[close].id() != i64::from(b')') {
+        return false;
+    }
+    let Some(open) = pairs[close].filter(|&open| tokens[open].id() == i64::from(b'(')) else {
+        return false;
+    };
+    let Some(mut keyword) = previous_significant_index(tokens, open) else { return false; };
+    if is_reference_marker(tokens[keyword].id()) {
+        let Some(before) = previous_significant_index(tokens, keyword) else { return false; };
+        keyword = before;
+    }
+    tokens[keyword].id() == tok::T_FN && previous_significant_index(tokens, keyword).is_none_or(|before| {
+        !matches!(
+            tokens[before].id(),
+            tok::T_DOUBLE_COLON | tok::T_OBJECT_OPERATOR | tok::T_NULLSAFE_OBJECT_OPERATOR
+        )
+    })
 }
 
 /// Returns whether the ellipsis at `index` is a first-class callable marker.

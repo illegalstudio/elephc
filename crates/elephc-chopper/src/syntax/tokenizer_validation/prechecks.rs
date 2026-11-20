@@ -104,14 +104,14 @@ pub(crate) fn goto_is_statement<T: SourceToken>(tokens: &[T], index: usize) -> b
     )
 }
 
-/// Precomputes the matching close index for every opener in one pass.
+/// Maps each paired delimiter to its partner for reference-chain and arrow-header scans.
 ///
 /// The map follows the same generic nesting rule as the reference-target scan: any closing
 /// delimiter closes the innermost opener, regardless of its spelling. A target group can then
 /// be skipped in O(1) instead of rescanned once per enclosing reference marker.
-pub(super) fn delimiter_close_indices<T: SourceToken>(tokens: &[T]) -> Vec<Option<usize>> {
+pub(super) fn delimiter_pairs<T: SourceToken>(tokens: &[T]) -> Vec<Option<usize>> {
     let mut stack: Vec<usize> = Vec::new();
-    let mut close = vec![None; tokens.len()];
+    let mut pairs = vec![None; tokens.len()];
     for (index, token) in tokens.iter().enumerate() {
         let id = token.id();
         if id == i64::from(b'(')
@@ -124,11 +124,12 @@ pub(super) fn delimiter_close_indices<T: SourceToken>(tokens: &[T]) -> Vec<Optio
             stack.push(index);
         } else if id == i64::from(b')') || id == i64::from(b']') || id == i64::from(b'}') {
             if let Some(open) = stack.pop() {
-                close[open] = Some(index);
+                pairs[open] = Some(index);
+                pairs[index] = Some(open);
             }
         }
     }
-    close
+    pairs
 }
 
 /// Rejects a malformed `array(&…)`, `list(&…)` or `[&…]` reference entry.
@@ -141,6 +142,7 @@ pub(super) fn delimiter_close_indices<T: SourceToken>(tokens: &[T]) -> Vec<Optio
 pub(crate) fn invalid_array_reference_error<T: SourceToken>(
     source: &[u8],
     tokens: &[T],
+    reference_delimiters: &OnceCell<Vec<Option<usize>>>,
 ) -> Option<ValidationError> {
     let has_ampersand = tokens.iter().any(|token| {
         token.id() == tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
@@ -151,7 +153,7 @@ pub(crate) fn invalid_array_reference_error<T: SourceToken>(
     }
     // Every nested target group is skipped through this map instead of rescanned, keeping
     // `array(&$a[array(&$b[0])])` linear in the number of tokens.
-    let close_of = delimiter_close_indices(tokens);
+    let close_of = reference_delimiters.get_or_init(|| delimiter_pairs(tokens));
     // Every open delimiter with its closing token and whether it is an array/list entry list.
     let mut delimiters: Vec<(i64, bool)> = Vec::new();
     for index in 0..tokens.len() {
@@ -318,13 +320,15 @@ pub(super) fn normalized_reference_error<T: SourceToken>(
     assignment: bool,
     end_pos: usize,
 ) -> Option<ReferenceError> {
+    let target_pos = tokens[target].pos();
     let mut referenceable = tokens[target].id() == tok::T_READONLY;
     let open = if referenceable {
         let after = next_significant_index(tokens, target);
         let Some(open) = after.filter(|&open| tokens[open].id() == i64::from(b'(')) else {
             return Some(ReferenceError {
                 diagnostic: reference_expectation_error(source, tokens, after, end_pos, "\"(\""),
-                readonly_pos: Some(tokens[target].pos()),
+                target_pos,
+                readonly_without_call: true,
             });
         };
         open
@@ -379,7 +383,8 @@ pub(super) fn normalized_reference_error<T: SourceToken>(
                 end_pos,
                 REFERENCE_CONTINUATION,
             ),
-            readonly_pos: None,
+            target_pos,
+            readonly_without_call: false,
         });
     }
     let next = next?;
@@ -389,7 +394,8 @@ pub(super) fn normalized_reference_error<T: SourceToken>(
     {
         return Some(ReferenceError {
             diagnostic: unexpected_token_at(source, token.pos(), token.len(), None),
-            readonly_pos: None,
+            target_pos,
+            readonly_without_call: false,
         });
     }
     None
@@ -1197,7 +1203,8 @@ pub(crate) fn expression_slice_error<T: SourceToken>(
         .get(first)
         .map_or(fallback_pos, |token| token.pos())
         .min(fallback_pos);
-    let (view, map, reference_error) = parser_view(source, &tokens[first..end], fallback_pos);
+    let (view, map, reference_error) =
+        parser_view(source, &tokens[first..end], fallback_pos, &OnceCell::new());
     let lines = line_starts(&view);
     let map_position = |view_pos: usize| {
         map.get(view_pos)

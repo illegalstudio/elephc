@@ -13,6 +13,7 @@
 
 use crate::syntax::errors::CompileError;
 use crate::syntax::span::Span;
+use std::cell::OnceCell;
 
 mod diagnostics;
 mod parser_view;
@@ -291,8 +292,17 @@ pub struct ValidationFeedback {
 /// A reference diagnostic found before its marker is removed from the parser view.
 struct ReferenceError {
     diagnostic: ValidationError,
+    target_pos: usize,
     /// A non-call `readonly` keyword can cause an artificial parser error here.
-    readonly_pos: Option<usize>,
+    readonly_without_call: bool,
+}
+
+impl ReferenceError {
+    /// Prefers the reference location unless the parser found an earlier syntax error.
+    fn precedes(&self, error: &ValidationError) -> bool {
+        self.diagnostic.pos <= error.pos
+            || (self.readonly_without_call && !error.lexical && self.target_pos == error.pos)
+    }
 }
 
 /// Validates PHP source and returns identifier feedback or the first PHP-style parse error.
@@ -308,10 +318,11 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
     // These pre-checks parse regions the parser view blanks, so the identifier feedback they
     // record has to be merged with the main parse's feedback below.
     let mut precheck_names = Vec::new();
+    let reference_delimiters = OnceCell::new();
     let precheck = close_tag_else_error(source, tokens)
         .or_else(|| halt_compiler_scope_error(source, tokens))
         .or_else(|| new_dynamic_static_error(source, tokens))
-        .or_else(|| invalid_array_reference_error(source, tokens))
+        .or_else(|| invalid_array_reference_error(source, tokens, &reference_delimiters))
         .or_else(|| goto_statement_error(source, tokens))
         .or_else(|| unterminated_backtick_error(source, tokens));
     let precheck = precheck
@@ -325,7 +336,8 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
         .or_else(|| simple_interpolation_offset_error(source, tokens));
     // Precheck errors are only authoritative when they happen before the main parser's
     // failure: `echo ;` followed by `${1+}` must report the earlier `echo` error.
-    let (view, map, reference_error) = parser_view(source, tokens, source.len());
+    let (view, map, reference_error) =
+        parser_view(source, tokens, source.len(), &reference_delimiters);
     let view_tokens = match crate::syntax::lexer::tokenize(&view) {
         Ok(tokens) => tokens,
         Err(error) => {
@@ -338,10 +350,12 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
             };
             return ValidationFeedback {
                 names: Vec::new(),
-                error: prefer_reference_error(
-                    Some(earlier_error(source, precheck, view_error)),
+                error: Some(earlier_error(
+                    source,
+                    precheck,
+                    view_error,
                     reference_error,
-                ),
+                )),
                 warnings: encoding_warnings,
             };
         }
@@ -380,10 +394,12 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
                 .unwrap_or(mapped);
             ValidationFeedback {
                 names: Vec::new(),
-                error: prefer_reference_error(
-                    Some(earlier_error(source, precheck, error)),
+                error: Some(earlier_error(
+                    source,
+                    precheck,
+                    error,
                     reference_error,
-                ),
+                )),
                 warnings: encoding_warnings,
             }
         },
@@ -396,10 +412,9 @@ fn prefer_reference_error(
     reference: Option<ReferenceError>,
 ) -> Option<ValidationError> {
     match reference {
-        Some(reference) if error.as_ref().is_none_or(|error| {
-            reference.diagnostic.pos <= error.pos
-                || (!error.lexical && reference.readonly_pos == Some(error.pos))
-        }) => Some(reference.diagnostic),
+        Some(reference) if error.as_ref().is_none_or(|error| reference.precedes(error)) => {
+            Some(reference.diagnostic)
+        }
         _ => error,
     }
 }
@@ -409,20 +424,34 @@ fn prefer_reference_error(
 /// A parser failure on an earlier token can be a same-statement refinement (the precheck
 /// reports the real member after `::`), so only a separator between the two positions proves
 /// the parser reached an earlier statement. Unterminated backticks report at EOF and stay
-/// authoritative.
+/// authoritative. A reference diagnostic may displace a later precheck only after comparing it
+/// with the original parser position. Later prechecks also yield to earlier parser errors inside
+/// the reference.
 fn earlier_error(
     source: &[u8],
     precheck: Option<ValidationError>,
     main: ValidationError,
+    reference: Option<ReferenceError>,
 ) -> ValidationError {
-    let Some(precheck) = precheck else { return main; };
-    if precheck.pos <= main.pos
-        || precheck.message == "syntax error, unexpected end of file, expecting \"`\""
-        || !statement_boundary_between(source, main.pos, precheck.pos)
-    {
-        return precheck;
+    let precheck = precheck.filter(|precheck| {
+        precheck.pos <= main.pos
+            || precheck.message == "syntax error, unexpected end of file, expecting \"`\""
+            || !statement_boundary_between(source, main.pos, precheck.pos)
+    });
+    if let Some(reference) = reference {
+        let preferred = precheck.as_ref().unwrap_or(&main);
+        let reference_precedes_preferred = reference.precedes(preferred);
+        if !reference.precedes(&main)
+            && (reference_precedes_preferred
+                || (main.pos >= reference.target_pos && main.pos < preferred.pos))
+        {
+            return main;
+        }
+        if reference_precedes_preferred {
+            return reference.diagnostic;
+        }
     }
-    main
+    precheck.unwrap_or(main)
 }
 
 /// Returns whether a statement boundary separates two source positions.
