@@ -181,7 +181,7 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_from_value");                            // persist the unchanged string and box it for the caller
     emitter.instruction("b __rt_sid_return");                                   // share the epilogue with every other result path
 
-    // -- copy the operand into scratch, leaving one spare byte for a 'z' -> 'aa' growth --
+    // -- copy into an adoptable reservation, leaving one spare byte for 'z' -> 'aa' --
     emitter.label("__rt_sid_carry");
     elephc_memoir::strings::staged_concat::emit_reserve_with_prefix(
         emitter, 8, 40, "__rt_sid_reserve_ready",
@@ -200,7 +200,7 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
 
     // -- carry from the last byte towards the front, exactly like php-src --
     emitter.label("__rt_sid_copied");
-    emitter.instruction("add x12, x9, #1");                                     // x12 = base of the mutable copy inside scratch
+    emitter.instruction("add x12, x9, #1");                                     // x12 = first operand byte after the reserved prefix
     emitter.instruction("mov x13, x11");                                        // x13 = one past the byte position still to be processed
     emitter.label("__rt_sid_carry_loop");
     emitter.instruction("cbz x13, __rt_sid_carry_escaped");                     // a carry out of position zero grows the string by one byte
@@ -259,7 +259,7 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.label("__rt_sid_stop");
     emitter.instruction("add x1, x9, #1");                                      // the result starts at the copy, leaving the growth slot unused
     emitter.instruction("mov x2, x11");                                         // an absorbed carry keeps the original length
-    emitter.instruction("b __rt_sid_stop_box");                                 // share the boxing and reservation retirement
+    emitter.instruction("b __rt_sid_stop_box");                                 // share the boxing and reservation transfer
 
     emitter.label("__rt_sid_carry_escaped");
     emitter.instruction("ldr x15, [sp, #32]");                                  // reload the prefix byte chosen by the last wrap
@@ -267,7 +267,7 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x9");                                          // the grown result starts one byte earlier
     emitter.instruction("add x2, x11, #1");                                     // an escaped carry makes the result one byte longer
     emitter.label("__rt_sid_stop_box");
-    elephc_memoir::strings::staged_concat::emit_box_and_discard_reservation(emitter, 40);
+    elephc_memoir::strings::staged_concat::emit_box_reserved_slice(emitter, 40, "__rt_sid_box_ready");
 
     emitter.label("__rt_sid_return");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame pointer and return address
@@ -414,7 +414,7 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // persist the unchanged string and box it for the caller
     emitter.instruction("jmp __rt_sid_return_x86");                             // share the epilogue with every other result path
 
-    // -- copy the operand into scratch, leaving one spare byte for a 'z' -> 'aa' growth --
+    // -- copy into an adoptable reservation, leaving one spare byte for 'z' -> 'aa' --
     emitter.label("__rt_sid_carry_x86");
     elephc_memoir::strings::staged_concat::emit_reserve_with_prefix(
         emitter, 16, 48, "__rt_sid_reserve_ready_x86",
@@ -426,7 +426,7 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r10");                                        // rcx = remaining bytes to copy
     emitter.label("__rt_sid_copy_x86");
     emitter.instruction("test rcx, rcx");                                       // stop once the whole operand has been copied into scratch
-    emitter.instruction("jz __rt_sid_copied_x86");                              // the scratch copy is complete
+    emitter.instruction("jz __rt_sid_copied_x86");                              // the initial copy is complete
     emitter.instruction("mov al, BYTE PTR [r9]");                               // load one operand byte from the source cursor
     emitter.instruction("mov BYTE PTR [r11], al");                              // store the byte into the scratch copy
     emitter.instruction("add r9, 1");                                           // advance the source cursor
@@ -489,7 +489,7 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_sid_stop_x86");
     emitter.instruction("lea rdi, [r8 + 1]");                                   // the result starts at the copy, leaving the growth slot unused
     emitter.instruction("mov rsi, r10");                                        // an absorbed carry keeps the original length
-    emitter.instruction("jmp __rt_sid_stop_x86_box");                           // share the boxing and reservation retirement
+    emitter.instruction("jmp __rt_sid_stop_x86_box");                           // share the boxing and reservation transfer
 
     emitter.label("__rt_sid_carry_escaped_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the prefix byte chosen by the last wrap
@@ -497,7 +497,7 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, r8");                                         // the grown result starts one byte earlier
     emitter.instruction("lea rsi, [r10 + 1]");                                  // an escaped carry makes the result one byte longer
     emitter.label("__rt_sid_stop_x86_box");
-    elephc_memoir::strings::staged_concat::emit_box_and_discard_reservation(emitter, 48);
+    elephc_memoir::strings::staged_concat::emit_box_reserved_slice(emitter, 48, "__rt_sid_box_ready_x86");
 
     emitter.label("__rt_sid_return_x86");
     emitter.instruction("mov rsp, rbp");                                        // release every helper-local slot

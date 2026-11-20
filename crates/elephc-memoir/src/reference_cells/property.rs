@@ -174,3 +174,30 @@ pub fn emit_replace_with_uninitialized(emitter: &mut impl Emitter) {
     abi::emit_store_to_address(emitter, result, scratch, 0);
     abi::emit_store_zero_to_address(emitter, scratch, 8);
 }
+
+/// Keeps only a live allocator-owned reference cell carrying typed-property metadata.
+pub fn emit_check_managed_guard(emitter: &mut impl Emitter, done: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.emit_call_label("__rt_gc_candidate_live");                   // validate allocator-owned cell identity
+            emitter.instruction(&format!("cbz x0, {done}"));                    // stack-backed references need no property guard
+            emitter.instruction("ldrb w10, [x0, #-8]");                         // inspect the live allocation kind
+            emitter.instruction(&format!("cmp w10, #{REFERENCE_CELL_HEAP_KIND}")); // is this an owned reference cell?
+            emitter.instruction(&format!("b.ne {done}"));                       // ordinary heap allocations have no typed-property metadata
+            emitter.instruction("ldr x10, [x0, #-8]");                          // reload the full cell header
+            emitter.emit_load_int_immediate("x11", CELL_FLAG); // materialize the property marker
+            emitter.instruction("tst x10, x11");                                // does this cell carry a typed-property guard?
+            emitter.instruction(&format!("b.eq {done}"));                       // ordinary local references keep their fast path
+        }
+        Arch::X86_64 => {
+            emitter.emit_call_label("__rt_gc_candidate_live");                   // require exact allocator-owned identity
+            emitter.instruction("test rax, rax");                               // did the address name a live allocation?
+            emitter.instruction(&format!("je {done}"));                         // stack-backed references need no property guard
+            emitter.instruction(&format!("cmp BYTE PTR [rax - 8], {REFERENCE_CELL_HEAP_KIND}")); // is this an owned reference cell?
+            emitter.instruction(&format!("jne {done}"));                        // ordinary allocations have no typed-property metadata
+            emitter.emit_load_int_immediate("r10", CELL_FLAG); // materialize the property marker
+            emitter.instruction("test QWORD PTR [rax - 8], r10");               // does this cell carry a typed-property guard?
+            emitter.instruction(&format!("je {done}"));                         // ordinary local references keep their fast path
+        }
+    }
+}

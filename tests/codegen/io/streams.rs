@@ -1193,6 +1193,26 @@ fclose($translit);
     assert_eq!(out, format!("{cafe}|plain|plain|{cafe}|{cafe}"));
 }
 
+/// Length-growing read filters return every staged byte, even for a single input byte.
+#[test]
+fn test_stream_read_expanding_filter_publishes_full_result() {
+    let out = compile_and_run(r#"<?php
+$f = tmpfile();
+fwrite($f, "f");
+rewind($f);
+stream_filter_append($f, "convert.base64-encode", STREAM_FILTER_READ);
+echo fread($f, 8), "|";
+fclose($f);
+$f = tmpfile();
+fwrite($f, "=");
+rewind($f);
+stream_filter_append($f, "convert.quoted-printable-encode", STREAM_FILTER_READ);
+echo fread($f, 8);
+fclose($f);
+"#);
+    assert_eq!(out, "Zg==|=3D");
+}
+
 /// Verifies compiled PHP output for stream filter base64 encode pads correctly.
 #[test]
 fn test_stream_filter_base64_encode_pads_correctly() {

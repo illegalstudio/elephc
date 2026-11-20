@@ -64,9 +64,9 @@ pub unsafe extern "C" fn elephc_mbstring_variables_native_invoke_v1(
     let supplied = unsafe { std::slice::from_raw_parts(args, 4) };
     let tail = supplied[3].cast::<u8>();
     if tail.is_null() { return RuntimeBuiltinStatus::RuntimeFatal as i32; }
-    let kind = unsafe { tail.sub(8).cast::<u64>().read_unaligned() } & 0xff;
+    let kind = unsafe { crate::variables::elephc_mbstring_variable_heap_shape_v1(tail) }.kind;
     if kind != 2 && kind != 3 { return RuntimeBuiltinStatus::RuntimeFatal as i32; }
-    let length = unsafe { tail.cast::<u64>().read_unaligned() };
+    let length = unsafe { crate::variables::elephc_mbstring_variable_array_count_v1(tail) };
     let Ok(length) = usize::try_from(length) else { return RuntimeBuiltinStatus::RuntimeFatal as i32; };
     if kind == 2 {
         let Some(bytes) = length.checked_mul(8).and_then(|bytes| bytes.checked_add(24)) else {
@@ -85,7 +85,10 @@ pub unsafe extern "C" fn elephc_mbstring_variables_native_invoke_v1(
     expanded.extend_from_slice(&supplied[..3]);
     for index in 0..length {
         let (marker, tag, low, high) = if kind == 2 {
-            let marker = unsafe { tail.add(24 + index * 8).cast::<*const u64>().read_unaligned() };
+            let Some(Some(child)) = (unsafe { crate::variables::indexed_child(tail.cast_mut(), index) }) else {
+                return RuntimeBuiltinStatus::RuntimeFatal as i32;
+            };
+            let marker = unsafe { (child.words[0] as usize as *const *const u64).read_unaligned() };
             if marker.is_null() { return RuntimeBuiltinStatus::RuntimeFatal as i32; }
             (marker, unsafe { marker.read_unaligned() }, unsafe { marker.add(1).read_unaligned() },
                 unsafe { marker.add(2).read_unaligned() })

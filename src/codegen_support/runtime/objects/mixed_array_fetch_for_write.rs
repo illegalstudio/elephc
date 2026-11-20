@@ -40,6 +40,7 @@
 //! - Pending append mode preserves a payload-only survivor selected before a diagnostic
 //!   callback. Ordinary nested writes retain the normal cell and payload COW boundaries.
 
+use elephc_memoir::values::packed_slots::{self, AttachedPackedSlots};
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -195,32 +196,10 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_array_gfw_return");                       // finish after installing the autovivified element
 
     emitter.label("__rt_mixed_array_gfw_extend");
-    emitter.label("__rt_mixed_array_gfw_grow_check");
-    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the current unique array pointer
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the target index
-    emitter.instruction("ldr x12, [x10, #8]");                                  // load the current capacity
-    emitter.instruction("cmp x9, x12");                                         // does the target index fit in the current capacity?
-    emitter.instruction("b.lo __rt_mixed_array_gfw_grow_ready");                // skip growth once the destination slot is addressable
-    emitter.instruction("mov x0, x10");                                         // pass the current array pointer to the growth helper
-    emitter.instruction("bl __rt_array_grow");                                  // grow the unique array until the target slot fits
-    emitter.instruction("str x0, [sp, #24]");                                   // save the possibly reallocated array pointer
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the receiver cell
-    emitter.instruction("str x0, [x10, #8]");                                   // publish the grown array pointer back into the cell
-    emitter.instruction("b __rt_mixed_array_gfw_grow_check");                   // continue growing until the target slot fits
-    emitter.label("__rt_mixed_array_gfw_grow_ready");
-    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the final array pointer
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the target index
-    emitter.instruction("ldr x12, [sp, #40]");                                  // start zero-filling at the old logical end
-    emitter.label("__rt_mixed_array_gfw_zero_fill");
-    emitter.instruction("cmp x12, x9");                                         // have all gap slots before the target been initialized?
-    emitter.instruction("b.ge __rt_mixed_array_gfw_store_len");                 // stop once the loop reaches the autovivified slot
-    emitter.instruction("add x13, x10, #24");                                   // compute the indexed-array data base for the gap slot
-    emitter.instruction("str xzr, [x13, x12, lsl #3]");                         // initialize the gap slot to null (reads as PHP null)
-    emitter.instruction("add x12, x12, #1");                                    // advance to the next gap slot
-    emitter.instruction("b __rt_mixed_array_gfw_zero_fill");                    // continue zero-filling until the target slot is reached
-    emitter.label("__rt_mixed_array_gfw_store_len");
-    emitter.instruction("add x12, x9, #1");                                     // compute the new logical length
-    emitter.instruction("str x12, [x10]");                                      // store the extended logical length
+    AttachedPackedSlots { array: 24, index: 16, owner: 48 }
+        .emit_grow_to_index(emitter, "__rt_mixed_array_gfw");
+    abi::load_at_offset(emitter, "x11", 8);
+    packed_slots::emit_publish_mixed_extension(emitter, "__rt_mixed_array_gfw", true);
     emitter.instruction("b __rt_mixed_array_gfw_fill_slot");                    // install the autovivified element into the new slot
 
     emitter.label("__rt_mixed_array_gfw_autovivify_receiver");
@@ -474,31 +453,10 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // finish after installing the autovivified element
 
     emitter.label("__rt_mixed_array_gfw_extend");
-    emitter.label("__rt_mixed_array_gfw_grow_check");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current unique array pointer
-    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the target index
-    emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load the current capacity
-    emitter.instruction("cmp r9, r11");                                         // does the target index fit in the current capacity?
-    emitter.instruction("jb __rt_mixed_array_gfw_grow_ready");                  // skip growth once the destination slot is addressable
-    emitter.instruction("mov rdi, r10");                                        // pass the current array pointer to the growth helper
-    emitter.instruction("call __rt_array_grow");                                // grow the unique array until the target slot fits
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the possibly reallocated array pointer
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the receiver cell
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the grown array pointer back into the cell
-    emitter.instruction("jmp __rt_mixed_array_gfw_grow_check");                 // continue growing until the target slot fits
-    emitter.label("__rt_mixed_array_gfw_grow_ready");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the final array pointer
-    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the target index
-    emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // start zero-filling at the old logical end
-    emitter.label("__rt_mixed_array_gfw_zero_fill");
-    emitter.instruction("cmp r8, r9");                                          // have all gap slots before the target been initialized?
-    emitter.instruction("jae __rt_mixed_array_gfw_store_len");                  // stop once the loop reaches the autovivified slot
-    emitter.instruction("mov QWORD PTR [r10 + 24 + r8 * 8], 0");                // initialize the gap slot to null (reads as PHP null)
-    emitter.instruction("add r8, 1");                                           // advance to the next gap slot
-    emitter.instruction("jmp __rt_mixed_array_gfw_zero_fill");                  // continue zero-filling until the target slot is reached
-    emitter.label("__rt_mixed_array_gfw_store_len");
-    emitter.instruction("lea r8, [r9 + 1]");                                    // compute the new logical length
-    emitter.instruction("mov QWORD PTR [r10], r8");                             // store the extended logical length
+    AttachedPackedSlots { array: 32, index: 40, owner: 8 }
+        .emit_grow_to_index(emitter, "__rt_mixed_array_gfw");
+    abi::load_at_offset(emitter, "r11", 48);
+    packed_slots::emit_publish_mixed_extension(emitter, "__rt_mixed_array_gfw", true);
     emitter.instruction("jmp __rt_mixed_array_gfw_fill_slot");                  // install the autovivified element into the new slot
 
     emitter.label("__rt_mixed_array_gfw_autovivify_receiver");

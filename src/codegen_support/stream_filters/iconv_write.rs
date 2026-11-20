@@ -40,8 +40,7 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::{Arch, Platform};
 
-/// Capacity of the shared `_stream_grow_scratch` window used as the iconv output buffer.
-const ICONV_SCRATCH: i64 = 65536;
+use elephc_memoir::buffers::stream_scratch::CAPACITY as ICONV_SCRATCH;
 
 /// `iconvctl()` request that sets a descriptor's transliteration (GNU libiconv numbering,
 /// which Apple's iconv keeps).
@@ -172,7 +171,7 @@ fn emit_arm64<F>(
     }
 
     emitter.label(&loop_label);
-    abi::emit_symbol_address(emitter, "x9", "_stream_grow_scratch");
+    elephc_memoir::buffers::stream_scratch::emit_expansion_address(emitter, "x9");
     emitter.instruction("str x9, [sp, #32]");                                   // iconv outbuf = scratch window base
     emitter.instruction(&format!("mov w10, #{}", ICONV_SCRATCH & 0xFFFF));      // low half of the scratch capacity
     emitter.instruction(&format!("movk w10, #{}, lsl #16", ICONV_SCRATCH >> 16)); // high half of the scratch capacity
@@ -192,7 +191,7 @@ fn emit_arm64<F>(
     emitter.instruction("sub x12, x10, x11");                                   // produced = capacity - remaining
     emitter.instruction(&format!("cbz x12, {}", after_write));                  // nothing produced: skip the write
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd = the saved descriptor
-    abi::emit_symbol_address(emitter, "x1", "_stream_grow_scratch");
+    elephc_memoir::buffers::stream_scratch::emit_expansion_address(emitter, "x1");
     emitter.instruction("mov x2, x12");                                         // produced byte count as the write length
     emitter.syscall(4);
     emitter.label(&after_write);
@@ -300,7 +299,7 @@ fn emit_x86_64<F>(
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // iconv inbytesleft = payload length
 
     emitter.label(&loop_label);
-    abi::emit_symbol_address(emitter, "r9", "_stream_grow_scratch"); // scratch window base
+    elephc_memoir::buffers::stream_scratch::emit_expansion_address(emitter, "r9"); // scratch window base
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // iconv outbuf = scratch window base
     emitter.instruction(&format!("mov QWORD PTR [rbp - 48], {}", ICONV_SCRATCH)); // iconv outbytesleft = scratch capacity
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the descriptor to index the handle table
@@ -318,7 +317,7 @@ fn emit_x86_64<F>(
     emitter.instruction(&format!("jz {}", after_write));                        // nothing produced: skip the write
     emitter.instruction("mov rdx, rax");                                        // produced byte count as the write length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd = the saved descriptor
-    abi::emit_symbol_address(emitter, "rsi", "_stream_grow_scratch"); // write buffer = the scratch window base
+    elephc_memoir::buffers::stream_scratch::emit_expansion_address(emitter, "rsi"); // write buffer = the scratch window base
     emitter.instruction("call write");                                          // write the transcoded chunk through libc write()
     emitter.label(&after_write);
     emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // remaining inbytesleft?

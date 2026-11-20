@@ -15,13 +15,12 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
 use crate::types::param_binding::{
     PROPERTY_REF_TYPE_ARRAY, PROPERTY_REF_TYPE_BOOL, PROPERTY_REF_TYPE_FALSE,
     PROPERTY_REF_TYPE_FLOAT, PROPERTY_REF_TYPE_INT, PROPERTY_REF_TYPE_STRING,
 };
 use elephc_memoir::reference_cells::property::{
-    self, CELL_FLAG, SUFFIX_PTR_OFFSET, SUFFIX_LEN_OFFSET, TYPE_CODE_OFFSET,
+    self, SUFFIX_PTR_OFFSET, SUFFIX_LEN_OFFSET, TYPE_CODE_OFFSET,
 };
 
 /// Prefix php-src uses for every typed-reference assignment diagnostic.
@@ -48,15 +47,7 @@ fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #80]");                             // preserve the caller frame and return address
     emitter.instruction("add x29, sp, #80");                                    // establish the guard frame
     emitter.instruction("stp x0, x1, [sp, #0]");                                // keep the cell address and boxed source
-    abi::emit_call_label(emitter, "__rt_gc_candidate_live");                   // validate allocator-owned cell identity
-    emitter.instruction("cbz x0, __rt_property_reference_store_guard_done");    // stack-backed references need no property guard
-    emitter.instruction("ldrb w10, [x0, #-8]");                                 // inspect the live allocation kind
-    emitter.instruction(&format!("cmp w10, #{REFERENCE_CELL_HEAP_KIND}"));      // is this an owned reference cell?
-    emitter.instruction("b.ne __rt_property_reference_store_guard_done");       // ordinary heap allocations have no typed-property metadata
-    emitter.instruction("ldr x10, [x0, #-8]");                                  // reload the full cell header
-    abi::emit_load_int_immediate(emitter, "x11", CELL_FLAG); // materialize the property marker
-    emitter.instruction("tst x10, x11");                                        // does this cell carry a typed-property guard?
-    emitter.instruction("b.eq __rt_property_reference_store_guard_done");       // ordinary local references keep their fast path
+    property::emit_check_managed_guard(emitter, "__rt_property_reference_store_guard_done");
     emitter.instruction("str x0, [sp, #16]");                                   // keep the validated property cell
     // -- unbox the source value into a runtime tag and payload words --
     emitter.instruction("ldr x0, [sp, #8]");                                    // load the boxed source value
@@ -255,14 +246,7 @@ fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // keep the cell address
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // keep the boxed source
     emitter.instruction("mov rax, rdi");                                        // validate the candidate cell address
-    abi::emit_call_label(emitter, "__rt_gc_candidate_live");                   // require exact allocator-owned identity
-    emitter.instruction("test rax, rax");                                       // did the address name a live allocation?
-    emitter.instruction("je __rt_property_reference_store_guard_done_x");       // stack-backed references need no property guard
-    emitter.instruction(&format!("cmp BYTE PTR [rax - 8], {REFERENCE_CELL_HEAP_KIND}")); // is this an owned reference cell?
-    emitter.instruction("jne __rt_property_reference_store_guard_done_x");      // ordinary allocations have no typed-property metadata
-    abi::emit_load_int_immediate(emitter, "r10", CELL_FLAG); // materialize the property marker
-    emitter.instruction("test QWORD PTR [rax - 8], r10");                       // does this cell carry a typed-property guard?
-    emitter.instruction("je __rt_property_reference_store_guard_done_x");       // ordinary local references keep their fast path
+    property::emit_check_managed_guard(emitter, "__rt_property_reference_store_guard_done_x");
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // keep the validated property cell
     // -- unbox the source value into a runtime tag and payload words --
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the boxed source value
