@@ -354,9 +354,13 @@ fn lower_array_assign_from_value(
     // in any function whose frame widened to boxed slots.
     // `$boxed[$k] = &$x` binds a reference, which the boxed writer cannot carry: the general
     // path below materializes it through `lower_array_reference_or_value`.
+    // A raw scalar local (an `int &$x` that an `eval()` may have retyped, seen through a native
+    // reference view) has no array writer either: `array_set_op` sends it to the boxed writer,
+    // which boxes the scalar so the runtime dispatch (string offset or PHP's scalar error) decides.
+    // The raw IR types are the ones `array_set_op` maps to `Op::RuntimeCall` for a plain scalar.
     if matches!(
         ctx.peek_local_load_ir_type(array),
-        IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)
+        IrType::I64 | IrType::F64
     ) && !matches!(value.kind, ExprKind::ArrayReference(_))
     {
         lower_boxed_array_set(ctx, array, index, value, span, key_already_diagnosed);

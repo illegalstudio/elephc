@@ -218,3 +218,24 @@ $number = 41; nativeDetachedInteger($number, $code); echo $number;
             "optimize={optimize}: {}", output.stderr);
     }
 }
+
+/// A top-level reference alias keeps its frame cell when another function runs `eval()`.
+///
+/// An `eval()` in a declared body makes every top-level name program-global storage, but a name
+/// bound by `$alias =& $text` lives in a reference cell that the global symbol never reflects: the
+/// alias read back "" after a by-reference call detached the callee's local.
+#[test]
+fn test_top_level_reference_alias_survives_eval_in_a_declared_function() {
+    let source = r#"<?php
+function runCode(string $code): void { eval($code); }
+function detach(string &$text): void { unset($text); }
+$text = 'before'; $alias =& $text;
+detach($text); echo $text, ':', $alias, '|';
+runCode($argc > 0 ? '$unrelated = 1;' : '');
+$alias = 'after'; echo $text, ':', $alias;
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "before:before|after:after");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

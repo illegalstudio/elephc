@@ -59,12 +59,21 @@ pub(crate) fn collect_global_var_names(statements: &[Stmt]) -> HashSet<String> {
         // temporaries) are not PHP variables: no PHP text can name them, and promoting them to
         // boxed global storage erased the types their builtins require
         // (`__elephc_ptr_read_string(..., $__elephc_body_len)` refused a Mixed length).
+        let top_level = top_level_code(statements);
+        // A top-level name bound by `$a =& $b` lives in a frame reference cell that `load_global`
+        // and `store_global` never see: reading either side through the program symbol returned
+        // the stale value (`$alias =& $text; g($text); echo $alias;` printed ""). Those names keep
+        // their frame slot, like a name this walk does not widen at all; only text that spells
+        // `global $name` for one of them stays unreachable, as it is for `global`-declared names.
+        let reference_bound = top_level_reference_bound(&top_level);
         names.extend(
-            crate::prelude_prune::usage::collect(&top_level_code(statements))
+            crate::prelude_prune::usage::collect(&top_level)
                 .variables
                 .into_iter()
                 .filter(|name| {
-                    !name.starts_with("__elephc") && !crate::names::is_generated_local_name(name)
+                    !name.starts_with("__elephc")
+                        && !crate::names::is_generated_local_name(name)
+                        && !reference_bound.contains(name)
                 }),
         );
     }
@@ -96,6 +105,20 @@ fn declarations_run_dynamic_php(statements: &[Stmt], runs_dynamic: &dyn Fn(&[Stm
         StmtKind::NamespaceBlock { body, .. } => declarations_run_dynamic_php(body, runs_dynamic),
         _ => false,
     })
+}
+
+/// Returns the plain variables a statement list binds with `$target =& $source` (both sides).
+fn top_level_reference_bound(statements: &[Stmt]) -> HashSet<String> {
+    let mut bound = HashSet::default();
+    crate::parser::ast::visit::walk_stmts(statements, &mut |stmt| {
+        if let StmtKind::RefAssign { target, source } = &stmt.kind {
+            bound.insert(target.clone());
+            if let ExprKind::Variable(name) = &source.kind {
+                bound.insert(name.clone());
+            }
+        }
+    });
+    bound
 }
 
 /// Returns the top-level statements that run in the global scope (every declaration removed).
