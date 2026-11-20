@@ -7,18 +7,19 @@
 //! Key details:
 //! - Pair overrides preserve PHP's consumption of malformed trailing bytes.
 //! - Decoder outputs may expand into several codepoints, including mobile emoji.
+//! - Pair, triple, and encoder indexes are compact `mapping::Index` tables built by build.rs.
 //! - Reverse composition records handle sequences represented by one encoded character.
 
-use super::{mapping::{lookup, word}, Decoded, Substitute, BAD_INPUT};
+use super::{mapping::{word, Index}, Decoded, Substitute, BAD_INPUT};
 
 /// Compact mapping tables for a stateless codec with up to three-byte input units.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct DoubleByte {
     pub single: &'static [u8],
-    pub pairs: &'static [u8],
-    pub triples: &'static [u8],
+    pub pairs: Index,
+    pub triples: Index,
     pub points: &'static [u8],
-    pub encode: &'static [u8],
+    pub encode: Index,
     pub bytes: &'static [u8],
     pub composites: &'static [u8],
     pub escapes: &'static [u8],
@@ -71,7 +72,7 @@ impl DoubleByte {
             if offset + 2 < input.len() && !self.triples.is_empty() {
                 let key = (u32::from(input[offset]) << 16)
                     | (u32::from(input[offset + 1]) << 8) | u32::from(input[offset + 2]);
-                if let Some(record) = lookup(self.triples, key) {
+                if let Some(record) = self.triples.get(key) {
                     self.append_points(record as usize, offset, &mut output);
                     offset += 3;
                     continue;
@@ -98,7 +99,7 @@ impl DoubleByte {
             let pair = input.get(offset + 1).map(|&next| {
                 (u32::from(input[offset]) << 8) | u32::from(next)
             });
-            let paired = pair.and_then(|key| lookup(self.pairs, key));
+            let paired = pair.and_then(|key| self.pairs.get(key));
             let record = paired.unwrap_or_else(|| word(self.single, usize::from(input[offset]) * 4));
             self.append_points(record as usize, offset, &mut output);
             offset += if paired.is_some() { 2 } else { 1 };
@@ -166,7 +167,7 @@ impl DoubleByte {
 
     /// Borrows the canonical scalar mapping for stateful encodings sharing this character set.
     pub(super) fn encoded(self, code: u32) -> Option<&'static [u8]> {
-        let Some(offset) = lookup(self.encode, code) else {
+        let Some(offset) = self.encode.get(code) else {
             return None;
         };
         let offset = offset as usize;
@@ -177,7 +178,7 @@ impl DoubleByte {
     /// Reads a one-codepoint pair mapping for a stateful wrapper's validated character bytes.
     pub(super) fn decoded_pair(self, first: u8, second: u8) -> u32 {
         let key = (u32::from(first) << 8) | u32::from(second);
-        let Some(record) = lookup(self.pairs, key) else { return BAD_INPUT; };
+        let Some(record) = self.pairs.get(key) else { return BAD_INPUT; };
         let record = record as usize;
         if word(self.points, record) != 1 { return BAD_INPUT; }
         word(self.points, record + 4)
@@ -186,7 +187,7 @@ impl DoubleByte {
     /// Reads a one-codepoint triple mapping for a wrapper sharing the JIS X 0212 plane.
     pub(super) fn decoded_triple(self, first: u8, second: u8, third: u8) -> u32 {
         let key = (u32::from(first) << 16) | (u32::from(second) << 8) | u32::from(third);
-        let Some(record) = lookup(self.triples, key) else { return BAD_INPUT; };
+        let Some(record) = self.triples.get(key) else { return BAD_INPUT; };
         let record = record as usize;
         if word(self.points, record) != 1 { return BAD_INPUT; }
         word(self.points, record + 4)

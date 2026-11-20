@@ -8,14 +8,14 @@
 //! - Emoji expansions share their original byte offset and compose during encoding.
 //! - Empty encoder overrides represent rejected standalone regional indicators.
 
-use super::{mapping::{lookup, word}, Decoded, Substitute, UnicodeEncoding};
+use super::{mapping::{word, Index}, Decoded, Substitute, UnicodeEncoding};
 
 /// Sparse carrier mappings layered over PHP's ordinary UTF-8 codec.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct MobileUtf8 {
-    pub decode: &'static [u8],
+    pub decode: Index,
     pub points: &'static [u8],
-    pub encode: &'static [u8],
+    pub encode: Index,
     pub bytes: &'static [u8],
     pub composites: &'static [u8],
 }
@@ -26,7 +26,7 @@ impl MobileUtf8 {
         let raw = UnicodeEncoding::Utf8.decode(input);
         let mut output = Decoded::default();
         for (code, offset) in raw.points.into_iter().zip(raw.offsets) {
-            if let Some(record) = lookup(self.decode, code) {
+            if let Some(record) = self.decode.get(code) {
                 let record = record as usize;
                 for index in 0..word(self.points, record) as usize {
                     output.push(word(self.points, record + 4 + index * 4), offset);
@@ -59,7 +59,7 @@ impl MobileUtf8 {
 
     /// Appends one representable scalar, rejecting explicit empty mappings without output.
     fn append(self, code: u32, output: &mut Vec<u8>) -> bool {
-        if let Some(record) = lookup(self.encode, code) {
+        if let Some(record) = self.encode.get(code) {
             let record = record as usize;
             let length = word(self.bytes, record) as usize;
             output.extend_from_slice(&self.bytes[record + 4..record + 4 + length]);
