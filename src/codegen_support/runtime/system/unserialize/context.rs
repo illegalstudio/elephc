@@ -9,7 +9,7 @@
 //! - A negative saved count marks legacy sharing, whose owners survive until the outer decode ends.
 
 use crate::codegen_support::emit::Emitter;
-use elephc_memoir::values::reference_snapshot;
+use elephc_memoir::values::{reference_registry::UNSERIALIZE_CAPACITY, reference_snapshot};
 
 const SNAPSHOT: reference_snapshot::Storage<'static> = reference_snapshot::Storage {
     label_prefix: "__rt_unserialize",
@@ -49,7 +49,7 @@ pub(super) fn emit_unserialize_context_aarch64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_count");
     emitter.instruction("ldr x10, [x9]");                                       // load the outer registry's logical value count
     emitter.instruction("str x10, [sp]");                                       // preserve the logical count across context allocation
-    emitter.instruction("mov x11, #65536");                                     // materialize the fixed registry capacity
+    emitter.instruction(&format!("mov x11, #{UNSERIALIZE_CAPACITY}"));                                     // materialize the fixed registry capacity
     emitter.instruction("cmp x10, x11");                                        // does the logical count exceed the physical registry?
     emitter.instruction("csel x11, x10, x11, lo");                              // copy only the populated in-bounds registry prefix
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x12", "_unser_legacy_active", 0);
@@ -148,7 +148,7 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_unser_depth_fatal_x");                        // reject another snapshot before allocating bounded heap state
     emitter.instruction("mov r10, QWORD PTR [rip + _unser_count]");             // load the outer registry's logical value count
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // preserve the logical count across context allocation
-    emitter.instruction("mov r11, 65536");                                      // materialize the fixed registry capacity
+    emitter.instruction(&format!("mov r11, {UNSERIALIZE_CAPACITY}"));                                      // materialize the fixed registry capacity
     emitter.instruction("cmp r10, r11");                                        // does the logical count exceed the physical registry?
     emitter.instruction("cmovb r11, r10");                                      // copy only the populated in-bounds registry prefix
     emitter.instruction("cmp QWORD PTR [rip + _unser_legacy_active], 0");       // distinguish shared legacy payloads from ordinary nesting

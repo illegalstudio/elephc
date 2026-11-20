@@ -366,7 +366,7 @@ fn emit_from_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save SplFixedArray class id
     emitter.instruction("str x1, [sp, #8]");                                    // save source PHP array
     emitter.instruction("str x2, [sp, #16]");                                   // save preserveKeys flag
-    emitter.instruction("ldr x9, [x1, #-8]");                                   // load source heap kind metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x1");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low heap kind byte
     emitter.instruction("cmp x9, #3");                                          // is the source an associative array hash?
     emitter.instruction("b.eq __rt_spl_fixed_from_array_hash_size");            // hash sources need key-aware sizing
@@ -444,12 +444,12 @@ fn emit_copy_from_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver
     emitter.instruction("str x1, [sp, #8]");                                    // save source PHP array
     emitter.instruction("str x2, [sp, #16]");                                   // save preserveKeys flag
-    emitter.instruction("ldr x9, [x1, #-8]");                                   // load source heap kind metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x1");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low heap kind byte
     emitter.instruction("cmp x9, #3");                                          // is the source an associative array hash?
     emitter.instruction("b.eq __rt_spl_fixed_copy_from_hash");                  // hash sources need insertion-order import
     emitter.instruction("mov x0, x1");                                          // pass source array to mixed conversion
-    emitter.instruction("ldr x1, [x0, #-8]");                                   // load packed array kind and value-type metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x1", "x0");
     emitter.instruction("lsr x1, x1, #8");                                      // move value_type tag down to the low byte
     emitter.instruction("and x1, x1, #0x7f");                                   // isolate the indexed-array value_type tag without COW metadata
     emitter.instruction("bl __rt_array_to_mixed");                              // normalize source slots to boxed Mixed cells
@@ -926,7 +926,7 @@ fn emit_from_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save SplFixedArray class id
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save source PHP array
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save preserveKeys flag
-    emitter.instruction("mov r10, QWORD PTR [rsi - 8]");                        // load source heap kind metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rsi");
     emitter.instruction("and r10, 0xff");                                       // isolate the low heap kind byte
     emitter.instruction("cmp r10, 3");                                          // is the source an associative array hash?
     emitter.instruction("je __rt_spl_fixed_from_array_hash_size_x86");          // hash sources need key-aware sizing
@@ -1004,14 +1004,13 @@ fn emit_copy_from_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save source PHP array
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save preserveKeys flag
-    emitter.instruction("mov r10, QWORD PTR [rsi - 8]");                        // load source heap kind metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rsi");
     emitter.instruction("and r10, 0xff");                                       // isolate the low heap kind byte
     emitter.instruction("cmp r10, 3");                                          // is the source an associative array hash?
     emitter.instruction("je __rt_spl_fixed_copy_from_hash_x86");                // hash sources need insertion-order import
     emitter.instruction("mov rax, rsi");                                        // pass source array to mixed conversion
-    emitter.instruction("mov rsi, QWORD PTR [rax - 8]");                        // load packed array kind and value-type metadata
-    emitter.instruction("shr rsi, 8");                                          // move value_type tag down to the low byte
-    emitter.instruction("and rsi, 0x7f");                                       // isolate the indexed-array value_type tag without COW metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rsi", "rax");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rsi", "rsi");
     emitter.instruction("mov rdi, rax");                                        // pass the source indexed array pointer to the converter
     emitter.instruction("call __rt_array_to_mixed");                            // normalize source slots to boxed Mixed cells
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save possibly-converted source array

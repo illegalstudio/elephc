@@ -9,6 +9,7 @@
 //! - Callback concat scratch is discarded before writing the final envelope; the active
 //!   serialize stream is parked across the callback and every envelope byte goes through it.
 
+use elephc_memoir::strings::concat_cursor::SavedConcatCursor;
 use elephc_memoir::{FrameOffset, strings::scoped_stream::StreamScope};
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -65,8 +66,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, arg0, 8);
     abi::emit_load_from_address(emitter, result, arg0, 0);
     abi::store_at_offset(emitter, result, 16);
-    elephc_memoir::strings::concat_cursor::emit_read(emitter, scratch);
-    abi::store_at_offset(emitter, scratch, 24);
+    let cursor = SavedConcatCursor::Frame(elephc_memoir::FrameOffset::new(24));
+    cursor.emit_save(emitter, scratch);
     abi::emit_store_zero_to_local_slot(emitter, 48);
     // -- the legacy hook may run serialize() and uses the concat scratch: park the active stream
     //    and move `_concat_off` past a scratch-backed stream so the hook cannot overwrite it --
@@ -87,8 +88,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
             abi::store_at_offset(emitter, "rdx", 64);
         }
     }
-    abi::load_at_offset(emitter, result, 24);
-    elephc_memoir::strings::concat_cursor::emit_write(emitter, result);
+    cursor.emit_restore(emitter, result);
     OUTPUT_STREAM.emit_restore(emitter);
     load_table_entry(emitter, "_class_serializable_serialize_return_abi");
     abi::emit_reg_move(emitter, result, scratch);

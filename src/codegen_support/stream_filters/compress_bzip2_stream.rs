@@ -17,7 +17,7 @@ use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 
-const FILTER_BUF_SIZE: i64 = 65536;
+const FILTER_BUF_SIZE: i64 = elephc_memoir::buffers::stream_scratch::CAPACITY;
 
 /// ARM64: 96-byte stack frame.
 /// Layout:
@@ -51,7 +51,7 @@ where
     emitter.instruction("str xzr, [sp, #8]");                                   // slurp offset = 0
     emitter.label(&slurp);
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd to read from
-    abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "x1");
     emitter.instruction("ldr x9, [sp, #8]");                                    // current compressed-byte count
     emitter.instruction("add x1, x1, x9");                                      // write ptr = buf + offset
     emitter.instruction(&format!("mov x2, #{}", FILTER_BUF_SIZE));              // total slurp buffer capacity
@@ -81,7 +81,7 @@ where
     // BZ2_bzBuffToBuffDecompress(dest, &destLen, source, sourceLen, 0, 0).
     emitter.instruction("ldr x0, [sp, #16]");                                   // dest
     emitter.instruction("add x1, sp, #48");                                     // &destLen
-    abi::emit_symbol_address(emitter, "x2", "_stream_filter_buf"); // source
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "x2"); // source
     emitter.instruction("ldr x3, [sp, #8]");                                    // sourceLen (passed as w3 below)
     emitter.instruction("mov w4, #0");                                          // small = 0
     emitter.instruction("mov w5, #0");                                          // verbosity = 0
@@ -164,7 +164,7 @@ where
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // slurp offset
     emitter.label(&slurp);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
-    abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf"); // slurp buffer base
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "rsi"); // slurp buffer base
     emitter.instruction("add rsi, QWORD PTR [rbp - 16]");                       // ptr = buf + offset
     emitter.instruction(&format!("mov rdx, {}", FILTER_BUF_SIZE));              // total slurp buffer capacity
     emitter.instruction("sub rdx, QWORD PTR [rbp - 16]");                       // remaining
@@ -190,7 +190,7 @@ where
     // BZ2_bzBuffToBuffDecompress(dest, &destLen, source, sourceLen, 0, 0).
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // dest
     emitter.instruction("lea rsi, [rbp - 48]");                                 // &destLen
-    abi::emit_symbol_address(emitter, "rdx", "_stream_filter_buf"); // source
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "rdx"); // source
     emitter.instruction("mov ecx, DWORD PTR [rbp - 16]");                       // sourceLen u32 (compressed len)
     emitter.instruction("xor r8d, r8d");                                        // small = 0
     emitter.instruction("xor r9d, r9d");                                        // verbosity = 0

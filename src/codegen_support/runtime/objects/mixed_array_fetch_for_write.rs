@@ -102,11 +102,11 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #5");                                          // hashes follow the same ownership rule
     emitter.instruction("b.ne __rt_mixed_array_gfw_mode_ready");                // scalar and object receivers use ordinary semantics
     emitter.label("__rt_mixed_array_gfw_mode_array");
-    emitter.instruction("ldr w9, [x0, #-12]");                                  // count owners of the selected Mixed cell
+    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w9", "x0");
     emitter.instruction("cmp w9, #1");                                          // the compiler lease is the one expected cell owner
     emitter.instruction("b.hi __rt_mixed_array_gfw_mode_ready");                // a stored cell owner keeps ordinary write-through semantics
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the selected array or hash payload
-    emitter.instruction("ldr w9, [x9, #-12]");                                  // count independent payload owners
+    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w9", "x9");
     emitter.instruction("cmp w9, #2");                                          // one selected-cell lease and exactly one PHP payload owner
     emitter.instruction("cset x9, eq");                                         // multiple independent copies must never share the detached write
     emitter.instruction("str x9, [sp, #48]");                                   // preserve it through conversion, lookup, and insertion
@@ -145,8 +145,8 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
     emitter.instruction("cmp x9, #0");                                          // negative indexes are not representable in dense storage
     emitter.instruction("b.lt __rt_mixed_array_gfw_promote");                   // negative integer keys require associative PHP-array storage
-    emitter.instruction("ldr x12, [x10, #-8]");                                 // load the packed indexed-array metadata
-    emitter.instruction("ubfx x1, x12, #8, #7");                                // pass the source value_type tag to the Mixed conversion helper
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x12", "x10");
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x1", "x12");
     emitter.instruction("mov x0, x10");                                         // pass the indexed array to the Mixed conversion helper
     emitter.instruction("ldr x14, [sp, #48]");                                  // select ordinary COW or the pre-callback payload identity
     emitter.instruction("cbnz x14, __rt_mixed_array_gfw_indexed_shared");       // payload-only survivors must remain observable through their copy
@@ -357,10 +357,10 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 5");                                          // hashes follow the same ownership rule
     emitter.instruction("jne __rt_mixed_array_gfw_mode_ready");                 // scalar and object receivers use ordinary semantics
     emitter.label("__rt_mixed_array_gfw_mode_array");
-    emitter.instruction("cmp DWORD PTR [rdi - 12], 1");                         // the compiler lease is the one expected cell owner
+    elephc_memoir::heap_refcount::emit_compare_owner_count_x86_64(emitter, "rdi", 1);
     emitter.instruction("ja __rt_mixed_array_gfw_mode_ready");                  // a stored cell owner keeps ordinary write-through semantics
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the selected array or hash payload
-    emitter.instruction("cmp DWORD PTR [r10 - 12], 2");                         // one selected-cell lease and exactly one PHP payload owner
+    elephc_memoir::heap_refcount::emit_compare_owner_count_x86_64(emitter, "r10", 2);
     emitter.instruction("sete r10b");                                           // multiple independent copies must never share the detached write
     emitter.instruction("movzx r10, r10b");                                     // materialize a complete mode word
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // preserve it through conversion, lookup, and insertion
@@ -398,9 +398,8 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the requested integer index
     emitter.instruction("cmp r9, 0");                                           // negative indexes are not representable in dense storage
     emitter.instruction("jl __rt_mixed_array_gfw_promote");                     // negative integer keys require associative PHP-array storage
-    emitter.instruction("mov r8, QWORD PTR [r10 - 8]");                         // load the packed indexed-array metadata
-    emitter.instruction("shr r8, 8");                                           // shift the runtime element value_type tag into the low bits
-    emitter.instruction("and r8, 0x7f");                                        // remove the persistent COW flag from the extracted tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r8", "r10");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r8", "r8");
     emitter.instruction("mov rsi, r8");                                         // pass the source value_type tag to the Mixed conversion helper
     emitter.instruction("mov rdi, r10");                                        // pass the indexed array to the Mixed conversion helper
     emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // select ordinary COW or the pre-callback payload identity

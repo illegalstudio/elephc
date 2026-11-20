@@ -18,6 +18,7 @@ pub(crate) fn emit_phpext_exports(
     exports: &[&ExportedFunction], heap_debug: bool, startup: Option<&str>,
 ) {
     elephc_memoir::heap_refcount::emit_c_owner_count(emitter, "elephc_phpext_native_owner_count", true);
+    elephc_memoir::values::throwable_storage::emit_c_projection(emitter);
     reserve_boundary_data(data);
     data.add_comm("_elephc_phpext_pack_depth".into(), 8);
     data.add_comm("_elephc_phpext_root_scan".into(), 8);

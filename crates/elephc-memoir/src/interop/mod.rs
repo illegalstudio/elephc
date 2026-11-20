@@ -16,4 +16,5 @@ pub mod cstr_scratch;
 pub mod replacement_owners;
 
 mod native_array_slots;
+mod native_object_slot;
 pub mod native_variable;

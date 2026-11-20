@@ -132,30 +132,7 @@ pub fn emit_ob_start(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, #1");                                    // round up to the next page
     emitter.instruction("lsl x0, x10, #12");                                    // capacity = ((chunk >> 12) + 1) << 12
     output::emit_allocate_slot(emitter);
-    abi::emit_symbol_address(emitter, "x11", "_ob_handler_stubs");              // materialize the handler-stub slot array
-    emitter.instruction("ldr x12, [sp, #0]");                                   // reload the handler stub
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the handler stub
-    abi::emit_symbol_address(emitter, "x11", "_ob_handler_envs");               // materialize the handler-env slot array
-    emitter.instruction("ldr x12, [sp, #8]");                                   // reload the handler env word
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the handler env word
-    abi::emit_symbol_address(emitter, "x11", "_ob_name_ptrs");                  // materialize the handler-name pointer array
-    emitter.instruction("ldr x12, [sp, #32]");                                  // reload the owned name pointer
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the owned name pointer
-    abi::emit_symbol_address(emitter, "x11", "_ob_name_lens");                  // materialize the handler-name length array
-    emitter.instruction("ldr x12, [sp, #40]");                                  // reload the owned name length
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the owned name length
-    abi::emit_symbol_address(emitter, "x11", "_ob_chunk_sizes");                // materialize the chunk-size slot array
-    emitter.instruction("ldr x12, [sp, #16]");                                  // reload the chunk size
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the chunk size
-    abi::emit_symbol_address(emitter, "x11", "_ob_flags");                      // materialize the flags slot array
-    emitter.instruction("ldr x12, [sp, #24]");                                  // reload the flags word
-    emitter.instruction("and x12, x12, #0xfffffffffffffff0");                   // handler type is selected by the runtime rather than caller flags
-    emitter.instruction("bic x12, x12, #0xf000");                               // PHP 8.4 and later forbid caller-supplied status bits
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the flags word
-    abi::emit_symbol_address(emitter, "x11", "_ob_started");                    // materialize the started-flag slot array
-    emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // the handler has not run yet
-    emitter.instruction("add x10, x10, #1");                                    // the stack is now one level deeper
-    emitter.instruction("str x10, [x9]");                                       // publish the new depth
+    output::emit_publish_slot(emitter);
     emitter.instruction("mov x0, #1");                                          // report success
     emitter.label("__rt_ob_start_done");
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
@@ -233,29 +210,7 @@ fn emit_ob_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl r10, 12");                                         // capacity = ((chunk >> 12) + 1) << 12
     emitter.instruction("mov rax, r10");                                        // pass the capacity to the allocator
     output::emit_allocate_slot(emitter);
-    abi::emit_symbol_address(emitter, "r11", "_ob_handler_stubs");              // materialize the handler-stub slot array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the handler stub
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the handler stub
-    abi::emit_symbol_address(emitter, "r11", "_ob_handler_envs");               // materialize the handler-env slot array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the handler env word
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the handler env word
-    abi::emit_symbol_address(emitter, "r11", "_ob_name_ptrs");                  // materialize the handler-name pointer array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the owned name pointer
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the owned name pointer
-    abi::emit_symbol_address(emitter, "r11", "_ob_name_lens");                  // materialize the handler-name length array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the owned name length
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the owned name length
-    abi::emit_symbol_address(emitter, "r11", "_ob_chunk_sizes");                // materialize the chunk-size slot array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the chunk size
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the chunk size
-    abi::emit_symbol_address(emitter, "r11", "_ob_flags");                      // materialize the flags slot array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the flags word
-    emitter.instruction("and rcx, -61456");                                     // clear caller-supplied handler type and lifecycle status bits
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the flags word
-    abi::emit_symbol_address(emitter, "r11", "_ob_started");                    // materialize the started-flag slot array
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");                      // the handler has not run yet
-    emitter.instruction("add r10, 1");                                          // the stack is now one level deeper
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the new depth
+    output::emit_publish_slot(emitter);
     emitter.instruction("mov eax, 1");                                          // report success
     emitter.label("__rt_ob_start_done_x86");
     emitter.instruction("add rsp, 64");                                         // release the ob_start local slots

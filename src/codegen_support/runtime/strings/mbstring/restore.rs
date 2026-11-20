@@ -113,10 +113,9 @@ fn aarch64(emitter: &mut Emitter) {
     bind_string(emitter, true);
     emitter.instruction("ldr x9, [sp, #32]");                                   // recover the unique indexed destination
     emitter.instruction("ldr x10, [sp, #24]");                                  // recover the next initialized element index
-    emitter.instruction("add x11, x9, #24");                                    // skip the indexed header
-    emitter.instruction("str x0, [x11, x10, lsl #3]");                          // transfer the fresh boxed owner into its element slot
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "x9", "x10", "x0", "x11");
     emitter.instruction("add x10, x10, #1");                                    // include the newly initialized owner in cleanup
-    emitter.instruction("str x10, [x9]");                                       // expose exactly the initialized elements
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x9", "x10");
     emitter.instruction("b __rt_mbstring_build_advance");                       // share progress with associative construction
     emitter.label("__rt_mbstring_build_done");
     emitter.instruction("ldr x0, [sp, #32]");                                   // transfer the single completed table owner to Rust
@@ -204,9 +203,9 @@ fn x86_64(emitter: &mut Emitter) {
     bind_string(emitter, true);
     emitter.instruction("mov r10, QWORD PTR [rsp + 32]");                       // recover the unique indexed destination
     emitter.instruction("mov r11, QWORD PTR [rsp + 24]");                       // recover the next element index
-    emitter.instruction("mov QWORD PTR [r10 + r11 * 8 + 24], rax");             // transfer the fresh boxed owner into its slot
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "r10", "r11", "rax", "r9");
     emitter.instruction("add r11, 1");                                          // include the initialized element in cleanup
-    emitter.instruction("mov QWORD PTR [r10], r11");                            // expose exactly initialized owners
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "r10", "r11");
     emitter.instruction("jmp __rt_mbstring_build_advance");                     // share progress with associative construction
     emitter.label("__rt_mbstring_build_done");
     emitter.instruction("mov rax, QWORD PTR [rsp + 32]");                       // transfer the single completed table owner to Rust

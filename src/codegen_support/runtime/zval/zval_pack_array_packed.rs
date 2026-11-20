@@ -47,7 +47,7 @@ pub fn emit_zval_pack_array_packed(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #8]");                                    // save the length
     emitter.instruction("ldr x1, [x0, #16]");                                   // load the element size
     emitter.instruction("str x1, [sp, #16]");                                   // save the elem_size
-    emitter.instruction("ldr x1, [x0, #-8]");                                   // load the kind word (value_type is byte 1)
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x1", "x0");
     emitter.instruction("lsr x1, x1, #8");                                      // shift the value_type byte into the low position
     emitter.instruction("and x1, x1, #0x7f");                                   // isolate the 7-bit value_type, excluding the COW flag in bit 15
     emitter.instruction("str x1, [sp, #24]");                                   // save the value_type
@@ -191,9 +191,8 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the length
     emitter.instruction("mov rcx, QWORD PTR [rax + 16]");                       // load the element size
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the elem_size
-    emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // load the kind word (value_type is byte 1)
-    emitter.instruction("shr rcx, 8");                                          // shift the value_type byte into the low position
-    emitter.instruction("and rcx, 0x7f");                                       // isolate the 7-bit value_type, excluding the COW flag in bit 15
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rcx", "rax");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rcx", "rcx");
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the value_type
     emitter.instruction("lea rcx, [rax + 24]");                                 // elements start right after the 24-byte header
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save the elements base

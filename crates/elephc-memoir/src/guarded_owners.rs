@@ -121,3 +121,19 @@ pub fn emit_detach_at_stack(emitter: &mut impl TargetAbi, record: RecordOffset) 
     emitter.emit_temporary_stack_address(emitter.int_arg_reg_name(0), record.bytes());
     emitter.emit_call_label("__rt_exception_unguard_owned");
 }
+
+/// Borrows the current owner of a pointer-word slot for a caller's detach decision.
+pub fn emit_load_indexed_owner(emitter: &mut impl Emitter, table: &str, index: &str, owner: &str) {
+    emitter.instruction(&match emitter.arch() {
+        Arch::AArch64 => format!("ldr {owner}, [{table}, {index}, lsl #3]"),
+        Arch::X86_64 => format!("mov {owner}, QWORD PTR [{table} + {index}*8]"),
+    });                                                                       // read the current owner without retaining it
+}
+
+/// Clears an indexed slot whose ownership has been transferred to the caller.
+pub fn emit_clear_indexed_owner(emitter: &mut impl Emitter, table: &str, index: &str) {
+    emitter.instruction(&match emitter.arch() {
+        Arch::AArch64 => format!("str xzr, [{table}, {index}, lsl #3]"),
+        Arch::X86_64 => format!("mov QWORD PTR [{table} + {index}*8], 0"),
+    });                                                                       // detach the table's owner before it can be released
+}

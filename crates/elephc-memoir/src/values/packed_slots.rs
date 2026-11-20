@@ -365,3 +365,66 @@ fn emit_zero_x86_64(emitter: &mut impl Emitter, wide: bool, array_reg: &str, ind
         }
     }
 }
+
+/// Byte width of the length, capacity and stride words preceding packed slots.
+const PACKED_PAYLOAD: usize = 24;
+
+/// Writes one prepared owner into a reserved word-sized slot at a dynamic index.
+pub fn emit_store_indexed_word(
+    emitter: &mut impl Emitter, array: &str, index: &str, value: &str, address: &str,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("add {address}, {array}, #{PACKED_PAYLOAD}")); // select payload storage after the indexed header
+            emitter.instruction(&format!("str {value}, [{address}, {index}, lsl #3]")); // transfer the prepared word to its slot
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov QWORD PTR [{array} + {index} * 8 + {PACKED_PAYLOAD}], {value}")); // transfer the prepared word to its slot
+        }
+    }
+}
+
+/// Initializes a constant-index word slot and publishes the initialized prefix through that slot.
+pub fn emit_publish_word_at(
+    emitter: &mut impl Emitter, array: &str, value: &str, length: &str, index: usize,
+) {
+    emitter.emit_store_to_address(value, array, PACKED_PAYLOAD + index * 8);
+    emitter.emit_load_int_immediate(length, (index + 1) as i64);
+    emit_publish_length(emitter, array, length);
+}
+
+/// Publishes the number of initialized slots to the native packed array.
+pub fn emit_publish_length(emitter: &mut impl Emitter, array: &str, length: &str) {
+    emitter.emit_store_to_address(length, array, 0);
+}
+
+/// Loads the logical length and reserved capacity without touching the payload.
+pub fn emit_load_length_and_capacity(
+    emitter: &mut impl Emitter, array: &str, length: &str, capacity: &str,
+) {
+    emitter.emit_load_from_address(length, array, 0);
+    emitter.emit_load_from_address(capacity, array, 8);
+}
+
+/// Branches around single-slot growth when an initialized array has spare capacity.
+/// The array is already in the native grow helper's argument register.
+pub fn emit_grow_if_full(emitter: &mut impl Emitter, spare: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emit_load_length_and_capacity(emitter, "x0", "x9", "x10");
+            emitter.instruction("cmp x9, x10");                                // check the old length against reserved slots
+            emitter.instruction(&format!("b.lt {spare}"));                     // the next slot is available without relocating
+        }
+        Arch::X86_64 => {
+            emit_load_length_and_capacity(emitter, "rdi", "r10", "r11");
+            emitter.instruction("cmp r10, r11");                              // check the old length against reserved slots
+            emitter.instruction(&format!("jb {spare}"));                       // the next slot is available without relocating
+        }
+    }
+    emit_grow(emitter);
+}
+
+/// Grows full packed storage; the caller publishes the resulting owner to its receiver.
+pub fn emit_grow(emitter: &mut impl Emitter) {
+    emitter.emit_call_label("__rt_array_grow");
+}

@@ -210,12 +210,12 @@ fn emit_packed_int_sum_fast_path(emitter: &mut Emitter, prefix: &str) {
     abi::load_at_offset(emitter, abi::int_result_reg(emitter), PAYLOAD);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("ldr x9, [x0, #-8]");                           // load the packed array metadata
+            elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
             emitter.instruction("and w9, w9, #0xff");                           // isolate the storage kind
             emitter.instruction("cmp w9, #2");                                  // kind 2 = indexed packed array
             emitter.instruction(&format!("b.ne {generic}"));                    // other storage keeps the generic fold
-            emitter.instruction("ldr x9, [x0, #-8]");                           // reload the metadata for the value type
-            emitter.instruction("ubfx x9, x9, #8, #7");                         // isolate the element value type
+            elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
+            elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x9", "x9");
             emitter.instruction(&format!("cbnz x9, {generic}"));                // only int-shaped slots take the fast path
             emitter.instruction("ldr x9, [x0, #16]");                           // load the element size
             emitter.instruction("cmp x9, #8");                                  // int slots are one 8-byte word
@@ -226,13 +226,12 @@ fn emit_packed_int_sum_fast_path(emitter: &mut Emitter, prefix: &str) {
             abi::emit_call_label(emitter, "__rt_array_sum_int_i64");
         }
         Arch::X86_64 => {
-            emitter.instruction("mov r10, QWORD PTR [rax - 8]");                // load the packed array metadata
+            elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rax");
             emitter.instruction("and r10d, 0xff");                              // isolate the storage kind
             emitter.instruction("cmp r10d, 2");                                 // kind 2 = indexed packed array
             emitter.instruction(&format!("jne {generic}"));                     // other storage keeps the generic fold
-            emitter.instruction("mov r10, QWORD PTR [rax - 8]");                // reload the metadata for the value type
-            emitter.instruction("shr r10, 8");                                  // move the value type into the low bits
-            emitter.instruction("and r10d, 0x7f");                              // ignore the persistent COW flag
+            elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rax");
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10d");
             emitter.instruction(&format!("jnz {generic}"));                     // only int-shaped slots take the fast path
             emitter.instruction("mov r10, QWORD PTR [rax + 16]");               // load the element size
             emitter.instruction("cmp r10, 8");                                  // int slots are one 8-byte word

@@ -940,7 +940,7 @@ fn emit_typed_array_ref_writeback_payload(ctx: &mut FunctionContext<'_>, element
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x9, [x0]");                            // load the written-back array's element count
             ctx.emitter.instruction(&format!("cbz x9, {}_empty", converted));   // an empty array only needs the element layout
-            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the written-back array's packed kind word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x9", "x0");
             ctx.emitter.instruction("lsr x9, x9, #8");                          // shift the runtime value_type tag into the low bits
             ctx.emitter.instruction("and x9, x9, #0x7f");                       // isolate the value_type, dropping the COW bit
             ctx.emitter.instruction(&format!("cmp x9, #{}", element_tag));      // do the slots already have the element layout?
@@ -959,9 +959,8 @@ fn emit_typed_array_ref_writeback_payload(ctx: &mut FunctionContext<'_>, element
             ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                // load the written-back array's element count
             ctx.emitter.instruction("test r10, r10");                           // is the written-back array empty?
             ctx.emitter.instruction(&format!("je {}_empty", converted));        // an empty array only needs the element layout
-            ctx.emitter.instruction("mov r10, QWORD PTR [rax - 8]");            // load the written-back array's packed kind word
-            ctx.emitter.instruction("shr r10, 8");                              // shift the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and r10, 0x7f");                           // isolate the value_type, dropping the COW bit
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r10", "rax");
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "r10", "r10");
             ctx.emitter.instruction(&format!("cmp r10, {}", element_tag));      // do the slots already have the element layout?
             ctx.emitter.instruction(&format!("je {}", keep));                   // yes: the typed contract is exact
             if convertible {
@@ -984,15 +983,14 @@ fn emit_typed_array_ref_writeback_payload(ctx: &mut FunctionContext<'_>, element
         abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction("ldr x1, [x0, #-8]");                   // reload the packed kind word after the retain
+                elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x1", "x0");
                 ctx.emitter.instruction("lsr x1, x1, #8");                      // shift the runtime value_type tag into the low bits
                 ctx.emitter.instruction("and x1, x1, #0x7f");                   // pass the current slot tag to the widening helper
             }
             Arch::X86_64 => {
                 ctx.emitter.instruction("mov rdi, rax");                        // pass the retained array to the widening helper
-                ctx.emitter.instruction("mov rsi, QWORD PTR [rax - 8]");        // reload the packed kind word after the retain
-                ctx.emitter.instruction("shr rsi, 8");                          // shift the runtime value_type tag into the low bits
-                ctx.emitter.instruction("and rsi, 0x7f");                       // pass the current slot tag to the widening helper
+                elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "rsi", "rax");
+                elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "rsi", "rsi");
             }
         }
         abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
@@ -1013,7 +1011,7 @@ fn emit_typed_array_ref_writeback_payload(ctx: &mut FunctionContext<'_>, element
     ctx.emitter.label(&format!("{}_empty", converted));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the empty array's packed kind word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x9", "x0");
             ctx.emitter.instruction("lsr x9, x9, #8");                          // shift the runtime value_type tag into the low bits
             ctx.emitter.instruction("and x9, x9, #0x7f");                       // isolate the value_type, dropping the COW bit
             ctx.emitter.instruction(&format!("cmp x9, #{}", element_tag));      // is it already laid out for the element type?
@@ -1022,9 +1020,8 @@ fn emit_typed_array_ref_writeback_payload(ctx: &mut FunctionContext<'_>, element
             ctx.emitter.instruction("bl __rt_array_unbox_slots");               // build a fresh owned empty array of that layout
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, QWORD PTR [rax - 8]");            // load the empty array's packed kind word
-            ctx.emitter.instruction("shr r10, 8");                              // shift the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and r10, 0x7f");                           // isolate the value_type, dropping the COW bit
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r10", "rax");
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "r10", "r10");
             ctx.emitter.instruction(&format!("cmp r10, {}", element_tag));      // is it already laid out for the element type?
             ctx.emitter.instruction(&format!("je {}", keep));                   // yes: keep it
             abi::emit_load_int_immediate(ctx.emitter, "rdi", element_tag);
@@ -1312,7 +1309,7 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                 let nonempty = ctx.next_label("ref_writeback_nested_nonempty");
                 ctx.emitter.instruction("ldr x9, [x0]");                        // load the nested array's element count
                 ctx.emitter.instruction(&format!("cbnz x9, {}", nonempty));     // a non-empty nested array is checked below
-                ctx.emitter.instruction("ldr x9, [x0, #-8]");                   // load the empty nested array's packed kind word
+                elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x9", "x0");
                 ctx.emitter.instruction("lsr x9, x9, #8");                      // shift the runtime value_type tag into the low bits
                 ctx.emitter.instruction("and x9, x9, #0x7f");                   // isolate the value_type, dropping the COW bit
                 ctx.emitter.instruction(&format!("cmp x9, #{}", inner_tag));    // is it laid out for the nested element type?
@@ -1332,7 +1329,7 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                 ctx.emitter.instruction("str x0, [x10, x9, lsl #3]");           // the slot now owns the fresh empty array
                 ctx.emitter.instruction(&format!("b {}", next));                // nothing else to check in it
                 ctx.emitter.label(&nonempty);
-                ctx.emitter.instruction("ldr x9, [x0, #-8]");                   // load the nested array's packed kind word
+                elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x9", "x0");
                 ctx.emitter.instruction("lsr x9, x9, #8");                      // shift the runtime value_type tag into the low bits
                 ctx.emitter.instruction("and x9, x9, #0x7f");                   // isolate the value_type, dropping the COW bit
                 ctx.emitter.instruction(&format!("cmp x9, #{}", inner_tag));    // do the nested slots have the nested element layout?
@@ -1369,9 +1366,8 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                 let nonempty = ctx.next_label("ref_writeback_nested_nonempty");
                 ctx.emitter.instruction("cmp QWORD PTR [rax], 0");              // is the nested array empty?
                 ctx.emitter.instruction(&format!("jne {}", nonempty));          // a non-empty nested array is checked below
-                ctx.emitter.instruction("mov r11, QWORD PTR [rax - 8]");        // load the empty nested array's packed kind word
-                ctx.emitter.instruction("shr r11, 8");                          // shift the runtime value_type tag into the low bits
-                ctx.emitter.instruction("and r11, 0x7f");                       // isolate the value_type, dropping the COW bit
+                elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r11", "rax");
+                elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "r11", "r11");
                 ctx.emitter.instruction(&format!("cmp r11, {}", inner_tag));    // is it laid out for the nested element type?
                 ctx.emitter.instruction(&format!("je {}", next));               // yes: nothing to check
                 abi::emit_load_int_immediate(ctx.emitter, "rdi", inner_tag);
@@ -1389,9 +1385,8 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                 ctx.emitter.instruction("mov QWORD PTR [r10 + 24 + rcx * 8], rax"); // the slot now owns the fresh empty array
                 ctx.emitter.instruction(&format!("jmp {}", next));              // nothing else to check in it
                 ctx.emitter.label(&nonempty);
-                ctx.emitter.instruction("mov r11, QWORD PTR [rax - 8]");        // load the nested array's packed kind word
-                ctx.emitter.instruction("shr r11, 8");                          // shift the runtime value_type tag into the low bits
-                ctx.emitter.instruction("and r11, 0x7f");                       // isolate the value_type, dropping the COW bit
+                elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r11", "rax");
+                elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "r11", "r11");
                 ctx.emitter.instruction(&format!("cmp r11, {}", inner_tag));    // do the nested slots have the nested element layout?
                 ctx.emitter.instruction(&format!("je {}", fits));               // yes: check what they hold
                 if inner == PhpType::Mixed {

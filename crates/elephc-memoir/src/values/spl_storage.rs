@@ -122,3 +122,42 @@ fn emit_fixed_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", SPL_FIXED_STORAGE_OFFSET)); // object.storage = fixed-array storage
     emitter.instruction("mov rax, r11");                                        // return initialized SplFixedArray object
 }
+
+/// Shifts the reserved SPL tail right, transfers the staged owner and publishes the new length.
+/// The insertion frame holds the owner in its original SP- or RBP-relative slot.
+pub fn emit_insert_word(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::AArch64 {
+        emitter.instruction("add x11, x9, #24");                                    // point at the first storage element
+        emitter.instruction("mov x13, x10");                                        // start right-shift cursor at the old length
+        emitter.label("__rt_spl_dll_insert_shift_loop");
+        emitter.instruction("cmp x13, x12");                                        // has the cursor reached the insertion index?
+        emitter.instruction("b.le __rt_spl_dll_insert_store");                      // stop once the insertion slot is free
+        emitter.instruction("sub x14, x13, #1");                                    // source index is one slot before the cursor
+        emitter.instruction("ldr x15, [x11, x14, lsl #3]");                         // load the Mixed pointer being shifted right
+        emitter.instruction("str x15, [x11, x13, lsl #3]");                         // store the Mixed pointer one slot to the right
+        emitter.instruction("sub x13, x13, #1");                                    // move the shift cursor left
+        emitter.instruction("b __rt_spl_dll_insert_shift_loop");                    // continue shifting until the insert slot is open
+        emitter.label("__rt_spl_dll_insert_store");
+        emitter.instruction("ldr x14, [sp, #16]");                                  // reload owned Mixed value to insert
+        emitter.instruction("str x14, [x11, x12, lsl #3]");                         // store the owned Mixed value in the insertion slot
+        emitter.instruction("add x10, x10, #1");                                    // increase storage length
+        emitter.instruction("str x10, [x9]");                                       // persist new storage length
+    } else {
+        emitter.instruction("lea r11, [r9 + 24]");                                  // point at first storage element
+        emitter.instruction("mov r13, r10");                                        // start right-shift cursor at old length
+        emitter.label("__rt_spl_dll_insert_shift_loop");
+        emitter.instruction("cmp r13, r12");                                        // has cursor reached insertion index?
+        emitter.instruction("jle __rt_spl_dll_insert_store");                       // stop once insertion slot is free
+        emitter.instruction("mov r14, r13");                                        // copy destination index for source calculation
+        emitter.instruction("sub r14, 1");                                          // source index is one slot before cursor
+        emitter.instruction("mov r15, QWORD PTR [r11 + r14 * 8]");                  // load Mixed pointer being shifted right
+        emitter.instruction("mov QWORD PTR [r11 + r13 * 8], r15");                  // store Mixed pointer one slot to the right
+        emitter.instruction("sub r13, 1");                                          // move shift cursor left
+        emitter.instruction("jmp __rt_spl_dll_insert_shift_loop");                  // continue shifting until insert slot opens
+        emitter.label("__rt_spl_dll_insert_store");
+        emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // reload owned Mixed value to insert
+        emitter.instruction("mov QWORD PTR [r11 + r12 * 8], r14");                  // store owned Mixed value in insertion slot
+        emitter.instruction("add r10, 1");                                          // increase storage length
+        emitter.instruction("mov QWORD PTR [r9], r10");                             // persist new storage length
+    }
+}

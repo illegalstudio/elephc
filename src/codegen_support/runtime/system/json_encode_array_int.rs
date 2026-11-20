@@ -55,7 +55,7 @@ pub(crate) fn emit_json_encode_array_int(emitter: &mut Emitter) {
     // is the encoder that renders `[5 => 3]` the way PHP does, `{"5":3}` rather than `[3]`.
     // The conditional branch skips OVER an unconditional one because AArch64 cannot name an
     // external label in a conditional branch.
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
     emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
     emitter.instruction("b.ne __rt_json_arr_int_packed");                       // packed storage encodes inline below
@@ -189,7 +189,7 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     // Same runtime-promotion probe as the AArch64 path; `__rt_json_encode_assoc` takes the
     // container in RAX and returns rax/rdx exactly as this entry does. NOTE the register:
     // every json encoder here carries the array in RAX, not rdi.
-    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "rax");
     emitter.instruction("and r11, 0xff");                                       // isolate the low-byte heap kind
     emitter.instruction("cmp r11, 3");                                          // kind 3 = associative hash storage
     emitter.instruction("jne __rt_json_arr_int_packed");                        // packed storage encodes inline below

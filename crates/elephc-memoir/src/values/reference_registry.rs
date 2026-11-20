@@ -10,6 +10,15 @@
 
 use crate::{Arch, Emitter};
 
+/// Number of reference slots shared by native unserialize scopes and their snapshots.
+pub const UNSERIALIZE_CAPACITY: usize = 65_536;
+
+/// Declares the count and backing slots of the native unserialize reference registry.
+pub fn append_unserialize_storage(out: &mut String, target: &impl crate::data::DataTarget) {
+    out.push_str(&target.common("_unser_count", 8));
+    out.push_str(&target.common("_unser_values", UNSERIALIZE_CAPACITY * 8));
+}
+
 /// Emits a two-argument C entry that registers a borrowed cell and gives its scope a lease.
 /// The fixed table capacity must fit a single immediate on both native architectures.
 pub fn emit_register_cell(

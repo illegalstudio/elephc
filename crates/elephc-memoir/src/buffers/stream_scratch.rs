@@ -93,13 +93,50 @@ pub fn emit_growing_read_capacity(emitter: &mut impl Emitter, prefix: &str) {
     emitter.label(&done);
 }
 
+/// Gives a filter its own input string with the direction in the fourth argument.
+/// A read transfers an owned reservation or copies scratch. A write borrows and copies.
+pub fn emit_acquire_filter_input(emitter: &mut impl Emitter) {
+    const COPY_WRITE: &str = "__rt_filter_acquire_write";
+    const READY: &str = "__rt_filter_acquire_ready";
+    let (pointer, length) = emitter.string_result_regs();
+    let kind = emitter.int_result_reg();
+    emitter.label_global("__rt_filter_acquire_input");
+    match emitter.arch() {
+        Arch::AArch64 => emitter.instruction(&format!("cbnz x3, {COPY_WRITE}")), // writes keep the caller's original owner
+        Arch::X86_64 => {
+            emitter.instruction("test rcx, rcx");                              // identify a borrowed write argument
+            emitter.instruction(&format!("jnz {COPY_WRITE}"));                  // write arguments always get an independent copy
+        }
+    }
+
+    emitter.emit_frame_prologue(32);
+    emitter.emit_store_to_sp(pointer, 0);
+    emitter.emit_store_to_sp(length, 8);
+    emitter.emit_reg_move(kind, pointer);
+    emitter.emit_call_label("__rt_heap_kind");
+    emitter.instruction(&match emitter.arch() {
+        Arch::AArch64 => format!("cmp {kind}, #{}", crate::layout::STRING_HEAP_KIND),
+        Arch::X86_64 => format!("cmp {kind}, {}", crate::layout::STRING_HEAP_KIND),
+    });                                                                        // distinguish an owned read reservation from scratch
+    emitter.emit_load_temporary_stack_slot(pointer, 0);
+    emitter.emit_load_temporary_stack_slot(length, 8);
+    emitter.emit_branch_if_equal_wide(READY);
+    emitter.emit_call_label("__rt_str_dup_owned");
+    emitter.label(READY);
+    emitter.emit_frame_restore(32);
+    emitter.emit_return();
+
+    emitter.label(COPY_WRITE);
+    emitter.emit_jump("__rt_str_dup_owned");
+}
+
 /// Stack record holding the borrowed callback arguments and the stabilized input owner.
 const CALLBACK_GUARD: crate::RecordOffset = crate::RecordOffset::new(32);
 /// Stack bytes for the callback arguments, result pair and owner guard.
 const CALLBACK_STACK_BYTES: usize = 32 + crate::activation_records::GUARD_BYTES;
 
 /// Stabilizes a string passed to a reentrant filter and roots it until the result is owned.
-/// Reads can adopt the consumed transient; writes borrow their original source.
+/// Reads can transfer the reservation owner; writes borrow their original source.
 pub fn emit_stage_callback_input(emitter: &mut impl Emitter, method: &str) {
     let receiver = emitter.int_arg_reg_name(0);
     let input = emitter.int_arg_reg_name(1);
@@ -112,18 +149,7 @@ pub fn emit_stage_callback_input(emitter: &mut impl Emitter, method: &str) {
     emitter.emit_store_to_sp(method, 8);
     emitter.emit_store_to_sp(length, 24);
     emitter.emit_reg_move(result, input);
-    match emitter.arch() {
-        Arch::AArch64 => emitter.instruction("cbnz x3, __rt_filter_copy_borrowed"), // writes retain their source owner
-        Arch::X86_64 => {
-            emitter.instruction("test rcx, rcx");                               // identify a borrowed write source
-            emitter.instruction("jnz __rt_filter_copy_borrowed");                // leave the caller's source intact
-        }
-    }
-    emitter.emit_call_label("__rt_str_persist");
-    emitter.emit_jump("__rt_filter_input_ready");
-    emitter.label("__rt_filter_copy_borrowed");
-    emitter.emit_call_label("__rt_str_dup_owned");
-    emitter.label("__rt_filter_input_ready");
+    emitter.emit_call_label("__rt_filter_acquire_input");
     emitter.emit_store_to_sp(result, 16);
     crate::guarded_owners::emit_publish_at_stack(
         emitter, result, "__rt_exception_release_owned", scratch, CALLBACK_GUARD,

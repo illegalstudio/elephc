@@ -729,7 +729,7 @@ fn emit_aarch64_builtin_throwable_previous_arg(
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the previous argument is an object
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed non-object previous arguments
     emitter.instruction("ldr x9, [sp, #16]");                                   // inspect the actual receiver allocated by AOT or the by-name eval bridge
-    emitter.instruction("ldr x10, [x9, #-8]");                                  // recover the heap kind independently of the PHP class id
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x10", "x9");
     emitter.instruction("and x10, x10, #0xff");                                 // discard collector and ownership flags
     emitter.instruction("cmp x10, #6");                                         // only compact Throwable payloads own a raw previous pointer
     emitter.instruction("ldr x0, [x29, #-16]");                                 // ordinary objects retain the nullable property's Mixed argument cell
@@ -758,7 +758,7 @@ fn emit_x86_64_builtin_throwable_previous_arg(
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the previous argument is an object
     emitter.instruction(&format!("jne {}", fail_label));                        // reject malformed non-object previous arguments
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // inspect the receiver allocated by AOT or the by-name eval bridge
-    emitter.instruction("mov r10, QWORD PTR [r11 - 8]");                        // recover the actual heap layout independently of the PHP class id
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "r11");
     emitter.instruction("and r10, 0xff");                                       // discard the heap marker and collector flags
     emitter.instruction("cmp r10, 6");                                          // compact Throwable payloads own raw previous pointers
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // ordinary objects retain the nullable property's Mixed argument cell

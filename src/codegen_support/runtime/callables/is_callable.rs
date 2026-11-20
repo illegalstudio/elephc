@@ -379,7 +379,7 @@ fn emit_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0]");                                        // load indexed array length
     emitter.instruction("cmp x9, #2");                                          // callable arrays must have receiver and method entries
     emitter.instruction("b.ne __rt_is_callable_array_false");                   // reject arrays without exactly two entries
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load packed heap kind and value-type metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("lsr x9, x9, #8");                                      // move array value-type tag into low bits
     emitter.instruction("and x9, x9, #0x7f");                                   // isolate array value-type tag without ownership flags
     emitter.instruction("cmp x9, #7");                                          // are indexed slots boxed Mixed pointers?
@@ -1021,9 +1021,8 @@ fn emit_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load indexed array length
     emitter.instruction("cmp r10, 2");                                          // callable arrays must have receiver and method entries
     emitter.instruction("jne __rt_is_callable_array_false_x86_64");             // reject arrays without exactly two entries
-    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load packed heap kind and value-type metadata
-    emitter.instruction("shr r10, 8");                                          // move array value-type tag into low bits
-    emitter.instruction("and r10, 0x7f");                                       // isolate array value-type tag without ownership flags
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rdi");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10");
     emitter.instruction("cmp r10, 7");                                          // are indexed slots boxed Mixed pointers?
     emitter.instruction("je __rt_is_callable_array_mixed_slots_x86_64");        // Mixed arrays may hold object/string method callables
     emitter.instruction("cmp r10, 1");                                          // are indexed slots raw string pointer/length pairs?

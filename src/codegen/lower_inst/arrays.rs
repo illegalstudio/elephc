@@ -116,11 +116,11 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
             abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::NULL_SENTINEL);
             ctx.emitter.instruction("cmp x0, x9");                              // does the array carry the in-band null-container sentinel?
             ctx.emitter.instruction(&format!("b.eq {}", done));                 // missed-read sentinels pass through unconverted
-            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load the uniform heap-kind header word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x1", "x0");
             ctx.emitter.instruction("and x1, x1, #0xff");                       // isolate the runtime storage kind
             ctx.emitter.instruction("cmp x1, #3");                              // kind 3 = a typed packed local promoted to a hash
             ctx.emitter.instruction(&format!("b.eq {}", promoted));             // its raw entries widen through the hash converter
-            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load the indexed-array packed header to recover the runtime slot tag
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x1", "x0");
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the source element value_type for Mixed boxing
             if pointer_elements {
@@ -143,13 +143,12 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
             abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
             ctx.emitter.instruction("cmp rdi, r10");                            // does the array carry the in-band null-container sentinel?
             ctx.emitter.instruction(&format!("je {}", done));                   // missed-read sentinels pass through unconverted
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load the uniform heap-kind header word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "rsi", "rdi");
             ctx.emitter.instruction("and rsi, 0xff");                           // isolate the runtime storage kind
             ctx.emitter.instruction("cmp rsi, 3");                              // kind 3 = a typed packed local promoted to a hash
             ctx.emitter.instruction(&format!("je {}", promoted));               // its raw entries widen through the hash converter
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load the indexed-array packed header to recover the runtime slot tag
-            ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type byte into the low bits
-            ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the source element value_type for Mixed boxing
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "rsi", "rdi");
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "rsi", "rsi");
             if pointer_elements {
                 abi::emit_load_int_immediate(
                     ctx.emitter,
@@ -1471,7 +1470,7 @@ fn lower_promotable_scalar_array_set(
             }
             abi::emit_push_reg(ctx.emitter, "x1");                              // keep the integer key across the storage probes
             ctx.load_value_to_reg(array, "x0")?;
-            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the uniform heap-kind header word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x9", "x0");
             ctx.emitter.instruction("and x9, x9, #0xff");                       // isolate the runtime storage kind
             ctx.emitter.instruction("cmp x9, #3");                              // kind 3 = already promoted to a hash
             ctx.emitter.instruction(&format!("b.eq {hash_pop}"));               // a promoted array writes through the hash writer
@@ -1502,7 +1501,7 @@ fn lower_promotable_scalar_array_set(
 
             ctx.emitter.label(&string_key);
             ctx.load_value_to_reg(array, "x0")?;
-            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the uniform heap-kind header word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x9", "x0");
             ctx.emitter.instruction("and x9, x9, #0xff");                       // isolate the runtime storage kind
             ctx.emitter.instruction("cmp x9, #3");                              // kind 3 = already promoted to a hash
             ctx.emitter.instruction(&format!("b.eq {hash}"));                   // a promoted array writes through the hash writer
@@ -1550,7 +1549,7 @@ fn lower_promotable_scalar_array_set(
             }
             abi::emit_push_reg(ctx.emitter, "rsi");                             // keep the integer key across the storage probes
             ctx.load_value_to_reg(array, "rdi")?;
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi - 8]");            // load the uniform heap-kind header word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r10", "rdi");
             ctx.emitter.instruction("and r10, 0xff");                           // isolate the runtime storage kind
             ctx.emitter.instruction("cmp r10, 3");                              // kind 3 = already promoted to a hash
             ctx.emitter.instruction(&format!("je {hash_pop}"));                 // a promoted array writes through the hash writer
@@ -1581,7 +1580,7 @@ fn lower_promotable_scalar_array_set(
 
             ctx.emitter.label(&string_key);
             ctx.load_value_to_reg(array, "rdi")?;
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi - 8]");            // load the uniform heap-kind header word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r10", "rdi");
             ctx.emitter.instruction("and r10, 0xff");                           // isolate the runtime storage kind
             ctx.emitter.instruction("cmp r10, 3");                              // kind 3 = already promoted to a hash
             ctx.emitter.instruction(&format!("je {hash}"));                     // a promoted array writes through the hash writer
@@ -1620,7 +1619,7 @@ fn lower_promotable_scalar_array_set(
 fn emit_promote_unless_hash_aarch64(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
     let keep = ctx.next_label("promotable_null_keep_hash");
     ctx.load_value_to_reg(array, "x0")?;
-    ctx.emitter.instruction("ldr x9, [x0, #-8]");                               // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x9", "x0");
     ctx.emitter.instruction("and x9, x9, #0xff");                               // isolate the runtime storage kind
     ctx.emitter.instruction("cmp x9, #3");                                      // kind 3 = already promoted to a hash
     ctx.emitter.instruction(&format!("b.eq {keep}"));                           // an existing hash takes the null entry directly
@@ -1638,7 +1637,7 @@ fn emit_promote_unless_hash_aarch64(ctx: &mut FunctionContext<'_>, array: ValueI
 fn emit_promote_unless_hash_x86_64(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
     let keep = ctx.next_label("promotable_null_keep_hash");
     ctx.load_value_to_reg(array, "rdi")?;
-    ctx.emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                    // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r10", "rdi");
     ctx.emitter.instruction("and r10, 0xff");                                   // isolate the runtime storage kind
     ctx.emitter.instruction("cmp r10, 3");                                      // kind 3 = already promoted to a hash
     ctx.emitter.instruction(&format!("je {keep}"));                             // an existing hash takes the null entry directly
@@ -2031,7 +2030,7 @@ fn lower_runtime_polymorphic_array_push(
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
             ctx.emitter.instruction(&format!("cbz x0, {indexed}"));             // null receivers take the allocating indexed path
-            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the packed storage-kind metadata
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x9", "x0");
             ctx.emitter.instruction("and x9, x9, #0xff");                       // isolate the low storage-kind byte
             ctx.emitter.instruction("cmp x9, #3");                              // kind 3 = storage promoted to a hash
             ctx.emitter.instruction(&format!("b.eq {hash}"));                   // hash append has a distinct header and growth helper
@@ -2070,7 +2069,7 @@ fn lower_runtime_polymorphic_array_push(
             ctx.load_value_to_reg(array, "rax")?;
             ctx.emitter.instruction("test rax, rax");                           // null receivers take the allocating indexed path
             ctx.emitter.instruction(&format!("jz {indexed}"));                  // route null storage to the indexed helper
-            ctx.emitter.instruction("mov r10, QWORD PTR [rax - 8]");            // load the packed storage-kind metadata
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r10", "rax");
             ctx.emitter.instruction("and r10d, 0xff");                          // isolate the low storage-kind byte
             ctx.emitter.instruction("cmp r10d, 3");                             // kind 3 = storage promoted to a hash
             ctx.emitter.instruction(&format!("je {hash}"));                     // hash append has a distinct header and growth helper
@@ -2663,7 +2662,7 @@ fn emit_array_get_in_bounds_aarch64(
         let typed = ctx.next_label("array_get_typed_payload");
         let done = ctx.next_label("array_get_widened_done");
         ctx.emitter.instruction(&format!("ldr x11, [{}, #-8]", array_reg));     // load the runtime indexed-array value type
-        ctx.emitter.instruction("ubfx x11, x11, #8, #7");                       // isolate the value type without the COW flag
+        elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(ctx.emitter, "x11", "x11");
         ctx.emitter.instruction("cmp x11, #7");                                 // tag 7 means the slots were widened to boxed Mixed
         ctx.emitter.instruction(&format!("b.ne {}", typed));                    // preserve the ordinary typed-slot fast path
         ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // move to the pointer-sized Mixed payload base
@@ -2804,8 +2803,7 @@ fn emit_array_get_in_bounds_x86_64(
             array_reg
         );
         ctx.emitter.instruction(&load_value_type);                              // load the runtime indexed-array value type
-        ctx.emitter.instruction("shr rcx, 8");                                  // move the value type byte into the low bits
-        ctx.emitter.instruction("and rcx, 0x7f");                               // isolate the value type without the COW flag
+        elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "rcx", "rcx");
         ctx.emitter.instruction("cmp rcx, 7");                                  // tag 7 means the slots were widened to boxed Mixed
         ctx.emitter.instruction(&format!("jne {}", typed));                     // preserve the ordinary typed-slot fast path
         ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // move to the pointer-sized Mixed payload base

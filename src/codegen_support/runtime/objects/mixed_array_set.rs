@@ -108,8 +108,8 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x12, [x10]");                                      // inspect the packed array's current logical length
     emitter.instruction("cmp x9, x12");                                         // only overwrites and contiguous appends stay packed
     emitter.instruction("b.hi __rt_mixed_array_set_promote");                   // preserve absent positive keys by promoting sparse writes
-    emitter.instruction("ldr x12, [x10, #-8]");                                 // load the packed indexed-array metadata
-    emitter.instruction("ubfx x1, x12, #8, #7");                                // pass the source value_type tag to the Mixed conversion helper
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x12", "x10");
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x1", "x12");
     emitter.instruction("mov x0, x10");                                         // pass the indexed array to the Mixed conversion helper
     emitter.instruction("bl __rt_array_to_mixed");                              // split shared arrays and normalize slots before writing Mixed values
     emitter.instruction("str x0, [sp, #32]");                                   // save the unique array pointer
@@ -424,9 +424,8 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_mixed_array_set_promote");                     // negative integer keys require associative PHP-array storage
     emitter.instruction("cmp r9, QWORD PTR [r10]");                             // compare the requested key with the packed logical length
     emitter.instruction("ja __rt_mixed_array_set_promote");                     // sparse writes require hashes so gaps remain absent
-    emitter.instruction("mov r8, QWORD PTR [r10 - 8]");                         // load the packed indexed-array metadata
-    emitter.instruction("shr r8, 8");                                           // move the value_type tag into the low byte
-    emitter.instruction("and r8, 0x7f");                                        // isolate the runtime value_type tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r8", "r10");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r8", "r8");
     emitter.instruction("mov rsi, r8");                                         // pass the source value_type tag to the Mixed conversion helper
     emitter.instruction("mov rdi, r10");                                        // pass the indexed array to the Mixed conversion helper
     emitter.instruction("call __rt_array_to_mixed");                            // split shared arrays and normalize slots before writing Mixed values
@@ -752,7 +751,7 @@ fn emit_string_payload_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the retained-cell flag
     emitter.instruction("cbz x9, __rt_mixed_array_set_string_publish");         // no warning could have run a handler
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell
-    emitter.instruction("ldr w11, [x10, #-12]");                                // its refcount, from the uniform heap header
+    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w11", "x10");
     emitter.instruction("cmp w11, #1");                                         // is the retained reference the last one?
     emitter.instruction("b.ne __rt_mixed_array_set_string_publish");            // the variable still holds the cell: write it
     emitter.instruction("ldr x0, [sp, #48]");                                   // a handler replaced the variable: drop the updated string
@@ -857,7 +856,7 @@ fn emit_string_payload_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // was the cell retained?
     emitter.instruction("je __rt_mixed_array_set_string_publish");              // no warning could have run a handler
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
-    emitter.instruction("cmp DWORD PTR [r10 - 12], 1");                         // is the retained reference the last one?
+    elephc_memoir::heap_refcount::emit_compare_owner_count_x86_64(emitter, "r10", 1);
     emitter.instruction("jne __rt_mixed_array_set_string_publish");             // the variable still holds the cell: write it
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // a handler replaced the variable: drop the updated string
     emitter.instruction("call __rt_heap_free_safe");                            // php abandons the write in that case

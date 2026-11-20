@@ -136,7 +136,7 @@ fn emit_array_iter_next_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_iter_next ---");
     emitter.label_global("__rt_array_iter_next");
 
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the heap kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low heap-kind byte (2 = packed, 3 = hash)
     emitter.instruction("cmp x9, #3");                                          // is the operand a hash (associative) container?
     emitter.instruction("b.eq __rt_array_iter_next_hash");                      // hashes delegate to the ordered hash iterator
@@ -145,7 +145,7 @@ fn emit_array_iter_next_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x0]");                                       // x10 = packed length (header word 0)
     emitter.instruction("cmp x1, x10");                                         // has the cursor walked past the last element?
     emitter.instruction("b.ge __rt_array_iter_next_done");                      // exhausted packed arrays report the done sentinel
-    emitter.instruction("ldr x11, [x0, #-8]");                                  // reload the kind word for the value_type field
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x11", "x0");
     emitter.instruction("lsr x11, x11, #8");                                    // shift the array-wide value_type into the low bits
     emitter.instruction("and x11, x11, #0x7f");                                 // isolate the value_type, dropping the copy-on-write bit
     emitter.instruction("add x12, x0, #24");                                    // x12 = base of the packed data region (skip 24-byte header)
@@ -300,7 +300,7 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_iter_next ---");
     emitter.label_global("__rt_array_iter_next");
 
-    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // load the heap kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rax", "rdi");
     emitter.instruction("and rax, 0xff");                                       // isolate the low heap-kind byte (2 = packed, 3 = hash)
     emitter.instruction("cmp rax, 3");                                          // is the operand a hash (associative) container?
     emitter.instruction("je __rt_array_iter_next_hash");                        // hashes delegate to the ordered hash iterator
@@ -308,9 +308,8 @@ fn emit_array_strict_eq_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // rax = packed length (header word 0)
     emitter.instruction("cmp rsi, rax");                                        // has the cursor walked past the last element?
     emitter.instruction("jge __rt_array_iter_next_done");                       // exhausted packed arrays report the done sentinel
-    emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                        // reload the kind word for the value_type field
-    emitter.instruction("shr r11, 8");                                          // shift the array-wide value_type into the low bits
-    emitter.instruction("and r11, 0x7f");                                       // isolate the value_type, dropping the copy-on-write bit
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "rdi");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r11", "r11");
     emitter.instruction("mov rcx, rsi");                                        // key low word = the integer index
     emitter.instruction("mov rdx, -1");                                         // key high word = -1 marks an integer key
     emitter.instruction("cmp r11, 1");                                          // is the array a string array (16-byte {ptr,len} slots)?

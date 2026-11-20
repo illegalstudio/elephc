@@ -13,13 +13,11 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 use elephc_memoir::buffers::output;
 
-const HANDLER_FIELDS: [&str; 3] = ["_ob_handler_stubs", "_ob_handler_envs", "_ob_name_ptrs"];
-const HANDLER_METADATA: [&str; 4] = ["_ob_name_lens", "_ob_chunk_sizes", "_ob_flags", "_ob_started"];
 
 /// Emits buffer detachment and the optional Rust callback-retirement trampoline.
 pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label_global("__rt_ob_pop_free");
-    output::emit_pop_storage(emitter, HANDLER_FIELDS, &HANDLER_METADATA);
+    output::emit_pop_storage(emitter);
     if emitter.target.arch == Arch::AArch64 { aarch64(emitter); }
     else { x86_64(emitter); }
     output::emit_pop_empty_return(emitter);

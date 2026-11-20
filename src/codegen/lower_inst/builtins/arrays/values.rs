@@ -88,8 +88,8 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_loaded_boxed_array_values(
                 &indexed_empty,
             );
             abi::emit_call_label(ctx.emitter, "__rt_incref");
-            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // discover the actual scalar, string, or boxed element layout
-            ctx.emitter.instruction("ubfx x1, x1, #8, #7");                     // exclude heap kind and persistent COW metadata from the value tag
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x1", "x0");
+            elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(ctx.emitter, "x1", "x1");
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
             ctx.emitter.instruction(&format!("b {done}"));                      // transfer the converted array owner to the result
             ctx.emitter.label(&indexed_empty);
@@ -117,9 +117,8 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_loaded_boxed_array_values(
             );
             abi::emit_call_label(ctx.emitter, "__rt_incref");
             ctx.emitter.instruction("mov rdi, rax");                            // pass an independent owner to the consuming conversion helper
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // discover the actual scalar, string, or boxed element layout
-            ctx.emitter.instruction("shr rsi, 8");                              // move the indexed value tag into the low bits
-            ctx.emitter.instruction("and rsi, 0x7f");                           // discard persistent COW metadata above the value tag
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "rsi", "rdi");
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "rsi", "rsi");
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
             ctx.emitter.instruction(&format!("jmp {done}"));                    // transfer the converted array owner to the result
             ctx.emitter.label(&indexed_empty);

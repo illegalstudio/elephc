@@ -8,6 +8,7 @@
 //! - Uses the shared modulo conversion and shortest float formatter on every target.
 //! - NaN emits both PHP diagnostics; out-of-range finite values and infinities emit one warning.
 
+use elephc_memoir::strings::concat_cursor::SavedConcatCursor;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 const PRECISION_PREFIX: &str = "Deprecated: Implicit conversion from float ";
@@ -37,9 +38,7 @@ fn emit_aarch64(e: &mut Emitter) {
     e.instruction("str d0, [sp, #0]");                                          // retain the source float across diagnostic callbacks
     abi::emit_call_label(e, "__rt_php_float_to_int");
     e.instruction("str x9, [sp, #8]");                                          // save PHP's modulo-converted integer key
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(e, "x9");
-    e.instruction("ldr x10, [x9]");                                             // read the caller's concat scratch cursor
-    e.instruction("str x10, [sp, #16]");                                        // restore concat scratch after float formatting
+    SavedConcatCursor::Stack(16).emit_save(e, "x10");
 
     e.instruction("fcmp d0, d0");                                               // identify NaN before ordered range comparisons
     e.instruction("b.vs __rt_float_key_nan");                                   // NaN receives both warning and deprecation
@@ -79,9 +78,7 @@ fn emit_diagnostic_aarch64(e: &mut Emitter, prefix: &str, prefix_len: usize, suf
     e.instruction("ldr d0, [sp, #0]");                                          // reload the original float for exact display
     abi::emit_call_label(e, "__rt_ftoa_repr");
     abi::emit_call_label(e, "__rt_diag_warning_fragment");
-    e.instruction("ldr x10, [sp, #16]");                                        // reload the caller's concat cursor
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(e, "x9");
-    e.instruction("str x10, [x9]");                                             // release formatter scratch before invoking the handler
+    SavedConcatCursor::Stack(16).emit_restore(e, "x10");
     abi::emit_symbol_address(e, "x1", suffix);
     abi::emit_load_int_immediate(e, "x2", suffix_len as i64);
     abi::emit_call_label(e, "__rt_diag_warning");
@@ -98,8 +95,7 @@ fn emit_x86_64(e: &mut Emitter) {
     e.instruction("movsd QWORD PTR [rbp - 8], xmm0");                           // retain the source float across diagnostic callbacks
     abi::emit_call_label(e, "__rt_php_float_to_int");
     e.instruction("mov QWORD PTR [rbp - 16], r11");                             // save PHP's modulo-converted integer key
-    elephc_memoir::strings::concat_cursor::emit_read(e, "r10");
-    e.instruction("mov QWORD PTR [rbp - 24], r10");                             // restore concat scratch after formatting
+    SavedConcatCursor::Frame(elephc_memoir::FrameOffset::new(24)).emit_save(e, "r10");
 
     e.instruction("ucomisd xmm0, xmm0");                                        // identify NaN before ordered range comparisons
     e.instruction("jp __rt_float_key_nan");                                     // NaN receives both warning and deprecation
@@ -141,8 +137,7 @@ fn emit_diagnostic_x86_64(e: &mut Emitter, prefix: &str, prefix_len: usize, suff
     e.instruction("mov rdi, rax");                                              // pass the formatted float pointer to the dispatcher
     e.instruction("mov rsi, rdx");                                              // pass the formatted float length to the dispatcher
     abi::emit_call_label(e, "__rt_diag_warning_fragment");
-    e.instruction("mov r10, QWORD PTR [rbp - 24]");                             // reload the caller's concat cursor
-    elephc_memoir::strings::concat_cursor::emit_write(e, "r10");
+    SavedConcatCursor::Frame(elephc_memoir::FrameOffset::new(24)).emit_restore(e, "r10");
     abi::emit_symbol_address(e, "rdi", suffix);
     abi::emit_load_int_immediate(e, "rsi", suffix_len as i64);
     abi::emit_call_label(e, "__rt_diag_warning");

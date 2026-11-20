@@ -120,3 +120,41 @@ pub fn emit_promote_mixed<E: Emitter>(emitter: &mut E, associate: Option<fn(&mut
     abi::emit_frame_restore(emitter, 48);
     abi::emit_return(emitter);
 }
+
+/// Transfers staged native payload words to a caller slot and exposes its previous low owner.
+/// Each replacement operand names a slot in the caller's actual native frame.
+pub fn emit_publish_staged_payload(
+    emitter: &mut impl Emitter, destination: &str, scratch: &str,
+    replacement_low: &str, replacement_high: Option<&str>,
+) {
+    let displaced = emitter.int_result_reg();
+    emitter.emit_load_from_address(displaced, destination, 0);
+    let arm = emitter.arch() == Arch::AArch64;
+    for (offset, source) in [(0, Some(replacement_low)), (8, replacement_high)] {
+        if let Some(source) = source {
+            emitter.instruction(&if arm { format!("ldr {scratch}, {source}") }
+                else { format!("mov {scratch}, QWORD PTR {source}") });        // load the prepared replacement word
+            emitter.emit_store_to_address(scratch, destination, offset);
+        }
+    }
+}
+
+/// Replaces a persistent reference's child and retires the incoming and displaced owners in order.
+pub fn emit_replace_persistent_owner(emitter: &mut impl Emitter, incoming: &str) {
+    let result = emitter.int_result_reg();
+    emitter.emit_call_label("__rt_reference_replace");
+    emitter.emit_push_reg(result);
+    emitter.instruction(&match emitter.arch() {
+        Arch::AArch64 => format!("ldr {result}, {incoming}"),
+        Arch::X86_64 => format!("mov {result}, QWORD PTR {incoming}"),
+    });                                                                       // recover the incoming owner without disturbing the displaced child
+    emitter.emit_call_label("__rt_decref_any");
+    emitter.emit_pop_reg(result);
+    emitter.emit_call_label("__rt_decref_any");
+}
+
+/// Publishes two already staged native payload words to the same caller slot.
+pub fn emit_publish_payload_pair(emitter: &mut impl Emitter, destination: &str, low: &str, high: &str) {
+    emitter.emit_store_to_address(low, destination, 0);
+    emitter.emit_store_to_address(high, destination, 8);
+}

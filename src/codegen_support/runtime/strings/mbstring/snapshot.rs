@@ -64,7 +64,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x0]");                                       // read the indexed array length
     emitter.instruction("cmp x9, x10");                                         // check the live bounds before loading a slot
     emitter.instruction("b.hs __rt_mbstring_array_next_end");                   // finish without reading beyond the indexed payload
-    emitter.instruction("ldr x12, [x0, #-8]");                                  // read the indexed element type from heap metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x12", "x0");
     emitter.instruction("lsr x12, x12, #8");                                    // move the element type into the low bits
     emitter.instruction("and x12, x12, #0x7f");                                 // remove the persistent COW flag
     emitter.instruction("mov x13, #8");                                         // ordinary scalar and pointer slots occupy one word
@@ -186,9 +186,8 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // read the next logical indexed position
     emitter.instruction("cmp r11, QWORD PTR [rdi]");                            // check the live bounds before loading a slot
     emitter.instruction("jae __rt_mbstring_array_next_end");                    // finish without reading beyond the indexed payload
-    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // read the indexed element type from heap metadata
-    emitter.instruction("shr rax, 8");                                          // move the element type into the low bits
-    emitter.instruction("and rax, 0x7f");                                       // remove the persistent COW flag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rax", "rdi");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rax", "rax");
     emitter.instruction("mov r8, 8");                                           // ordinary scalar and pointer slots occupy one word
     emitter.instruction("cmp rax, 1");                                          // strings occupy a pointer and length pair
     emitter.instruction("je __rt_mbstring_array_next_wide");                    // select a two-word string slot

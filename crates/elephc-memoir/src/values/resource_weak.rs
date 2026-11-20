@@ -220,3 +220,79 @@ fn emit_drain_x86_64<E: Emitter>(emitter: &mut E, first_resource_id: i64, emit_c
     emitter.instruction("leave");                                               // release reset storage and restore rbp
     emitter.instruction("ret");                                                 // return with an empty inventory
 }
+
+/// Size of the native payload-to-resource-id side table. Probing masks with capacity minus one.
+pub const RESOURCE_ID_TABLE_SLOTS: usize = 1024;
+
+/// Declares the native resource identity tables and linked weak inventory roots.
+pub fn append_storage(out: &mut String, target: &impl crate::data::DataTarget) {
+    for symbol in ["_resource_id_keys", "_resource_id_vals"] {
+        out.push_str(&target.common(symbol, RESOURCE_ID_TABLE_SLOTS * 8));
+    }
+    for symbol in ["_resource_inventory_head", "_resource_inventory_tail"] {
+        out.push_str(&target.common(symbol, 8));
+    }
+}
+
+/// Finds the weak incarnation node for a resource id before optional registration.
+pub fn emit_find_registration_aarch64(emitter: &mut impl Emitter) {
+    emitter.emit_symbol_address("x9", "_resource_inventory_head");
+    emitter.instruction("ldr x10, [x9]");                                       // load the first recorded incarnation
+    emitter.label("__rt_resource_inventory_register_find");
+    emitter.instruction("cbz x10, __rt_resource_inventory_register_new");       // a missing id needs a fresh node
+    emitter.instruction(&format!("ldr x11, [x10, #{ID_OFFSET}]"));              // load the node's PHP id
+    emitter.instruction("cmp x11, x0");                                         // compare with the incoming PHP id
+    emitter.instruction("b.eq __rt_resource_inventory_register_found");         // aliases share the existing incarnation node
+    emitter.instruction("ldr x10, [x10, #0]");                                  // follow the creation-order next pointer
+    emitter.instruction("b __rt_resource_inventory_register_find");             // continue until the id is found or the list ends
+}
+
+/// Finds the weak incarnation node for a resource id before optional registration.
+pub fn emit_find_registration_x86_64(emitter: &mut impl Emitter) {
+    emitter.emit_symbol_address("r10", "_resource_inventory_head");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load first node
+    emitter.label("__rt_resource_inventory_register_find_x86");
+    emitter.instruction("test r10, r10");                                       // did the list end?
+    emitter.instruction("jz __rt_resource_inventory_register_new_x86");         // allocate a node for a new id
+    emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {ID_OFFSET}]"));    // load stored PHP id
+    emitter.instruction("cmp r11, QWORD PTR [rbp - 8]");                        // compare with incoming id
+    emitter.instruction("je __rt_resource_inventory_register_found_x86");       // aliases share the existing incarnation node
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // follow next pointer
+    emitter.instruction("jmp __rt_resource_inventory_register_find_x86");       // continue search
+}
+
+/// Locates the weak incarnation and publishes its closed state before returning.
+pub fn emit_mark_closed_aarch64(emitter: &mut impl Emitter) {
+    emitter.emit_symbol_address("x9", "_resource_inventory_head");
+    emitter.instruction("ldr x9, [x9]");                                        // start at the oldest resource incarnation
+    emitter.label("__rt_resource_inventory_close_find");
+    emitter.instruction("cbz x9, __rt_resource_inventory_close_done");          // an untracked id needs no update
+    emitter.instruction(&format!("ldr x10, [x9, #{ID_OFFSET}]"));               // load the node's PHP id
+    emitter.instruction("cmp x10, x0");                                         // is this the resource being closed?
+    emitter.instruction("b.eq __rt_resource_inventory_close_hit");              // update the matching node
+    emitter.instruction("ldr x9, [x9, #0]");                                    // follow the next pointer
+    emitter.instruction("b __rt_resource_inventory_close_find");                // continue the linear search
+    emitter.label("__rt_resource_inventory_close_hit");
+    emitter.instruction(&format!("mov x10, #{CLOSED}"));                        // materialize the closed marker
+    emitter.instruction(&format!("str x10, [x9, #{STATE_OFFSET}]"));            // retain the node but mark it Unknown
+    emitter.instruction("neg x10, x0");                                         // closed resources carry their stable id as -id
+    emitter.instruction(&format!("str x10, [x9, #{PAYLOAD_OFFSET}]"));          // replace the now-invalid native payload
+}
+
+/// Locates the weak incarnation and publishes its closed state before returning.
+pub fn emit_mark_closed_x86_64(emitter: &mut impl Emitter) {
+    emitter.emit_symbol_address("r10", "_resource_inventory_head");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // start at oldest incarnation
+    emitter.label("__rt_resource_inventory_close_find_x86");
+    emitter.instruction("test r10, r10");                                       // did the list end?
+    emitter.instruction("jz __rt_resource_inventory_close_done_x86");           // an untracked id is a no-op
+    emitter.instruction(&format!("cmp QWORD PTR [r10 + {ID_OFFSET}], rax"));    // compare node id with the closing id
+    emitter.instruction("je __rt_resource_inventory_close_hit_x86");            // update matching node
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // follow next pointer
+    emitter.instruction("jmp __rt_resource_inventory_close_find_x86");          // continue search
+    emitter.label("__rt_resource_inventory_close_hit_x86");
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {STATE_OFFSET}], {CLOSED}")); // mark resource Unknown
+    emitter.instruction("mov r11, rax");                                        // copy stable PHP id
+    emitter.instruction("neg r11");                                             // closed payload sentinel = -id
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {PAYLOAD_OFFSET}], r11")); // discard the invalid native payload
+}

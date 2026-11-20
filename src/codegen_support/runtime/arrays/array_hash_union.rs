@@ -50,7 +50,7 @@ pub fn emit_array_hash_union(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_new");                                    // allocate the result associative-array hash table
     emitter.instruction("str x0, [sp, #16]");                                   // save the evolving result hash pointer
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the left indexed-array pointer
-    emitter.instruction("ldr x10, [x9, #-8]");                                  // load the packed left indexed-array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x10", "x9");
     emitter.instruction("lsr x10, x10, #8");                                    // move the left value_type tag into the low bits
     emitter.instruction("and x10, x10, #0x7f");                                 // isolate the left value_type tag without the persistent COW flag
     emitter.instruction("str x10, [sp, #40]");                                  // save the left value_type tag for copy dispatch
@@ -181,9 +181,8 @@ fn emit_array_hash_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_new");                                  // allocate the result associative-array hash table
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the evolving result hash pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the left indexed-array pointer
-    emitter.instruction("mov r11, QWORD PTR [r10 - 8]");                        // load the packed left indexed-array kind word
-    emitter.instruction("shr r11, 8");                                          // move the left value_type tag into the low bits
-    emitter.instruction("and r11, 0x7f");                                       // isolate the left value_type tag without the persistent COW flag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "r10");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r11", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // save the left value_type tag for copy dispatch
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the left indexed-array numeric key cursor
 

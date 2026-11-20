@@ -185,8 +185,8 @@ fn read_aarch64_entry(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, "x9", CURSOR);
     emitter.instruction("mov x9, #-1");                                         // integer keys carry a negative high word
     abi::store_at_offset(emitter, "x9", KEY_HI);
-    emitter.instruction("ldr x0, [x11, #-8]");                                  // inspect the actual packed element representation
-    emitter.instruction("ubfx x0, x0, #8, #7");                                 // isolate the value tag from heap flags
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x0", "x11");
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x0", "x0");
     emitter.instruction("ldr x12, [x11, #16]");                                 // read the physical slot width
     emitter.instruction("madd x11, x10, x12, x11");                             // address the current element before its header offset
     emitter.instruction("ldr x1, [x11, #24]");                                  // borrow its low payload word
@@ -223,9 +223,8 @@ fn read_x86_64_entry(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, "r9", CURSOR);
     emitter.instruction("mov r9, -1");                                          // mark the preserved key as an integer
     abi::store_at_offset(emitter, "r9", KEY_HI);
-    emitter.instruction("mov rdx, QWORD PTR [r11 - 8]");                        // inspect the packed element metadata
-    emitter.instruction("shr rdx, 8");                                          // move the element tag to the low bits
-    emitter.instruction("and rdx, 127");                                        // discard heap flags outside the value tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rdx", "r11");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rdx", "rdx");
     emitter.instruction("mov rcx, QWORD PTR [r11 + 16]");                       // read the actual eight- or sixteen-byte stride
     emitter.instruction("imul r10, rcx");                                       // convert the logical index to a payload offset
     emitter.instruction("add r11, r10");                                        // locate the current packed entry

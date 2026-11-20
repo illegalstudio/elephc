@@ -47,11 +47,11 @@ fn emit_array_type_check_aarch64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "x9", NULL_SENTINEL);
     emitter.instruction("cmp x0, x9");                                          // does the receiver carry the in-band null-container sentinel?
     emitter.instruction(&format!("b.eq {fallback}"));                           // sentinel-null receivers need the generic warning path
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed array kind word from the heap header
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x10, x9, #0xff");                                  // isolate the storage kind byte
     emitter.instruction("cmp x10, #2");                                         // is this packed indexed storage?
     emitter.instruction(&format!("b.ne {fallback}"));                           // hashes and unknown storage use the generic read
-    emitter.instruction("ubfx x11, x9, #8, #7");                                // extract the runtime element value_type tag
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x11", "x9");
     emitter.instruction("cmp x11, #7");                                         // are the slots boxed Mixed pointers?
     emitter.instruction(&format!("b.ne {fallback}"));                           // typed slots and inline tagged scalars use the generic read
     emitter.instruction("ldr x12, [x0]");                                       // load the packed element count
@@ -123,13 +123,12 @@ fn emit_array_type_check_x86_64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "r10", NULL_SENTINEL);
     emitter.instruction("cmp rdi, r10");                                        // does the receiver carry the in-band null-container sentinel?
     emitter.instruction(&format!("je {fallback}"));                             // sentinel-null receivers need the generic warning path
-    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load the packed array kind word from the heap header
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rdi");
     emitter.instruction("mov r11, r10");                                        // copy the kind word before isolating the storage byte
     emitter.instruction("and r11d, 0xff");                                      // isolate the storage kind byte
     emitter.instruction("cmp r11, 2");                                          // is this packed indexed storage?
     emitter.instruction(&format!("jne {fallback}"));                            // hashes and unknown storage use the generic read
-    emitter.instruction("shr r10, 8");                                          // move the runtime element value_type tag into the low byte
-    emitter.instruction("and r10d, 0x7f");                                      // isolate the element value_type tag
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10d");
     emitter.instruction("cmp r10, 7");                                          // are the slots boxed Mixed pointers?
     emitter.instruction(&format!("jne {fallback}"));                            // typed slots and inline tagged scalars use the generic read
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the packed element count

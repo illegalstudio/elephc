@@ -50,7 +50,7 @@ pub fn emit_array_union(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_array_clone_shallow");                         // clone the left operand so the union result owns its storage
     emitter.instruction("str x0, [sp, #16]");                                   // save the evolving result indexed-array pointer
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the right indexed-array pointer
-    emitter.instruction("ldr x12, [x11, #-8]");                                 // load the packed right array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x12", "x11");
     emitter.instruction("lsr x12, x12, #8");                                    // move the right value_type tag into the low bits
     emitter.instruction("and x12, x12, #0x7f");                                 // isolate the right value_type tag
     emitter.instruction("str x12, [sp, #40]");                                  // save the right value_type tag for append dispatch
@@ -134,9 +134,8 @@ fn emit_array_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_clone_shallow");                       // clone the left operand so the union result owns its storage
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the evolving result indexed-array pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the right indexed-array pointer
-    emitter.instruction("mov r11, QWORD PTR [r10 - 8]");                        // load the packed right array kind word
-    emitter.instruction("shr r11, 8");                                          // move the right value_type tag into the low bits
-    emitter.instruction("and r11, 0x7f");                                       // isolate the right value_type tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "r10");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r11", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // save the right value_type tag for append dispatch
 
     emitter.label("__rt_array_union_x86_loop");

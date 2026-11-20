@@ -65,7 +65,7 @@ pub fn emit_zval_unpack_array(emitter: &mut Emitter) {
 
     // -- set the length = nNumUsed so the array reports its occupied size --
     emitter.instruction("ldr x12, [sp, #24]");                                  // reload nNumUsed
-    emitter.instruction("str x12, [x0]");                                       // header[0]: length = nNumUsed
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x0", "x12");
 
     // -- initialize the loop index i = 0 --
     emitter.instruction("str xzr, [sp, #16]");                                  // loop index i starts at the first bucket
@@ -87,10 +87,7 @@ pub fn emit_zval_unpack_array(emitter: &mut Emitter) {
     // -- store the cell at arr + 24 + i * 8 --
     emitter.instruction("ldr x13, [sp, #8]");                                   // reload the rebuilt array pointer
     emitter.instruction("ldr x14, [sp, #16]");                                  // reload i (clobbered by the unpack call) before the slot stride multiply
-    emitter.instruction("lsl x15, x14, #3");                                    // i * 8 bytes per Mixed-cell slot
-    emitter.instruction("add x16, x13, #24");                                   // elements start after the 24-byte array header
-    emitter.instruction("add x16, x16, x15");                                   // x16 = destination element slot
-    emitter.instruction("str x0, [x16]");                                       // arr[i] = owned Mixed cell pointer
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "x13", "x14", "x0", "x16");
 
     // -- advance the loop index --
     emitter.instruction("ldr x14, [sp, #16]");                                  // reload the loop index
@@ -230,7 +227,7 @@ fn emit_zval_unpack_array_linux_x86_64(emitter: &mut Emitter) {
 
     // -- set the length = nNumUsed so the array reports its occupied size --
     emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // reload nNumUsed
-    emitter.instruction("mov QWORD PTR [rax], r12");                            // header[0]: length = nNumUsed
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "rax", "r12");
 
     // -- initialize the loop index i = 0 --
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // loop index i starts at the first bucket
@@ -252,11 +249,8 @@ fn emit_zval_unpack_array_linux_x86_64(emitter: &mut Emitter) {
 
     // -- store the cell at arr + 24 + i * 8 --
     emitter.instruction("mov r13, QWORD PTR [rbp - 16]");                       // reload the rebuilt array pointer
-    emitter.instruction("add r13, 24");                                         // elements start after the 24-byte array header
-    emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // reload the loop index before the slot stride multiply
-    emitter.instruction("shl r14, 3");                                          // i * 8 bytes per Mixed-cell slot
-    emitter.instruction("add r13, r14");                                        // r13 = destination element slot
-    emitter.instruction("mov QWORD PTR [r13], rax");                            // arr[i] = owned Mixed cell pointer
+    emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // recover the loop index after unpacking
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "r13", "r14", "rax", "r11");
 
     // -- advance the loop index --
     emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // reload the loop index

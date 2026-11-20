@@ -55,7 +55,7 @@ pub fn emit_vsprintf(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x29, #32]");                                  // save the argument count
     emitter.instruction("add x10, x0, #24");                                    // skip the 24-byte array header to the slot payload
     emitter.instruction("str x10, [x29, #40]");                                 // save the slot base pointer
-    emitter.instruction("ldr x11, [x0, #-8]");                                  // packed array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x11", "x0");
     emitter.instruction("lsr x11, x11, #8");                                    // shift the runtime value_type into the low byte
     emitter.instruction("and x11, x11, #0x7f");                                 // isolate the value_type tag (drop the COW bit)
     emitter.instruction("str x11, [x29, #48]");                                 // save the value_type
@@ -196,9 +196,8 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save the argument count
     emitter.instruction("lea r10, [rdi + 24]");                                 // slot base = array + 24-byte header
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the slot base
-    emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                        // packed array kind word
-    emitter.instruction("shr r11, 8");                                          // shift the runtime value_type into the low byte
-    emitter.instruction("and r11, 0x7f");                                       // isolate the value_type (drop the COW bit)
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "rdi");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r11", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the value_type
     emitter.instruction("mov r12, 8");                                          // default slot size = 8 bytes
     emitter.instruction("cmp r11, 1");                                          // string-typed array (16-byte slots)?

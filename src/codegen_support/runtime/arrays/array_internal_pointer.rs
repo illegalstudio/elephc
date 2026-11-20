@@ -49,7 +49,7 @@ pub(super) fn emit_normalize_aarch64(emitter: &mut Emitter, prefix: &str, invali
     );
     emitter.instruction("cmp x0, x9");                                          // does the container carry the in-band null sentinel?
     emitter.instruction(&format!("b.eq {}", invalid));                          // sentinel-null containers are never positionable
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
     emitter.instruction("cmp x9, #5");                                          // is the container a boxed mixed cell?
     emitter.instruction(&format!("b.eq {}_unbox", prefix));                     // mixed cells are unwrapped before anything else
@@ -90,7 +90,7 @@ pub(super) fn emit_normalize_x86_64(emitter: &mut Emitter, prefix: &str, invalid
     );
     emitter.instruction("cmp rdi, r10");                                        // does the container carry the in-band null sentinel?
     emitter.instruction(&format!("je {}", invalid));                            // sentinel-null containers are never positionable
-    emitter.instruction("movzx eax, BYTE PTR [rdi - 8]");                       // load the low-byte heap kind from the uniform header
+    elephc_memoir::heap_kind::emit_load_kind_byte(emitter, "eax", "rdi");
     emitter.instruction("cmp eax, 5");                                          // is the container a boxed mixed cell?
     emitter.instruction(&format!("je {}_unbox", prefix));                       // mixed cells are unwrapped before anything else
     emitter.instruction("cmp eax, 2");                                          // is the container an indexed array?
@@ -301,7 +301,7 @@ fn emit_array_ptr_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_aptr_key_null");                               // invalid cursors have no key
     emitter.instruction("cmp rsi, r11");                                        // is the cursor past the last ordinal?
     emitter.instruction("jge __rt_aptr_key_null");                              // invalid cursors have no key
-    emitter.instruction("movzx eax, BYTE PTR [rdi - 8]");                       // reload the low-byte heap kind after normalization
+    elephc_memoir::heap_kind::emit_load_kind_byte(emitter, "eax", "rdi");
     emitter.instruction("cmp eax, 3");                                          // is the container an associative hash?
     emitter.instruction("je __rt_aptr_key_hash");                               // hashes read the key out of the ordinal's entry
     emitter.instruction("mov rdi, rsi");                                        // dense indexed keys are the ordinal itself
@@ -391,7 +391,7 @@ fn emit_array_ptr_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_aptr_val_false");                              // invalid cursors have no value
     emitter.instruction("cmp rsi, r11");                                        // is the cursor past the last ordinal?
     emitter.instruction("jge __rt_aptr_val_false");                             // invalid cursors have no value
-    emitter.instruction("movzx eax, BYTE PTR [rdi - 8]");                       // reload the low-byte heap kind after normalization
+    elephc_memoir::heap_kind::emit_load_kind_byte(emitter, "eax", "rdi");
     emitter.instruction("cmp eax, 3");                                          // is the container an associative hash?
     emitter.instruction("je __rt_aptr_val_hash");                               // hashes box the entry payload directly
     emitter.instruction("mov rdx, -1");                                         // key_hi = -1 marks an integer indexed key
