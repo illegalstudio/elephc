@@ -775,7 +775,11 @@ canonical reference writes invalidate stale evidence. Entry proofs keep their
 original write epochs. Reading a stored snapshot retains the container's declared
 alternatives or observed predicate view, so element evidence cannot narrow an
 explicit `mixed` container by itself. Spread, callback-array and reflection
-invocation share the same entry projection and owner cleanup adapters.
+invocation share the same entry projection and owner cleanup adapters. Native
+function and method binders also retain source packets through named, variadic and
+default normalization. They check logical alternatives and canonical reference
+stamps before coercing payloads; method variadic collectors keep each entry's
+optional evidence independently.
 
 
 ## Runtime script cache

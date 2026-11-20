@@ -129,6 +129,7 @@ fn bind_evaluated_native_function_args_with_mode(
                 &name,
                 arg.value,
                 arg.ref_target,
+                arg.source_type,
                 by_ref_mode,
                 values,
             )?;
@@ -140,12 +141,13 @@ fn bind_evaluated_native_function_args_with_mode(
                 &mut next_positional,
                 arg.value,
                 arg.ref_target,
+                arg.source_type,
                 by_ref_mode,
                 values,
             )?;
         } else {
             // Surplus positional arguments are by-value in PHP and bind to no parameter.
-            surplus_args.push(BoundMethodArg { source_type: None,
+            surplus_args.push(BoundMethodArg { source_type: arg.source_type,
                 value: arg.value,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
@@ -297,7 +299,7 @@ fn bind_evaluated_native_variadic_function_args(
                     )?;
                     named_variadic_args.push((
                         name,
-                        BoundMethodArg { source_type: None,
+                        BoundMethodArg { source_type: arg.source_type,
                             value: arg.value,
                             ref_target,
                             variadic_ref_targets: Vec::new(),
@@ -312,6 +314,7 @@ fn bind_evaluated_native_variadic_function_args(
                     &name,
                     arg.value,
                     arg.ref_target,
+                    arg.source_type,
                     by_ref_mode,
                     values,
                 )?;
@@ -323,6 +326,7 @@ fn bind_evaluated_native_variadic_function_args(
                     &mut next_positional,
                     arg.value,
                     arg.ref_target,
+                    arg.source_type,
                     by_ref_mode,
                     values,
                 )?;
@@ -337,7 +341,7 @@ fn bind_evaluated_native_variadic_function_args(
                     by_ref_mode,
                     values,
                 )?;
-                variadic_args.push(BoundMethodArg { source_type: None,
+                variadic_args.push(BoundMethodArg { source_type: arg.source_type,
                     value: arg.value,
                     ref_target,
                     variadic_ref_targets: Vec::new(),
@@ -454,7 +458,8 @@ fn fill_native_function_defaults(
             if bound.is_some() { continue; }
             if position < function.required_param_count() { return Err(EvalStatus::RuntimeFatal); }
             let default = function.param_default(position).ok_or(EvalStatus::RuntimeFatal)?;
-            *bound = Some(BoundMethodArg { source_type: None,
+            *bound = Some(BoundMethodArg { source_type: function.param_type(position)
+                .map(|ty| ArgumentSource::capture(ty.clone(), context)),
                 value: materialize_native_callable_default(default, context, values)?,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
@@ -508,6 +513,8 @@ fn apply_native_function_arg_types(
             continue;
         };
         let original = bound_arg.value;
+        mixed_source_proofs::require_argument_with_target(param_type, bound_arg.source_type.as_ref(), original,
+            bound_arg.ref_target.as_ref(), context, values)?;
         if native_function_object_reference_defers_nominal_check(
             function,
             param_index,
@@ -549,6 +556,7 @@ fn bind_native_function_named_arg(
     name: &str,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    source_type: Option<ArgumentSource>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -560,7 +568,7 @@ fn bind_native_function_named_arg(
     }
     let ref_target =
         native_function_parameter_ref_target(function, Some(param_index), ref_target, by_ref_mode, values)?;
-    bound_args[param_index] = Some(BoundMethodArg { source_type: None,
+    bound_args[param_index] = Some(BoundMethodArg { source_type,
         value,
         ref_target,
         variadic_ref_targets: Vec::new(),
@@ -576,6 +584,7 @@ fn bind_native_function_positional_arg(
     next_positional: &mut usize,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    source_type: Option<ArgumentSource>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -588,7 +597,7 @@ fn bind_native_function_positional_arg(
     }
     let ref_target =
         native_function_parameter_ref_target(function, Some(param_index), ref_target, by_ref_mode, values)?;
-    bound_args[param_index] = Some(BoundMethodArg { source_type: None,
+    bound_args[param_index] = Some(BoundMethodArg { source_type,
         value,
         ref_target,
         variadic_ref_targets: Vec::new(),

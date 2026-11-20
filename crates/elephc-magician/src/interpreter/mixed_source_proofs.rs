@@ -169,6 +169,17 @@ pub(super) fn require_argument(expected: &EvalParameterType, source: Option<&Arg
         context, values)
 }
 
+/// Validates canonical reference stamps even when a native adapter materialized the payload separately.
+pub(super) fn require_argument_with_target(expected: &EvalParameterType,
+    source: Option<&ArgumentSource>, value: RuntimeCellHandle, target: Option<&EvalReferenceTarget>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let source = if let Some(EvalReferenceTarget::Cell { cell }) = target {
+        source.filter(|source| context.source_view_is_current(*cell, source.write_epoch))
+    } else { source };
+    require_argument(expected, source, value, target.is_some(), context, values)
+}
+
 /// Shares finite alternative traversal with exact generic/nominal membership and weak scalar domains.
 fn source_assignable(actual: &Type, target: &Type, context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -183,6 +194,9 @@ fn source_assignable(actual: &Type, target: &Type, context: &ElephcEvalContext,
         Type::Nullable(inner) => return Ok(source_assignable(inner, target, context, values)?
             && source_assignable(&Type::atom("null"), target, context, values)?),
         _ => {}
+    }
+    if context.semantic_profile().contains(StrictFeature::Coercions) {
+        return generic_type_is_a(actual, target, context, values);
     }
     if let Some(kind) = scalar_source_kind(actual) {
         if elephc_semantics::weak_scalar_binding::supports_source_kind(scalar_target_kinds(target), kind) {
