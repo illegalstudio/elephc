@@ -123,7 +123,7 @@ pub(super) fn nominal_type(name: &str) -> Type {
 }
 
 /// Projects declared offset elements while preserving every represented receiver alternative.
-fn offset_result(receiver: &Type) -> Option<Type> {
+pub(in crate::interpreter) fn offset_result(receiver: &Type) -> Option<Type> {
     match receiver {
         Type::Apply(name,args) if name == "array"=>args.last().cloned(),
         Type::Atom(name) if name == "array"=>Some(Type::atom("mixed")),

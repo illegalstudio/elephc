@@ -18,7 +18,7 @@ pub(super) fn handles(expr: &EvalExpr) -> bool {
 }
 
 /// Accepts object source domains while leaving method existence and access to ordinary dispatch.
-fn object_source(ty: &Type, context: &ElephcEvalContext) -> bool {
+pub(super) fn object_source(ty: &Type, context: &ElephcEvalContext) -> bool {
     match ty {
         Type::Atom(name) => name == "object" || name == "Closure" || context.resolve_class_like_name(name).is_some(),
         Type::Apply(name,_) => name != "array" && context.resolve_class_like_name(&ty.to_string()).is_some(),
@@ -81,15 +81,23 @@ fn object_call(expr: &EvalExpr, object: &EvalExpr, method: Option<&str>, dynamic
         if nullsafe && values.is_null(receivers[0])? { return values.null().map(|value|(value,Some(Type::atom("null")))); }
         let method=match method {Some(method)=>method.to_string(),None=>
             eval_dynamic_member_name(dynamic.ok_or(EvalStatus::RuntimeFatal)?,context,scope,values)?};
-        let class=mixed_callable_sources::object_class(receivers[0],context,values)?;
-        let mut source=local_binding_origins::declared_method_result(&class,&class,&method,false,context);
-        with_eval_object_method_arguments(args,receivers[0],&method,context,scope,values,|arguments,context,_,values| {
-            if let Some(reflected)=eval_reflection_invocation_source(receivers[0],&method,&arguments,context,values)? {
+        selected_object(receivers[0],&method,args,discarded,context,scope,values)
+    })
+}
+
+/// Invokes a selected owned receiver while carrying its declaration through argument and warning cleanup.
+pub(super) fn selected_object(object: RuntimeCellHandle, method: &str, args: &[EvalCallArg],
+    discarded: bool, context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle,Option<Type>),EvalStatus> {
+    let class=mixed_callable_sources::object_class(object,context,values)?;
+    let mut source=local_binding_origins::declared_method_result(&class,&class,method,false,context);
+    with_eval_object_method_arguments(args,object,method,context,scope,values,|arguments,context,_,values| {
+            if let Some(reflected)=eval_reflection_invocation_source(object,method,&arguments,context,values)? {
                 source=reflected;
             }
-            let result=eval_method_call_result_with_evaluated_args(receivers[0],&method,arguments,context,values)?;
-            if discarded { warn_eval_discarded_instance_result(receivers[0],&method,result,context,values) }
+            let result=eval_method_call_result_with_evaluated_args(object,method,arguments,context,values)?;
+            if discarded { warn_eval_discarded_instance_result(object,method,result,context,values) }
             else { Ok(result) }
         }).map(|value|(value,source))
-    })
 }

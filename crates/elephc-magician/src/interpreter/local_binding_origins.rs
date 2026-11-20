@@ -21,6 +21,7 @@ pub(super) use calls::builtin as selected_call_builtin;
 mod declared_sources;
 pub(super) use declared_sources::resolve_type as resolve_declared_source_type;
 pub(super) use declared_sources::method_result as declared_method_result;
+pub(super) use declared_sources::offset_result as declared_offset_result;
 
 pub(super) use source_views::{LocalAssignmentProducer, prepare_assignment, source_view, argument_source, evaluate_assignment};
 

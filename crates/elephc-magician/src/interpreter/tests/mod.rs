@@ -160,3 +160,5 @@ mod strict_mixed_namespace_sources;
 mod strict_mixed_forwarded_results;
 
 mod strict_mixed_method_results;
+
+mod strict_mixed_nullsafe_sources;

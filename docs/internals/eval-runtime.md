@@ -800,6 +800,12 @@ domain before conversion; class selectors require a string or object source.
 Reflection `invoke` and `invokeArgs` read the reflected declaration, including
 callback forwarding. Discarded method results share the same receiver scope and
 retain their existing warning behavior.
+Nullsafe postfix chains carry each reached value and its optional logical source
+separately from the upstream short-circuit marker. A method returning null keeps
+its ordinary successor; an upstream nullsafe short circuit skips later selectors,
+keys and arguments. Quiet `??` probes preserve missing roots and initialized null
+receivers without deriving type evidence from them. Reached PHP array/string
+keys use their source alternatives; custom ArrayAccess keys keep their own domain.
 
 Native descriptor signatures retain their original twelve physical metadata words.
 Flag bit 1 marks an appended logical-source record pointer at word 12. The

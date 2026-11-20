@@ -63,7 +63,8 @@ pub(super) fn eval_null_coalesce_value(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
+    if (context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
+        || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed))
         && super::nullsafe_chains::has_nullsafe(expr) {
         return super::nullsafe_chains::evaluate_receiver(expr, true, context, scope, values)?
             .map_or_else(|| values.null(), Ok);
@@ -104,7 +105,8 @@ fn eval_expr_with_result_ownership(
     values: &mut impl RuntimeValueOps,
     own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
+    if (context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
+        || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed))
         && super::nullsafe_chains::has_nullsafe(expr) {
         return super::nullsafe_chains::evaluate_receiver(expr, false, context, scope, values)?
             .map_or_else(|| values.null(), Ok);
