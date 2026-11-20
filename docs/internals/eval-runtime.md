@@ -810,6 +810,12 @@ Ordinary postfix accesses reuse this same source and owner scope. A reached inde
 or dynamic member selector runs before its access proof is checked; method
 arguments remain behind receiver validation. Open array elements and undeclared
 properties retain unknown sources instead of inheriting their current value tags.
+Foreach checks its iterable source and publishes declared array key/value domains
+or selected Iterator method returns with the prepared operands. IteratorAggregate
+results use the same iterable check. `Mixed + Bools` also checks the declared
+`valid()` result. Source metadata stays outside runtime owner slots, while the
+existing value-before-key publication and destructor cleanup order remains intact.
+ArrayTypes loop content origins preserve their separate conditional role.
 
 Native descriptor signatures retain their original twelve physical metadata words.
 Flag bit 1 marks an appended logical-source record pointer at word 12. The

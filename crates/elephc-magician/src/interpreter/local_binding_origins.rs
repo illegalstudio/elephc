@@ -177,6 +177,24 @@ pub(in crate::interpreter) fn store_local_with_origin(context: &mut ElephcEvalCo
     scope: &mut ElephcEvalScope, name: String, value: RuntimeCellHandle,
     producer: LocalAssignmentProducer, values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    store_local_with_roles(context,scope,name,value,producer,true,values)
+}
+
+/// Publishes loop source and content roles without adding a new inferred Locals kind contract.
+pub(in crate::interpreter) fn store_foreach_with_origin(context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, name: String, value: RuntimeCellHandle,
+    source: Option<&Type>, values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>,EvalStatus> {
+    let source=source.map(parameter_type);
+    let producer=LocalAssignmentProducer {binding:source.clone(),source,arguments:None};
+    store_local_with_roles(context,scope,name,value,producer,false,values)
+}
+
+/// Shares source, array-content and owner publication while callers select the binding-kind role.
+fn store_local_with_roles(context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, name: String, value: RuntimeCellHandle,
+    producer: LocalAssignmentProducer, infer_kind: bool, values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>,EvalStatus> {
     let LocalAssignmentProducer { binding: producer, source, arguments } = producer;
     let source = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
         && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
@@ -186,7 +204,7 @@ pub(in crate::interpreter) fn store_local_with_origin(context: &mut ElephcEvalCo
         }
     } else if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { source }
     else { None };
-    let fresh = context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals)
+    let fresh = infer_kind && context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals)
         && visible_scope_cell(context, scope, &name).is_none()
         && scope.local_type(&name).is_none();
     let array_origin = match arrays::prepare(scope, &name, producer.as_ref(), value, context, values) {

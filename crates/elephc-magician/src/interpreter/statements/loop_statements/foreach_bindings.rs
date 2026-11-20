@@ -28,33 +28,35 @@ pub(super) fn release(owners: impl IntoIterator<Item = RuntimeCellHandle>,
 }
 
 /// Publishes an owned candidate before retiring every displaced binding lease.
-fn publish(name: &str, owner: &RuntimeOwnerSlot, context: &mut ElephcEvalContext,
+fn publish(name: &str, owner: &RuntimeOwnerSlot, source: Option<&elephc_generics::Type>, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let replaced = set_owned_scope_cell(context, scope, name.to_string(), owner.take(), values)?;
+    let replaced=local_binding_origins::store_foreach_with_origin(context,scope,name.to_string(),owner.take(),source,values)?;
     release(replaced, context, values)
 }
 
 /// Acquires both operands once and consumes their leases in PHP publication order.
 pub(super) fn bind<V: RuntimeValueOps>(value_name: &str, key_name: Option<&str>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut V,
-    value: impl FnOnce(&mut ElephcEvalContext, &mut V) -> Result<RuntimeCellHandle, EvalStatus>,
-    key: impl FnOnce(&mut ElephcEvalContext, &mut V) -> Result<RuntimeCellHandle, EvalStatus>,
+    value: impl FnOnce(&mut ElephcEvalContext, &mut V) -> Result<(RuntimeCellHandle,Option<elephc_generics::Type>), EvalStatus>,
+    key: impl FnOnce(&mut ElephcEvalContext, &mut V) -> Result<(RuntimeCellHandle,Option<elephc_generics::Type>), EvalStatus>,
 ) -> Result<(), EvalStatus> {
-    let value = value(context, values).and_then(|value| promote_borrowed_result(value, values))?;
+    let (value,value_source)=value(context,values)?;
+    let value=promote_borrowed_result(value,values)?;
     let value = RuntimeOwnerSlot::new(value);
     let key = with_runtime_owners(&value, || {
-        key_name.map(|_| key(context, values).and_then(|key| promote_borrowed_result(key, values)))
-            .transpose().map(|key| key.map(RuntimeOwnerSlot::new))
+        key_name.map(|_| key(context,values).and_then(|(key,source)|
+            promote_borrowed_result(key,values).map(|key|(RuntimeOwnerSlot::new(key),source)))).transpose()
     });
-    let key = match key {
-        Ok(key) => key,
+    let (key,key_source)=match key {
+        Ok(Some((key,source)))=>(Some(key),source),
+        Ok(None)=>(None,None),
         Err(status) => { let _ = release([value.take()], context, values); return Err(status); }
     };
     with_runtime_owners(&(&value, &key), || {
-        let result = publish(value_name, &value, context, scope, values).and_then(|()| {
-            if let Some((name, key)) = key_name.zip(key.as_ref()) {
-                publish(name, key, context, scope, values)
+        let result = publish(value_name,&value,value_source.as_ref(),context,scope,values).and_then(|()| {
+            if let Some((name,key))=key_name.zip(key.as_ref()) {
+                publish(name,key,key_source.as_ref(),context,scope,values)
             } else { Ok(()) }
         });
         let released = release(std::iter::once(value.take()).chain(key.as_ref().map(RuntimeOwnerSlot::take)), context, values);
@@ -63,11 +65,13 @@ pub(super) fn bind<V: RuntimeValueOps>(value_name: &str, key_name: Option<&str>,
 }
 
 /// Checks a prepared Iterator predicate while keeping it rooted through a possible TypeError.
-pub(super) fn condition(value: RuntimeCellHandle, context: &mut ElephcEvalContext,
+pub(super) fn condition(value: RuntimeCellHandle, source: Option<&elephc_generics::Type>, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let owner = RuntimeOwnerSlot::new(value);
-    let result = with_runtime_owners(&owner, || eval_boolean_condition(owner.borrowed(), context, values));
+    let source=source.cloned().unwrap_or_else(||elephc_generics::Type::atom("mixed"));
+    let result=with_runtime_owners(&owner,|| mixed_source_proofs::require_condition(&source,context,values)
+        .and_then(|()|eval_boolean_condition(owner.borrowed(),context,values)));
     let released = release([owner.take()], context, values);
     result.and_then(|condition| released.map(|()| condition))
 }

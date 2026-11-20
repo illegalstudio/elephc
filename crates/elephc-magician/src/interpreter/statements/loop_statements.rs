@@ -140,21 +140,30 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let array = eval_owned_expr(array, context, scope, values)?;
-    foreach_bindings::with_source(array, context, scope, values, |array, context, scope, values| match values.type_tag(array)? {
+    let (array,source)=if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        mixed_eval::evaluate(array,context,scope,values)?
+    } else {
+        let source=local_binding_origins::source_view(array,context,scope).as_ref().map(crate::eval_ir::generic_type);
+        (eval_owned_expr(array,context,scope,values)?,source)
+    };
+    foreach_bindings::with_source(array, context, scope, values, |array,context,scope,values| {
+        mixed_foreach_sources::require(source.as_ref(),context,values)?;
+        match values.type_tag(array)? {
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
-            execute_foreach_array_stmt(array, key_name, value_name, body, context, scope, values)
+            execute_foreach_array_stmt(array,source.as_ref(), key_name, value_name, body, context, scope, values)
         }
         EVAL_TAG_OBJECT => {
             execute_foreach_object_stmt(array, key_name, value_name, body, context, scope, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
+        }
     })
 }
 
 /// Executes `foreach` over a PHP array value using insertion-order runtime hooks.
 pub(super) fn execute_foreach_array_stmt(
     array: RuntimeCellHandle,
+    source: Option<&elephc_generics::Type>,
     key_name: Option<&str>,
     value_name: &str,
     body: &[EvalStmt],
@@ -162,11 +171,12 @@ pub(super) fn execute_foreach_array_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
+    let (key_source,value_source)=mixed_foreach_sources::array_parts(source);
     let len = values.array_len(array)?;
     for index in 0..len {
         foreach_bindings::bind(value_name, key_name, context, scope, values,
-            |_, values| values.array_iter_value(array, index),
-            |_, values| values.array_iter_key(array, index))?;
+            |_,values|values.array_iter_value(array,index).map(|value|(value,value_source.clone())),
+            |_,values|values.array_iter_key(array,index).map(|value|(value,key_source.clone())))?;
         match execute_statements(body, context, scope, values)? {
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
@@ -194,10 +204,12 @@ pub(super) fn execute_foreach_object_stmt(
         );
     }
     if eval_foreach_object_is_a(object, "IteratorAggregate", context, values)? {
-        let iterator = eval_method_call_result(object, "getIterator", Vec::new(), context, values)?;
-        return foreach_bindings::with_source(iterator, context, scope, values, |iterator, context, scope, values| match values.type_tag(iterator)? {
+        let (iterator,source)=mixed_foreach_sources::method(object,"getIterator",context,values)?;
+        return foreach_bindings::with_source(iterator, context, scope, values, |iterator,context,scope,values| {
+            mixed_foreach_sources::require(source.as_ref(),context,values)?;
+            match values.type_tag(iterator)? {
             EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => execute_foreach_array_stmt(
-                iterator, key_name, value_name, body, context, scope, values,
+                iterator, source.as_ref(), key_name, value_name, body, context, scope, values,
             ),
             EVAL_TAG_OBJECT if eval_foreach_object_is_a(iterator, "Iterator", context, values)? => {
                 execute_foreach_iterator_stmt(
@@ -205,6 +217,7 @@ pub(super) fn execute_foreach_object_stmt(
                 )
             }
             _ => Err(EvalStatus::RuntimeFatal),
+            }
         });
     }
     Err(EvalStatus::RuntimeFatal)
@@ -223,14 +236,14 @@ pub(super) fn execute_foreach_iterator_stmt(
     let result = eval_method_call_result(iterator, "rewind", Vec::new(), context, values)?;
     foreach_bindings::release([result], context, values)?;
     loop {
-        let valid = eval_method_call_result(iterator, "valid", Vec::new(), context, values)?;
-        if !foreach_bindings::condition(valid, context, values)? {
+        let (valid,source)=mixed_foreach_sources::method(iterator,"valid",context,values)?;
+        if !foreach_bindings::condition(valid,source.as_ref(),context,values)? {
             return Ok(EvalControl::None);
         }
 
         foreach_bindings::bind(value_name, key_name, context, scope, values,
-            |context, values| eval_method_call_result(iterator, "current", Vec::new(), context, values),
-            |context, values| eval_method_call_result(iterator, "key", Vec::new(), context, values))?;
+            |context,values|mixed_foreach_sources::method(iterator,"current",context,values),
+            |context,values|mixed_foreach_sources::method(iterator,"key",context,values))?;
 
         match execute_statements(body, context, scope, values)? {
             EvalControl::None | EvalControl::Continue => {
