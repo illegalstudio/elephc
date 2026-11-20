@@ -42,7 +42,11 @@ use crate::codegen::{CodegenIrError, Result};
 mod instance_expr;
 pub(super) mod results;
 mod scope;
+mod selector_tables;
+mod shared_selector;
 use scope::{factory_method_visible, inherits_lexical_private_static};
+pub(in crate::codegen) use shared_selector::{emit_pending_callable_selectors, SharedCallableSelectorKey};
+use shared_selector::SelectorPolicy;
 
 const MIXED_METHOD_TAG_OFFSET: usize = 0;
 const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
@@ -169,7 +173,9 @@ pub(super) fn lower_callable_descriptor_invoke(
             "callable_descriptor_invoke",
         ),
         PhpType::Mixed | PhpType::Union(_) => {
-            if ctx.runtime_callable_candidates(callable).is_none()
+            if value_holds_only_closures(ctx, callable)? && eval_callback_context(ctx).is_none() {
+                lower_closure_union_descriptor_invoke(ctx, inst, callable, arg_mixed)
+            } else if ctx.runtime_callable_candidates(callable).is_none()
                 && super::instruction_strict_php_profile(inst) == crate::strict_php::is_enabled()
             {
                 lower_shared_mixed_descriptor_invoke(ctx, inst, callable, arg_mixed)
@@ -210,6 +216,60 @@ pub(super) fn lower_callable_descriptor_invoke(
             other
         ))),
     }
+}
+
+/// Returns whether a boxed value can only hold a Closure descriptor or null (`?Closure`).
+///
+/// Such a value never carries a function name, a callable array or an invokable object, so its
+/// invocation needs no candidate selection at all.
+fn value_holds_only_closures(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+    Ok(match ctx.raw_value_php_type(value)? {
+        PhpType::Union(members) => {
+            members.iter().any(|member| *member == PhpType::Callable)
+                && members.iter().all(|member| matches!(member, PhpType::Callable | PhpType::Void))
+        }
+        _ => false,
+    })
+}
+
+/// Invokes a boxed `Closure|null` value through its descriptor without any candidate selector.
+///
+/// Only the descriptor tag can occur besides null, so the open name, array and object ladders
+/// (and the wrapper for every builtin they link) are unnecessary. A non-descriptor value raises
+/// the same catchable `TypeError` the shared argument normalizer reports. A program with eval
+/// support keeps the general path: an eval-created Closure is an object, not a descriptor.
+fn lower_closure_union_descriptor_invoke(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, callable: ValueId, arguments: ValueId,
+) -> Result<()> {
+    let not_closure = ctx.next_label("closure_union_not_callable");
+    let done = ctx.next_label("closure_union_done");
+    let descriptor = abi::nested_call_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(callable, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // only a Closure descriptor is callable here
+            ctx.emitter.instruction(&format!("b.ne {}", not_closure));          // null (or any other tag) is not a valid callback
+            ctx.emitter.instruction(&format!("mov {}, x1", descriptor));        // keep the borrowed Closure descriptor for the invoker
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(callable, "rax")?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_CALLABLE)); // only a Closure descriptor is callable here
+            ctx.emitter.instruction(&format!("jne {}", not_closure));           // null (or any other tag) is not a valid callback
+            ctx.emitter.instruction(&format!("mov {}, rdi", descriptor));       // keep the borrowed Closure descriptor for the invoker
+        }
+    }
+    emit_descriptor_reg_invoker_call_with_mixed_arg(
+        ctx, inst, descriptor, arguments, "callable_descriptor_invoke", false,
+    )?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&not_closure);
+    emit_callable_conversion_error(
+        ctx, CallableConversionError::Type("Argument must be a valid callback"),
+    );
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Resolves an unrestricted boxed callback once per module instead of expanding every candidate.
@@ -410,8 +470,8 @@ fn lower_mixed_callable_descriptor_invoke(
 }
 
 /// Catchable error selected by a callable-conversion surface.
-#[derive(Clone, Copy)]
-enum CallableConversionError { Type(&'static str), Error(&'static str) }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::codegen) enum CallableConversionError { Type(&'static str), Error(&'static str) }
 
 /// Emits the conversion surface's PHP exception class.
 fn emit_callable_conversion_error(ctx: &mut FunctionContext<'_>, error: CallableConversionError) {
@@ -508,6 +568,10 @@ pub(in crate::codegen) fn emit_runtime_unary_callback_descriptor_value(
 }
 
 /// Implements boxed callable descriptor selection with a configurable string-name miss path.
+///
+/// Calls the module's shared selector for this policy when the site allows it (see
+/// `shared_selector`), so equivalent sites do not each expand the whole candidate inventory.
+#[allow(clippy::too_many_arguments)]
 fn emit_runtime_mixed_callable_descriptor_value_impl(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
@@ -519,6 +583,36 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     scoped: bool,
     fresh_closure: bool,
 ) -> Result<()> {
+    let policy = SelectorPolicy {
+        op_name,
+        retain_existing_descriptor,
+        string_type_error,
+        invalid_type_error,
+        arity,
+        scoped,
+        fresh_closure,
+    };
+    if shared_selector::emit_shared_selector_site(ctx, callable, policy)? {
+        return Ok(());
+    }
+    emit_inline_mixed_callable_descriptor_value(ctx, callable, policy)
+}
+
+/// Expands boxed callable descriptor selection over every candidate at this site.
+fn emit_inline_mixed_callable_descriptor_value(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    policy: SelectorPolicy<'_>,
+) -> Result<()> {
+    let SelectorPolicy {
+        op_name,
+        retain_existing_descriptor,
+        string_type_error,
+        invalid_type_error,
+        arity,
+        scoped,
+        fresh_closure,
+    } = policy;
     let instance_targets = runtime_array_instance_method_targets_with_scope(ctx, scoped);
     let invokable_targets = instance_targets
         .iter()
@@ -607,13 +701,15 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         )?;
         let selected_label = ctx.next_label("mixed_callable_value_array_done");
         let static_selected_label = ctx.next_label("mixed_callable_value_array_static_done");
-        for target in &instance_targets {
-            let next_label = ctx.next_label("mixed_callable_value_array_instance_next");
-            emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
-            emit_runtime_array_instance_descriptor_value(ctx, target)?;
-            abi::emit_jump(ctx.emitter, &selected_label);
-            ctx.emitter.label(&next_label);
-        }
+        let static_label = ctx.next_label("mixed_callable_value_array_static");
+        selector_tables::emit_instance_target_table_lookup(
+            ctx,
+            &instance_targets,
+            selector_tables::ReceiverSelector::CallableArray,
+            &selected_label,
+            &static_label,
+        )?;
+        ctx.emitter.label(&static_label);
         for case in &static_cases {
             let next_label = ctx.next_label("mixed_callable_value_array_static_next");
             emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
@@ -643,32 +739,15 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         ctx.emitter.label(object_label);
         emit_push_mixed_unbox_payload(ctx);
         let selected_label = ctx.next_label("mixed_callable_value_object_done");
-        for target in &invokable_targets {
-            let next_label = ctx.next_label("mixed_callable_value_object_next");
-            emit_branch_if_saved_receiver_class_id_mismatch(
-                ctx,
-                target.class_id,
-                MIXED_VALUE_PAYLOAD_OFFSET,
-                &next_label,
-            );
-            let receiver_ty = PhpType::Object(target.class_name.clone());
-            let template = runtime_instance_method_descriptor_template(
-                ctx,
-                &target.class_name,
-                &target.method_name,
-                &target.method_key,
-                &target.impl_class,
-                &target.sig,
-            )?;
-            emit_runtime_descriptor_with_saved_receiver_capture(
-                ctx,
-                &template.descriptor_label,
-                &receiver_ty,
-                MIXED_VALUE_PAYLOAD_OFFSET,
-            );
-            abi::emit_jump(ctx.emitter, &selected_label);
-            ctx.emitter.label(&next_label);
-        }
+        let object_miss_label = ctx.next_label("mixed_callable_value_object_miss");
+        selector_tables::emit_instance_target_table_lookup(
+            ctx,
+            &invokable_targets,
+            selector_tables::ReceiverSelector::InvokableObject,
+            &selected_label,
+            &object_miss_label,
+        )?;
+        ctx.emitter.label(&object_miss_label);
         if eval_fallback_slot.is_some() {
             abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
             abi::emit_jump(ctx.emitter, &fatal_label);
@@ -685,7 +764,9 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     ctx.emitter.label(&fatal_label);
     if let Some(slot) = eval_fallback_slot {
         emit_eval_closure_descriptor_fallback(ctx, callable, slot, &done_label)?;
-        if ctx.declared_callable_candidates.is_some() && invalid_type_error.is_none() {
+        // A declared `callable` reports an unlinked builtin with the named Error even on a
+        // conversion surface (`Closure::fromCallable()`) whose other misses raise TypeError.
+        if ctx.declared_callable_candidates.is_some() {
             emit_unlinked_declared_callable_builtin_error_from_mixed(ctx, callable)?;
         }
     }
@@ -1315,26 +1396,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
 
     let done_label = ctx.next_label(&format!("{}_mixed_string_descriptor_done", op_name));
     let miss_label = ctx.next_label(&format!("{}_mixed_string_descriptor_missing", op_name));
-    let selector = callable_dispatch::RuntimeCallableSelector::StringNameStack {
-        ptr_offset: 0,
-        len_offset: 8,
-        call_reg: abi::int_result_reg(ctx.emitter),
-    };
-    for case in &cases {
-        let next_case = ctx.next_label("mixed_string_descriptor_next");
-        let matched_label = ctx.next_label("mixed_string_descriptor_match");
-        callable_dispatch::emit_branch_if_callable_case_mismatch(
-            &selector,
-            case,
-            &next_case,
-            ctx.emitter,
-            &matched_label,
-            ctx.data,
-        );
-        abi::emit_jump(ctx.emitter, &done_label);
-        ctx.emitter.label(&next_case);
-    }
-    abi::emit_jump(ctx.emitter, &miss_label);
+    selector_tables::emit_string_case_table_lookup(ctx, &cases, &done_label, &miss_label);
 
     ctx.emitter.label(&miss_label);
     // A function entered from `eval()` (no eval context of its own) lets the eval frame resolve
@@ -1342,7 +1404,6 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     // context only because it calls `eval()` checks first: that context resolves every builtin,
     // and only an eval-only function (which `is_callable` of the native table refuses) reaches it.
     if ctx.declared_callable_candidates.is_some()
-        && type_error.is_none()
         && (eval_fallback.is_none() || own_eval_context)
     {
         emit_unlinked_declared_callable_builtin_error(ctx);

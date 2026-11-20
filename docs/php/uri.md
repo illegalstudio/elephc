@@ -121,7 +121,7 @@ var_export($uri);
 
 - The php-src `ext/uri` compliance cases are embedded as a Rust table in
   `tests/codegen/uri_php_src/cases.rs` and run by
-  `cargo test --test codegen_tests test_uri_php_src_bundle`.
+  `cargo test --test codegen_tests_ext test_uri_php_src_bundle`.
 - The `zend_test`-driven cases (`100`–`102`) exercise php-src's test-only
   `zend_test_uri_parser()` helper. The Rust harness supplies an equivalent helper
   built on the public `Uri\*` classes, so those cases validate the same parsing,
@@ -129,7 +129,7 @@ var_export($uri);
   `zend_test` extension.
 - The OOM cases run with their recorded `memory_limit` heap ceiling and the fatal
   message matches php-src's `Allowed memory size of N bytes exhausted …` form. All 332
-  embedded cases pass, including the twelve OOM cases.
+  embedded cases pass, including the eleven OOM cases.
 - The URI implementations retain one path-segment node per segment (an estimated 32-byte
   node) plus copied text for non-empty segments, and the complete path string itself.
   Because that storage lives inside the Rust bridge rather than in the elephc heap, the

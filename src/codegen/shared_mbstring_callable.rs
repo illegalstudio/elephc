@@ -20,6 +20,8 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSectio
     super::shared_helper::emit_shared_helper(module, emitter, data, shared, false, label,
         PhpType::Callable, "resolve a native replacement callback", |ctx| {
             let value = super::shared_helper::helper_value();
+            // Already one module-level body: expand here rather than trampoline to a selector.
+            ctx.inline_callable_selectors = true;
             abi::emit_reserve_temporary_stack(ctx.emitter, 16);
             ctx.placement.slot_of.insert(value, 32);
             ctx.store_int_result_value(value)?;

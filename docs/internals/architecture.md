@@ -358,6 +358,8 @@ src/
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── magic_constants/           File/scope/trait magic-constant walkers
 ├── conditional/               Build-time `ifdef` pass
+├── goto_lowering.rs           Per-file `goto`/label validation and rewrite into structured loops and `continue N`
+├── goto_lowering/             Jump analysis, dispatch-loop planning, rewriting, and unit tests
 ├── strict_php.rs              `--strict-php` mode state and audit entry point
 ├── strict_php/                Strict-mode AST audit pass rejecting elephc-only syntax extensions
 ├── autoload/                  Composer/SPL AOT autoload indexing, rule interpretation, and file insertion
@@ -401,6 +403,12 @@ src/
 ├── var_export_prelude/        var_export prelude usage detection
 ├── xml_prelude.rs             Usage-gated XMLParser, XMLWriter, and SimpleXML declaration injection
 ├── xml_prelude/               XML usage detection and parser/writer prelude declarations
+├── tidy_prelude.rs            Usage-gated `tidy`/`tidyNode` and `tidy_*` declaration injection over the elephc_tidy bridge
+├── tidy_prelude/              Tidy usage detection, built class/function declarations, and fragments
+├── uri_prelude/               `Uri\Rfc3986\Uri`, `Uri\WhatWg\Url`, and related declarations over the elephc_uri bridge
+├── locale_prelude.rs          libc-backed `setlocale()` and `nl_langinfo()` declarations when referenced
+├── pcre_prelude.rs            `preg_grep()` declaration over `preg_split()`/`preg_match()` when referenced
+├── apm_prelude.rs             Transaction boundaries for `--apm-transaction` and Symfony Messenger in transaction-monitoring builds
 ├── simplexml_prelude.rs       Cached synthetic AST declarations for the SimpleXML surface
 ├── simplexml_prelude/         Built SimpleXML classes, functions, and native bridge declarations
 ├── dom_html_prelude.rs        Pay-for-use DOM HTML injection before name resolution and after autoload
@@ -555,8 +563,8 @@ src/
 │       ├── resource_ids.rs    Runtime resource-kind identifiers shared by cleanup paths
 │       ├── round_mode.rs      PHP rounding-mode constants used by runtime helpers
 │       ├── sysv_call_alignment.rs x86_64 SysV nested-call stack-alignment helpers
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (116 top-level Rust files + 69 nested Rust helpers)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (236 top-level Rust files + 26 nested target/debug/test helpers)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (117 top-level Rust files + 69 nested Rust helpers)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (235 top-level Rust files + 26 nested target/debug/test helpers)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (7 files)
 │       ├── compare/           Loose/strict comparison and truthiness helpers (5 top-level Rust files + 1 nested object-conversion helper)
 │       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (132 top-level Rust files + 2 nested response-metadata helpers)
@@ -567,7 +575,7 @@ src/
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (24 top-level Rust files + 3 nested cleanup helpers)
 │       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (52 top-level Rust files + 65 nested Rust files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (53 top-level Rust files + 65 nested Rust files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (5 top-level files) + `api/` (4 target-aware public API helper files)
 │       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (22 files)
@@ -607,6 +615,7 @@ crates/
 ├── elephc-tokenizer-engine/   Shared byte-preserving PHP tokenizer and parse validation
 ├── elephc-tokenizer/          Standalone tokenizer C bridge over the shared engine
 ├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
+├── elephc-uri/                PHP 8.5 `ext/uri` bridge for RFC 3986 and WHATWG URL values
 ├── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation
 ├── elephc-zend/               PHP extension ABI implementation for hosted PECL/PIE extensions
 └── elephc-xml/                XML, XMLWriter, and SimpleXML bridge over the catalog's static libxml2

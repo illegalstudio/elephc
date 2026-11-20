@@ -192,6 +192,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::DeclaredCallableNames => {
             let _ = write!(out, " declared_callable_names");
         }
+        Immediate::DeclaredCallableFactory(dynamic) => {
+            let _ = write!(out, " declared_callable_factory {}", dynamic);
+        }
         Immediate::Data(id) => {
             let _ = write!(out, " data[{}]", id.as_raw());
         }
