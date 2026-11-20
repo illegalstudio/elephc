@@ -271,21 +271,7 @@ fn lower_heap_cell_has_other_owner(ctx: &mut FunctionContext<'_>, inst: &Instruc
     ctx.load_value_to_result(expect_operand(inst, 0)?)?;
     let done = ctx.next_label("mixed_cell_other_owner_done");
     // -- distinguish attached cell ownership from the sole pending write pin --
-    match ctx.emitter.target.arch {
-        crate::codegen::platform::Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz x0, {done}"));                // an absent cell cannot have another owner
-            ctx.emitter.instruction("ldr w9, [x0, #-12]");                      // read the uniform heap reference count
-            ctx.emitter.instruction("cmp w9, #1");                              // the pending write owns one retained cell reference
-            ctx.emitter.instruction("cset x0, hi");                             // another owner keeps the selected parent attached
-        }
-        crate::codegen::platform::Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");                           // an absent cell cannot have another owner
-            ctx.emitter.instruction(&format!("jz {done}"));                     // retain the zero result for an absent cell
-            ctx.emitter.instruction("cmp DWORD PTR [rax - 12], 1");             // compare the uniform heap reference count with the pending pin
-            ctx.emitter.instruction("seta al");                                 // another owner keeps the selected parent attached
-            ctx.emitter.instruction("movzx eax, al");                           // materialize the complete PHP boolean result
-        }
-    }
+    elephc_memoir::heap_refcount::emit_has_other_owner(ctx.emitter, &done);
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
@@ -556,9 +542,7 @@ fn separate_shared_attached_cell(ctx: &mut FunctionContext<'_>, cell: crate::ir:
     match ctx.emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbz x0, {done}"));                // an absent cell has nothing to separate
-            ctx.emitter.instruction("ldr w9, [x0, #-12]");                      // read the cell refcount from the uniform heap header
-            ctx.emitter.instruction("cmp w9, #1");                              // is this zval shared with another variable?
-            ctx.emitter.instruction(&format!("b.ls {done}"));                   // a sole owner may be promoted in place
+            elephc_memoir::heap_refcount::emit_branch_if_at_most_one_owner(ctx.emitter, &done);
             abi::emit_push_reg(ctx.emitter, "x0");                              // keep the replaced cell addressable for its release
             ctx.emitter.instruction("ldr x2, [x0, #16]");                       // copy the shared cell high payload word
             ctx.emitter.instruction("ldr x1, [x0, #8]");                        // copy the shared cell low payload word
@@ -567,9 +551,7 @@ fn separate_shared_attached_cell(ctx: &mut FunctionContext<'_>, cell: crate::ir:
         crate::codegen::platform::Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // an absent cell has nothing to separate
             ctx.emitter.instruction(&format!("jz {done}"));                     // keep the promotion on its ordinary path
-            ctx.emitter.instruction("mov r10d, DWORD PTR [rax - 12]");          // read the cell refcount from the uniform heap header
-            ctx.emitter.instruction("cmp r10d, 1");                             // is this zval shared with another variable?
-            ctx.emitter.instruction(&format!("jbe {done}"));                    // a sole owner may be promoted in place
+            elephc_memoir::heap_refcount::emit_branch_if_at_most_one_owner(ctx.emitter, &done);
             abi::emit_push_reg(ctx.emitter, "rax");                             // keep the replaced cell addressable for its release
             ctx.emitter.instruction("mov rsi, QWORD PTR [rax + 16]");           // copy the shared cell high payload word
             ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");            // copy the shared cell low payload word

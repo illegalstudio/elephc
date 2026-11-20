@@ -58,11 +58,7 @@ pub fn emit_array_column_boxed(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, arg0, 8);
     abi::emit_load_int_immediate(emitter, arg1, 8);
     abi::emit_call_label(emitter, "__rt_array_new");
-    ins(emitter, "ldr x9, [x0, #-8]", "mov r10, QWORD PTR [rax - 8]");
-    ins(emitter, "mov x10, #0x80ff", "mov r11, 0xffffffff000080ff");
-    ins(emitter, "and x9, x9, x10", "and r10, r11");
-    ins(emitter, "orr x9, x9, #0x700", "or r10, 0x700");
-    ins(emitter, "str x9, [x0, #-8]", "mov QWORD PTR [rax - 8], r10");
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, elephc_memoir::ValueTag::new(7));
     abi::emit_store_to_sp(emitter, result, OUTPUT);
     abi::emit_load_int_immediate(emitter, result, 0);
     abi::emit_store_to_sp(emitter, result, CURSOR);

@@ -43039,7 +43039,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",
@@ -61624,7 +61624,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",
@@ -138456,7 +138456,12 @@
         "reason": "typed backend operation has no runtime-selected wrapper contract"
       },
       "effects": {
-        "kind": "shared"
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "alloc_concat",
+          "may_fatal"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -138464,7 +138469,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "independent"
       },
       "requirements": {
         "kind": "static",

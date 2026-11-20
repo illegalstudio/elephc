@@ -98,3 +98,22 @@ fn emit_hash_ensure_unique_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.label("__rt_hash_ensure_unique_done");
     emitter.instruction("ret");                                                 // return to the caller with rax holding the unique associative-array pointer
 }
+
+/// Branches for a hash with at most one logical owner, excluding non-owning lifetime pins.
+pub fn emit_branch_if_at_most_one_logical_owner(emitter: &mut impl Emitter, done: &str) {
+    match emitter.arch() {
+        crate::Arch::AArch64 => {
+            emitter.instruction("ldr w9, [x0, #-12]");                          // count logical PHP owners before COW can consume this one
+            emitter.instruction(&format!("ldr x10, [x0, #{PINS_OFFSET}]"));     // lifetime pins do not require copy-on-write separation
+            emitter.instruction("sub x9, x9, x10");                             // use the same logical owner count as hash_ensure_unique
+            emitter.instruction("cmp x9, #1");                                  // a unique hash keeps its header even if its entries grow
+            emitter.instruction(&format!("b.ls {done}"));                       // unique ordinary writes need no preliminary hash lookup
+        }
+        crate::Arch::X86_64 => {
+            emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");              // count logical PHP owners before COW can consume this one
+            emitter.instruction(&format!("sub r10, QWORD PTR [rdi + {PINS_OFFSET}]")); // lifetime pins do not require copy-on-write separation
+            emitter.instruction("cmp r10, 1");                                  // a unique hash keeps its header even if its entries grow
+            emitter.instruction(&format!("jbe {done}"));                        // unique ordinary writes need no preliminary hash lookup
+        }
+    }
+}

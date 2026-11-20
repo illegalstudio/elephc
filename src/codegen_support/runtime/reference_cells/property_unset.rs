@@ -9,7 +9,6 @@
 //! - Reentrant destructors may recreate the property without a later overwrite.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-use crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 
 /// Addresses an eligible object slot and invokes the shared native detach operation.
 pub(crate) fn emit_owned_property_unset(emitter: &mut Emitter, base: &str, offset: usize) {
@@ -29,31 +28,11 @@ pub(crate) fn emit_owned_property_unset(emitter: &mut Emitter, base: &str, offse
 /// Replaces the object's cell owner with uninitialized storage, then retires the old owner.
 pub(super) fn emit_property_unset(emitter: &mut Emitter, native_validation: bool) {
     let result = abi::int_result_reg(emitter);
-    let scratch = abi::secondary_scratch_reg(emitter);
     emitter.blank();
     emitter.label_global("__rt_reference_property_unset");
     abi::emit_frame_prologue(emitter, 48);
     abi::store_at_offset(emitter, result, 8);
-    abi::emit_load_from_address(emitter, scratch, result, 0);
-    abi::store_at_offset(emitter, scratch, 16);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x0, [{scratch}, #-8]"));          // read the old managed cell's payload descriptor
-            emitter.instruction("ubfx x0, x0, #8, #7");                         // preserve the declared native payload shape
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("mov rdi, QWORD PTR [{scratch} - 8]")); // read the old managed cell's payload descriptor
-            emitter.instruction("shr rdi, 8");                                  // position the payload tag for cell allocation
-            emitter.instruction("and edi, 127");                                // exclude heap-kind and collector flag bits
-        }
-    }
-    abi::emit_call_label(emitter, "__rt_reference_cell_new");
-    abi::emit_load_int_immediate(emitter, scratch, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-    abi::emit_store_to_address(emitter, scratch, result, 0);
-    abi::emit_store_zero_to_address(emitter, result, 8);
-    abi::load_at_offset(emitter, scratch, 8);
-    abi::emit_store_to_address(emitter, result, scratch, 0);
-    abi::emit_store_zero_to_address(emitter, scratch, 8);
+    elephc_memoir::reference_cells::property::emit_replace_with_uninitialized(emitter);
     if native_validation {
         abi::store_at_offset(emitter, result, 24);
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);

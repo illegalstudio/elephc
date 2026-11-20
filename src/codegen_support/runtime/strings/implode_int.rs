@@ -43,23 +43,7 @@ pub fn emit_implode_int(emitter: &mut Emitter) {
     emitter.instruction("add x20, x3, #24");                                    // address the packed integer payload base
     emitter.instruction("ldr x21, [x3]");                                       // load the packed element count once
     emitter.instruction("mov x22, xzr");                                        // start at the first element
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer offset
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x12", emitter.concat_capacity as i64);
-    emitter.instruction("subs x12, x12, x10");                                  // room left in the shared concat buffer
-    emitter.instruction("b.lo __rt_implode_int_fallback");                      // an over-full scratch join uses the growable body
-    emitter.instruction("cmp x24, #64");                                        // bound the separator length used in the capacity check
-    emitter.instruction("b.hi __rt_implode_int_fallback");                      // unusually long glue uses the growable body
-    emitter.instruction("add x13, x24, #20");                                   // worst-case bytes per element: glue plus an int64
-    emitter.instruction("mul x14, x21, x13");                                   // total worst-case output size
-    emitter.instruction("umulh x15, x21, x13");                                 // detect a size multiplication overflow
-    emitter.instruction("cbnz x15, __rt_implode_int_fallback");                 // an unrepresentable bound uses the growable body
-    emitter.instruction("cmp x14, x12");                                        // does the worst-case output fit the remaining capacity?
-    emitter.instruction("b.hi __rt_implode_int_fallback");                      // larger joins use the growable body
-    emitter.instruction("str x9, [sp, #32]");                                   // save the offset variable address for finalization
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x11");
-    emitter.instruction("add x19, x11, x10");                                   // compute the destination cursor
-    emitter.instruction("str x19, [sp, #24]");                                  // save the result start pointer
+    elephc_memoir::strings::implode_buffer::emit_open_integer_aarch64(emitter);
 
     // -- join each integer, keeping the whole loop state in registers --
     emitter.label("__rt_implode_int_loop");
@@ -124,10 +108,7 @@ pub fn emit_implode_int(emitter: &mut Emitter) {
     emitter.label("__rt_implode_int_done");
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the result start pointer
     emitter.instruction("sub x2, x19, x1");                                     // result length = destination end - start
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the offset variable address
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer offset
-    emitter.instruction("add x10, x10, x2");                                    // advance it by the joined string length
-    emitter.instruction("str x10, [x9]");                                       // publish the updated concat-buffer offset
+    emitter.instruction("bl __rt_concat_publish");                              // commit the actual bounded join result
     emitter.instruction("ldp x23, x24, [sp, #96]");                             // restore the glue pointer and length
     emitter.instruction("ldp x21, x22, [sp, #80]");                             // restore the element count and index
     emitter.instruction("ldp x19, x20, [sp, #64]");                             // restore the destination and payload base
@@ -163,25 +144,7 @@ fn emit_implode_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the glue string pointer across integer conversion and copy helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the glue string length across integer conversion and copy helper calls
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the indexed-array pointer across integer conversion and copy helper calls
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "r8");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before materializing the implode output start pointer
-    emitter.instruction("mov r11, QWORD PTR [rdx]");                            // load the element count for the capacity check
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // load the separator length for the capacity check
-    emitter.instruction("cmp rcx, 64");                                         // bound the separator length used in the capacity check
-    emitter.instruction("ja __rt_implode_int_fallback_x86");                    // unusually long glue uses the growable body
-    emitter.instruction("add rcx, 20");                                         // worst-case bytes per element: glue plus an int64
-    emitter.instruction("mov rax, r11");                                        // copy the element count for the bound multiplication
-    emitter.instruction("imul rax, rcx");                                       // total worst-case output size
-    emitter.instruction("jo __rt_implode_int_fallback_x86");                    // an unrepresentable bound uses the growable body
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "rcx", emitter.concat_capacity as i64);
-    emitter.instruction("sub rcx, r9");                                         // room left in the shared concat buffer
-    emitter.instruction("jb __rt_implode_int_fallback_x86");                    // an over-full scratch join uses the growable body
-    emitter.instruction("cmp rax, rcx");                                        // does the worst-case output fit the remaining capacity?
-    emitter.instruction("ja __rt_implode_int_fallback_x86");                    // larger joins use the growable body
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r10");
-    emitter.instruction("lea r10, [r10 + r9]");                                 // compute the current concat-buffer destination pointer for the integer implode output
-    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the implode result start pointer so the final string result can reference the copied bytes
-    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the current concat-buffer destination cursor across glue emission and integer string copies
+    elephc_memoir::strings::implode_buffer::emit_open_integer_x86_64(emitter);
     emitter.instruction("mov r11, QWORD PTR [rdx]");                            // load the indexed-array logical length once before entering the integer implode loop
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the indexed-array logical length for the loop termination check
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // initialize the indexed-array loop cursor to the first integer element
@@ -277,10 +240,7 @@ fn emit_implode_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the implode result start pointer before computing the joined string length
     emitter.instruction("mov rdx, r10");                                        // copy the final concat-buffer destination cursor before subtracting the result start pointer
     emitter.instruction("sub rdx, rax");                                        // compute the joined string length as dest_end - dest_start
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "r8");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // reload the current concat-buffer write offset after the integer-to-string helper scratch allocations
-    emitter.instruction("add r9, rdx");                                         // advance the concat-buffer write offset by the joined string length that this integer implode call produced
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // persist the updated concat-buffer write offset after writing the integer implode output bytes
+    emitter.instruction("call __rt_concat_publish");                            // commit the actual bounded join result
     emitter.instruction("add rsp, 112");                                        // release the integer-implode frame before returning the joined string
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the joined string
     emitter.instruction("ret");                                                 // return the joined string in the standard x86_64 string result registers

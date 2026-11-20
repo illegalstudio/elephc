@@ -22,13 +22,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("cmovb rdi, r10");                                      // use max(requested, 4) as the runtime allocation capacity
     emitter.instruction("mov rsi, 8");                                          // Mixed indexed arrays store boxed-cell pointers
     emitter.instruction("call __rt_array_new");                                 // allocate indexed-array storage for boxed Mixed slots
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the packed indexed-array heap kind word
-    emitter.instruction("mov r11, 0xffffffff000080ff");                         // preserve heap magic, indexed-array kind, and COW metadata
-    emitter.instruction("and r10, r11");                                        // clear the default scalar value_type bits
-    emitter.instruction("mov r11, 7");                                          // runtime value_type 7 = boxed Mixed
-    emitter.instruction("shl r11, 8");                                          // move the value_type tag into the packed kind word
-    emitter.instruction("or r10, r11");                                         // stamp the array as carrying boxed Mixed slots
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // persist the updated indexed-array metadata
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, ValueTag::new(7));
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the owned array pointer while allocating the Mixed box
     emit_owned_pointer_from_slot(emitter, ValueTag::new(4), "QWORD PTR [rbp - 8]");
     emitter.instruction("add rsp, 16");                                         // release the array-new wrapper slots
@@ -90,13 +84,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("cmovb rdi, r10");                                      // use max(requested, 4) as the runtime allocation capacity
     emitter.instruction("mov rsi, 8");                                          // direct object arrays store one object pointer per slot
     emitter.instruction("call __rt_array_new");                                 // allocate indexed-array storage for direct object slots
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the packed indexed-array heap kind word
-    emitter.instruction("mov r11, 0xffffffff000080ff");                         // preserve heap magic, indexed-array kind, and COW metadata
-    emitter.instruction("and r10, r11");                                        // clear the default scalar value_type bits
-    emitter.instruction("mov r11, 6");                                          // runtime value_type 6 = object
-    emitter.instruction("shl r11, 8");                                          // move the value_type tag into the packed kind word
-    emitter.instruction("or r10, r11");                                         // stamp the array as carrying direct object slots
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // persist the updated indexed-array metadata
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, ValueTag::new(6));
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the owned object-array pointer while boxing it
     emit_owned_pointer_from_slot(emitter, ValueTag::new(4), "QWORD PTR [rbp - 8]");
     emitter.instruction("add rsp, 16");                                         // release the object-array-new wrapper slots

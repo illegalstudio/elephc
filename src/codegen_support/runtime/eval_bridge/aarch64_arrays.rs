@@ -22,13 +22,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("csel x0, x0, x9, hs");                                 // use max(requested, 4) as the runtime allocation capacity
     emitter.instruction("mov x1, #8");                                          // Mixed indexed arrays store boxed-cell pointers
     emitter.instruction("bl __rt_array_new");                                   // allocate indexed-array storage for boxed Mixed slots
-    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the packed indexed-array heap kind word
-    emitter.instruction("mov x12, #0x80ff");                                    // preserve indexed-array kind and persistent COW metadata
-    emitter.instruction("and x10, x10, x12");                                   // clear the default scalar value_type bits
-    emitter.instruction("mov x11, #7");                                         // runtime value_type 7 = boxed Mixed
-    emitter.instruction("lsl x11, x11, #8");                                    // move the value_type tag into the packed kind word
-    emitter.instruction("orr x10, x10, x11");                                   // stamp the array as carrying boxed Mixed slots
-    emitter.instruction("str x10, [x0, #-8]");                                  // persist the updated indexed-array metadata
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, ValueTag::new(7));
     emitter.instruction("str x0, [sp, #0]");                                    // save the owned array pointer while allocating the Mixed box
     emit_owned_pointer_from_slot(emitter, ValueTag::new(4), "[sp, #0]");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
@@ -87,13 +81,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("csel x0, x0, x9, hs");                                 // use max(requested, 4) as the runtime allocation capacity
     emitter.instruction("mov x1, #8");                                          // direct object arrays store one object pointer per slot
     emitter.instruction("bl __rt_array_new");                                   // allocate indexed-array storage for direct object slots
-    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the packed indexed-array heap kind word
-    emitter.instruction("mov x12, #0x80ff");                                    // preserve indexed-array kind and persistent COW metadata
-    emitter.instruction("and x10, x10, x12");                                   // clear the default scalar value_type bits
-    emitter.instruction("mov x11, #6");                                         // runtime value_type 6 = object
-    emitter.instruction("lsl x11, x11, #8");                                    // move the value_type tag into the packed kind word
-    emitter.instruction("orr x10, x10, x11");                                   // stamp the array as carrying direct object slots
-    emitter.instruction("str x10, [x0, #-8]");                                  // persist the updated indexed-array metadata
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, ValueTag::new(6));
     emitter.instruction("str x0, [sp, #0]");                                    // save the owned object-array pointer while boxing it
     emit_owned_pointer_from_slot(emitter, ValueTag::new(4), "[sp, #0]");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address

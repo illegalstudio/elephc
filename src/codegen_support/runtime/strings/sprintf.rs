@@ -71,7 +71,6 @@ pub(super) const CONV_SCRATCH_CAP: u32 = 512;
 /// cursor in `_concat_buf`, `x24` = result start, `x25` = `_concat_off` address,
 /// `x26` = argument count, `x27` = optional eval context.
 pub fn emit_sprintf(emitter: &mut Emitter) {
-    let cap = emitter.concat_capacity;
     if emitter.target.arch == Arch::X86_64 {
         emit_sprintf_linux_x86_64(emitter);
         return;
@@ -118,14 +117,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("add x22, sp, #704");                                   // argument record base (just past this frame)
 
     // -- set up the concat_buf destination and its hard write limit --
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x25");
-    emitter.instruction("ldr x8, [x25]");                                       // current concat-buffer write offset
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x7");
-    emitter.instruction("add x23, x7, x8");                                     // write cursor = buffer base + offset
-    emitter.instruction("mov x24, x23");                                        // remember where this result starts
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x9", cap as i64); // total concat-buffer capacity in bytes
-    emitter.instruction("add x9, x7, x9");                                      // one-past-the-end address of the concat buffer
-    emitter.instruction("str x9, [sp, #144]");                                  // publish the hard write limit for every copy below
+    elephc_memoir::strings::format_buffer::emit_open_aarch64(emitter);
     emitter.instruction("str xzr, [sp, #152]");                                 // no formatter-owned temporary string is live
 
     // ================================================================
@@ -137,9 +129,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("sub x20, x20, #1");                                    // account for the consumed format byte
     emitter.instruction("cmp w12, #37");                                        // is it '%'?
     emitter.instruction("b.eq __rt_sprintf_fmt");                               // yes → parse a conversion specifier
-    emitter.instruction("ldr x9, [sp, #144]");                                  // reload the concat-buffer write limit
-    emitter.instruction("cmp x23, x9");                                         // would this literal byte land outside the arena?
-    emitter.instruction("b.hs __rt_sprintf_ofatal");                            // yes → controlled fatal instead of an overrun
+    elephc_memoir::strings::format_buffer::emit_require_literal_room(emitter, "__rt_sprintf_ofatal");
     emitter.instruction("strb w12, [x23], #1");                                 // copy the literal byte to the result
     emitter.instruction("b __rt_sprintf_loop");                                 // continue scanning
 
@@ -150,9 +140,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_sprintf_spec");                              // no → parse a real specifier
     emitter.instruction("add x19, x19, #1");                                    // consume the second '%'
     emitter.instruction("sub x20, x20, #1");                                    // account for the consumed byte
-    emitter.instruction("ldr x9, [sp, #144]");                                  // reload the concat-buffer write limit
-    emitter.instruction("cmp x23, x9");                                         // would the literal '%' land outside the arena?
-    emitter.instruction("b.hs __rt_sprintf_ofatal");                            // yes → controlled fatal instead of an overrun
+    elephc_memoir::strings::format_buffer::emit_require_literal_room(emitter, "__rt_sprintf_ofatal");
     emitter.instruction("strb w12, [x23], #1");                                 // emit the literal '%'
     emitter.instruction("b __rt_sprintf_loop");                                 // continue scanning
 
@@ -176,10 +164,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x23, x24");                                    // result byte length
 
     // -- update concat_off --
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x8");
-    emitter.instruction("sub x8, x23, x8");                                     // derive the absolute cursor after nested concat-producing conversions
-    emitter.instruction("str x8, [x25]");                                       // publish the exact new write offset without double-counting
-
+    elephc_memoir::strings::format_buffer::emit_finish_aarch64(emitter);
     // -- prepare to pop the caller's packed argument records --
     emitter.instruction("mov x0, x26");                                         // packed argument record count
     emitter.instruction("lsl x0, x0, #4");                                      // records are 16 bytes each
@@ -460,9 +445,7 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.instruction("b __rt_sprintf_t_int");                                // format through the integer path
 
     emitter.label("__rt_sprintf_str_mixed");
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x9");
-    emitter.instruction("sub x10, x23, x9");                                    // publish bytes already written before a nested __toString call
-    emitter.instruction("str x10, [x25]");                                      // make nested concat users start after the partial sprintf result
+    elephc_memoir::strings::format_buffer::emit_partial_aarch64(emitter);
     emitter.instruction("mov x0, x5");                                          // pass the deferred record tag
     emitter.instruction("mov x1, x3");                                          // pass the preserved record payload
     emitter.instruction("mov x2, x27");                                         // pass the optional eval context
@@ -814,10 +797,7 @@ fn emit_pad_and_copy(emitter: &mut Emitter) {
     emitter.instruction("sub x11, x5, x4");                                     // padding = width - body length
     emitter.label("__rt_sprintf_emit_nopad");
     emitter.instruction("add x13, x4, x11");                                    // total bytes this conversion emits
-    emitter.instruction("add x13, x13, x23");                                   // address just past the emitted bytes
-    emitter.instruction("ldr x15, [sp, #144]");                                 // concat-buffer write limit
-    emitter.instruction("cmp x13, x15");                                        // would the conversion leave the arena?
-    emitter.instruction("b.hi __rt_sprintf_ofatal");                            // yes → controlled fatal instead of an overrun
+    elephc_memoir::strings::format_buffer::emit_require_field_room(emitter, "__rt_sprintf_ofatal");
     emitter.instruction("mov x15, x13");                                        // preserve the end of the complete padded output range
     emitter.instruction("ldr x10, [sp, #112]");                                 // parsed flags
     emitter.instruction("mov x13, x23");                                        // default final body destination for a left-aligned field

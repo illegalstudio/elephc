@@ -21,10 +21,8 @@
 //! - The carry stops at the first non-alphanumeric byte, so `"a-"++` is `"a-"` while
 //!   `"-a"++` is `"-b"`. Bytes are compared as raw ASCII: this is byte-oriented exactly
 //!   like php-src, so multi-byte characters are never carried into.
-//! - The carried result is built in the shared `_concat_buf` scratch (one spare byte in
-//!   front for the `z`→`aa` growth) and immediately handed to `__rt_mixed_from_value`,
-//!   which persists it into owned heap storage; the scratch offset is deliberately NOT
-//!   advanced because the bytes do not outlive that call.
+//! - The carry uses an unpublished Memoir reservation with one spare prefix byte.
+//!   Boxing owns the finished slice before the reservation is discarded.
 //! - The numeric classification is `__rt_php_num_scan`'s fully-numeric flag, so it matches
 //!   `is_numeric()` byte for byte (`" 5"` and `"5 "` are numeric, `"0x1A"` and `"1_0"` are
 //!   not, and therefore carry alphanumerically like PHP).
@@ -158,10 +156,9 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the delta to tell the two empty-string rules apart
     emitter.instruction("cmp x3, #0");                                          // is this a decrement of the empty string?
     emitter.instruction("b.lt __rt_sid_empty_dec");                             // decrementing the empty string yields PHP's int(-1)
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x9");
-    emitter.instruction("mov w10, #49");                                        // ASCII '1' is the whole result of incrementing the empty string
-    emitter.instruction("strb w10, [x9]");                                      // materialize the one-byte result in the shared scratch buffer
-    emitter.instruction("mov x1, x9");                                          // pass the scratch pointer as the boxing helper's string payload
+    emitter.instruction("mov w10, #49");                                        // ASCII '1' is the whole result
+    emitter.instruction("strb w10, [sp, #40]");                                 // stage the byte in the current helper frame
+    emitter.instruction("add x1, sp, #40");                                     // pass the frame byte to the boxing helper
     emitter.instruction("mov x2, #1");                                          // the incremented empty string is exactly one byte long
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
     emitter.instruction("bl __rt_mixed_from_value");                            // persist the one-byte result and box it for the caller
@@ -186,11 +183,10 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
 
     // -- copy the operand into scratch, leaving one spare byte for a 'z' -> 'aa' growth --
     emitter.label("__rt_sid_carry");
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x6");
-    emitter.instruction("ldr x8, [x6]");                                        // load the current shared scratch write offset
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x7");
-    emitter.instruction("add x9, x7, x8");                                      // compute the scratch cursor for this result
-    emitter.instruction("add x9, x9, #16");                                     // keep a header-sized gap so the heap-kind probe never reads before the buffer
+    elephc_memoir::strings::staged_concat::emit_reserve_with_prefix(
+        emitter, 8, 40, "__rt_sid_reserve_ready",
+    );
+    emitter.instruction("mov x9, x0");                                          // keep the reservation base for prefix insertion
     emitter.instruction("ldr x10, [sp, #0]");                                   // x10 = source cursor over the operand string
     emitter.instruction("ldr x11, [sp, #8]");                                   // x11 = the operand string length
     emitter.instruction("add x12, x9, #1");                                     // x12 = destination cursor, one byte past the growth slot
@@ -263,17 +259,15 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.label("__rt_sid_stop");
     emitter.instruction("add x1, x9, #1");                                      // the result starts at the copy, leaving the growth slot unused
     emitter.instruction("mov x2, x11");                                         // an absorbed carry keeps the original length
-    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
-    emitter.instruction("bl __rt_mixed_from_value");                            // persist the carried result and box it for the caller
-    emitter.instruction("b __rt_sid_return");                                   // share the epilogue with every other result path
+    emitter.instruction("b __rt_sid_stop_box");                                 // share the boxing and reservation retirement
 
     emitter.label("__rt_sid_carry_escaped");
     emitter.instruction("ldr x15, [sp, #32]");                                  // reload the prefix byte chosen by the last wrap
     emitter.instruction("strb w15, [x9]");                                      // write the prefix into the reserved growth slot
     emitter.instruction("mov x1, x9");                                          // the grown result starts one byte earlier
     emitter.instruction("add x2, x11, #1");                                     // an escaped carry makes the result one byte longer
-    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
-    emitter.instruction("bl __rt_mixed_from_value");                            // persist the grown result and box it for the caller
+    emitter.label("__rt_sid_stop_box");
+    elephc_memoir::strings::staged_concat::emit_box_and_discard_reservation(emitter, 40);
 
     emitter.label("__rt_sid_return");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame pointer and return address
@@ -397,9 +391,8 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_sid_empty_x86");
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // is this a decrement of the empty string?
     emitter.instruction("jl __rt_sid_empty_dec_x86");                           // decrementing the empty string yields PHP's int(-1)
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r8");
-    emitter.instruction("mov BYTE PTR [r8], 49");                               // ASCII '1' is the whole result of incrementing the empty string
-    emitter.instruction("mov rdi, r8");                                         // pass the scratch pointer as the boxing helper's string payload
+    emitter.instruction("mov BYTE PTR [rbp - 48], 49");                         // stage ASCII '1' in the helper frame
+    emitter.instruction("lea rdi, [rbp - 48]");                                 // pass the frame byte to the boxing helper
     emitter.instruction("mov rsi, 1");                                          // the incremented empty string is exactly one byte long
     emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
     emitter.instruction("call __rt_mixed_from_value");                          // persist the one-byte result and box it for the caller
@@ -423,11 +416,10 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
 
     // -- copy the operand into scratch, leaving one spare byte for a 'z' -> 'aa' growth --
     emitter.label("__rt_sid_carry_x86");
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "rcx");
-    emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // load the current shared scratch write offset
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r8");
-    emitter.instruction("add r8, rcx");                                         // compute the scratch cursor for this result
-    emitter.instruction("add r8, 16");                                          // keep a header-sized gap so the heap-kind probe never reads before the buffer
+    elephc_memoir::strings::staged_concat::emit_reserve_with_prefix(
+        emitter, 16, 48, "__rt_sid_reserve_ready_x86",
+    );
+    emitter.instruction("mov r8, rax");                                         // keep the reservation base for prefix insertion
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // r9 = source cursor over the operand string
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // r10 = the operand string length
     emitter.instruction("lea r11, [r8 + 1]");                                   // r11 = destination cursor, one byte past the growth slot
@@ -497,17 +489,15 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_sid_stop_x86");
     emitter.instruction("lea rdi, [r8 + 1]");                                   // the result starts at the copy, leaving the growth slot unused
     emitter.instruction("mov rsi, r10");                                        // an absorbed carry keeps the original length
-    emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
-    emitter.instruction("call __rt_mixed_from_value");                          // persist the carried result and box it for the caller
-    emitter.instruction("jmp __rt_sid_return_x86");                             // share the epilogue with every other result path
+    emitter.instruction("jmp __rt_sid_stop_x86_box");                           // share the boxing and reservation retirement
 
     emitter.label("__rt_sid_carry_escaped_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the prefix byte chosen by the last wrap
     emitter.instruction("mov BYTE PTR [r8], al");                               // write the prefix into the reserved growth slot
     emitter.instruction("mov rdi, r8");                                         // the grown result starts one byte earlier
     emitter.instruction("lea rsi, [r10 + 1]");                                  // an escaped carry makes the result one byte longer
-    emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
-    emitter.instruction("call __rt_mixed_from_value");                          // persist the grown result and box it for the caller
+    emitter.label("__rt_sid_stop_x86_box");
+    elephc_memoir::strings::staged_concat::emit_box_and_discard_reservation(emitter, 48);
 
     emitter.label("__rt_sid_return_x86");
     emitter.instruction("mov rsp, rbp");                                        // release every helper-local slot

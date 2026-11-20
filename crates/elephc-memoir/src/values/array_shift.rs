@@ -123,3 +123,51 @@ fn emit_array_shift_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("mov QWORD PTR [rdi], r10");                            // persist the decremented indexed-array logical length back into the array header
     emitter.instruction("ret");                                                 // return the removed first scalar payload in rax
 }
+
+/// Slides AArch64 indexed-array payloads one slot left after removing the first element.
+pub fn emit_array_shift_compact_aarch64(emitter: &mut impl Emitter, pairs: bool, loop_label: &str, done_label: &str) {
+    emitter.instruction("mov x13, #1");                                         // start the source cursor at the second live element
+    emitter.label(loop_label);
+    emitter.instruction("cmp x13, x9");                                         // compare the source cursor with the original indexed-array length
+    emitter.instruction(&format!("b.ge {}", done_label));                       // finish compaction after moving every trailing element
+    if pairs {
+        emitter.instruction("lsl x14, x13, #4");                                // scale the source cursor by the 16-byte string slot size
+        emitter.instruction("add x15, x10, x14");                               // compute the source string slot address
+        emitter.instruction("sub x14, x14, #16");                               // convert the source byte offset into the destination byte offset
+        emitter.instruction("add x14, x10, x14");                               // compute the destination string slot address
+        emitter.instruction("ldp x16, x17, [x15]");                             // load the trailing string payload that slides toward the front
+        emitter.instruction("stp x16, x17, [x14]");                             // store the trailing string payload into the previous slot
+    } else {
+        emitter.instruction("ldr x14, [x10, x13, lsl #3]");                     // load the trailing pointer-sized payload that slides toward the front
+        emitter.instruction("sub x15, x13, #1");                                // compute the previous slot index after removing the first element
+        emitter.instruction("str x14, [x10, x15, lsl #3]");                     // store the trailing payload into the previous slot
+    }
+    emitter.instruction("add x13, x13, #1");                                    // advance to the next trailing source slot
+    emitter.instruction(&format!("b {}", loop_label));                          // continue compacting until the original length is exhausted
+    emitter.label(done_label);
+}
+
+/// Slides x86_64 indexed-array payloads one slot left after removing the first element.
+pub fn emit_array_shift_compact_x86_64(emitter: &mut impl Emitter, pairs: bool, loop_label: &str, done_label: &str) {
+    emitter.instruction("mov rcx, 1");                                          // start the source cursor at the second live element
+    emitter.label(loop_label);
+    emitter.instruction("cmp rcx, r10");                                        // compare the source cursor with the original indexed-array length
+    emitter.instruction(&format!("jge {}", done_label));                        // finish compaction after moving every trailing element
+    if pairs {
+        emitter.instruction("mov rdx, rcx");                                    // copy the string source cursor before scaling it
+        emitter.instruction("shl rdx, 4");                                      // scale the source cursor by the 16-byte string slot size
+        emitter.instruction("lea rdi, [r11 + rdx]");                            // compute the source string slot address
+        emitter.instruction("sub rdx, 16");                                     // convert the source byte offset into the destination byte offset
+        emitter.instruction("lea rsi, [r11 + rdx]");                            // compute the destination string slot address
+        emitter.instruction("mov rdx, QWORD PTR [rdi]");                        // load the trailing string pointer that slides toward the front
+        emitter.instruction("mov QWORD PTR [rsi], rdx");                        // store the trailing string pointer into the previous slot
+        emitter.instruction("mov rdx, QWORD PTR [rdi + 8]");                    // load the trailing string length that slides toward the front
+        emitter.instruction("mov QWORD PTR [rsi + 8], rdx");                    // store the trailing string length into the previous slot
+    } else {
+        emitter.instruction("mov rdx, QWORD PTR [r11 + rcx * 8]");              // load the trailing pointer-sized payload that slides toward the front
+        emitter.instruction("mov QWORD PTR [r11 + rcx * 8 - 8], rdx");          // store the trailing payload into the previous slot
+    }
+    emitter.instruction("add rcx, 1");                                          // advance to the next trailing source slot
+    emitter.instruction(&format!("jmp {}", loop_label));                        // continue compacting until the original length is exhausted
+    emitter.label(done_label);
+}

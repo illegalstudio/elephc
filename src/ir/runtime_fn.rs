@@ -1839,7 +1839,8 @@ impl RuntimeFnId {
             ),
             RuntimeFnId::SplObjectHash => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits()
-                    | crate::ir::Effects::ALLOC_CONCAT.bits(),
+                    | crate::ir::Effects::ALLOC_CONCAT.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
             ),
             // Both resolve the handle (a stale one is fatal) and read the descriptor.
             RuntimeFnId::BufferLen | RuntimeFnId::BufferPtr => crate::ir::Effects::from_bits_retain(
@@ -2820,7 +2821,10 @@ impl RuntimeFnId {
 
     /// Reports runtime string results with checked scratch and adoptable heap fallback.
     pub const fn creates_transient_string(self) -> bool {
-        matches!(self, Self::Chr | Self::Long2ip | Self::Gethostname | Self::PhpUname)
+        matches!(
+            self, Self::Chr | Self::Long2ip | Self::Gethostname | Self::PhpUname
+                | Self::SplObjectHash | Self::Date | Self::Gmdate
+        )
     }
 
     /// Returns the ownership and argument-aliasing contract for this operation.
@@ -3360,6 +3364,9 @@ impl RuntimeFnId {
                 | RuntimeFnId::StrReplace
                 | RuntimeFnId::StrIreplace
                 // These producers format fresh bytes into scratch or a heap reservation.
+                | RuntimeFnId::SplObjectHash
+                | RuntimeFnId::Date
+                | RuntimeFnId::Gmdate
                 | RuntimeFnId::Chr
                 | RuntimeFnId::Long2ip
                 | RuntimeFnId::Gethostname

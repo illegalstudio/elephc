@@ -4510,36 +4510,9 @@ fn array_element_size(ty: &PhpType) -> Result<i64> {
 
 /// Stamps an indexed array as carrying inline tagged-scalar `{payload, tag}` slots.
 fn emit_tagged_scalar_array_value_type_stamp(ctx: &mut FunctionContext<'_>, array_reg: &str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg)); // load the packed indexed-array metadata before replacing value_type bits
-            ctx.emitter.instruction("mov x11, #0x80ff");                        // preserve heap kind and persistent COW metadata only
-            ctx.emitter.instruction("and x10, x10, x11");                       // clear stale indexed-array value_type bits
-            ctx.emitter
-                .instruction(
-                &format!("mov x11, #{}", TAGGED_SCALAR_ARRAY_VALUE_TYPE)
-            );                                                                  // value_type 11 = inline tagged-scalar slots
-            ctx.emitter.instruction("lsl x11, x11, #8");                        // move the tagged-scalar value_type into the packed kind word
-            ctx.emitter.instruction("orr x10, x10, x11");                       // combine stable metadata with the tagged-scalar value_type tag
-            ctx.emitter.instruction(&format!("str x10, [{}, #-8]", array_reg)); // publish tagged-scalar indexed-array metadata
-        }
-        Arch::X86_64 => {
-            ctx.emitter
-                .instruction(
-                &format!("mov r10, QWORD PTR [{} - 8]", array_reg)
-            );                                                                  // load the packed indexed-array metadata before replacing value_type bits
-            ctx.emitter.instruction("mov r11, 0xffffffff000080ff");             // preserve heap marker, indexed-array kind, and persistent COW metadata
-            ctx.emitter.instruction("and r10, r11");                            // clear stale indexed-array value_type bits
-            ctx.emitter
-                .instruction(
-                &format!("or r10, 0x{:x}", TAGGED_SCALAR_ARRAY_VALUE_TYPE << 8)
-            );                                                                  // add value_type 11 for inline tagged-scalar slots
-            ctx.emitter
-                .instruction(
-                &format!("mov QWORD PTR [{} - 8], r10", array_reg)
-            );                                                                  // publish tagged-scalar indexed-array metadata
-        }
-    }
+    elephc_memoir::values::array_header::emit_array_value_type_stamp(
+        ctx.emitter, array_reg, elephc_memoir::ValueTag::new(TAGGED_SCALAR_ARRAY_VALUE_TYPE as u8),
+    );
 }
 
 /// Verifies that an array opcode receives an indexed array.

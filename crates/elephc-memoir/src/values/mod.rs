@@ -88,3 +88,5 @@ pub mod packed_slice;
 pub mod destructor_header;
 pub mod spl_storage;
 pub mod stack_cell;
+
+pub mod packed_slots;

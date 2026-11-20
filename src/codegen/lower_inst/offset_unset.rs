@@ -202,17 +202,7 @@ pub(super) fn lower_array_unset_with_key_diagnostics(
     let done = ctx.next_label("unset_diagnostic_done");
     // -- preserve ordinary destruction timing when another owner still holds the hash --
     abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("ldr w9, [x0, #-12]");                      // read the uniform hash reference count after the callback
-            ctx.emitter.instruction("cmp w9, #1");                              // the snapshot is the only owner of a detached hash
-            ctx.emitter.instruction(&format!("b.ls {remove}"));                 // keep detached storage alive through deletion and unwind
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("cmp DWORD PTR [rax - 12], 1");             // compare the physical owner count with our snapshot reference
-            ctx.emitter.instruction(&format!("jbe {remove}"));                  // keep detached storage alive through deletion and unwind
-        }
-    }
+    elephc_memoir::heap_refcount::emit_branch_if_at_most_one_owner(ctx.emitter, &remove);
     abi::emit_unlink_call_operand_owner_at_stack(ctx.emitter, 32);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
     abi::emit_load_int_immediate(ctx.emitter, abi::tertiary_scratch_reg(ctx.emitter), 0);

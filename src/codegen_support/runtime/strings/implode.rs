@@ -69,7 +69,6 @@ const MIXED_CAST_HEADROOM: usize = 64;
 /// The result is written into the shared concat buffer and _concat_off is updated
 /// to reflect the bytes consumed by this call.
 pub fn emit_implode(emitter: &mut Emitter) {
-    let cap = emitter.concat_capacity;
     super::implode_cast::emit_implode_element_cast(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_implode_linux_x86_64(emitter);
@@ -100,19 +99,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #16]");                                   // save array pointer
 
     // -- get concat_buf write position --
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x6");
-    emitter.instruction("ldr x8, [x6]");                                        // load current write offset
-    emitter.instruction("str x8, [sp, #88]");                                   // remember the entry offset: a grown join restores it, holding no scratch
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x7");
-    emitter.instruction("add x9, x7, x8");                                      // compute destination pointer
-    emitter.instruction("str x9, [sp, #24]");                                   // save result start pointer
-    emitter.instruction("str x6, [sp, #32]");                                   // save offset variable address
-    // The destination starts as the scratch tail and grows out of it on demand, so the
-    // capacity it is measured against is what remains of the 64 KiB buffer, not all of it.
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x12", cap as i64); // total concat scratch capacity in bytes
-    emitter.instruction("subs x12, x12, x8");                                   // room left in the scratch buffer from the entry offset
-    emitter.instruction("csel x12, x12, xzr, pl");                              // a full (or over-full) scratch starts this join at zero capacity
-    emitter.instruction("str x12, [sp, #80]");                                  // save the destination capacity
+    elephc_memoir::strings::implode_buffer::emit_open_aarch64(emitter);
 
     // -- load array length and initialize index --
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload array pointer
@@ -416,7 +403,6 @@ fn emit_aarch64_scalar_format_into(emitter: &mut Emitter, formatter: &str) {
 ///
 /// The result is written into the shared concat buffer and _concat_off is updated.
 fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
-    let cap = emitter.concat_capacity;
     emitter.blank();
     emitter.comment("--- runtime: implode ---");
     emitter.label_global("__rt_implode");
@@ -437,21 +423,7 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the glue string pointer across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the glue string length across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the indexed-array pointer across the element copy loop and concat-buffer bookkeeping
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "r8");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before materializing the implode output start pointer
-    emitter.instruction("mov QWORD PTR [rbp - 88], r9");                        // remember the entry offset: a grown join restores it, holding no scratch
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r10");
-    emitter.instruction("lea r10, [r10 + r9]");                                 // compute the current concat-buffer destination pointer for the implode output
-    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the implode result start pointer so the final string result can reference the copied bytes
-    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the current concat-buffer destination cursor across glue and element copy loops
-    // The destination starts as the scratch tail and grows out of it on demand, so the
-    // capacity it is measured against is what remains of the 64 KiB buffer, not all of it.
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "rcx", cap as i64); // total concat scratch capacity in bytes
-    emitter.instruction("sub rcx, r9");                                         // room left in the scratch buffer from the entry offset
-    emitter.instruction("jns __rt_implode_capacity_ready");                     // a full (or over-full) scratch starts this join at zero capacity
-    emitter.instruction("xor ecx, ecx");                                        // clamp the remaining capacity at zero
-    emitter.label("__rt_implode_capacity_ready");
-    emitter.instruction("mov QWORD PTR [rbp - 80], rcx");                       // save the destination capacity
+    elephc_memoir::strings::implode_buffer::emit_open_x86_64(emitter);
     emitter.instruction("mov r11, QWORD PTR [rdx]");                            // load the indexed-array logical length once before entering the implode loop
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the indexed-array logical length for the loop termination check
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // initialize the indexed-array loop cursor to the first element

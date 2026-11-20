@@ -138,14 +138,8 @@ pub(super) fn emit_strip_tags_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x29, #-152]");                                // reload the requested result mode
     emitter.instruction("cbz x9, __rt_strip_tags_publish");                     // full string results publish and persist the reservation
     emitter.instruction("str x2, [x29, #-160]");                                // preserve the counted length across an optional heap release
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x9");
-    emitter.instruction("sub x10, x1, x9");                                     // classify the reservation by its offset from concat scratch
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64);
-    emitter.instruction("cmp x10, x11");                                        // did this call fall back to owned heap storage?
-    emitter.instruction("b.lo __rt_strip_tags_count_return");                   // scratch reservations need no deallocation
-    emitter.instruction("mov x0, x1");                                          // pass the heap-backed reservation to the allocator
-    emitter.instruction("bl __rt_heap_free_safe");                              // discard output bytes the length-only caller never observes
-    emitter.label("__rt_strip_tags_count_return");
+    emitter.instruction("mov x0, x1");                                          // pass the original reservation to the safe release helper
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_heap_free_safe");
     emitter.instruction("ldr x0, [x29, #-160]");                                // return the counted output length
     emitter.instruction("b __rt_strip_tags_restore");                           // skip string publication
     emitter.label("__rt_strip_tags_publish");

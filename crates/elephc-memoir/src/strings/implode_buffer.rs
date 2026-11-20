@@ -144,3 +144,82 @@ pub fn emit_implode_publish_offset_x86_64(emitter: &mut impl Emitter, site: &str
     abi::emit_symbol_address(emitter, "r8", "_concat_off");
     emitter.instruction("mov QWORD PTR [r8], r9");                              // publish it
 }
+
+/// Opens the scratch tail for the growable join.
+pub fn emit_open_aarch64(emitter: &mut impl Emitter) {
+    super::concat_cursor::emit_cursor_address(emitter, "x6");
+    emitter.instruction("ldr x8, [x6]");                                        // load current write offset
+    emitter.instruction("str x8, [sp, #88]");                                   // remember the entry offset: a grown join restores it, holding no scratch
+    super::concat_cursor::emit_base_address(emitter, "x7");
+    emitter.instruction("add x9, x7, x8");                                      // compute destination pointer
+    emitter.instruction("str x9, [sp, #24]");                                   // save result start pointer
+    emitter.instruction("str x6, [sp, #32]");                                   // save offset variable address
+    // The destination starts as the scratch tail and grows out of it on demand, so the
+    // capacity it is measured against is what remains of the 64 KiB buffer, not all of it.
+    abi::emit_load_int_immediate(emitter, "x12", emitter.concat_capacity() as i64); // total concat scratch capacity in bytes
+    emitter.instruction("subs x12, x12, x8");                                   // room left in the scratch buffer from the entry offset
+    emitter.instruction("csel x12, x12, xzr, pl");                              // a full (or over-full) scratch starts this join at zero capacity
+    emitter.instruction("str x12, [sp, #80]");                                  // save the destination capacity
+}
+
+/// Opens the scratch tail for the growable join.
+pub fn emit_open_x86_64(emitter: &mut impl Emitter) {
+    super::concat_cursor::emit_cursor_address(emitter, "r8");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before materializing the implode output start pointer
+    emitter.instruction("mov QWORD PTR [rbp - 88], r9");                        // remember the entry offset: a grown join restores it, holding no scratch
+    super::concat_cursor::emit_base_address(emitter, "r10");
+    emitter.instruction("lea r10, [r10 + r9]");                                 // compute the current concat-buffer destination pointer for the implode output
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the implode result start pointer so the final string result can reference the copied bytes
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the current concat-buffer destination cursor across glue and element copy loops
+    // The destination starts as the scratch tail and grows out of it on demand, so the
+    // capacity it is measured against is what remains of the 64 KiB buffer, not all of it.
+    abi::emit_load_int_immediate(emitter, "rcx", emitter.concat_capacity() as i64); // total concat scratch capacity in bytes
+    emitter.instruction("sub rcx, r9");                                         // room left in the scratch buffer from the entry offset
+    emitter.instruction("jns __rt_implode_capacity_ready");                     // a full (or over-full) scratch starts this join at zero capacity
+    emitter.instruction("xor ecx, ecx");                                        // clamp the remaining capacity at zero
+    emitter.label("__rt_implode_capacity_ready");
+    emitter.instruction("mov QWORD PTR [rbp - 80], rcx");                       // save the destination capacity
+}
+
+/// Opens a bounded scratch window or branches to the growable join.
+pub fn emit_open_integer_aarch64(emitter: &mut impl Emitter) {
+    super::concat_cursor::emit_cursor_address(emitter, "x9");
+    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer offset
+    abi::emit_load_int_immediate(emitter, "x12", emitter.concat_capacity() as i64);
+    emitter.instruction("subs x12, x12, x10");                                  // room left in the shared concat buffer
+    emitter.instruction("b.lo __rt_implode_int_fallback");                      // an over-full scratch join uses the growable body
+    emitter.instruction("cmp x24, #64");                                        // bound the separator length used in the capacity check
+    emitter.instruction("b.hi __rt_implode_int_fallback");                      // unusually long glue uses the growable body
+    emitter.instruction("add x13, x24, #20");                                   // worst-case bytes per element: glue plus an int64
+    emitter.instruction("mul x14, x21, x13");                                   // total worst-case output size
+    emitter.instruction("umulh x15, x21, x13");                                 // detect a size multiplication overflow
+    emitter.instruction("cbnz x15, __rt_implode_int_fallback");                 // an unrepresentable bound uses the growable body
+    emitter.instruction("cmp x14, x12");                                        // does the worst-case output fit the remaining capacity?
+    emitter.instruction("b.hi __rt_implode_int_fallback");                      // larger joins use the growable body
+    super::concat_cursor::emit_base_address(emitter, "x11");
+    emitter.instruction("add x19, x11, x10");                                   // compute the destination cursor
+    emitter.instruction("str x19, [sp, #24]");                                  // save the result start pointer
+}
+
+/// Opens a bounded scratch window or branches to the growable join.
+pub fn emit_open_integer_x86_64(emitter: &mut impl Emitter) {
+    super::concat_cursor::emit_cursor_address(emitter, "r8");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before materializing the implode output start pointer
+    emitter.instruction("mov r11, QWORD PTR [rdx]");                            // load the element count for the capacity check
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // load the separator length for the capacity check
+    emitter.instruction("cmp rcx, 64");                                         // bound the separator length used in the capacity check
+    emitter.instruction("ja __rt_implode_int_fallback_x86");                    // unusually long glue uses the growable body
+    emitter.instruction("add rcx, 20");                                         // worst-case bytes per element: glue plus an int64
+    emitter.instruction("mov rax, r11");                                        // copy the element count for the bound multiplication
+    emitter.instruction("imul rax, rcx");                                       // total worst-case output size
+    emitter.instruction("jo __rt_implode_int_fallback_x86");                    // an unrepresentable bound uses the growable body
+    abi::emit_load_int_immediate(emitter, "rcx", emitter.concat_capacity() as i64);
+    emitter.instruction("sub rcx, r9");                                         // room left in the shared concat buffer
+    emitter.instruction("jb __rt_implode_int_fallback_x86");                    // an over-full scratch join uses the growable body
+    emitter.instruction("cmp rax, rcx");                                        // does the worst-case output fit the remaining capacity?
+    emitter.instruction("ja __rt_implode_int_fallback_x86");                    // larger joins use the growable body
+    super::concat_cursor::emit_base_address(emitter, "r10");
+    emitter.instruction("lea r10, [r10 + r9]");                                 // compute the current concat-buffer destination pointer for the integer implode output
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the implode result start pointer so the final string result can reference the copied bytes
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the current concat-buffer destination cursor across glue emission and integer string copies
+}

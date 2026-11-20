@@ -467,3 +467,87 @@ fn emit_strbuf_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the reservation in rax
 }
+
+/// Bridges a producer's frame-local cursor to the growable string descriptor.
+///
+/// Slots are measured from sp on AArch64 and below rbp on x86-64.
+#[derive(Clone, Copy)]
+pub struct FramedStringBuffer {
+    /// Base of the buffer descriptor.
+    pub descriptor: usize,
+    /// Existing cursor slot used by the producer's formatters.
+    pub cursor: usize,
+}
+
+impl FramedStringBuffer {
+    /// Opens an empty buffer and supplies its write pointer to the producer.
+    pub fn emit_init(self, emitter: &mut impl Emitter) {
+        self.emit_descriptor_address(emitter);
+        abi::emit_call_label(emitter, "__rt_strbuf_init");
+        self.emit_load_cursor(emitter);
+    }
+
+    /// Makes room for a fixed number of bytes and reloads the possibly relocated write pointer.
+    pub fn emit_ensure_fixed(self, emitter: &mut impl Emitter, bytes: usize) {
+        let need = abi::int_arg_reg_name(emitter, 1);
+        abi::emit_load_int_immediate(emitter, need, bytes as i64);
+        self.emit_ensure(emitter);
+    }
+
+    /// Makes room for the byte count in the second native argument register.
+    pub fn emit_ensure(self, emitter: &mut impl Emitter) {
+        self.emit_sync_cursor(emitter);
+        abi::emit_call_label(emitter, "__rt_strbuf_ensure");
+        self.emit_load_cursor(emitter);
+    }
+
+    /// Copies a source pair backed by immutable native data in argument registers two and three.
+    pub fn emit_append_external(self, emitter: &mut impl Emitter) {
+        self.emit_sync_cursor(emitter);
+        let extra = abi::int_arg_reg_name(emitter, 3);
+        abi::emit_load_int_immediate(emitter, extra, 0);
+        abi::emit_call_label(emitter, "__rt_strbuf_append");
+        self.emit_load_cursor(emitter);
+    }
+
+    /// Publishes the accumulated string through the requested ownership entry.
+    pub fn emit_finish(self, emitter: &mut impl Emitter, owned: bool) {
+        self.emit_sync_cursor(emitter);
+        let finish = if owned { "__rt_strbuf_finish_owned" } else { "__rt_strbuf_finish" };
+        abi::emit_call_label(emitter, finish);
+    }
+
+    /// Materializes the descriptor address in the first native argument register.
+    fn emit_descriptor_address(self, emitter: &mut impl Emitter) {
+        let Self { descriptor, .. } = self;
+        match emitter.arch() {
+            Arch::AArch64 => emitter.instruction(&format!("add x0, sp, #{descriptor}")), // pass the physical buffer descriptor
+            Arch::X86_64 => emitter.instruction(&format!("lea rdi, [rbp - {descriptor}]")), // pass the physical buffer descriptor
+        }
+    }
+
+    /// Copies the producer's current write pointer into the descriptor.
+    fn emit_sync_cursor(self, emitter: &mut impl Emitter) {
+        let Self { cursor, .. } = self;
+        self.emit_descriptor_address(emitter);
+        match emitter.arch() {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("ldr x10, [sp, #{cursor}]"));      // reload the cursor advanced by the producer
+                emitter.instruction(&format!("str x10, [x0, #{STRBUF_WRITE}]")); // publish it before the buffer operation
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {cursor}]")); // reload the cursor advanced by the producer
+                emitter.instruction(&format!("mov QWORD PTR [rdi + {STRBUF_WRITE}], r10")); // publish it before the buffer operation
+            }
+        }
+    }
+
+    /// Updates the producer frame with the cursor returned by the buffer operation.
+    fn emit_load_cursor(self, emitter: &mut impl Emitter) {
+        let Self { cursor, .. } = self;
+        match emitter.arch() {
+            Arch::AArch64 => emitter.instruction(&format!("str x11, [sp, #{cursor}]")), // preserve the current write pointer
+            Arch::X86_64 => emitter.instruction(&format!("mov QWORD PTR [rbp - {cursor}], r11")), // preserve the current write pointer
+        }
+    }
+}

@@ -93,14 +93,9 @@ pub fn emit_json_decode(emitter: &mut Emitter) {
     // -- reserve the decoded result before the decode loop writes anything --
     emitter.instruction("mov x0, x2");                                          // the decoded string cannot exceed the trimmed quoted slice length
     emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x9"); // classify the reservation by its arena offset
-    emitter.instruction("sub x10, x0, x9");                                     // compute the candidate scratch offset
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64); // load the arena capacity
-    emitter.instruction("cmp x10, x11");                                        // is the reservation outside the scratch window?
-    emitter.instruction("b.lo __rt_json_decode_mark_done");                     // scratch reservations need no transient header
-    emitter.instruction(&format!("mov x9, #{}", crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND)); // mark the heap block as transferable
-    emitter.instruction("str x9, [x0, #-8]");                                   // let persistence adopt the reservation
-    emitter.label("__rt_json_decode_mark_done");
+    elephc_memoir::strings::concat_scratch::emit_mark_reserved_result_temporary(
+        emitter, "__rt_json_decode_mark_done", ["r8", "r9", "r10"],
+    );
     emitter.instruction("str x0, [sp, #16]");                                   // save the decoded-string start pointer for the final result slice
     emitter.instruction("str x0, [sp, #24]");                                   // save the current write pointer for the decode loop
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the trimmed quoted JSON pointer after the reservation

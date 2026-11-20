@@ -30,23 +30,23 @@ pub(crate) fn emit_object_handles(emitter: &mut Emitter) {
 /// mutually consistent.
 ///
 /// Input: `x0` = object pointer. Output: `x1` = byte pointer, `x2` = 32, matching
-/// `__rt_itoa`'s string-return convention. Writes into the `_concat_buf` scratch.
+/// `__rt_itoa`'s string-return convention. Uses a checked string reservation.
 fn emit_spl_object_hash_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: spl_object_hash ---");
     emitter.label_global("__rt_spl_object_hash");
 
-    emitter.instruction("sub sp, sp, #16");                                     // allocate the helper frame
-    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    emitter.instruction("sub sp, sp, #32");                                     // reserve linkage, handle, and output base
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the formatter frame
 
-    emitter.instruction("bl __rt_object_handle_of");                            // x0 = this object's PHP handle
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x6");
-    emitter.instruction("ldr x8, [x6]");                                        // x8 = current scratch-buffer offset
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x7");
-    emitter.instruction("add x9, x7, x8");                                      // x9 = write cursor for the 32 hash bytes
-    emitter.instruction("add x10, x8, #32");                                    // reserve exactly 32 scratch bytes
-    emitter.instruction("str x10, [x6]");                                       // publish the advanced scratch offset
+    emitter.instruction("bl __rt_object_handle_of");                            // resolve this object's PHP handle
+    emitter.instruction("str x0, [sp]");                                        // keep the handle across output reservation
+    emitter.instruction("mov x0, #32");                                         // request the fixed hash output size
+    emitter.instruction("bl __rt_strbuf_reserve_temp");                         // reserve scratch or an adoptable heap fallback
+    emitter.instruction("str x0, [sp, #8]");                                    // retain the reservation base for publication
+    emitter.instruction("mov x9, x0");                                          // write from the beginning of the reservation
+    emitter.instruction("ldr x0, [sp]");                                        // restore the handle for hexadecimal formatting
 
     emitter.instruction("mov x11, #15");                                        // start at the most significant of the 16 nibbles
     emitter.label("__rt_spl_object_hash_nibble");
@@ -71,10 +71,11 @@ fn emit_spl_object_hash_arm64(emitter: &mut Emitter) {
     emitter.instruction("subs x11, x11, #1");                                   // count the padding byte
     emitter.instruction("b.ne __rt_spl_object_hash_pad");                       // keep padding to the full 32 bytes
 
-    emitter.instruction("add x1, x7, x8");                                      // x1 = pointer to the first hash byte
-    emitter.instruction("mov x2, #32");                                         // x2 = PHP's fixed spl_object_hash length
-    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // release the helper frame
+    emitter.instruction("ldr x1, [sp, #8]");                                    // return the reservation base
+    emitter.instruction("mov x2, #32");                                         // return the initialized length
+    emitter.instruction("bl __rt_concat_publish");                              // publish only a scratch-backed result
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller linkage
+    emitter.instruction("add sp, sp, #32");                                     // release the formatter frame
     emitter.instruction("ret");                                                 // return the (ptr, len) string pair
 }
 
@@ -92,15 +93,12 @@ fn emit_spl_object_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve the callee-saved cursor register
     emitter.instruction("sub rsp, 8");                                          // restore the SysV 16-byte call alignment the odd push broke
 
-    emitter.instruction("call __rt_object_handle_of");                          // rax = this object's PHP handle
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "r8");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // r9 = current scratch-buffer offset
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r10");
-    emitter.instruction("mov rbx, r10");                                        // rbx = write cursor for the 32 hash bytes
-    emitter.instruction("add rbx, r9");                                         // advance the cursor to the reserved scratch slot
-    emitter.instruction("mov r11, r9");                                         // copy the offset before reserving space
-    emitter.instruction("add r11, 32");                                         // reserve exactly 32 scratch bytes
-    emitter.instruction("mov QWORD PTR [r8], r11");                             // publish the advanced scratch offset
+    emitter.instruction("call __rt_object_handle_of");                          // resolve this object's PHP handle
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // keep the handle across output reservation
+    emitter.instruction("mov rax, 32");                                         // request the fixed hash output size
+    emitter.instruction("call __rt_strbuf_reserve_temp");                       // reserve scratch or an adoptable heap fallback
+    emitter.instruction("mov rbx, rax");                                        // write from the beginning of the reservation
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // restore the handle for hexadecimal formatting
 
     emitter.instruction("mov r8, 15");                                          // start at the most significant of the 16 nibbles
     emitter.label("__rt_spl_object_hash_nibble");
@@ -128,9 +126,9 @@ fn emit_spl_object_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r8, 1");                                           // count the padding byte
     emitter.instruction("jnz __rt_spl_object_hash_pad");                        // keep padding to the full 32 bytes
 
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "rax");
-    emitter.instruction("add rax, r9");                                         // rax = pointer to the first hash byte
-    emitter.instruction("mov rdx, 32");                                         // rdx = PHP's fixed spl_object_hash length
+    emitter.instruction("lea rax, [rbx - 32]");                                 // return the reservation base after 32 written bytes
+    emitter.instruction("mov rdx, 32");                                         // return the initialized length
+    emitter.instruction("call __rt_concat_publish");                            // publish only a scratch-backed result
     emitter.instruction("add rsp, 8");                                          // release the alignment pad
     emitter.instruction("pop rbx");                                             // restore the callee-saved cursor register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

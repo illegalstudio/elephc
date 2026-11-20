@@ -190,3 +190,9 @@ pub fn emit_open_string_gap(emitter: &mut impl Emitter) {
         }
     }
 }
+
+mod payload;
+pub use payload::{
+    emit_array_splice_insert, emit_array_splice_insert_boxed, emit_array_splice_insert_refcounted,
+    emit_array_splice_insert_str, emit_array_splice_insert_unboxed,
+};

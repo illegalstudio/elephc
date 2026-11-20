@@ -23,8 +23,8 @@ description: "Compiler internals for spl_object_hash(): lowering path, type chec
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
-- **Effects**: `shared`
+- **Result ownership**: `independent`
+- **Effects**: `static (3 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`

@@ -22,7 +22,7 @@ use crate::codegen_support::emit::Emitter;
 /// - `x2`: format string length
 ///
 /// Output registers:
-/// - `x1`: pointer to formatted result in concat buffer
+/// - `x1`: pointer to formatted result in scratch or managed heap storage
 /// - `x2`: length of formatted result
 ///
 /// The function scans the format string, dispatching on each character.
@@ -30,11 +30,12 @@ use crate::codegen_support::emit::Emitter;
 /// i, s, A, a, U, S, z, t, L, W, o, O, P, Z, e, T, I, u, v, c, r, p, B.
 /// A backslash escapes the next character so it is emitted literally; a lone trailing
 /// backslash emits nothing. Other literal characters are copied unchanged. Output is
-/// written to the concat buffer and `_concat_off` is updated to reflect the bytes appended.
+/// written through the growable string buffer.
 ///
-/// Uses a 96-byte stack frame with saved x29/x30 and local variables for
+/// Uses a 160-byte stack frame with saved x29/x30 and local variables for
 /// timestamp, format ptr/len, tm pointer, output position, and format index.
 pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
+    let output = elephc_memoir::strings::strbuf::FramedStringBuffer { descriptor: 128, cursor: 32 };
     emitter.blank();
     emitter.comment("--- runtime: date / gmdate ---");
     // gmdate() shares this formatter; it enters here with the UTC flag set so the
@@ -60,7 +61,7 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     //   [sp+48..55] = format index
     //   [sp+56..63] = UTC flag (1 = gmtime, 0 = localtime)
     //   [sp+80..95] = saved x29, x30
-    emitter.instruction("sub sp, sp, #128");                                    // allocate 128 bytes (extra slots for the c/r format-include)
+    emitter.instruction("sub sp, sp, #160");                                    // reserve the formatter frame and string buffer descriptor
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // set new frame pointer
 
@@ -91,14 +92,7 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.label("__rt_date_decomposed");
     emitter.instruction("str x0, [sp, #24]");                                   // save tm pointer
 
-    // -- set up output buffer in concat_buf --
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
-    emitter.instruction("ldr x10, [x9]");                                       // load current concat offset
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x11");
-    emitter.instruction("add x11, x11, x10");                                   // compute write position: buf + offset
-    emitter.instruction("str x11, [sp, #32]");                                  // save output write position
-    emitter.instruction("str x11, [sp, #40]");                                  // save output start position
-
+    output.emit_init(emitter);
     // -- initialize format index --
     emitter.instruction("str xzr, [sp, #48]");                                  // format index = 0
     emitter.instruction("str xzr, [sp, #80]");                                  // format-include save slot empty (not inside a c/r sub-format)
@@ -109,6 +103,9 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldr x13, [sp, #16]");                                  // load format length
     emitter.instruction("cmp x12, x13");                                        // check if we've processed all chars
     emitter.instruction("b.ge __rt_date_check_pop");                            // index >= len: pop a c/r sub-format or finish
+    // Fixed-width tokens fit in one signed integer's decimal representation plus punctuation.
+    output.emit_ensure_fixed(emitter, 32);
+    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the token index after buffer growth
 
     // -- load current format character --
     emitter.instruction("ldr x14, [sp, #8]");                                   // load format ptr
@@ -794,19 +791,10 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #80]");                                  // clear the in-sub marker
     emitter.instruction("b __rt_date_loop");                                    // resume the main format
     emitter.label("__rt_date_done");
-    emitter.instruction("ldr x1, [sp, #40]");                                   // x1 = output start
-    emitter.instruction("ldr x9, [sp, #32]");                                   // load output end position
-    emitter.instruction("sub x2, x9, x1");                                      // x2 = output length
-
-    // -- update concat_off --
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x10");
-    emitter.instruction("ldr x11, [x10]");                                      // load current offset
-    emitter.instruction("add x11, x11, x2");                                    // add result length
-    emitter.instruction("str x11, [x10]");                                      // store updated offset
-
+    output.emit_finish(emitter, false);
     // -- tear down stack frame --
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #128");                                    // deallocate stack frame
+    emitter.instruction("add sp, sp, #160");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 
     // -- helper: write 2-digit zero-padded number from x0 to output --
@@ -1124,16 +1112,12 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #24]");                                   // load tm pointer
     emitter.instruction("ldr x1, [x1, #48]");                                   // load tm_zone (char* abbreviation, offset 48)
     emitter.instruction("cbz x1, __rt_date_T_done");                            // no abbreviation available → emit nothing
-    emitter.instruction("ldr x9, [sp, #32]");                                   // load output position
-    emitter.label("__rt_date_T_copy");
-    emitter.instruction("ldrb w11, [x1]");                                      // load one abbreviation byte
-    emitter.instruction("cbz w11, __rt_date_T_save");                           // NUL terminator → finish
-    emitter.instruction("strb w11, [x9]");                                      // store the byte into the output buffer
-    emitter.instruction("add x9, x9, #1");                                      // advance output position
-    emitter.instruction("add x1, x1, #1");                                      // advance the abbreviation pointer
-    emitter.instruction("b __rt_date_T_copy");                                  // continue copying
-    emitter.label("__rt_date_T_save");
-    emitter.instruction("str x9, [sp, #32]");                                   // save the advanced output position
+    emitter.instruction("mov x0, x1");                                          // pass the abbreviation to strlen
+    emitter.bl_c("strlen");
+    emitter.instruction("mov x2, x0");                                          // pass the actual abbreviation length to the buffer
+    emitter.instruction("ldr x1, [sp, #24]");                                   // reload the decomposed timestamp
+    emitter.instruction("ldr x1, [x1, #48]");                                   // reload the borrowed abbreviation
+    output.emit_append_external(emitter);
     emitter.label("__rt_date_T_done");
     emitter.instruction("b __rt_date_next");                                    // continue
 
@@ -1151,18 +1135,7 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_php_tz_utc");
     emitter.instruction("mov x2, #3");                                          // length of "UTC"
     emitter.label("__rt_date_e_copy");
-    emitter.instruction("ldr x9, [sp, #32]");                                   // load output position
-    emitter.instruction("mov x10, #0");                                         // copy index = 0
-    emitter.label("__rt_date_e_loop");
-    emitter.instruction("cmp x10, x2");                                         // copied every byte?
-    emitter.instruction("b.ge __rt_date_e_done");                               // yes → finish
-    emitter.instruction("ldrb w11, [x1, x10]");                                 // load one identifier byte
-    emitter.instruction("strb w11, [x9, x10]");                                 // store it into the output buffer
-    emitter.instruction("add x10, x10, #1");                                    // advance the copy index
-    emitter.instruction("b __rt_date_e_loop");                                  // continue copying
-    emitter.label("__rt_date_e_done");
-    emitter.instruction("add x9, x9, x2");                                      // advance output position by the identifier length
-    emitter.instruction("str x9, [sp, #32]");                                   // save output position
+    output.emit_append_external(emitter);
     emitter.instruction("b __rt_date_next");                                    // continue
 
     // -- helper: ISO-8601 week + year from struct tm (x0=tm ptr → x0=week, x1=year) --

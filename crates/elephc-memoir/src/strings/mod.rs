@@ -31,3 +31,5 @@ pub mod implode_buffer;
 pub mod format_windows;
 pub mod scratch_window;
 pub mod staged_concat;
+pub mod concat_checkpoint;
+pub mod format_buffer;
