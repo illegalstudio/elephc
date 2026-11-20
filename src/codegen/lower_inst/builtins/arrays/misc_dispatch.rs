@@ -138,6 +138,11 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let elem_ty = array_pop_element_type(ctx.value_php_type(array)?)?;
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
+    // A reference-cell load borrows the stored array. Keep a separate helper owner so the
+    // consuming COW split and the subsequent store-back each retire their own reference.
+    if matches!(receiver, ReceiverPlace::RefCell(_)) {
+        receiver.prepare_consuming_storeback(ctx, array)?;
+    }
     ensure_unique_array_pop_source(ctx, array)?;
     receiver.store_back_after_consuming_split(ctx, array)?;
     match ctx.emitter.target.arch {
