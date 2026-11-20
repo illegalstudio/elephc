@@ -92,12 +92,11 @@ function checkout(): void {
     echo json_encode(['status' => 'paid']);
 }
 
-// Fails on purpose, one call in ten: the 5xx a dashboard should surface.
+// Fails on purpose, one call in ten: the 5xx a dashboard should surface, and the
+// error the page groups under Errors.
 function flaky_report(int $seed): void {
     if ($seed % 10 === 0) {
-        http_response_code(503);
-        echo json_encode(['error' => 'report backend unavailable']);
-        return;
+        throw new RuntimeException('report backend unavailable');
     }
     echo json_encode(['total' => array_sum(array_column(catalogue(200), 'price'))]);
 }

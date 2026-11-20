@@ -30,7 +30,6 @@ pub(crate) fn conflicts(cmd: &MonitorCommand, service: bool) -> Vec<&'static str
             ("--assert", !cmd.asserts.is_empty()),
             ("--assert-file", cmd.assert_file.is_some()),
             ("--prometheus", cmd.prom_out.is_some()),
-            ("--otlp", cmd.otlp.is_some()),
             ("-- <program arguments>", !cmd.target_args.is_empty()),
         ]
     } else {
@@ -58,7 +57,7 @@ pub(crate) fn conflicts(cmd: &MonitorCommand, service: bool) -> Vec<&'static str
 /// having captured nothing (review). `--alert` alone is not here: without a
 /// collector it checks the budgets once and exits 2 when one is broken.
 pub(crate) fn need_a_collector(cmd: &MonitorCommand) -> Vec<&'static str> {
-    let collecting = cmd.live || cmd.apm_store.is_some() || cmd.serve.is_some();
+    let collecting = cmd.live || cmd.apm_store.is_some() || cmd.serve.is_some() || cmd.otlp.is_some();
     if collecting || cmd.target.is_empty() {
         return Vec::new();
     }

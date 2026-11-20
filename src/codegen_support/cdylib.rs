@@ -142,6 +142,8 @@ pub(crate) fn emit_cdylib_exports(
 pub(crate) struct LibraryApm {
     /// Whether an `--apm-collector` address is embedded to send the counts to.
     pub(crate) collector: bool,
+    /// Whether the project's `[apm]` include/exclude rules are embedded.
+    pub(crate) rules: bool,
 }
 
 /// Runs optional non-PHP initialization after host inputs are saved and before installing the PHP handler.
@@ -766,7 +768,7 @@ mod tests {
                 &[&export],
                 false,
                 None,
-                Some(LibraryApm { collector: true }),
+                Some(LibraryApm { collector: true, rules: false }),
             );
             let asm = emitter.output();
             let public = format!("{}:", target.extern_symbol(&export.c_name));

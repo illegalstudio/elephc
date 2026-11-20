@@ -92,6 +92,7 @@ pub(crate) fn build_call_graph(display: &[(Vec<(String, Kind)>, u64)]) -> crate:
         edges,
         total: stats.grand,
         queries: Vec::new(),
+        query_callers: Default::default(),
         lines: None,
         trace: None,
     }
