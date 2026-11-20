@@ -44,6 +44,14 @@ pub(super) fn before_update_parent_materialization(
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if !update { return Ok(()); }
+    before_selected_parent_materialization(receiver, key, context, values)
+}
+
+/// Rejects an exact key before an unprepared null or false receiver becomes an array.
+pub(super) fn before_selected_parent_materialization(
+    receiver: RuntimeCellHandle, key: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     let Some(key) = key else { return Ok(()); };
     let tag = values.type_tag(receiver)?;
     let materializes = tag == EVAL_TAG_NULL

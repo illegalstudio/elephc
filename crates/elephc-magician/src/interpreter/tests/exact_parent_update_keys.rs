@@ -65,16 +65,20 @@ fn exact_eval_parent_update_keys_walker_vm_order_and_owners() {
                 result.err(), values.output);
             expected.push_str(&format!("E|{kind}|"));
         }
-        let mut valid_call = "evalParentValidLeafCase();".to_string();
-        if vm {
-            valid_call = format!(
-                "if(false){{function evalParentValidLeafCase(){{}}}} {valid_call}"
-            );
+        assert!(values.warnings.is_empty(),
+            "invalid leaf conversion ran before the key guard: vm={vm}: {:?}", values.warnings);
+        for child in ["null", "false"] {
+            let mut valid_call = format!("evalParentValidLeafCase({child});");
+            if vm {
+                valid_call = format!(
+                    "if(false){{function evalParentValidLeafCase($child){{}}}} {valid_call}"
+                );
+            }
+            staged_numeric_execution(
+                &valid_call, vm, &mut context, &mut scope, &mut values,
+            ).unwrap();
+            expected.push_str("array:7|");
         }
-        staged_numeric_execution(
-            &valid_call, vm, &mut context, &mut scope, &mut values,
-        ).unwrap();
-        expected.push_str("array:7|");
         assert_eq!(values.output, expected, "vm={vm}");
         assert_eq!(values.warnings, vec![
             "Deprecated: Automatic conversion of false to array is deprecated in  on line 0\n".to_string(),

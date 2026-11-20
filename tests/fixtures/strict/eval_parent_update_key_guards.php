@@ -41,8 +41,8 @@ function evalParentLeafCase(mixed $child, mixed $outerKey, mixed $leafKey): void
     }
     echo gettype($parent[0]), '|';
 }
-function evalParentValidLeafCase(): void {
-    $parent = [null];
+function evalParentValidLeafCase(mixed $child): void {
+    $parent = [$child];
     $parent[0][1] = 7;
     echo gettype($parent[0]), ':', $parent[0][1], '|';
 }

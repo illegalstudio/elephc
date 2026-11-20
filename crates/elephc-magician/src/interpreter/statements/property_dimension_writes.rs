@@ -323,9 +323,7 @@ fn write_value_in_storage(
             return Ok(Some(replacement));
         }
     }
-    checked_array_keys::before_update_parent_materialization(
-        current, index, op.is_some(), context, values,
-    )?;
+    checked_array_keys::before_selected_parent_materialization(current, index, context, values)?;
     if attached {
         match values.type_tag(current)? {
             EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_NULL => {}
