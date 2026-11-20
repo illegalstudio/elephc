@@ -239,8 +239,8 @@ pub(super) fn with_eval_property_write_operands<V: RuntimeValueOps>(
         -> Result<(), EvalStatus>,
 ) -> Result<(), EvalStatus> {
     let Some((object, rest)) = args.split_first() else { return consume(&[], context, scope, values); };
-    with_write_operands(object, None, rest, context, scope, values,
-        |args, _, context, scope, values| consume(args, context, scope, values))
+    with_write_operands(object, None, rest, false, context, scope, values,
+        |args, _, _, context, scope, values| consume(args, context, scope, values))
 }
 
 /// Preserves dynamic name evaluation before the RHS and receiver fetches after it.
@@ -250,8 +250,8 @@ pub(super) fn with_eval_named_property_write_operands<V: RuntimeValueOps>(
     consume: impl FnOnce(&[RuntimeCellHandle], &str, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
         -> Result<(), EvalStatus>,
 ) -> Result<(), EvalStatus> {
-    with_write_operands(object, Some(property), args, context, scope, values,
-        |args, property, context, scope, values| consume(args, property.unwrap_or(""), context, scope, values))
+    with_write_operands(object, Some(property), args, false, context, scope, values,
+        |args, property, _, context, scope, values| consume(args, property.unwrap_or(""), context, scope, values))
 }
 
 /// Preserves an owned mutation result while the shared receiver and name leases are retired.
@@ -277,11 +277,24 @@ pub(super) fn with_eval_named_property_write_result<V: RuntimeValueOps>(
     }
 }
 
+/// Preserves source-aware RHS metadata through the same late receiver and member-name owner scope.
+pub(super) fn with_eval_sourced_property_write<V: RuntimeValueOps>(
+    object: &EvalExpr, property: DimensionProperty<'_>, value: &EvalExpr,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut V,
+    consume: impl FnOnce(RuntimeCellHandle, &str, RuntimeCellHandle, Option<&ArgumentSource>,
+        &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V) -> Result<(), EvalStatus>,
+) -> Result<(), EvalStatus> {
+    with_write_operands(object, Some(property), &[value], true, context, scope, values,
+        |args, property, sources, context, scope, values| {
+            consume(args[0], property.unwrap_or(""), args[1], sources[0].as_ref(), context, scope, values)
+        })
+}
+
 /// Shares receiver preparation and reverse cleanup for literal and runtime-name mutations.
 fn with_write_operands<V: RuntimeValueOps>(
-    object: &EvalExpr, property: Option<DimensionProperty<'_>>, args: &[&EvalExpr],
+    object: &EvalExpr, property: Option<DimensionProperty<'_>>, args: &[&EvalExpr], sourced: bool,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut V,
-    consume: impl FnOnce(&[RuntimeCellHandle], Option<&str>, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
+    consume: impl FnOnce(&[RuntimeCellHandle], Option<&str>, &[Option<ArgumentSource>], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V)
         -> Result<(), EvalStatus>,
 ) -> Result<(), EvalStatus> {
     let mut owners = Vec::new();
@@ -294,10 +307,13 @@ fn with_write_operands<V: RuntimeValueOps>(
             None => None,
         };
         let mut suffix = Vec::with_capacity(args.len());
+        let mut sources = Vec::with_capacity(args.len());
         for arg in args {
-            let value = eval_owned_expr(arg, context, scope, values)?;
+            let (value, source) = if sourced { evaluate_member_value(arg, context, scope, values)? }
+                else { (eval_owned_expr(arg, context, scope, values)?, None) };
             owners.push(value);
             suffix.push(value);
+            sources.push(source);
         }
         let mut receiver = if matches!(object, EvalExpr::LoadVar(_)) { None } else {
             let value = finish_property_write_receiver(plan.take().ok_or(EvalStatus::RuntimeFatal)?, &mut owners, context, scope, values)?;
@@ -317,7 +333,7 @@ fn with_write_operands<V: RuntimeValueOps>(
         let receiver = receiver.ok_or(EvalStatus::RuntimeFatal)?;
         let mut operands = vec![receiver];
         operands.extend(suffix);
-        consume(&operands, property.as_deref(), context, scope, values)
+        consume(&operands, property.as_deref(), &sources, context, scope, values)
     })();
     result.and(release_receivers(owners, context, values))
 }

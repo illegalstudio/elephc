@@ -54,6 +54,7 @@ mod return_type_compat;
 mod return_values;
 mod value_contracts;
 mod property_value_contracts;
+mod member_write_sources;
 mod property_reference_contracts;
 mod property_reference_candidates;
 mod runtime_ops;
@@ -125,6 +126,7 @@ use return_type_compat::*;
 use return_values::*;
 use value_contracts::*;
 use property_value_contracts::*;
+use member_write_sources::*;
 use property_reference_contracts::*;
 #[cfg(not(test))]
 pub(crate) use property_reference_contracts::eval_validate_property_reference;

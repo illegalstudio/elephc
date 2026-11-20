@@ -853,6 +853,14 @@ unset recreates these declaration-backed obligations. Conditional content
 projections validate array candidates without contributing a scalar coercion
 candidate; real declarations, including explicit mixed, retain their normal
 role in joint reference conversion arbitration.
+Source-aware whole-property writes retain RHS proof packets through the existing
+late-receiver/name operand owner scope. They reuse call argument source checks
+for an authorized physical declaration, and pass the original packet into a
+selected setter hook's input contract. Validated internal stores retain their
+separate role. Runtime first array producers use the shared content-origin
+planner, preserving explicit mixed openness and leaving rejected origins pending.
+Canonical reference replacement publishes a prepared origin before retiring its
+old value. Readonly and visibility failures retain their original ordering.
 
 Native descriptor signatures retain their original twelve physical metadata words.
 Flag bit 1 marks an appended logical-source record pointer at word 12. The

@@ -176,3 +176,5 @@ mod strict_array_member_promises;
 mod strict_array_member_origins;
 
 mod strict_declared_member_roots;
+
+mod strict_member_source_promises;

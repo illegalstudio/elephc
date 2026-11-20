@@ -804,6 +804,21 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    set_static_property_with_source(class_name, property_name, value, MemberWriteSource::Internal, context, values)
+}
+
+/// Carries an evaluated producer through the selected static declaration and backing slot.
+pub(in crate::interpreter) fn eval_sourced_static_property_set_result(class: &str, property: &str,
+    value: RuntimeCellHandle, source: Option<&ArgumentSource>, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    set_static_property_with_source(class, property, value, MemberWriteSource::Evaluated(source), context, values)
+}
+
+/// Shares static authorization and source publication while preserving old-value retirement ordering.
+fn set_static_property_with_source(class_name: &str, property_name: &str, value: RuntimeCellHandle,
+    source: MemberWriteSource<'_>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
     if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
         if !property.is_static() {
@@ -831,6 +846,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
             );
         }
         validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
+        source.validate(property.property_type(), &declaring_class, &class_name, value, context, values)?;
         eval_validate_static_property_value(&declaring_class, property.name(), value, context, values)?;
         if context.static_property_alias(&declaring_class,property.name()).is_none() {
             if let Some(candidate)=coerce_property_value_candidate(&declaring_class,&property,value,context,values)? {
@@ -838,19 +854,21 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
                     eval_static_property_set_result(&declaring_class,property.name(),candidate,context,values));
             }
         }
+        let existing = context.static_property_array_type(&declaring_class, property.name()).cloned();
+        let mut origin = source.array_origin(existing.as_ref(), property.property_type(), property.name(), value, context, values)?;
         if let Some(target) = context
             .static_property_alias(&declaring_class, property.name())
             .cloned()
         {
-            eval_static_reference_target_write(
-                &declaring_class,
-                property.name(),
-                target,
-                value,
-                context,
-                values,
-            )?;
+            let handled = write_member_reference_origin(&target, value, origin.as_ref(), context, values,
+                |context, values, origin, cell| {
+                    context.set_static_property_array_type(&declaring_class, property.name(), origin.clone());
+                    eval_note_static_property_array_value(&declaring_class, property.name(), cell, context, values)
+                })?;
+            if handled { origin = None; }
+            else { eval_static_reference_target_write(&declaring_class, property.name(), target, value, context, values)?; }
         }
+        if let Some(origin) = origin { context.set_static_property_array_type(&declaring_class, property.name(), origin); }
         return store_borrowed_static_property(&declaring_class, property.name(), value, context, values);
     }
     if eval_static_member_context_owns_class(&class_name, context) {

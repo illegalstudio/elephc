@@ -245,6 +245,21 @@ pub(crate) fn eval_property_set_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    set_property_with_source(object, property_name, value, MemberWriteSource::Internal, context, values)
+}
+
+/// Writes an evaluated user producer without inferring a logical proof from its runtime occupant.
+pub(in crate::interpreter) fn eval_sourced_property_set_result(object: RuntimeCellHandle, property: &str,
+    value: RuntimeCellHandle, source: Option<&ArgumentSource>, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    set_property_with_source(object, property, value, MemberWriteSource::Evaluated(source), context, values)
+}
+
+/// Shares authorization, hook dispatch and physical publication for internal and source-aware writes.
+fn set_property_with_source(object: RuntimeCellHandle, property_name: &str, value: RuntimeCellHandle,
+    source: MemberWriteSource<'_>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     validate_property_write_receiver(object, property_name, "assign", context, values)?;
     let Ok(identity) = values.object_identity(object) else {
         return values.property_set(object, property_name, value);
@@ -368,6 +383,7 @@ pub(crate) fn eval_property_set_result(
     let class_is_readonly = class.is_readonly_class();
     let mut storage_property_name = property_name.to_string();
     let mut declared_property_found = false;
+    let mut declared_type = None;
     if let Some((declaring_class, property)) =
         eval_dynamic_property_for_access(&object_class_name, property_name, context)
     {
@@ -403,6 +419,7 @@ pub(crate) fn eval_property_set_result(
             );
         }
         storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
+        declared_type = property.property_type().cloned();
         // An initialized readonly value rejects an overwrite before implicit protected(set)
         // access is checked. An authorized clone can still consume its one rewrite later.
         if property.is_readonly()
@@ -445,6 +462,10 @@ pub(crate) fn eval_property_set_result(
                 &declaring_class, property.name(), value, context, values,
             );
         }
+        if !property.has_set_hook() || current_eval_property_hook_is(&declaring_class, property.name(),
+            &property_hook_set_method(property.name()), context) {
+            source.validate(property.property_type(), &declaring_class, &object_class_name, value, context, values)?;
+        }
         if property.has_set_hook() {
             if !current_eval_property_hook_is(
                 &declaring_class,
@@ -463,7 +484,7 @@ pub(crate) fn eval_property_set_result(
                     &object_class_name,
                     &hook_method,
                     object,
-                    vec![EvaluatedCallArg { source_type: None,
+                    vec![EvaluatedCallArg { source_type: source.argument(),
                         evaluation_owner: None,
                         name: None,
                         value,
@@ -590,6 +611,8 @@ pub(crate) fn eval_property_set_result(
         )?;
     }
     eval_validate_instance_property_array_value(identity, &storage_property_name, value, context, values)?;
+    let existing = context.dynamic_property_array_type(identity, &storage_property_name).cloned();
+    let origin = source.array_origin(existing.as_ref(), declared_type.as_ref(), property_name, value, context, values)?;
     if let Some(target) = context
         .dynamic_property_alias(identity, &storage_property_name)
         .cloned()
@@ -598,14 +621,15 @@ pub(crate) fn eval_property_set_result(
             EvalReferenceTarget::Cell { cell } if values.is_reference(*cell)? => *cell,
             _ => value,
         };
-        eval_reference_target_write(
-            identity,
-            &storage_property_name,
-            target,
-            value,
-            context,
-            values,
-        )?;
+        let handled = write_member_reference_origin(&target, value, origin.as_ref(), context, values,
+            |context, values, origin, cell| {
+                context.set_dynamic_property_array_type(identity, &storage_property_name, origin.clone());
+                eval_note_instance_property_array_value(identity, &storage_property_name, cell, context, values)
+            })?;
+        if !handled {
+            eval_reference_target_write(identity, &storage_property_name, target, value, context, values)?;
+            if let Some(origin) = origin { context.set_dynamic_property_array_type(identity, &storage_property_name, origin); }
+        }
         context.mark_dynamic_property_initialized(identity, &storage_property_name);
         eval_note_instance_property_array_value(identity, &storage_property_name, storage, context, values)?;
         return eval_with_native_property_storage_scope(
@@ -613,6 +637,7 @@ pub(crate) fn eval_property_set_result(
             |values| values.property_set(object, &storage_property_name, storage),
         );
     }
+    if let Some(origin) = origin { context.set_dynamic_property_array_type(identity, &storage_property_name, origin); }
     eval_note_instance_property_array_value(identity, &storage_property_name, value, context, values)?;
     eval_with_native_property_storage_scope(
         &object_class_name, &storage_property_name, context, values,
