@@ -75,6 +75,7 @@ fn compile_and_run(dir: &Path, stem: &str, source: &str, flags: &[&str]) -> Stri
     fs::write(&php, source).unwrap();
 
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
@@ -258,7 +259,7 @@ echo churn(2000000), "\nEND\n";
     // The structural half: this callee must NOT have been spliced.
     let php = dir.join("asm.php");
     fs::write(&php, CARRIER).unwrap();
-    let out = Command::new(elephc_bin())
+    let out = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)
@@ -295,7 +296,7 @@ printf("B:%s|%s\n", "'$v'", var_export(plain(), true));
     )
     .unwrap();
 
-    let out = Command::new(elephc_bin())
+    let out = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)

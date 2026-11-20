@@ -56,7 +56,7 @@ fn compile_project_with_cli_and_run(
     stdout
 }
 
-/// Runs `elephc --check` on `entry` of a written project and returns the stderr of the failure.
+/// Runs `elephc build --check` on `entry` of a written project and returns the stderr of the failure.
 fn check_project_with_cli_expect_failure(
     prefix: &str,
     files: &[(&str, &str)],

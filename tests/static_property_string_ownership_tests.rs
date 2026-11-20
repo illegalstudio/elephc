@@ -53,6 +53,7 @@ fn compile_and_run(dir: &Path, source: &str) -> String {
     let probe = dir.join("main.php");
     fs::write(&probe, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
@@ -84,7 +85,7 @@ fn compile_and_run(dir: &Path, source: &str) -> String {
 fn static_store_producer(dir: &Path, source: &str) -> String {
     let probe = dir.join("ir.php");
     fs::write(&probe, source).unwrap();
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(dir)
@@ -136,6 +137,7 @@ fn run_with_heap_debug(dir: &Path, name: &str, source: &str) -> String {
     let probe = dir.join(format!("{name}.php"));
     fs::write(&probe, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);

@@ -76,7 +76,7 @@ function boom(string $m) { throw new X($m); }
 fn assert_program(label: &str, body: &str, expected: &str) {
     let dir = make_test_dir(&format!("finally_pending_{label}"));
     fs::write(dir.join("main.php"), format!("<?php\n{PRELUDE}{body}")).unwrap();
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)

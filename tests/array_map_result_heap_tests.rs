@@ -134,6 +134,7 @@ fn assert_program_output_and_clean_heap(prefix: &str, source: &str, expected_std
     fs::write(&php, source).unwrap();
 
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(&dir);

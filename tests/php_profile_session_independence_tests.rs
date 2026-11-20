@@ -160,7 +160,7 @@ fn serve_once(dir: &Path, source: &str, profile: &str, case: &str) -> String {
     let php = dir.join("prog.php");
     fs::write(&php, source).unwrap();
 
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(dir)

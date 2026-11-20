@@ -50,7 +50,7 @@ ELEPHC="${ELEPHC_BIN:-$PROJECT_DIR/target/debug/elephc}"
 [ -x "$ELEPHC" ] || (cd "$PROJECT_DIR" && cargo build)
 
 echo "==> compiling main.php for $ELEPHC_TARGET"
-(cd "$HERE" && XDG_CACHE_HOME="$HERE/.cache" "$ELEPHC" --target "$ELEPHC_TARGET" --emit staticlib main.php)
+(cd "$HERE" && XDG_CACHE_HOME="$HERE/.cache" "$ELEPHC" build --target "$ELEPHC_TARGET" --emit staticlib main.php)
 
 # Any PHP touching the filesystem reaches __rt_fopen_maybe_phar, so the phar
 # bridge is not optional here. Bridges are ordinary Rust staticlibs and must be

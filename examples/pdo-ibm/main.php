@@ -1,7 +1,7 @@
 <?php
 
 // Build/run with an installed IBM Db2 CLI/ODBC driver:
-// cargo run --features pdo-ibm -- examples/pdo-ibm/main.php
+// cargo run --features pdo-ibm -- build examples/pdo-ibm/main.php
 // ELEPHC_IBM_DSN='ibm:DATABASE=SAMPLE;HOSTNAME=127.0.0.1;PORT=50000;PROTOCOL=TCPIP;UID=db2inst1;PWD=secret' ./examples/pdo-ibm/main
 $dsn = (string) getenv("ELEPHC_IBM_DSN");
 try {

@@ -24,11 +24,11 @@ By default the compiler targets the **host** it runs on, detected automatically.
 ## Selecting a target
 
 ```bash
-elephc --target linux-aarch64 hello.php
-elephc --target linux-x86_64 hello.php
-elephc --target=macos-aarch64 hello.php
-elephc --target ios-arm64 --emit staticlib module.php
-elephc --target ios-sim-arm64 --emit staticlib module.php
+elephc build --target linux-aarch64 hello.php
+elephc build --target linux-x86_64 hello.php
+elephc build --target=macos-aarch64 hello.php
+elephc build --target ios-arm64 --emit staticlib module.php
+elephc build --target ios-sim-arm64 --emit staticlib module.php
 ```
 
 Both the spaced (`--target VALUE`) and inline (`--target=VALUE`) forms work.

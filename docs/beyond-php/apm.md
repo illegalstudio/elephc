@@ -17,7 +17,7 @@ table, a live terminal view, a history on disk, and a Transactions view on the
 same monitor page as the profile.
 
 ```bash
-elephc --web --with-monitoring shop.php
+elephc build --web --with-monitoring shop.php
 ELEPHC_PROBE_ADDR=127.0.0.1:9411 ./shop --listen 0.0.0.0:8080 --apm
 
 elephc monitor 127.0.0.1:9411 --apm --key shop.key \
@@ -572,14 +572,14 @@ expect of a library. `--with-monitoring` carries it too, with the profiler.
 
 ```bash
 # A consumer that sends what it counts to a collector.
-elephc --with-apm --apm-collector 10.0.0.5:9412 bin/console.php
+elephc build --with-apm --apm-collector 10.0.0.5:9412 bin/console.php
 
 # A library for an iOS application, counting every call the app makes into it.
-elephc --emit staticlib --target ios-arm64 --with-apm \
+elephc build --emit staticlib --target ios-arm64 --with-apm \
     --apm-collector 192.168.1.20:9412 Renderer.php
 
 # A job loop whose iterations are what matters.
-elephc --with-apm --apm-collector 10.0.0.5:9412 \
+elephc build --with-apm --apm-collector 10.0.0.5:9412 \
     --apm-transaction 'App\Jobs\Importer::importBatch' worker.php
 ```
 

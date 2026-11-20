@@ -4,7 +4,7 @@
 //
 // Build it with the monitoring capability, start it with --apm, and point the
 // collector at its endpoint:
-//   cargo run -- --web --with-monitoring examples/web-apm/main.php
+//   cargo run -- build --web --with-monitoring examples/web-apm/main.php
 //   ELEPHC_PROBE_ADDR=127.0.0.1:9411 examples/web-apm/main --listen 127.0.0.1:8080 --apm &
 //   cargo run -- monitor 127.0.0.1:9411 --apm --key examples/web-apm/main.key \
 //       --store /tmp/shop-apm --serve 127.0.0.1:9000 --capture-every 5

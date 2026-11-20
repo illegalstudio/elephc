@@ -441,7 +441,7 @@ fn phpext_classes_reject_unsupported_shapes_before_sdk() {
         let path = project.0.join(format!("unsupported_class_{index}.php"));
         fs::write(&path, source).unwrap();
         for terminal in ["--check", "--emit-ir"] {
-            let output = Command::new(compiler_binary()).args(["--emit", "phpext", terminal]).arg(&path)
+            let output = Command::new(compiler_binary()).args(["build", "--emit", "phpext", terminal]).arg(&path)
                 .env("ELEPHC_PHPEXT_PHP_CONFIG", project.0.join("missing-sdk")).output().unwrap();
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(!output.status.success(), "{source}: {terminal}");

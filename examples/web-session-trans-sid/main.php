@@ -1,7 +1,7 @@
 <?php
 // elephc-web: session.use_trans_sid — propagate the session id without cookies.
 //
-// Compile: cargo run -- --web examples/web-session-trans-sid/main.php
+// Compile: cargo run -- build --web examples/web-session-trans-sid/main.php
 // Run:     ./examples/web-session-trans-sid/main --listen 127.0.0.1:8080
 // Try (no cookie jar, so URL rewriting kicks in):
 //          curl -s 127.0.0.1:8080/          # links/forms get ?PHPSESSID=<id>

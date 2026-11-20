@@ -3289,7 +3289,7 @@ run($db);
 "#,
     );
     std::fs::write(dir.join("queries.php"), program).expect("failed to write the monitored fixture");
-    let output = elephc_cli_command(&dir)
+    let output = elephc_root_command(&dir)
         .args(["monitor", "queries.php", "--save", "queries.json"])
         .output()
         .expect("failed to run elephc monitor");

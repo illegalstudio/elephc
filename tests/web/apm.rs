@@ -588,7 +588,7 @@ fn apm_messages_and_boundaries_reach_a_listening_collector() {
     build
         .env("XDG_CACHE_HOME", fixture.join("cache-root"))
         .current_dir(&fixture)
-        .args(["--with-apm", "--apm-collector", &address, "--apm-transaction", "import_batch"])
+        .args(["build", "--with-apm", "--apm-collector", &address, "--apm-transaction", "import_batch"])
         .arg(&source);
     let built = output_with_timeout(build, Duration::from_secs(600));
     assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));

@@ -194,6 +194,7 @@ jobs:
         shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc \
+            build \
             --keep-symbols \
             --target "${{ inputs.target }}" \
             examples/date-json-regex/main.php
@@ -237,6 +238,7 @@ jobs:
         shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc \
+            build \
             --target "${{ inputs.target }}" \
             examples/curl-get/main.php
           ./examples/curl-get/main > "$RUNNER_TEMP/curl-get.out"
@@ -248,7 +250,7 @@ jobs:
         shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc native install --locked --target "${{ inputs.target }}" --manifest-path examples/fileinfo/elephc.toml
-          ./target/debug/elephc --target "${{ inputs.target }}" examples/fileinfo/main.php
+          ./target/debug/elephc build --target "${{ inputs.target }}" examples/fileinfo/main.php
           ./examples/fileinfo/main > "$RUNNER_TEMP/fileinfo.out"
           grep -Fx "text/plain; charset=us-ascii" "$RUNNER_TEMP/fileinfo.out"
 
@@ -266,6 +268,7 @@ jobs:
         shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc \
+            build \
             --target "${{ inputs.target }}" \
             examples/xml/main.php
           ./examples/xml/main > "$RUNNER_TEMP/xml.out"
@@ -282,6 +285,7 @@ jobs:
         shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc \
+            build \
             --target "${{ inputs.target }}" \
             examples/simplexml/main.php
           ./examples/simplexml/main > "$RUNNER_TEMP/simplexml.out"
@@ -297,6 +301,7 @@ jobs:
         shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc \
+            build \
             --target "${{ inputs.target }}" \
             examples/tidy/main.php
           ./examples/tidy/main > "$RUNNER_TEMP/tidy.out" 2> "$RUNNER_TEMP/tidy.err"

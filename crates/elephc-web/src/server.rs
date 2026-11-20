@@ -337,7 +337,7 @@ fn run_server(
     if args.apm && !crate::probe_route::apm_enable(isolation == IsolationMode::Worker) {
         eprintln!(
             "error: --apm needs a binary built with --with-apm or --with-monitoring (rebuild with \
-             `elephc --web --with-apm ...`)"
+             `elephc build --web --with-apm ...`)"
         );
         return 2;
     }

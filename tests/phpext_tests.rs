@@ -95,7 +95,7 @@ impl Project {
     fn compile_with_options(&self, name: &str, source: &str, options: &[&str]) -> PathBuf {
         let path = self.0.join(format!("{name}.php"));
         fs::write(&path, source).unwrap();
-        let output = Command::new(compiler_binary())
+        let output = Command::new(compiler_binary()).arg("build")
             .args(["--emit", "phpext"]).args(options).arg(&path).output().unwrap();
         assert!(output.status.success(), "compiler failed:\n{}\n{}",
             String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
@@ -121,7 +121,7 @@ fn phpext_timings_include_host_link_phase() {
     let _sdk = project.sdk();
     let source = project.0.join("timed.php");
     fs::write(&source, "<?php #[Export] function php_timed(): int { return 42; }").unwrap();
-    let output = Command::new(compiler_binary())
+    let output = Command::new(compiler_binary()).arg("build")
         .args(["--emit", "phpext", "--heap-size=524288", "--timings"])
         .arg(&source)
         .output()

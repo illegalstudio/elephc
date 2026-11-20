@@ -60,7 +60,7 @@ echo $sum;
         .arg("--ir-opt=on")
         .arg(&php_path)
         .output()
-        .expect("run elephc --emit-ir");
+        .expect("run elephc build --emit-ir");
     assert!(
         output.status.success(),
         "emit-ir failed: {}",
