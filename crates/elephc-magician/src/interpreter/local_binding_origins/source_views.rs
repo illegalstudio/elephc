@@ -14,6 +14,7 @@ use super::*;
 pub(in crate::interpreter) struct LocalAssignmentProducer {
     pub(super) binding: Option<EvalParameterType>,
     pub(super) source: Option<EvalParameterType>,
+    pub(super) arguments: Option<ArgumentSource>,
 }
 
 /// Captures both metadata roles before evaluating an assignment's source effects.
@@ -21,7 +22,22 @@ pub(in crate::interpreter) fn prepare_assignment(expr: &EvalExpr,
     context: &ElephcEvalContext, scope: &ElephcEvalScope,
 ) -> LocalAssignmentProducer {
     LocalAssignmentProducer { binding: local_producer_contract(expr, context, scope),
-        source: source_view(expr, context, scope) }
+        source: source_view(expr, context, scope), arguments: argument_source(expr, context, scope) }
+}
+
+/// Captures binding-owned argument evidence without replacing absent entry proofs by inference.
+pub(in crate::interpreter) fn argument_source(expr: &EvalExpr,
+    context: &ElephcEvalContext, scope: &ElephcEvalScope,
+) -> Option<ArgumentSource> {
+    match expr {
+        EvalExpr::LoadVar(name) => {
+            let mut packet = scope.local_argument_source(name, context)?.clone();
+            packet.ty = source_view(expr, context, scope)?;
+            Some(packet)
+        },
+        EvalExpr::Assign { value, .. } => argument_source(value, context, scope),
+        _ => None,
+    }
 }
 
 /// Uses a current source view without turning it into a whole-binding restriction.
@@ -64,9 +80,14 @@ pub(in crate::interpreter) fn evaluate_assignment(expr: &EvalExpr, name: &str,
     producer: &mut LocalAssignmentProducer, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+    let mixed = context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed);
+    let arrays = context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes);
+    if mixed || arrays {
         if let EvalExpr::Array(elements) = expr {
-            let (value, observed) = array_literals::evaluate_literal(elements, context, scope, values)?;
+            let (value, packet) = array_literals::evaluate_argument_array(elements, context, scope, values)?;
+            let observed = packet.ty.clone();
+            producer.arguments = Some(packet);
+            if !arrays { producer.source = Some(parameter_type(&Type::atom("array"))); return Ok(value); }
             let mut schemas = Vec::new();
             for contract in scope.local_type(name).cloned().into_iter()
                 .chain(generic_local_contracts(scope, name, context).into_iter()

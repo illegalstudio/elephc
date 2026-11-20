@@ -150,3 +150,4 @@ mod strict_mixed_builtin_boundaries;
 mod strict_mixed_declared_sources;
 mod strict_mixed_numeric_domains;
 mod strict_mixed_spread_sources;
+mod strict_mixed_stored_sources;

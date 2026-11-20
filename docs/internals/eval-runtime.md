@@ -767,6 +767,17 @@ profile decoder is shared by context installation, native hooks and disk-cache
 identity checks.
 
 
+Logical source snapshots belong to scope bindings and evaluated arguments. A
+snapshot may contain optional per-key entry evidence for a literal argument array;
+this evidence is separate from its inferred homogeneous content constraint. Stored
+arrays and value copies preserve entry snapshots, while binding generations and
+canonical reference writes invalidate stale evidence. Entry proofs keep their
+original write epochs. Reading a stored snapshot retains the container's declared
+alternatives or observed predicate view, so element evidence cannot narrow an
+explicit `mixed` container by itself. Spread, callback-array and reflection
+invocation share the same entry projection and owner cleanup adapters.
+
+
 ## Runtime script cache
 
 **Sources:** `crates/elephc-magician/src/script_cache/`, the

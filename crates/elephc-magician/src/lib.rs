@@ -31,6 +31,7 @@ mod repl;
 mod mbregex_provider;
 pub mod runtime_hooks;
 pub mod scope;
+mod source_snapshot;
 pub mod script_cache;
 mod php_only_mode;
 mod stream_resources;

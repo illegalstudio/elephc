@@ -29,20 +29,7 @@ pub enum EvalOutcome {
     Throwable(RuntimeCellHandle),
 }
 
-/// A source producer snapshot whose write stamp matters only for a shared argument.
-#[derive(Clone)]
-pub(super) struct ArgumentSource {
-    pub(super) ty: crate::eval_ir::EvalParameterType,
-    pub(super) write_epoch: u64,
-    pub(super) entries: Vec<(crate::context::EvalArrayReferenceKey, Option<ArgumentSource>)>,
-}
-
-impl ArgumentSource {
-    /// Captures declaration metadata without retaining or inspecting its runtime value.
-    pub(super) fn capture(ty: crate::eval_ir::EvalParameterType,
-        context: &crate::context::ElephcEvalContext,
-    ) -> Self { Self { ty, write_epoch: context.source_view_epoch(), entries: Vec::new() } }
-}
+pub(super) use crate::source_snapshot::SourceSnapshot as ArgumentSource;
 
 /// One already evaluated function-like call argument.
 #[derive(Clone)]

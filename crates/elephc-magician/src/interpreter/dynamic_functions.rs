@@ -133,8 +133,8 @@ fn evaluate_call_argument_value(
     values: &mut impl RuntimeValueOps, owners: Option<&mut Vec<RuntimeCellHandle>>,
     by_reference: bool,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>, Option<ArgumentSource>), EvalStatus> {
-    let source = local_binding_origins::source_view(expr, context, scope)
-        .map(|ty| ArgumentSource::capture(ty, context));
+    let source = local_binding_origins::argument_source(expr, context, scope).or_else(||
+        local_binding_origins::source_view(expr, context, scope).map(|ty| ArgumentSource::capture(ty, context)));
     if let Some(owners) = owners {
         if by_reference {
             let reference = builtin_arguments::reference(expr, context, scope, values)?;
@@ -146,8 +146,8 @@ fn evaluate_call_argument_value(
                 let (value, source) = array_literals::evaluate_argument_array(elements, context, scope, values)?;
                 (value, Some(source))
             } else {
-                let (value, source) = mixed_eval::evaluate(expr, context, scope, values)?;
-                (value, source.as_ref().map(|ty| ArgumentSource::capture(crate::eval_ir::parameter_type(ty), context)))
+                let (value, logical) = mixed_eval::evaluate(expr, context, scope, values)?;
+                (value, source.or_else(|| logical.as_ref().map(|ty| ArgumentSource::capture(crate::eval_ir::parameter_type(ty), context))))
             }
         } else { (eval_owned_expr(expr, context, scope, values)?, source) };
         owners.push(value);

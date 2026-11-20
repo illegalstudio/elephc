@@ -19,7 +19,7 @@ mod source_views;
 mod declared_sources;
 pub(super) use declared_sources::resolve_type as resolve_declared_source_type;
 
-pub(super) use source_views::{LocalAssignmentProducer, prepare_assignment, source_view, evaluate_assignment};
+pub(super) use source_views::{LocalAssignmentProducer, prepare_assignment, source_view, argument_source, evaluate_assignment};
 
 pub(super) use arrays::{element_source_type, element_value_source_type, refresh_reference_sources, refresh_value_sources};
 pub(super) use arrays::{prepare_write as prepare_array_local_write, publish_write as publish_array_local_write};
@@ -180,7 +180,7 @@ pub(in crate::interpreter) fn store_local_with_origin(context: &mut ElephcEvalCo
     scope: &mut ElephcEvalScope, name: String, value: RuntimeCellHandle,
     producer: LocalAssignmentProducer, values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    let LocalAssignmentProducer { binding: producer, source } = producer;
+    let LocalAssignmentProducer { binding: producer, source, arguments } = producer;
     let source = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
         && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
         match source.map(Ok).unwrap_or_else(|| value_contract(value, context, values)) {
@@ -230,5 +230,6 @@ pub(in crate::interpreter) fn store_local_with_origin(context: &mut ElephcEvalCo
         }
     }
     refresh_reference_sources(scope, &name, context, values)?;
+    if let Some(arguments) = arguments { scope.record_local_argument_source(name, arguments); }
     Ok(replaced)
 }

@@ -260,7 +260,13 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::TypedVar { name, declared, value } => {
-            let value = eval_owned_expr(value, context, scope, values)?;
+            let packet = local_binding_origins::argument_source(value, context, scope);
+            let (value, packet) = if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+                && matches!(value, EvalExpr::Array(_)) {
+                let EvalExpr::Array(elements) = value else { unreachable!() };
+                let (value, source) = array_literals::evaluate_argument_array(elements, context, scope, values)?;
+                (value, Some(source))
+            } else { (eval_owned_expr(value, context, scope, values)?, packet) };
             let checked = validate_generic_local(declared, name, value, context, values);
             if let Err(error) = checked { let _ = eval_release_value(context, values, value); return Err(error); }
             let previous = scope.local_type(name).cloned();
@@ -279,6 +285,7 @@ pub(in crate::interpreter) fn execute_stmt(
             if let Some(cell) = visible_scope_cell(context, scope, name) {
                 if values.is_reference(cell)? { context.bind_local_reference_types(cell, &[declared.clone()]); }
             }
+            if let Some(packet) = packet { scope.record_local_argument_source(name.clone(), packet); }
             Ok(EvalControl::None)
         }
         EvalStmt::StoreVar { name, value } => {

@@ -29,12 +29,15 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
                     return Err(EvalStatus::RuntimeFatal);
                 }
                 let source = local_binding_origins::source_view(arg.value(), context, caller_scope);
-                let (spread, entry_sources) = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
+                let (spread, packet) = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
                     || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
                     if let EvalExpr::Array(elements) = arg.value() {
-                        let (spread, sources) = array_literals::evaluate_argument_literal(elements, context, caller_scope, values)?;
-                        (spread, Some(sources))
-                    } else { (eval_expr(arg.value(), context, caller_scope, values)?, None) }
+                        let (spread, source) = array_literals::evaluate_argument_array(elements, context, caller_scope, values)?;
+                        (spread, Some(source))
+                    } else {
+                        let packet = local_binding_origins::argument_source(arg.value(), context, caller_scope);
+                        (eval_expr(arg.value(), context, caller_scope, values)?, packet)
+                    }
                 } else { (eval_expr(arg.value(), context, caller_scope, values)?, None) };
                 let unpacked = (|| {
                     if !values.is_array_like(spread)? {
@@ -44,21 +47,12 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
                     append_unpacked_call_arg_values(
                         spread, &mut evaluated_args, &mut saw_named, context, values,
                     )?;
-                    let element_source = source.as_ref().map(|ty| local_binding_origins::element_source_type(
-                        crate::eval_ir::generic_type(ty), true)).map(|ty| crate::eval_ir::parameter_type(&ty));
-                    let element_source = element_source.as_ref().map(|ty| crate::eval_ir::parameter_type(
-                        &local_binding_origins::replacement_element_source(Some(ty))));
+                    let packet = packet.or_else(|| source.map(|ty| ArgumentSource::capture(ty, context)));
+                    array_argument_sources::apply(spread, packet.as_ref(), &mut evaluated_args[first_unpacked..], context, values)?;
                     for (position, argument) in evaluated_args[first_unpacked..].iter_mut().enumerate() {
                         if argument.value.is_borrowed() {
                             argument.value = values.retain(argument.value)?;
                         }
-                        argument.source_type = if let Some(sources) = &entry_sources {
-                            let key = values.array_iter_key(spread, position)?;
-                            let normalized = eval_array_reference_key(key, context.semantic_profile(), values);
-                            let released = release_expr_result(key, context, values);
-                            let key = normalized.and_then(|key| released.map(|()| key))?;
-                            key.and_then(|key| sources.iter().find(|(source, _)| source == &key).and_then(|(_, proof)| proof.clone()))
-                        } else { element_source.clone().map(|ty| ArgumentSource::capture(ty, context)) };
                         if let Some(reference) = array_argument_sources::reference_cell(argument, values)? {
                             argument.source_type = argument.source_type.take().filter(|source|
                                 context.source_view_is_current(reference, source.write_epoch));
@@ -247,6 +241,7 @@ fn eval_source_argument_with_type(argument: &EvalCallArg, position: usize,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>, Option<ArgumentSource>), EvalStatus> {
     let source = local_binding_origins::source_view(argument.value(), context, scope);
+    let packet = local_binding_origins::argument_source(argument.value(), context, scope);
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
         && !modes.by_reference(argument.name(), position) {
         if let EvalExpr::Array(elements) = argument.value() {
@@ -258,7 +253,7 @@ fn eval_source_argument_with_type(argument: &EvalCallArg, position: usize,
         && !modes.by_reference(argument.name(), position)
         && !matches!(argument.value(), EvalExpr::Array(_)) {
         let (value, source) = mixed_eval::evaluate(argument.value(), context, scope, values)?;
-        return Ok((value, None, source.as_ref().map(|source| ArgumentSource::capture(crate::eval_ir::parameter_type(source), context))));
+        return Ok((value, None, packet.or_else(|| source.as_ref().map(|source| ArgumentSource::capture(crate::eval_ir::parameter_type(source), context)))));
     }
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
         && !modes.by_reference(argument.name(), position) {
@@ -268,5 +263,5 @@ fn eval_source_argument_with_type(argument: &EvalCallArg, position: usize,
         }
     }
     let (value, target) = eval_source_call_argument(argument, position, modes, context, scope, values)?;
-    Ok((value, target, source.map(|ty| ArgumentSource::capture(ty, context))))
+    Ok((value, target, packet.or_else(|| source.map(|ty| ArgumentSource::capture(ty, context)))))
 }

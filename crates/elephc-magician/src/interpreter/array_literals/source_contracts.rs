@@ -54,14 +54,6 @@ pub(in crate::interpreter) fn evaluate_literal(elements: &[EvalArrayElement],
     Ok((value, parameter_type(&source.finish())))
 }
 
-/// Returns each final argument entry's own producer instead of inferring a homogeneous tuple.
-pub(in crate::interpreter) fn evaluate_argument_literal(elements: &[EvalArrayElement],
-    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-) -> Result<(RuntimeCellHandle, Vec<(EvalArrayReferenceKey, Option<ArgumentSource>)>), EvalStatus> {
-    let (value, source) = evaluate_literal_source(elements, context, scope, values)?;
-    Ok((value, source.entries.into_iter().map(|(key, _, proof)| (key, proof)).collect()))
-}
-
 /// Captures tuple entry proofs separately from the schema used by inferred data-array constraints.
 pub(in crate::interpreter) fn evaluate_argument_array(elements: &[EvalArrayElement],
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
@@ -108,13 +100,14 @@ pub(super) fn evaluate_literal_value(expr: &EvalExpr, context: &mut ElephcEvalCo
         return Ok((value, Some(proof.ty.clone()), Some(proof)));
     }
     let schema = local_binding_origins::source_view(expr, context, scope);
+    let packet = local_binding_origins::argument_source(expr, context, scope);
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
         let (value, source) = mixed_eval::evaluate(expr, context, scope, values)?;
-        let proof = source.as_ref().map(|ty| ArgumentSource::capture(parameter_type(ty), context));
+        let proof = packet.or_else(|| source.as_ref().map(|ty| ArgumentSource::capture(parameter_type(ty), context)));
         Ok((value, schema, proof))
     } else {
         let value = eval_owned_expr(expr, context, scope, values)?;
-        let proof = schema.as_ref().map(|ty| ArgumentSource::capture(ty.clone(), context));
+        let proof = packet.or_else(|| schema.as_ref().map(|ty| ArgumentSource::capture(ty.clone(), context)));
         Ok((value, schema, proof))
     }
 }

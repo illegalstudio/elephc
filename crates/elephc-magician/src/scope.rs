@@ -150,12 +150,20 @@ struct LocalSourceView {
     predicate_guard: bool,
 }
 
+/// A binding generation and its optional nested argument evidence.
+#[derive(Clone)]
+struct LocalArgumentSource {
+    generation: u64,
+    source: crate::source_snapshot::SourceSnapshot,
+}
+
 /// Materialized activation scope passed opaquely across the eval ABI.
 pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
     local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     inferred_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     local_source_views: HashMap<String, LocalSourceView>,
+    local_argument_sources: HashMap<String, LocalArgumentSource>,
     array_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_storage_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_binding_types: HashMap<String, crate::eval_ir::EvalParameterType>,
@@ -175,6 +183,7 @@ impl ElephcEvalScope {
             local_types: HashMap::new(),
             inferred_local_types: HashMap::new(),
             local_source_views: HashMap::new(),
+            local_argument_sources: HashMap::new(),
             array_local_types: HashMap::new(),
             native_storage_types: HashMap::new(),
             native_binding_types: HashMap::new(),
@@ -437,6 +446,7 @@ impl ElephcEvalScope {
         self.inferred_local_types.remove(&name);
         self.array_local_types.remove(&name);
         self.local_source_views.remove(&name);
+        self.local_argument_sources.remove(&name);
         self.native_binding_types.remove(&name);
         if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         self.reference_targets.remove(&name);
@@ -457,6 +467,7 @@ impl ElephcEvalScope {
         self.inferred_local_types.remove(&name);
         self.array_local_types.remove(&name);
         self.local_source_views.remove(&name);
+        self.local_argument_sources.remove(&name);
         self.native_binding_types.remove(&name);
         if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         let Some(entry) = self.entries.get(&name).copied() else {
@@ -633,6 +644,7 @@ impl ElephcEvalScope {
         self.inferred_local_types.clear();
         self.array_local_types.clear();
         self.local_source_views.clear();
+        self.local_argument_sources.clear();
         self.native_binding_types.clear();
         self.aot_visible_names.clear();
         self.reference_targets.clear();
