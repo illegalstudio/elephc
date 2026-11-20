@@ -803,6 +803,9 @@ fn lower_nested_array_assign_selected(
         if !super::nested_write_guards::guard_nested_write_parent(ctx, parent, Some(index), span) {
             return;
         }
+        crate::ir_lower::array_key_guards::before_parent_materialization(
+            ctx, parent, key, span,
+        );
         super::nested_scalar_writes::lower_nested_set(
             ctx,
             parent,

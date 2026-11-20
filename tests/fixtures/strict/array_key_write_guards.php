@@ -95,3 +95,15 @@ function writeOpaqueLeafCase(mixed $child): void {
 // The valid outer fetch materializes a null child before checking the leaf key.
 writeOpaqueLeafCase(null);
 writeOpaqueLeafCase(false);
+function writeDynamicFalsePropertyCase(mixed $key, int $mode): void {
+    $box = new stdClass();
+    $box->value = false;
+    try {
+        if ($mode === 0) { $box->value[$key] += 1; }
+        else { ++$box->value[$key]; }
+        echo 'W';
+    } catch (Error $error) { echo 'E'; unset($error); }
+    echo gettype($box->value), '|';
+}
+writeDynamicFalsePropertyCase(false, 0);
+writeDynamicFalsePropertyCase(false, 1);
