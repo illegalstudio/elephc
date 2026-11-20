@@ -362,7 +362,10 @@ fn dollar_without_identifier_is_literal_text() {
             TokenKind::LParen,
             string("$"),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             var("s"),
+            TokenKind::RParen,
             TokenKind::RParen,
             TokenKind::Semicolon,
             TokenKind::Eof,
@@ -379,8 +382,9 @@ fn dollar_without_identifier_is_literal_text() {
 fn interpolated_tokens_carry_the_opening_quote_line() {
     let tokens = tokenize("$x;\n\"a\n$v\nb\";\n$y;").expect("fragment should tokenize");
     let lines: Vec<i64> = tokens.iter().map(super::Token::line).collect();
-    // `$x` `;` on line 1, then the literal's nine tokens
-    // (`(` `"a\n"` `.` `$v` `.` `"\nb"` `)`) all stamped with its opening-quote line 2,
+    // `$x` `;` on line 1, then the literal's ten tokens
+    // (`(` `"a\n"` `.` `StringFormat` `(` `$v` `)` `.` `"\nb"` `)`) all stamped with
+    // its opening-quote line 2,
     // the `;` after the closing quote on line 4, then `$y` `;` on line 5 and EOF.
     assert_eq!(
         kinds("$x;\n\"a\n$v\nb\";\n$y;"),
@@ -390,7 +394,10 @@ fn interpolated_tokens_carry_the_opening_quote_line() {
             TokenKind::LParen,
             string("a\n"),
             TokenKind::Dot,
+            TokenKind::StringFormat,
+            TokenKind::LParen,
             var("v"),
+            TokenKind::RParen,
             TokenKind::Dot,
             string("\nb"),
             TokenKind::RParen,
@@ -400,7 +407,7 @@ fn interpolated_tokens_carry_the_opening_quote_line() {
             TokenKind::Eof,
         ]
     );
-    assert_eq!(lines, vec![1, 1, 2, 2, 2, 2, 2, 2, 2, 4, 5, 5, 5]);
+    assert_eq!(lines, vec![1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 5, 5, 5]);
 }
 
 /// Verifies `"$a[]"` is refused. PHP 8.5.6: `syntax error, unexpected token "]"`.
