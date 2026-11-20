@@ -2,7 +2,7 @@
 //! End-to-end parity tests for the `ext/gmp` surface through the runtime Magician eval bridge.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests gmp_eval` through the codegen test module.
+//! - `cargo test --test codegen_tests_ext gmp_eval` through the codegen test module.
 //!
 //! Key details:
 //! - The fixture forces bridge-run eval by building the fragment from a runtime-unknown

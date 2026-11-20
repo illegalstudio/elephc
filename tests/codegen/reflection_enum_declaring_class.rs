@@ -2,7 +2,7 @@
 //! Regression tests for the `ReflectionEnum` php's class factory hands back for enum members.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests reflection_enum_declaring_class` through Rust's test
+//! - `cargo test --test codegen_tests_oop reflection_enum_declaring_class` through Rust's test
 //!   harness.
 //!
 //! Key details:

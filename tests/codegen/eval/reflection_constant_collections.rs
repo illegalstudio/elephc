@@ -2,7 +2,7 @@
 //! Heap regression tests for the constant collections of eval reflectors.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval::reflection_constant_collections` through Rust's
+//! - `cargo test --test codegen_tests_eval eval::reflection_constant_collections` through Rust's
 //!   test harness.
 //!
 //! Key details:

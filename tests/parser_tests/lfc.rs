@@ -2,7 +2,7 @@
 //! Parser regressions for tagless `.lfc` source and durable source provenance.
 //!
 //! Called from:
-//! - `cargo test --test parser_tests lfc` through the integration test harness.
+//! - `cargo test --test integration parser_tests::lfc` through the integration test harness.
 //!
 //! Key details:
 //! - LFC uses the shared PHP grammar after the lexer synthesizes `OpenTag`.
