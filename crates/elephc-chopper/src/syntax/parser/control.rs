@@ -199,6 +199,17 @@ fn validate_foreach_target(
     pos: &mut usize,
     span: Span,
 ) -> Result<(), CompileError> {
+    // Zend requires a variable or destructuring target here. An ungrouped arrow
+    // function fails at its keyword, before parsing its signature or body.
+    match tokens.get(*pos..) {
+        Some([(Token::Fn, metadata), ..]) => {
+            return Err(CompileError::new(metadata.span, "Unexpected arrow function in foreach target"));
+        }
+        Some([(Token::Static, _), (Token::Fn, metadata), ..]) => {
+            return Err(CompileError::new(metadata.span, "Expected '::' after 'static' in foreach target"));
+        }
+        _ => {}
+    }
     let starts_pattern = starts_destructuring_pattern(tokens, *pos);
     let starts_paren = matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::LParen));
     let bare_paren = starts_paren && parenthesized_target_is_bare(tokens, *pos);

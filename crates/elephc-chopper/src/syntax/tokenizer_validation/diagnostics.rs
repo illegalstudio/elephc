@@ -174,6 +174,9 @@ pub(crate) fn diagnostic_override<T: SourceToken>(
     if raw_message == "Expected '=' after constant name" {
         return Some(with_expectation(mapped.clone(), "\"=\""));
     }
+    if raw_message == "Expected '::' after 'static' in foreach target" {
+        return Some(with_expectation(mapped.clone(), "\"::\""));
+    }
     if raw_message.starts_with("Expected parent class name after 'extends'") {
         return Some(match token_after_keyword(tokens, mapped.pos, tok::T_EXTENDS) {
             Some(next) => token_at_index_error(source, tokens, next),
