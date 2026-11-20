@@ -402,11 +402,14 @@ pub(super) fn write_back_owned_variable_ref_target(
 /// a live variable or a static local through an explicit retain), the entry's reference is
 /// separate and must be released with the entry: a borrowed entry leaked one cell per write
 /// (`$r = 9` after `$r = &$x[0]`). A `Cell` that is not a PHP reference (`$x = &f()` with a
-/// by-value `f()`) keeps nothing, so the entry is the only owner. The other targets keep the
-/// borrowed entry they always had: their write paths do not show a separate reference to keep.
+/// by-value `f()`) keeps nothing, so the entry is the only owner. A `Cell` that IS a PHP reference
+/// (a closure's `use (&$x)`) is written through by `reference_replace`, which stores a COPY and
+/// consumes nothing, so the entry owns the statement's value then too: a borrowed entry leaked
+/// one boxed value per assignment inside the closure. The remaining targets keep the borrowed
+/// entry they always had: their write paths do not show a separate reference to keep.
 pub(in crate::interpreter) fn written_value_is_owned_by_entry(
     target: &EvalReferenceTarget,
-    values: &mut impl RuntimeValueOps,
+    _values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     Ok(match target {
         EvalReferenceTarget::ArrayElement { scope, .. }
@@ -414,7 +417,7 @@ pub(in crate::interpreter) fn written_value_is_owned_by_entry(
         EvalReferenceTarget::NestedArrayElement { .. }
         | EvalReferenceTarget::StaticLocal { .. }
         | EvalReferenceTarget::ObjectProperty { .. } => true,
-        EvalReferenceTarget::Cell { cell } => !values.is_reference(*cell)?,
+        EvalReferenceTarget::Cell { .. } => true,
         EvalReferenceTarget::StaticProperty { .. } | EvalReferenceTarget::InvokerSlot { .. } => false,
     })
 }

@@ -250,3 +250,28 @@ echo "end\n";
     assert_eq!(out.stdout, "1\n1\n1\nend\n", "stderr: {}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// An assignment inside `function () use (&$x)` stores through the shared reference, which copies
+/// the value, so the statement's own owner has to be released with the entry. Every assignment
+/// leaked one boxed value (object, string, array) until the entry owned it.
+#[test]
+fn test_eval_closure_by_reference_capture_assignment_releases_the_written_value() {
+    let source = r#"<?php
+class ByRefCaptureOwner {
+    public function __construct(public string $label) {}
+    public function __destruct() { echo $this->label, "|"; }
+}
+$source = '$object = new ByRefCaptureOwner("old");
+$callback = function() use (&$object): string { $object = new ByRefCaptureOwner("new"); return $object->label; };
+echo $callback(), ":"; unset($object, $callback); echo "done|";
+$text = "a"; $callback = function() use (&$text) { $text = str_repeat("z", 3); };
+$callback(); unset($callback); echo $text, "|";
+$list = []; $callback = function() use (&$list) { $list = [1, 2]; };
+$callback(); unset($callback); echo count($list);' . ' // ' . $argc;
+eval($source);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "old|new:new|done|zzz|2", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
