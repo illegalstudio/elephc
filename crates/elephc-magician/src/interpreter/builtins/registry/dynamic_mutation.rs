@@ -323,15 +323,19 @@ fn eval_dynamic_preg_match_call(
     )?;
     let pattern = required_evaluated_ref_arg(&bound, 0)?;
     let subject = required_evaluated_ref_arg(&bound, 1)?;
+    let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let offset = optional_evaluated_ref_arg(&bound, 4).map(|arg| arg.value);
+    // Named `flags:` / `offset:` may skip `$matches`; the positional by-value fallback cannot
+    // place them, so the count-only form is answered here.
     let Some(matches) = optional_evaluated_ref_arg(&bound, 2) else {
-        return Ok(None);
+        eval_preg_match_flags(flags, context, values)?;
+        let offset = eval_preg_offset_value(offset, values)?;
+        return eval_preg_match_result(pattern.value, subject.value, offset, values).map(Some);
     };
     let Some(target) = matches.ref_target.as_ref() else {
         return Ok(None);
     };
-    let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
     let flags = eval_preg_match_flags(flags, context, values)?;
-    let offset = optional_evaluated_ref_arg(&bound, 4).map(|arg| arg.value);
     let offset = eval_preg_offset_value(offset, values)?;
     let (result, matches_array) =
         eval_preg_match_capture_result(pattern.value, subject.value, flags, offset, values)?;
@@ -352,15 +356,19 @@ fn eval_dynamic_preg_match_all_call(
     )?;
     let pattern = required_evaluated_ref_arg(&bound, 0)?;
     let subject = required_evaluated_ref_arg(&bound, 1)?;
+    let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let offset = optional_evaluated_ref_arg(&bound, 4).map(|arg| arg.value);
+    // Named `flags:` / `offset:` may skip `$matches`; the positional by-value fallback would
+    // see a defaulted `$matches` and warn, so the count-only form is answered here.
     let Some(matches) = optional_evaluated_ref_arg(&bound, 2) else {
-        return Ok(None);
+        eval_preg_match_all_require_supported_flags(flags, context, values)?;
+        let offset = eval_preg_offset_value(offset, values)?;
+        return eval_preg_match_all_result(pattern.value, subject.value, offset, values).map(Some);
     };
     let Some(target) = matches.ref_target.as_ref() else {
         return Ok(None);
     };
-    let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
     let flags = eval_preg_match_all_require_supported_flags(flags, context, values)?;
-    let offset = optional_evaluated_ref_arg(&bound, 4).map(|arg| arg.value);
     let offset = eval_preg_offset_value(offset, values)?;
     let (result, matches_array) =
         eval_preg_match_all_capture_result(pattern.value, subject.value, flags, offset, values)?;

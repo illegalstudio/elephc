@@ -122658,11 +122658,18 @@
           "name": "flags",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 2,
       "runtime_builtin_id": null,
-      "signature_override_reason": "additional-optional-parameters",
+      "signature_override_reason": "runtime-default-representation",
       "supported": true,
       "variadic": null
     },

@@ -98,7 +98,7 @@ fn eval_signature_override(id: BuiltinId) -> Option<EvalSignatureProfile> {
                 variadic: None,
                 required_param_count: None,
             },
-            override_reason: Some(EvalSignatureOverrideReason::AdditionalOptionalParameters),
+            override_reason: Some(EvalSignatureOverrideReason::RuntimeDefaultRepresentation),
         });
     }
     None
@@ -195,6 +195,12 @@ const PREG_MATCH_PARAMS: &[ParamSpec] = &[
         default: Some(DefaultSpec::Int(0)),
         by_ref: false,
     },
+    ParamSpec {
+        name: "offset",
+        ty: TypeSpec::Int,
+        default: Some(DefaultSpec::Int(0)),
+        by_ref: false,
+    },
 ];
 
 
@@ -241,5 +247,19 @@ mod tests {
         assert_eq!(overridden.len(), 5);
         assert_eq!(overridden[0].0, "implode");
         assert_eq!(overridden[4].0, "preg_match");
+    }
+
+    /// Verifies the `preg_match` profile names every canonical parameter, so named
+    /// arguments bound through eval callables (`offset:`) resolve like direct calls.
+    #[test]
+    fn preg_match_eval_profile_keeps_canonical_parameter_names() {
+        let contract = lookup("preg_match").expect("preg_match contract must exist");
+        let profile_names = eval_signature(contract)
+            .params
+            .iter()
+            .map(|param| param.name)
+            .collect::<Vec<_>>();
+        let canonical_names = contract.params.iter().map(|param| param.name).collect::<Vec<_>>();
+        assert_eq!(profile_names, canonical_names);
     }
 }
