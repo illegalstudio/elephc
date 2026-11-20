@@ -142,10 +142,12 @@ impl<V: RuntimeValueOps> Reducer<'_, V> {
         let value = if let Some(value) = self.context.enum_case(&class, name) { value }
         else if let Some((owner, constant)) = self.context.class_constant(&class, name) {
             if validate_eval_member_access(&owner, constant.visibility(), self.context).is_err() { return Ok(None); }
-            let Some(value) = self.context.class_constant_cell(&owner, name) else { return Ok(None); };
+            let preview = self.operation(|context, values|
+                eval_class_constant_preview(&owner, name, context, values))?;
+            let Some((value, _)) = preview else { return Ok(None); };
             value
         } else { return Ok(None); };
-        self.make(|context, values| copy_scope_value(value, context, values))
+        self.own(value).map(Some)
     }
 
     /// Excludes warning-producing or invalid keys before any runtime array operation.
