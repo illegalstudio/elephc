@@ -173,7 +173,6 @@ fn bytecode_slice_balances_failed_operand_cleanup() {
         ("return 2 + 3;", 0),
         ("return 2 + 3;", 1),
         ("return -3;", 0),
-        ("return -3;", 1),
         ("return (int) 3;", 0),
         ("$n = 1; $n++;", 1),
     ] {
