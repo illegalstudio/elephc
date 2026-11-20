@@ -499,6 +499,23 @@ echo filter_var("\xFE", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => $patt
     assert_eq!(out, "ok|no");
 }
 
+/// A raw-byte pattern still validates its ASCII modifiers before matching.
+#[test]
+fn test_filter_regexp_byte_pattern_rejects_unknown_modifier() {
+    let output = compile_and_run_capture(
+        r#"<?php
+$value = "\xFF";
+var_dump(filter_var($value, FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => "/^\xFF$/q"]]));
+"#,
+    );
+    assert_eq!(output.stdout, "bool(false)\n");
+    assert!(
+        output.stderr.contains("Unknown modifier 'q'"),
+        "missing modifier warning: {}",
+        output.stderr
+    );
+}
+
 /// `add_empty` is a weak `bool` parameter: arrays/objects are rejected before any body
 /// logic, including `filter_input_array()` with an empty input.
 #[test]

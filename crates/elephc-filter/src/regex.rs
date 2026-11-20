@@ -75,6 +75,70 @@ fn split_php_pattern(pattern: &str) -> Result<(&str, &str), String> {
     Ok((&pattern[body_start..closing], modifiers))
 }
 
+/// Byte-oriented sibling of [`split_php_pattern`] for patterns that are not valid UTF-8.
+///
+/// PHP keeps non-`u` patterns byte-exact, but their delimiters and modifiers are ASCII. This
+/// validates the spelling before the native matcher sees it, so an unknown modifier still
+/// reports `Unknown modifier 'q'` instead of being silently ignored by the runtime scan.
+fn split_php_pattern_bytes(pattern: &[u8]) -> Result<(&[u8], &[u8]), String> {
+    let mut start = 0usize;
+    let mut end = pattern.len();
+    while start < end && pattern[start].is_ascii_whitespace() { start += 1; }
+    while end > start && pattern[end - 1].is_ascii_whitespace() { end -= 1; }
+    let pattern = &pattern[start..end];
+    let Some(&delimiter) = pattern.first() else {
+        return Err("Empty regular expression".to_string());
+    };
+    if delimiter.is_ascii_alphanumeric() || delimiter == b'\\' || delimiter == 0 || delimiter.is_ascii_whitespace() {
+        return Err("Delimiter must not be alphanumeric, backslash, or NUL byte".to_string());
+    }
+    let paired = match delimiter {
+        b'(' => Some(b')'),
+        b'{' => Some(b'}'),
+        b'[' => Some(b']'),
+        b'<' => Some(b'>'),
+        _ => None,
+    };
+    let mut depth = 1usize;
+    let mut escaped = false;
+    let mut closing = None;
+    for (index, &byte) in pattern.iter().enumerate().skip(1) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if byte == b'\\' {
+            escaped = true;
+            continue;
+        }
+        match paired {
+            Some(_) if byte == delimiter => depth += 1,
+            Some(close) if byte == close => {
+                depth -= 1;
+                if depth == 0 {
+                    closing = Some(index);
+                    break;
+                }
+            }
+            None if byte == delimiter => {
+                closing = Some(index);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let closing = closing.ok_or_else(|| format!("No ending delimiter '{}' found", delimiter as char))?;
+    let close_len = if paired.is_some() { 1 } else { 1 };
+    let modifiers = &pattern[closing + close_len..];
+    for &flag in modifiers {
+        let known = matches!(flag, b'i' | b'm' | b's' | b'x' | b'A' | b'D' | b'S' | b'X' | b'U' | b'J' | b'u' | b'n' | b'r');
+        if !known {
+            return Err(format!("Unknown modifier '{}'", flag as char));
+        }
+    }
+    Ok((&pattern[1..closing], modifiers))
+}
+
 /// Rewrites PCRE's `$` anchor to its precise end-of-subject semantics.
 ///
 /// PCRE `$` matches at the end or immediately before a final newline; `D` restricts it to the
@@ -448,8 +512,14 @@ pub(crate) fn php_pattern_with_error(
     pattern: &[u8],
 ) -> (bool, Option<String>) {
     // PHP keeps non-`u` patterns byte-exact. A raw byte pattern cannot go through the
-    // UTF-8-based delimiter/fallback splitter, but PCRE2 accepts the bytes directly.
+    // UTF-8-based fallback splitter, but its delimiter and modifiers are still ASCII and must
+    // be validated before PCRE2's lenient runtime scan sees them.
     let Ok(pattern) = std::str::from_utf8(pattern) else {
+        let (_, modifiers) = match split_php_pattern_bytes(pattern) {
+            Ok(parts) => parts,
+            Err(error) => return (false, Some(error)),
+        };
+        let _ = modifiers;
         return preg_match_via_runtime(pattern, value)
             .map_or((false, None), |matched| (matched, None));
     };
