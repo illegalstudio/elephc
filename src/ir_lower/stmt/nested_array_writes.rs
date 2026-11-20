@@ -646,6 +646,7 @@ fn lower_static_update_key_and_guard(
 ) -> LoweredValue {
     if !matches!(read_key.kind, ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_)) {
         let key = lower_expr(ctx, read_key);
+        crate::ir_lower::array_key_guards::before_parent_materialization(ctx, parent, key, span);
         if ctx.value_is_owning_temporary(key) {
             crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
         }
@@ -942,6 +943,9 @@ fn lower_nested_parent_from_receiver(
             key,
             Some(index.span),
         );
+        crate::ir_lower::array_key_guards::before_parent_materialization(
+            ctx, receiver, key, span,
+        );
         let key_pins =
             crate::ir_lower::expr::pin_in_flight_owners(ctx, &[key.value], index.span);
         let pending_append = matches!(&array.kind,
@@ -1008,6 +1012,9 @@ fn lower_local_parent_fetch_for_write_inner(
                         key,
                         Some(index.span),
                     );
+                    crate::ir_lower::array_key_guards::before_parent_materialization(
+                        ctx, array, key, span,
+                    );
                     if matches!(key.ir_type, IrType::Str
                         | IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)) {
                         // Syntactic inference defaults variables/calls to integer keys. Their
@@ -1053,6 +1060,9 @@ fn lower_local_parent_fetch_for_write_inner(
                         key,
                         Some(index.span),
                     );
+                    crate::ir_lower::array_key_guards::before_parent_materialization(
+                        ctx, array, key, span,
+                    );
                     let key = coerce_array_key_to_int_at_span(
                         ctx,
                         key,
@@ -1072,6 +1082,9 @@ fn lower_local_parent_fetch_for_write_inner(
                         key,
                         Some(index.span),
                     );
+                    crate::ir_lower::array_key_guards::before_parent_materialization(
+                        ctx, array, key, span,
+                    );
                     let cell = lower_indexed_parent_fetch_for_write(
                         ctx, name, array, key, span, key_already_diagnosed,
                     );
@@ -1085,6 +1098,11 @@ fn lower_local_parent_fetch_for_write_inner(
                     // promoted hash flows straight into the ensure call and
                     // is stored back exactly once at the end.
                     let array_value = ctx.load_local_for_mutation(name, Some(span));
+                    let key = lower_expr(ctx, index);
+                    let key = crate::ir_lower::ownership::persist_string_byte_view(ctx, key, Some(index.span));
+                    crate::ir_lower::array_key_guards::before_parent_materialization(
+                        ctx, array_value, key, span,
+                    );
                     let assoc_ty = promoted_assoc_array_type(local_ty, PhpType::Mixed);
                     ctx.prepare_mutated_local_owner_for_backend_retire(name, array_value, assoc_ty.clone(), Some(span));
                     let hash = ctx.emit_value(
@@ -1095,18 +1113,23 @@ fn lower_local_parent_fetch_for_write_inner(
                         Op::ArrayToHash.default_effects(),
                         Some(span),
                     );
-                    Some(lower_hash_parent_fetch_for_write(ctx, name, hash, assoc_ty, index, span, key_already_diagnosed))
+                    Some(lower_hash_parent_fetch_for_write_with_key(ctx, name, hash, assoc_ty, key, span, key_already_diagnosed))
                 }
                 _ => None,
             }
         }
         PhpType::AssocArray { key, .. } => {
             let hash_value = ctx.load_local_for_mutation(name, Some(span));
+            let key_value = lower_expr(ctx, index);
+            let key_value = crate::ir_lower::ownership::persist_string_byte_view(ctx, key_value, Some(index.span));
+            crate::ir_lower::array_key_guards::before_parent_materialization(
+                ctx, hash_value, key_value, span,
+            );
             let assoc_ty = PhpType::AssocArray { key, value: Box::new(PhpType::Mixed) };
             // Fetch-for-write normalizes typed entries in place and returns their attached
             // Mixed cells. Declare that result contract before publishing the changed hash.
             ctx.prepare_mutated_local_owner(name, hash_value, assoc_ty.clone(), Some(span));
-            Some(lower_hash_parent_fetch_for_write(ctx, name, hash_value, assoc_ty, index, span, key_already_diagnosed))
+            Some(lower_hash_parent_fetch_for_write_with_key(ctx, name, hash_value, assoc_ty, key_value, span, key_already_diagnosed))
         }
         _ => None,
     }
@@ -1149,32 +1172,6 @@ fn lower_indexed_parent_fetch_for_write(
     );
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, key_pins, span);
     cell
-}
-
-/// Ensures a hash element exists for a nested write parent, stores the
-/// possibly reallocated hash back into the local (the previous owner was
-/// already released by `prepare_mutated_local_owner`), and re-reads the
-/// stored cell (retained by `Op::HashGetForWrite`) as the parent of the leaf write.
-/// An earlier read's key diagnosis is preserved during this relocation.
-fn lower_hash_parent_fetch_for_write(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    hash_value: LoweredValue,
-    assoc_ty: PhpType,
-    index: &Expr,
-    span: Span,
-    key_already_diagnosed: bool,
-) -> LoweredValue {
-    let key = lower_expr(ctx, index);
-    lower_hash_parent_fetch_for_write_with_key(
-        ctx,
-        name,
-        hash_value,
-        assoc_ty,
-        key,
-        span,
-        key_already_diagnosed,
-    )
 }
 
 /// Uses an already evaluated hash key for both the ensure and stored-cell read, then retires it.

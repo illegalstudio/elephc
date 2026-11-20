@@ -56,6 +56,7 @@ fn lower_captured_store(
     let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
     let key = lower_expr(ctx, index);
     let (key, key_owner) = super::nested_array_writes::root_static_update_receiver(ctx, key, span);
+    crate::ir_lower::array_key_guards::before_parent_materialization(ctx, parent, key, span);
     let pending = super::nested_false_errors::capture(ctx, parent, span);
     super::nested_false_errors::handle_pending(ctx, pending, Some(key), span, |ctx| {
         emit_store(ctx, parent, key, value, index, span);
@@ -242,6 +243,7 @@ pub(super) fn fetch_parent(
         super::nested_array_writes::root_static_update_receiver(ctx, receiver, span);
     let key = lower_expr(ctx, index);
     let (key, key_owner) = super::nested_array_writes::root_static_update_receiver(ctx, key, span);
+    crate::ir_lower::array_key_guards::before_parent_materialization(ctx, receiver, key, span);
     let pending = super::nested_false_errors::capture(ctx, receiver, span);
     super::nested_false_errors::handle_pending(ctx, pending, Some(key), span, |ctx| {
         let null = lower_expr(ctx, &Expr::new(ExprKind::Null, span));

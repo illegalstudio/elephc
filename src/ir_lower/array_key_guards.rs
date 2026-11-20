@@ -63,6 +63,16 @@ pub(super) fn for_declared_array_write(
     super::expr::unpin_in_flight_owners(ctx, pins, span);
 }
 
+/// Rejects an original key while standalone receiver/key temporaries remain unwind-visible.
+pub(super) fn before_parent_materialization(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, key: LoweredValue, span: Span,
+) {
+    if !needs_check(ctx, key) { return; }
+    let pins = super::expr::protect_additional_pending_operands(ctx, &[parent, key], &[], span);
+    for_prepared_write(ctx, parent, key, span);
+    super::expr::unpin_in_flight_owners(ctx, pins, span);
+}
+
 /// Checks operands whose caller already published every independent exceptional owner.
 pub(super) fn for_prepared_write(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, key: LoweredValue, span: Span,

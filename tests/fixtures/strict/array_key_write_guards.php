@@ -57,3 +57,41 @@ function writePropertyReceiverCase(mixed $key): void {
     echo $box->reads, '|';
 }
 writePropertyReceiverCase(false);
+function writeOpaqueUpdateCase(mixed $parent, int $mode): void {
+    try {
+        if ($mode === 0) { $parent[false] += 1; }
+        elseif ($mode === 1) { ++$parent[false]; }
+        else { $parent[false][0] = 1; }
+        echo 'W';
+        if ($mode === 2) { echo $parent[0][0]; }
+        else { echo $parent[0]; }
+    } catch (Error $error) { echo 'E'; unset($error); }
+    echo gettype($parent), '|';
+}
+foreach ([0, 1, 2] as $writeUpdateMode) {
+    writeOpaqueUpdateCase(null, $writeUpdateMode);
+    writeOpaqueUpdateCase(false, $writeUpdateMode);
+}
+function writeTypedNestedCase(mixed $key): void {
+    $parent = [[1]];
+    try { $parent[markedWriteKey($key)][0] = 2; echo 'W'; }
+    catch (Error $error) { echo 'E'; unset($error); }
+    echo $parent[0][0], '|';
+}
+function writeHashNestedCase(mixed $key): void {
+    $parent = [0 => [1], 'a' => [2]];
+    try { $parent[markedWriteKey($key)][0] = 3; echo 'W'; }
+    catch (Error $error) { echo 'E'; unset($error); }
+    echo $parent[0][0], '|';
+}
+writeTypedNestedCase(false);
+writeHashNestedCase(false);
+function writeOpaqueLeafCase(mixed $child): void {
+    $parent = [$child];
+    try { $parent[0][false] = 1; echo 'W'; }
+    catch (Error $error) { echo 'E'; unset($error); }
+    echo gettype($parent[0]), '|';
+}
+// The valid outer fetch materializes a null child before checking the leaf key.
+writeOpaqueLeafCase(null);
+writeOpaqueLeafCase(false);
