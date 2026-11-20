@@ -1622,7 +1622,8 @@ echo call_user_func_array($o->withPath(...), [box("ok")]), "\n";
 
 /// A refused argument of a call through a bound method callable releases the call's other
 /// owned arguments: `call_user_func_array($o->m(...), [...])` lowers to a direct expr call whose
-/// arguments are rooted in an argument-evaluation scope, like the other bound-method forms.
+/// arguments are rooted in an argument-evaluation scope, like the other bound-method forms. An
+/// accepted call releases the owned arguments it borrowed after the call.
 #[test]
 fn test_refused_bound_method_callable_arguments_do_not_leak() {
     let output = compile_and_run_with_heap_debug(
@@ -1637,11 +1638,12 @@ for ($i = 0; $i < 300; $i++) {
     try { call_user_func_array($o->m(...), [box([$i]), make($i)]); } catch (TypeError $e) { $n++; }
     try { call_user_func_array([$o, "m"], [box(null), make($i)]); } catch (TypeError $e) { $n++; }
     try { $f = $o->m(...); $f(box(null), make($i)); } catch (TypeError $e) { $n++; }
+    $r = call_user_func_array($o->m(...), [box("ok"), make($i)]);
 }
-echo $n, " ", $o->m(box("ok"), make(1)), "\n";
+echo $n, " ", $r, " ", $o->m(box("ok"), make(1)), "\n";
 "#,
     );
     assert!(output.success, "{}", output.stderr);
-    assert_eq!(output.stdout, "1200 ok2\n");
+    assert_eq!(output.stdout, "1200 ok2 ok2\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }

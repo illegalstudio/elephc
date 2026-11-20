@@ -69,7 +69,20 @@ pub(super) fn emit_rooted_expr_call(
         Vec::new()
     };
     operands.extend(arg_values);
-    let conversion_roots = root_unpublished_argument_conversions(ctx, &mut operands[1..], span);
+    let mut conversion_roots = root_unpublished_argument_conversions(ctx, &mut operands[1..], span);
+    // `ExprCall` borrows its arguments, so an owned temporary the argument scope handed to the
+    // call (a list rebuilt as a hash, a fresh array) is rooted here and released after it.
+    if checked {
+        for operand in operands[1..].iter_mut() {
+            let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
+            if !ctx.value_is_owning_temporary(value) {
+                continue;
+            }
+            let (rooted, slot) = root_owned_call_operand(ctx, value, span);
+            *operand = rooted.value;
+            conversion_roots.extend(slot);
+        }
+    }
     // `ExprCall` can dispatch a first-class `__construct` callable; publish the invocation
     // site's `strict_types` after the arguments are evaluated.
     super::object_construction::publish_call_strictness(ctx, span);
