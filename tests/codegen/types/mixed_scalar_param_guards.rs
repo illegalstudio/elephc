@@ -1470,3 +1470,28 @@ echo $o->n, "\n";
     assert_eq!(output.stdout, "TypeError: f(): Argument #1 ($a) must be of type int, string given\nTypeError: g(): Argument #1 ($b) must be of type int, null given\nTypeError: f(): Argument #2 ($b) must be of type int, null given\nf 4 5\n9\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// With a throwing default left out, the supplied named arguments are checked before the
+/// default runs, still in parameter order with an earlier by-reference property argument:
+/// its refusal wins without converting a later `Stringable` or refusing a later `null`.
+#[test]
+fn test_named_checks_before_a_throwing_default_raise_earlier_property_references_first() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class Bad { public function __toString(): string { echo "toString\n"; throw new Exception("from toString"); } }
+class C { public string $s = "abc"; public int $n = 4; }
+function f(int &$a, string $s, int $d = 1 % 0): void { echo "f ", $a, " ", $s, "\n"; }
+function box(mixed $v): mixed { return $v; }
+function show(Throwable $e): void { echo get_class($e), ": ", explode(', called', $e->getMessage())[0], "\n"; }
+$o = new C;
+try { f(a: $o->s, s: box(new Bad())); } catch (Throwable $e) { show($e); }
+try { f(s: box(null), a: $o->s); } catch (Throwable $e) { show($e); }
+try { f(a: $o->n, s: box(null)); } catch (Throwable $e) { show($e); }
+try { f(a: $o->n, s: box("x")); } catch (Throwable $e) { show($e); }
+echo "next\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "TypeError: f(): Argument #1 ($a) must be of type int, string given\nTypeError: f(): Argument #1 ($a) must be of type int, string given\nTypeError: f(): Argument #2 ($s) must be of type string, null given\nDivisionByZeroError: Modulo by zero\nnext\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}

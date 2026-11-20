@@ -205,6 +205,10 @@ fn check_supplied_scalar_params_before_defaults(
         if super::scalar_param_guards::guarded_scalar_param(ctx, sig, param_index, value, GuardSource::Unrecorded).is_none() {
             continue;
         }
+        // An earlier by-reference property argument's check comes first, as in the final
+        // operand pass (`f(a: $o->s, s: $bad)` for `f(int &$a, string $s)` refuses `$a`
+        // without converting `$s`).
+        super::call_arg_coercion::emit_property_type_guards_before(ctx, param_index);
         let lowered = lowered_value_from_id(ctx, value);
         if let Some(converted) = super::scalar_param_guards::guard_scalar_param(
             ctx, sig, param_index, lowered, GuardSource::Unrecorded, guard_span, false, &[],

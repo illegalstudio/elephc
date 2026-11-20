@@ -1800,7 +1800,7 @@ pub(super) fn coerce_operands_to_params_guarded(
 /// failing parameter's `TypeError`: `f($box->text, $null)` for `f(int &$a, int $b)` must
 /// report argument #1. The remaining property checks stay with the scope and still run in
 /// `finish_call_argument_evaluation`.
-fn emit_property_type_guards_before(ctx: &mut LoweringContext<'_, '_>, index: usize) {
+pub(super) fn emit_property_type_guards_before(ctx: &mut LoweringContext<'_, '_>, index: usize) {
     let depth = ctx.expression_depth;
     let Some(scope) = ctx.call_argument_evaluation_scopes.last_mut() else {
         return;
