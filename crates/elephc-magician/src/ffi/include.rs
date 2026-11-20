@@ -99,6 +99,19 @@ pub unsafe extern "C" fn __elephc_eval_register_native_include_state(
     }).unwrap_or(EvalStatus::RuntimeFatal.code())
 }
 
+/// Releases the request's eval statics when a CLI process ends its one request.
+///
+/// Emitted by the main epilogue just before `__elephc_eval_include_request_reset`; a `--web`
+/// worker never calls it, because its statics live in the arena the boundary wipes.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_release_request_statics() {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_release_request_statics");
+    let _ = std::panic::catch_unwind(|| {
+        #[cfg(not(test))]
+        crate::context::release_request_statics_at_exit();
+    });
+}
+
 /// Clears dynamic include bookkeeping before a generated web request starts.
 ///
 /// CLI binaries never call this entry point, so their include registry naturally

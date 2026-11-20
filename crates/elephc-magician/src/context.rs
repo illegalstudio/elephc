@@ -83,6 +83,8 @@ pub(crate) use request_includes::{
     install_native_include_hooks, request_include_marks, NativeIncludeHooks,
 };
 pub(crate) use request_statics::{reset_request_statics, with_request_strtok};
+#[cfg(not(test))]
+pub(crate) use request_statics::release_request_statics_at_exit;
 
 #[cfg(not(test))]
 static GLOBAL_EVAL_CLASSES: OnceLock<Mutex<GlobalEvalClassRegistry>> = OnceLock::new();

@@ -1693,7 +1693,9 @@ fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     if !ctx.module.web
         && (!eval_context_locals(ctx).is_empty() || ctx.module.required_runtime_features.eval_bridge)
     {
-        ctx.emitter.comment("end the CLI request: finalize request-retained eval contexts");
+        ctx.emitter.comment("end the CLI request: release eval statics, finalize request-retained eval contexts");
+        let release_statics = ctx.emitter.target.extern_symbol("__elephc_eval_release_request_statics");
+        abi::emit_call_label(ctx.emitter, &release_statics);
         let symbol = ctx
             .emitter
             .target

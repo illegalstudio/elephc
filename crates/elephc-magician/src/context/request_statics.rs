@@ -102,3 +102,20 @@ pub(crate) fn with_request_strtok<R>(f: impl FnOnce(&mut Option<(Vec<u8>, usize)
 pub(crate) fn reset_request_statics() {
     REQUEST_STATICS.with(|statics| *statics.borrow_mut() = RequestStatics::new());
 }
+
+/// Releases every request static at the end of a CLI process, running the destructors they hold.
+///
+/// A `--web` boundary forgets the handles with the arena ([`reset_request_statics`]); a CLI
+/// process is one request that ends in the generated epilogue, where php destroys its statics, so
+/// the cells are consumed here instead of surviving into the final heap report. The store is
+/// replaced before anything is released: a destructor that runs a static accessor meets an empty
+/// store, not the one being torn down.
+#[cfg(not(test))]
+pub(crate) fn release_request_statics_at_exit() {
+    let old = REQUEST_STATICS
+        .with(|statics| std::mem::replace(&mut *statics.borrow_mut(), RequestStatics::new()));
+    let RequestStatics { scope, properties, .. } = old;
+    let _ = crate::runtime_hooks::release::release_native_cells(properties.into_values(), None);
+    // SAFETY: the box came from `RequestStatics::new` and nothing else holds its pointer now.
+    let _ = unsafe { crate::ffi::scope::__elephc_eval_scope_free(Box::into_raw(scope)) };
+}

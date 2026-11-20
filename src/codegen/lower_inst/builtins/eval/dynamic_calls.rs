@@ -426,7 +426,6 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_dynamic_fa
         .target
         .extern_symbol("__elephc_eval_try_new_object_at");
     abi::emit_call_label(ctx.emitter, &symbol);
-    retire_eval_call_argument_boxes(ctx, constructor_args, args_offset)?;
     emit_branch_if_eval_c_int_negative(ctx, &eval_miss_label);
     emit_eval_status_check_releasing(ctx, &boxed);
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
@@ -1148,7 +1147,6 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_native_frame_static_m
         .target
         .extern_symbol("__elephc_eval_native_frame_static_method_call");
     abi::emit_call_label(ctx.emitter, &symbol);
-    retire_eval_call_argument_boxes(ctx, &inst.operands, args_offset + 8)?;
     emit_branch_if_eval_c_int_negative(ctx, &miss_stack_label);
     emit_eval_status_check_releasing(ctx, &boxed);
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
