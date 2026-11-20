@@ -699,14 +699,50 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut impl Emitter) {
         emitter.instruction("jmp __rt_throw_current");                          // unwind to the cdylib handler with allocation status recorded
         emitter.label("__rt_heap_exhausted_fatal");
     }
-    emitter.instruction("mov edi, 2");                                          // fd = stderr for the heap exhaustion fatal error message
-    crate::abi::emit_symbol_address(emitter, "rsi", "_heap_err_msg");
-    emitter.instruction("mov edx, 35");                                         // pass the exact heap exhaustion message length to the Linux write syscall
-    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // print the fatal heap exhaustion message to stderr
-    emitter.instruction("mov edi, 1");                                          // exit code 1 for heap exhaustion
-    emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
-    emitter.instruction("syscall");                                             // terminate the process after reporting heap exhaustion
+    // This fatal entry also accepts tail-branches. The process will exit without restoring rsp.
+    emitter.instruction("and rsp, -16");                                        // align the stack for the decimal conversion calls
+    // Preserve the failed request across the two decimal conversions.
+    crate::abi::emit_symbol_address(emitter, "r10", "_heap_fail_request");
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // remember the allocation size for the diagnostic
+    crate::abi::emit_symbol_address(emitter, "rsi", "_heap_fatal_prefix");
+    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction(                                                        // PHP's "Allowed memory size of " prefix
+        &format!("mov edx, {}", crate::diagnostics::HEAP_FATAL_PREFIX.len())
+    );
+    emitter.instruction("mov eax, 1");                                          // Linux write syscall
+    emitter.instruction("syscall");                                             // write the prefix bytes
+    crate::abi::emit_symbol_address(emitter, "r10", "_heap_limit");
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // heap limit in bytes
+    crate::abi::emit_call_label(emitter, "__rt_itoa");
+    emitter.instruction("mov rsi, rax");                                        // decimal digits pointer
+    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction("mov eax, 1");                                          // Linux write syscall
+    emitter.instruction("syscall");                                             // write the limit digits
+    crate::abi::emit_symbol_address(emitter, "rsi", "_heap_fatal_middle");
+    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction(                                                        // " bytes exhausted (tried to allocate "
+        &format!("mov edx, {}", crate::diagnostics::HEAP_FATAL_MIDDLE.len())
+    );
+    emitter.instruction("mov eax, 1");                                          // Linux write syscall
+    emitter.instruction("syscall");                                             // write the middle bytes
+    crate::abi::emit_symbol_address(emitter, "r10", "_heap_fail_request");
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // requested allocation size
+    crate::abi::emit_call_label(emitter, "__rt_itoa");
+    emitter.instruction("mov rsi, rax");                                        // decimal digits pointer
+    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction("mov eax, 1");                                          // Linux write syscall
+    emitter.instruction("syscall");                                             // write the request digits
+    crate::abi::emit_symbol_address(emitter, "rsi", "_heap_fatal_suffix");
+    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction(                                                        // closing location and newline
+        &format!("mov edx, {}", crate::diagnostics::HEAP_FATAL_SUFFIX.len())
+    );
+    emitter.instruction("mov eax, 1");                                          // Linux write syscall
+    emitter.instruction("syscall");                                             // write the suffix bytes
+    emitter.instruction("mov edi, 255");                                        // PHP fatal exit status
+    emitter.instruction("mov eax, 231");                                        // Linux exit_group syscall
+    emitter.instruction("syscall");                                             // exit with PHP's fatal status
+    emitter.instruction("ud2");                                                 // keep a failed exit from reaching the overflow entry
 
     emitter.label("__rt_heap_alloc_size_overflow");
     emitter.instruction("jmp __rt_heap_exhausted");                             // report an impossible header size through the established fatal path
