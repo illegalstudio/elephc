@@ -26,6 +26,15 @@ pub(super) struct PropertyReferenceAdmission {
 }
 
 impl ElephcEvalContext {
+    /// Resolves immutable declaration metadata from an eval object's physical private or visible slot.
+    pub(crate) fn dynamic_storage_property(&self, identity: u64, storage: &str) -> Option<(String, EvalClassProperty)> {
+        let class = self.dynamic_object_class(identity)?;
+        if let Some(private) = storage.strip_prefix('\0') {
+            let (owner, name) = private.split_once('\0')?;
+            self.class_own_property(owner, name)
+        } else { self.class_property(class.name(), storage) }
+    }
+
     /// Reads current property associations without extending receiver or reference lifetimes.
     pub(crate) fn property_reference_types(&self, cell: RuntimeCellHandle) -> Vec<EvalPropertyReferenceType> {
         let same_cell = |target: &EvalReferenceTarget| matches!(target,
@@ -33,12 +42,7 @@ impl ElephcEvalContext {
         let mut types = Vec::new();
         for ((identity, storage), target) in &self.dynamic_property_aliases {
             if !same_cell(target) { continue; }
-            let Some(class_key) = self.dynamic_objects.get(identity) else { continue; };
-            let Some(class) = self.classes.get(class_key) else { continue; };
-            let declared = if let Some(private) = storage.strip_prefix('\0') {
-                private.split_once('\0').and_then(|(owner, name)| self.class_own_property(owner, name))
-            } else { self.class_property(class.name(), storage) };
-            let Some((owner, property)) = declared else { continue; };
+            let Some((owner, property)) = self.dynamic_storage_property(*identity, storage) else { continue; };
             for ty in property.property_type().into_iter().chain(self.dynamic_property_array_type(*identity, storage)) {
                 types.push(EvalPropertyReferenceType {
                     owner: owner.clone(), property: property.name().to_string(), declared: ty.clone(),

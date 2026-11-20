@@ -846,6 +846,13 @@ Each origin tracks its currently published array through an allocation-validity
 token, without retaining a PHP owner. Canonical reference checks also inspect
 these property-owned roots, so nested element aliases cannot invalidate their
 contents. Rebinding or replacing a property retires only its departed root.
+Checked property profiles validate declared defaults before publishing successful
+initialization and derive the same conditional roots from explicit structural
+declarations, independently from inferred array policy. Reinitialization after
+unset recreates these declaration-backed obligations. Conditional content
+projections validate array candidates without contributing a scalar coercion
+candidate; real declarations, including explicit mixed, retain their normal
+role in joint reference conversion arbitration.
 
 Native descriptor signatures retain their original twelve physical metadata words.
 Flag bit 1 marks an appended logical-source record pointer at word 12. The

@@ -32,6 +32,10 @@ pub(crate) fn prepare_property_reference_candidates(
     sources.extend(context.claim_property_reference_admission(reference));
     for source in sources {
         array_reference_contracts::validate_new_owner(reference, original, std::slice::from_ref(&source.declared), context, values)?;
+        if crate::eval_ir::array_contents_schema(&crate::eval_ir::generic_type(&source.declared)).is_some() {
+            validate_generic_local(&source.declared, &source.property, original, context, values)?;
+            continue;
+        }
         prepared.push(prepare_property_value_candidate(&source.owner,&source.property,&source.declared,original,context,values)?);
     }
     Ok(prepared)

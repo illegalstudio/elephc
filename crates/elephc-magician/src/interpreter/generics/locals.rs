@@ -91,7 +91,10 @@ pub(in crate::interpreter) fn validate_generic_local_contracts(scope: &ElephcEva
 pub(in crate::interpreter) fn validate_generic_local(declared: &EvalParameterType, name: &str, value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
     if generic_value_accepts(&generic_type(declared), value, context, values)? { return Ok(()); }
     let message = if let Some(schema) = crate::eval_ir::array_contents_schema(&generic_type(declared)) {
-        format!("--strict-array-types: ${name} requires {schema} when holding an array")
+        let prefix = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+            "--strict-array-types: "
+        } else { "" };
+        format!("{prefix}${name} requires {schema} when holding an array")
     } else { format!("Typed local ${name} expects {}", crate::eval_ir::php_type_label(declared)) };
     eval_throw_type_error(&message, context, values)
 }
@@ -112,7 +115,10 @@ pub(in crate::interpreter) fn validate_generic_local_element(declared: Option<&E
     let released = normalized.map_or(Ok(()), |key| values.release(key));
     if accepted.and_then(|accepted| released.map(|()| accepted))? { return Ok(()); }
     let message = if let Some(schema) = crate::eval_ir::array_contents_schema(&ty) {
-        format!("--strict-array-types: array write requires {schema}")
+        let prefix = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+            "--strict-array-types: "
+        } else { "" };
+        format!("{prefix}array write requires {schema}")
     } else { format!("Array write violates typed local {ty}") };
     eval_throw_type_error(&message, context, values)
 }

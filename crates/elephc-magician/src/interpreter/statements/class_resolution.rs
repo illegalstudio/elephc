@@ -777,7 +777,7 @@ fn eval_dynamic_class_allocate_object_inner(
                 };
                 let storage_name = eval_instance_property_storage_name(class.name(), property);
                 if let Some(value) = value {
-                    let origin = eval_default_property_array_origin(property, value, context, values)?;
+                    let origin = eval_default_property_array_origin(class.name(), property, value, context, values)?;
                     let written = eval_with_native_property_storage_scope(
                         class.name(), &storage_name, context, values,
                         |values| values.property_set(object, &storage_name, value),

@@ -15,7 +15,7 @@ use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 pub(super) fn validate(reference: RuntimeCellHandle, candidate: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) { return Ok(()); }
+    if !context.semantic_profile().checked_property_references() { return Ok(()); }
     let sources = context.array_reference_sources();
     let owners = sources.iter().map(|_| RuntimeOwnerSlot::new(
         RuntimeCellHandle::from_raw(std::ptr::null_mut()).borrowed())).collect::<Vec<_>>();
@@ -31,7 +31,10 @@ pub(super) fn validate(reference: RuntimeCellHandle, candidate: RuntimeCellHandl
                 for contract in &source.contracts {
                     if generic_value_accepts_with_reference(&crate::eval_ir::generic_type(contract), owner.borrowed(),
                         reference, candidate, context, values)? == Some(false) {
-                        return eval_throw_type_error("--strict-array-types: reference write violates array contents", context, values);
+                        let message = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+                            "--strict-array-types: reference write violates array contents"
+                        } else { "Reference write violates declared array contents" };
+                        return eval_throw_type_error(message, context, values);
                     }
                 }
             }
@@ -45,12 +48,15 @@ pub(super) fn validate(reference: RuntimeCellHandle, candidate: RuntimeCellHandl
 pub(super) fn validate_new_owner(reference: RuntimeCellHandle, candidate: RuntimeCellHandle,
     contracts: &[EvalParameterType], context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
+    if !context.semantic_profile().checked_property_references()
         || !matches!(values.type_tag(candidate)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) { return Ok(()); }
     for contract in contracts {
         if generic_value_accepts_with_reference(&crate::eval_ir::generic_type(contract), candidate,
             reference, candidate, context, values)? == Some(false) {
-            return eval_throw_type_error("--strict-array-types: recursive inferred contents require an explicit mixed contract", context, values);
+            let message = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+                "--strict-array-types: recursive inferred contents require an explicit mixed contract"
+            } else { "Reference write violates a recursive array declaration" };
+            return eval_throw_type_error(message, context, values);
         }
     }
     Ok(())

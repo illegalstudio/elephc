@@ -15,6 +15,14 @@ use super::*;
 pub(in crate::interpreter) fn eval_note_instance_property_array_value(identity: u64, storage: &str,
     value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if context.dynamic_property_array_type(identity, storage).is_none()
+        && context.semantic_profile().checked_property_references() {
+        if let Some((_, property)) = context.dynamic_storage_property(identity, storage) {
+            if let Some(origin) = declared_property_array_origin(property.property_type()) {
+                context.set_dynamic_property_array_type(identity, storage, origin);
+            }
+        }
+    }
     let array = matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC);
     context.publish_dynamic_property_array_source(identity, storage, array.then_some(value));
     Ok(())
@@ -24,9 +32,23 @@ pub(in crate::interpreter) fn eval_note_instance_property_array_value(identity: 
 pub(in crate::interpreter) fn eval_note_static_property_array_value(class: &str, property: &str,
     value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if context.static_property_array_type(class, property).is_none()
+        && context.semantic_profile().checked_property_references() {
+        if let Some((_, metadata)) = context.class_property(class, property) {
+            if let Some(origin) = declared_property_array_origin(metadata.property_type()) {
+                context.set_static_property_array_type(class, property, origin);
+            }
+        }
+    }
     let array = matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC);
     context.publish_static_property_array_source(class, property, array.then_some(value));
     Ok(())
+}
+
+/// Projects immutable array alternatives independently from the runtime occupant and inferred policy.
+fn declared_property_array_origin(declared: Option<&EvalParameterType>) -> Option<EvalParameterType> {
+    local_binding_origins::array_source_schema(&crate::eval_ir::generic_type(declared?))
+        .and_then(crate::eval_ir::array_contents_type).map(|ty| crate::eval_ir::parameter_type(&ty))
 }
 
 /// Copies static declaration and binding origins before a published array payload can change.
@@ -38,12 +60,21 @@ pub(in crate::interpreter) fn eval_static_property_array_contracts(class: &str, 
     Ok(property.property_type().into_iter().chain(context.static_property_array_type(&owner, property.name())).cloned().collect())
 }
 
-/// Prepares an untyped default's content origin while the caller owns its initialized value.
-pub(in crate::interpreter) fn eval_default_property_array_origin(property: &EvalClassProperty,
+/// Validates initialized declarations and prepares their conditional contents without consuming a successful value.
+pub(in crate::interpreter) fn eval_default_property_array_origin(owner: &str, property: &EvalClassProperty,
     value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalParameterType>, EvalStatus> {
-    if property.property_type().is_some() { return Ok(None); }
-    let prepared = local_binding_origins::prepare_array_value_origin(None, None, value, property.name(), context, values);
+    let prepared = (|| {
+        if let Some(declared) = property.property_type() {
+            if !context.semantic_profile().checked_property_references() { return Ok(None); }
+            if !eval_declared_value_type_accepts_exact(declared, Some(owner), Some(owner), value, context, values)? {
+                return eval_throw_type_error(&format!("Invalid default for property {owner}::${}: expected {}",
+                    property.name(), crate::eval_ir::php_type_label(declared)), context, values);
+            }
+            return Ok(declared_property_array_origin(Some(declared)));
+        }
+        local_binding_origins::prepare_array_value_origin(None, None, value, property.name(), context, values)
+    })();
     if prepared.is_err() { let _ = eval_release_value(context, values, value); }
     prepared
 }

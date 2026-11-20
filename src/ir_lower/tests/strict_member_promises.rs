@@ -74,9 +74,15 @@ fn strict_member_promises_native_eval_initial_admission_and_owners() {
 fn strict_member_promises_native_eval_array_aliases_and_float_defaults() {
     let fragment="class NativeArrayPromise{public array<int> $items=[1];public static array<int> $cached=[2]; \
         public float $number=0;public static float $floating=0;} \
+        class NativeInvalidArrayDefault{public array<int> $items=['bad'];} \
+        try{$bad=new NativeInvalidArrayDefault();}catch(TypeError $error){echo 'F';} \
         $object=new NativeArrayPromise();array $instance=[1];array $cached=[2]; \
         try{$object->items[]='bad';}catch(TypeError $error){echo 'D';} \
         try{NativeArrayPromise::$cached[]='bad';}catch(TypeError $error){echo 'E';} \
+        $leaf=1;$staticLeaf=2;$object->items=[&$leaf];NativeArrayPromise::$cached=[&$staticLeaf]; \
+        try{$leaf='bad';}catch(TypeError $error){echo str_contains($error->getMessage(),'--strict-array-types')?'wrong':'R';} \
+        try{$staticLeaf='bad';}catch(TypeError $error){echo 'T';} \
+        $object->items=[1];NativeArrayPromise::$cached=[2];$leaf='released';$staticLeaf='released'; \
         $object->items=&$instance;NativeArrayPromise::$cached=&$cached; \
         try{$instance[]='bad';}catch(TypeError $error){echo 'I';} \
         try{$cached[]='bad';}catch(TypeError $error){echo 'S';} \
@@ -90,6 +96,6 @@ fn strict_member_promises_native_eval_array_aliases_and_float_defaults() {
     let output=super::native_module::run(&module);
     let stderr=String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(),"{:?}: stdout={}; {stderr}",output.status,String::from_utf8_lossy(&output.stdout));
-    assert_eq!(String::from_utf8_lossy(&output.stdout),"DEIS11:double:double:3","{stderr}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout),"FDERTIS11:double:double:3","{stderr}");
     assert!(stderr.contains("HEAP DEBUG: leak summary: clean"),"{stderr}");
 }

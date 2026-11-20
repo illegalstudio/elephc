@@ -27,10 +27,9 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter, eval_brid
     for (index, offset) in [8, 16, 24, 32, PROPOSED].into_iter().enumerate() {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
     }
-    if eval_bridge && (emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
-        || emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)
-        || emitter.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayTypes)) {
-        // Exact eval sources see the original RHS before native property coercion can change it.
+    if eval_bridge && (emitter.semantic_profile.checked_property_references()
+        || emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)) {
+        // Live contents and exact eval sources inspect the original RHS before scalar coercion.
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 2), 24);
@@ -128,7 +127,8 @@ mod tests {
     fn native_reference_coordinator_checks_eval_sources_on_every_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             for feature in [elephc_semantics::StrictFeature::Coercions, elephc_semantics::StrictFeature::Locals,
-                elephc_semantics::StrictFeature::ArrayTypes] {
+                elephc_semantics::StrictFeature::ArrayTypes, elephc_semantics::StrictFeature::Mixed,
+                elephc_semantics::StrictFeature::Casts, elephc_semantics::StrictFeature::Nullability] {
                 for enabled in [false, true] {
                     let target = Target::parse(name).unwrap();
                     let mut emitter = Emitter::new(target);
