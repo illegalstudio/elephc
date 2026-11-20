@@ -1619,3 +1619,29 @@ echo call_user_func_array($o->withPath(...), [box("ok")]), "\n";
     );
     assert_eq!(out, "P::withPath(): Argument #1 ($p) must be of type string, int given\nP::withPath(): Argument #1 ($p) must be of type string, int given\nP::withPath(): Argument #1 ($p) must be of type string, int given\nP::withPath(): Argument #1 ($p) must be of type string, int given\n[ok]\n");
 }
+
+/// A refused argument of a call through a bound method callable releases the call's other
+/// owned arguments: `call_user_func_array($o->m(...), [...])` lowers to a direct expr call whose
+/// arguments are rooted in an argument-evaluation scope, like the other bound-method forms.
+#[test]
+fn test_refused_bound_method_callable_arguments_do_not_leak() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function make(int $i): array { return [$i, "s" . $i]; }
+class P { public function m(string $s, array $a): string { return $s . count($a); } }
+$o = new P;
+$n = 0;
+for ($i = 0; $i < 300; $i++) {
+    try { call_user_func_array($o->m(...), [box(null), make($i)]); } catch (TypeError $e) { $n++; }
+    try { call_user_func_array($o->m(...), [box([$i]), make($i)]); } catch (TypeError $e) { $n++; }
+    try { call_user_func_array([$o, "m"], [box(null), make($i)]); } catch (TypeError $e) { $n++; }
+    try { $f = $o->m(...); $f(box(null), make($i)); } catch (TypeError $e) { $n++; }
+}
+echo $n, " ", $o->m(box("ok"), make(1)), "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "1200 ok2\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
