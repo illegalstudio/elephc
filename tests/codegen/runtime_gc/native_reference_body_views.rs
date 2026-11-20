@@ -141,6 +141,27 @@ echo $items[0]['key'], ':', $items[0][0], ':', count($items[0]);
     }
 }
 
+/// A by-reference `foreach` binds its value variable after an `eval()` left a null Mixed in it.
+///
+/// The eval writeback gives the not-yet-bound `$entry` slot an owned null cell; the loop's detach
+/// (`unset_local` + `zero_local_slot`) must retire that owner instead of zeroing it away.
+#[test]
+fn test_foreach_by_ref_value_slot_after_eval_writeback_is_heap_clean() {
+    let source = r#"<?php
+function f(array<mixed> &$items, string $code): void {
+    eval($code);
+    foreach ($items as &$entry) { }
+}
+array<mixed> $items = [0]; $code = $argc > 0 ? '$items[0] = 0;' : '';
+f($items, $code);
+echo count($items);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "1");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// A raw string reference keeps its two-word ABI through the same boxed logical value flow.
 #[test]
 fn test_native_reference_raw_string_offset_write_preserves_caller_alias() {

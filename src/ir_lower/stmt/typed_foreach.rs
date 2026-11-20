@@ -508,7 +508,10 @@ fn lower_foreach_selected(
                 // but the final one (Symfony's `EventDispatcher::optimizeListeners()` lost its
                 // listeners that way). php never assigns the value variable here, so detach it the
                 // way `unset($v)` does before the initializer stores into the slot itself.
-                for op in [Op::UnsetLocal, Op::ZeroLocalSlot] {
+                // `unset($v)` first retires an unpromoted OWNER too (`release_raw_local_slot`):
+                // an `eval()` writeback leaves a fresh null Mixed in a not-yet-bound slot, and
+                // the zeroing below would otherwise drop that owner without releasing it.
+                for op in [Op::ReleaseRawLocalSlot, Op::UnsetLocal, Op::ZeroLocalSlot] {
                     ctx.emit_void(
                         op,
                         Vec::new(),
