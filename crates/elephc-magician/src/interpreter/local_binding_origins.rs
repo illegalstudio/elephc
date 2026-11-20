@@ -18,6 +18,7 @@ pub(super) use array_mutations::{finish_array_mutation, replacement_element_sour
 mod source_views;
 mod declared_sources;
 pub(super) use declared_sources::resolve_type as resolve_declared_source_type;
+pub(super) use declared_sources::method_result as declared_method_result;
 
 pub(super) use source_views::{LocalAssignmentProducer, prepare_assignment, source_view, argument_source, evaluate_assignment};
 

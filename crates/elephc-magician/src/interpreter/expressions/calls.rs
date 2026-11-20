@@ -240,6 +240,9 @@ pub(in crate::interpreter) fn eval_dynamic_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        return mixed_eval::dynamic_call(callee,args,context,scope,values).map(|result|result.0);
+    }
     with_eval_operands(&[callee], context, scope, values, |callbacks, context, scope, values| {
         eval_dynamic_call_with_callback(callbacks[0], args, context, scope, values)
     })
@@ -253,6 +256,14 @@ pub(in crate::interpreter) fn eval_dynamic_call_with_callback(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_dynamic_call_with_callback_source(callback,args,context,scope,values).map(|result|result.0)
+}
+
+/// Returns the selected callable declaration beside its owned result through the same invocation path.
+pub(in crate::interpreter) fn eval_dynamic_call_with_callback_source(
+    callback: RuntimeCellHandle,args: &[EvalCallArg],context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle,Option<elephc_generics::Type>),EvalStatus> {
     if values.type_tag(callback)? == EVAL_TAG_OBJECT {
         let is_closure_object = values
             .object_identity(callback)
@@ -266,13 +277,16 @@ pub(in crate::interpreter) fn eval_dynamic_call_with_callback(
         if !is_closure_object && !is_detached_pcntl_handler {
             eval_invokable_object_precheck(callback, context, values)?;
             let modes = CallArgumentModes::for_method(callback, "__invoke", context, values).unwrap_or_default();
+            let source=if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+                mixed_callable_sources::invokable(callback,context,values)?
+            } else {None};
             return with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |arguments, context, _, values| {
                 eval_invokable_object_call_result(callback, arguments, context, values)
-            });
+            }).map(|value|(value,source));
         }
     }
     let callback = eval_callable(callback, context, values)?;
-    callback.with_values(context, values, |callback, context, values| {
+    callback.with_return_source(context, values, |callback, context, values| {
         let modes = CallArgumentModes::for_callable(&callback, context, values)?;
         with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |arguments, context, _, values| {
             eval_evaluated_callable_with_call_array_args(&callback, arguments, context, values)

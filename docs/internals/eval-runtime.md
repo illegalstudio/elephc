@@ -783,7 +783,11 @@ optional evidence independently. Logical operator result domains preserve finite
 alternatives, exact float and checked integer signatures, and reviewed native
 class result kinds. Lazy conditional expressions retain the reached branch's
 source, and selected boolean signatures validate every logical alternative before
-truthiness conversion.
+truthiness conversion. Dynamic invocation captures the normalized callable's
+immutable declared return before argument effects, resolving bound and late-static
+class scopes through the same declaration resolver. The value and optional source
+leave the receiver owner scope together. Unknown or missing descriptor declarations
+remain unknown rather than acquiring evidence from their current return tags.
 
 
 ## Runtime script cache

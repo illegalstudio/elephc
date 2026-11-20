@@ -20,6 +20,7 @@ pub(super) fn evaluate(expr: &EvalExpr, context: &mut ElephcEvalContext,
     match expr {
         EvalExpr::Binary { op, left, right } if !matches!(op, EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr) =>
             binary(*op, left, right, context, scope, values),
+        EvalExpr::DynamicCall{callee,args}=>dynamic_call(callee,args,context,scope,values),
         EvalExpr::Unary { op, expr } => unary(*op, expr, context, scope, values),
         EvalExpr::Ternary { condition, then_branch: Some(then_branch), else_branch } => {
             let selected = if eval_condition(condition, context, scope, values)? { then_branch } else { else_branch };
@@ -45,6 +46,18 @@ pub(super) fn evaluate(expr: &EvalExpr, context: &mut ElephcEvalContext,
             Ok((value, source))
         }
     }
+}
+
+/// Captures one callee before argument effects and returns its declaration-backed result evidence.
+pub(super) fn dynamic_call(callee: &EvalExpr,args: &[EvalCallArg],context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle,Option<Type>),EvalStatus> {
+    with_sources(&[callee],context,scope,values,|operands,sources,context,scope,values|{
+        let source=whole_source(sources[0].as_ref());
+        mixed_source_proofs::require_source(&source,"callable invocation",context,values,
+            mixed_callable_sources::supports)?;
+        eval_dynamic_call_with_callback_source(operands[0],args,context,scope,values)
+    })
 }
 
 /// Takes a producer snapshot without inferring a proof from its evaluated runtime tag.

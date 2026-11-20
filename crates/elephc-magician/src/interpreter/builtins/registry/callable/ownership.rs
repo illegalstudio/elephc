@@ -36,6 +36,21 @@ impl ResolvedEvalCallable {
         finish_eval_argument_values(result, self.receiver_owner, context, values)
     }
 
+    /// Captures immutable return evidence before arguments run, preserving receiver cleanup on failure.
+    pub(in crate::interpreter) fn with_return_source<V: RuntimeValueOps>(self,
+        context: &mut ElephcEvalContext,values: &mut V,
+        invoke: impl FnOnce(&EvaluatedCallable,&mut ElephcEvalContext,&mut V)->Result<RuntimeCellHandle,EvalStatus>,
+    ) -> Result<(RuntimeCellHandle,Option<elephc_generics::Type>),EvalStatus> {
+        let source=if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+            crate::interpreter::mixed_callable_sources::resolved(&self.callable,context,values)
+        } else {Ok(None)};
+        let source=match source {
+            Ok(source)=>source,
+            Err(status)=>{let _=self.release(context,values);return Err(status);}
+        };
+        self.with_values(context,values,invoke).map(|value|(value,source))
+    }
+
     /// Ends a normalization-only probe without transferring its temporary receiver.
     pub(in crate::interpreter) fn release(
         self, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,

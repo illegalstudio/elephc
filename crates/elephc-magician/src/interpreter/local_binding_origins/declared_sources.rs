@@ -43,7 +43,7 @@ fn class_name(name: &str, context: &ElephcEvalContext) -> Option<String> {
 }
 
 /// Reads a method's declared result from immutable user/native metadata.
-fn method_result(class: &str, called: &str, method: &str, static_call: bool,
+pub(in crate::interpreter) fn method_result(class: &str, called: &str, method: &str, static_call: bool,
     context: &ElephcEvalContext,
 ) -> Option<Type> {
     if let Some((owner,method))=context.class_method(class,method) {
