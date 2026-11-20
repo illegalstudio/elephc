@@ -203,6 +203,13 @@ fn parse_stmt_dispatch(
         Token::Function => params::parse_function_decl(tokens, pos, span),
         // `fn (…) => …` is always an arrow-function expression; it has no declaration form.
         Token::Fn => simple::parse_expr_stmt(tokens, pos, span),
+        // A scalar literal can lead an expression statement: `5;`, `"a";` or `5 |> f(...);` (#2450).
+        Token::IntLiteral(_)
+        | Token::FloatLiteral(_)
+        | Token::StringLiteral(_)
+        | Token::True
+        | Token::False
+        | Token::Null => simple::parse_expr_stmt(tokens, pos, span),
         // `namespace\helper();` is a relative name leading an expression statement (#825).
         Token::Namespace if crate::parser::relative_name_starts_at(tokens, *pos) => {
             parse_expression_led_stmt(tokens, pos, span)

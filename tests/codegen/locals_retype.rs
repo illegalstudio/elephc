@@ -2741,3 +2741,24 @@ fn test_promoted_param_retype_leaves_the_property_alone() {
     );
     assert_eq!(out, "1");
 }
+
+/// Verifies a scalar literal can lead an expression statement, and that a piped literal still
+/// runs its call for side effects (#2450).
+#[test]
+fn test_scalar_literal_leads_expression_statement() {
+    let out = compile_and_run(
+        r#"<?php
+function ti(int $n): int { echo $n, "\n"; return $n; }
+5 |> ti(...);
+5;
+5 + 1;
+1.5;
+"a";
+true;
+false;
+null;
+echo "ok\n";
+"#,
+    );
+    assert_eq!(out, "5\nok\n");
+}
