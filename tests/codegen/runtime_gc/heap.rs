@@ -901,3 +901,41 @@ fn test_direct_decref_helpers_ignore_null_sentinel() {
     let out = compile_harness_and_run("<?php", 65_536, harness);
     assert_eq!(out, "1");
 }
+
+/// Promoting a packed string list to a hash moves its strings when the conversion consumes the
+/// only owner, instead of persisting a second copy of each one.
+///
+/// 300 strings of ~480 bytes peaked at about 363 KB through `__rt_array_to_hash`, twice the list
+/// plus its growth copies; moved, the peak stays near the list itself. A list another owner still
+/// holds keeps the copying conversion, so the second variable below must read its own strings.
+#[test]
+fn test_unset_promotion_of_a_string_list_moves_its_strings() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$n = (int) ($argc > 0 ? 300 : 0);
+$keep = [];
+for ($i = 0; $i < $n; $i++) {
+    $keep[] = str_repeat(chr(65 + $i % 26), 480 + $i % 3);
+}
+for ($i = 0; $i < $n; $i++) {
+    unset($keep[$i]);
+}
+echo count($keep), "|";
+$a = ['x' . $n, 'y' . $n, 'z' . $n];
+$b = $a;
+unset($a[1]);
+echo implode(",", $a), "|", implode(",", $b);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0|x300,z300|x300,y300,z300");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    let peak: u64 = out
+        .stderr
+        .split("peak_live_bytes=")
+        .nth(1)
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|digits| digits.parse().ok())
+        .expect("heap debug reports the peak");
+    assert!(peak < 260_000, "promotion copied the strings: peak {peak}");
+}

@@ -471,7 +471,7 @@ pub use array_sum::emit_array_sum;
 /// Emit array sum helper.
 pub use array_sum_mixed::emit_array_sum_mixed;
 /// Emit boxed-Mixed array sum helper.
-pub use array_to_hash::emit_array_to_hash;
+pub use array_to_hash::{emit_array_to_hash, emit_array_to_hash_steal};
 /// Emit indexed-array-to-hash converter helper (shared by hash-based set ops).
 pub use array_to_hash_reverse::emit_array_to_hash_reverse;
 /// Emit key-preserving reversed indexed-array-to-hash converter helper (array_reverse preserve_keys).

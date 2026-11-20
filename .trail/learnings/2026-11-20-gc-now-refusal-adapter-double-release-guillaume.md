@@ -17,12 +17,12 @@ touches:
 - global_decls::collect_global_var_names no longer widens a top-level name bound by `$a =& $b` when a declared body runs eval: the frame ref cell is invisible to load_global/store_global, so the alias read stale. Main has the same limitation for `global`-declared names; not fixed.
 - Eval native-new/static-call sites: the branch releases the frame's boxes (status-releasing path); main's `retire_eval_call_argument_boxes` released them again. Kept the branch mechanism, removed the retire call and function.
 - Eval request statics (static props of eval-declared classes) are released at CLI exit (`__elephc_eval_release_request_statics`, before the request reset); web still forgets them with the arena.
-- Defrag heap test: main's lowering converts a packed list to a hash on unset, persisting a second copy of every string (~200 KB peak), so the test frees via `$keep = []`. Pre-merge branch kept `$keep` a hash from the start.
+- Defrag heap test: main's lowering converts a packed list to a hash on unset, and `__rt_array_to_hash` persisted a second copy of every string (363 KB peak against a 262 KB heap; pre-merge branch kept `$keep` a hash from the start, 230 KB). Fixed in the runtime, test unmodified: `__rt_array_to_hash_steal` (both arches) moves the string blocks into the hash and zeroes the source length when the conversion consumes the only owner (refcount 1, string payload); any other source copies. Peak now 224 KB. Regression: `test_unset_promotion_of_a_string_list_moves_its_strings`.
 
 ## Tried and ruled out
 - OwnerTransfer peephole (497670a27e) for the bad refcount: the double decref was in emitted asm of the eval bridge call, IR identical to main.
 - Allocator/heap_free diffs: whitespace only versus main.
 
 ## Watch out
-- array_to_hash persists strings even when it consumes the source; moving them would remove the peak (not done).
+- aarch64 conditional branches (`b.ne`) cannot target a global symbol: the assembler rejects it and the runtime cache silently keeps the OLD runtime object, so a test can pass on a stale runtime. Check the compile output for "Runtime cache error".
 - test_gc_heap_parks_a_mid_sized_block_in_its_size_class still fails (separate).

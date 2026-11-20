@@ -170,6 +170,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_diff_key(emitter);
     arrays::emit_array_intersect_key(emitter);
     arrays::emit_array_to_hash(emitter);
+    arrays::emit_array_to_hash_steal(emitter);
     arrays::emit_array_to_hash_reverse(emitter);
     arrays::emit_array_to_hash_unique(emitter);
     arrays::emit_hash_to_hash_reverse(emitter);

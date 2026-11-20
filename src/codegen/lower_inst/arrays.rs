@@ -348,7 +348,7 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
                 if release_source {
                     abi::emit_push_reg(ctx.emitter, "x0");
                 }
-                abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");        // copy uniform elements with their concrete runtime representation
+                abi::emit_call_label(ctx.emitter, if release_source { "__rt_array_to_hash_steal" } else { "__rt_array_to_hash" }); // a consumed sole-owner string list moves its strings; any other source copies
                 if release_source {
                     abi::emit_push_reg(ctx.emitter, "x0");
                     ctx.emitter.instruction("ldr x0, [sp, #16]");               // reload the transferable source indexed array from the stack
@@ -433,7 +433,7 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
                 if release_source {
                     abi::emit_push_reg(ctx.emitter, "rdi");
                 }
-                abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");        // copy uniform elements with their concrete runtime representation
+                abi::emit_call_label(ctx.emitter, if release_source { "__rt_array_to_hash_steal" } else { "__rt_array_to_hash" }); // a consumed sole-owner string list moves its strings; any other source copies
                 if release_source {
                     abi::emit_push_reg(ctx.emitter, "rax");
                     ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");   // reload the transferable source indexed array from the stack

@@ -202,6 +202,120 @@ fn emit_array_to_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the result hash in rax
 }
 
+/// array_to_hash_steal: `__rt_array_to_hash` for a source the caller is about to release.
+/// Input:  x0 / rdi = indexed array pointer
+/// Output: x0 / rax = new owned hash with integer keys 0..length-1
+///
+/// A string array that this call alone owns (refcount 1) hands its string blocks to the hash
+/// as they are and leaves its own length at zero, so the release that follows frees the
+/// container only. Copying every string (`__rt_str_persist`) made the promotion of a 300-string
+/// list peak at twice the list. Any other source takes the ordinary copying conversion.
+pub fn emit_array_to_hash_steal(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_to_hash_steal ---");
+    emitter.label_global("__rt_array_to_hash_steal");
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("cmp DWORD PTR [rdi - 12], 1");                     // is this call the only owner of the source?
+        emitter.instruction("jne __rt_array_to_hash");                          // a shared source must keep its strings
+        emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                    // load the uniform heap-kind header word
+        emitter.instruction("shr r10, 8");                                      // shift the packed value_type into the low bits
+        emitter.instruction("and r10, 127");                                    // isolate the indexed-array value_type
+        emitter.instruction("cmp r10, 1");                                      // only string payloads are moved
+        emitter.instruction("jne __rt_array_to_hash");                          // every other payload keeps the copying conversion
+        emitter.instruction("push rbp");                                        // preserve the caller frame pointer
+        emitter.instruction("mov rbp, rsp");                                    // establish a stable frame base
+        emitter.instruction("sub rsp, 32");                                     // source, length, result and index slots
+        emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                    // save the indexed array pointer
+        emitter.instruction("mov rax, QWORD PTR [rdi]");                        // load the source length
+        emitter.instruction("mov QWORD PTR [rbp - 16], rax");                   // save the length
+        emitter.instruction("mov rdi, rax");                                    // capacity hint = length
+        emitter.instruction("cmp rdi, 8");                                      // is the length below the minimum hash capacity?
+        emitter.instruction("jge __rt_array_to_hash_steal_cap");                // use the length as the capacity hint
+        emitter.instruction("mov rdi, 8");                                      // clamp the capacity hint to a small minimum
+        emitter.label("__rt_array_to_hash_steal_cap");
+        emitter.instruction("mov rsi, 1");                                      // string value_type for the new hash header
+        emitter.instruction("call __rt_hash_new");                              // allocate the result hash, rax = result
+        emitter.instruction("mov QWORD PTR [rbp - 24], rax");                   // save the result hash pointer
+        emitter.instruction("mov QWORD PTR [rbp - 32], 0");                     // index i = 0
+        emitter.label("__rt_array_to_hash_steal_loop");
+        emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                   // reload the index
+        emitter.instruction("cmp rsi, QWORD PTR [rbp - 16]");                   // has the index reached the length?
+        emitter.instruction("jge __rt_array_to_hash_steal_done");               // all strings moved
+        emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                    // reload the source array pointer
+        emitter.instruction("mov r11, rsi");                                    // copy the index
+        emitter.instruction("shl r11, 4");                                      // scale by the sixteen-byte string slot
+        emitter.instruction("lea r10, [r10 + r11 + 24]");                       // address of element[i] after the header
+        emitter.instruction("mov rcx, QWORD PTR [r10]");                        // string pointer, moved as is
+        emitter.instruction("mov r8, QWORD PTR [r10 + 8]");                     // string length
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                   // result hash pointer
+        emitter.instruction("mov rdx, -1");                                     // key_hi = -1 marks an integer key
+        emitter.instruction("mov r9, 1");                                       // string runtime tag
+        emitter.instruction("call __rt_hash_set");                              // insert element[i] at integer key i
+        emitter.instruction("mov QWORD PTR [rbp - 24], rax");                   // update the result pointer after possible reallocation
+        emitter.instruction("add QWORD PTR [rbp - 32], 1");                     // advance to the next element
+        emitter.instruction("jmp __rt_array_to_hash_steal_loop");               // continue moving elements
+        emitter.label("__rt_array_to_hash_steal_done");
+        emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                    // reload the source array pointer
+        emitter.instruction("mov QWORD PTR [r10], 0");                          // the hash owns the strings now: the source releases none
+        emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                   // rax = result hash pointer
+        emitter.instruction("add rsp, 32");                                     // release the local slots
+        emitter.instruction("pop rbp");                                         // restore the caller frame pointer
+        emitter.instruction("ret");                                             // return the result hash in rax
+        return;
+    }
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // load the source refcount
+    emitter.instruction("cmp w9, #1");                                          // is this call the only owner of the source?
+    emitter.instruction("b.ne __rt_array_to_hash_steal_copy");                  // a shared source must keep its strings
+    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the uniform heap-kind header word
+    emitter.instruction("lsr x10, x10, #8");                                    // shift the packed value_type into the low bits
+    emitter.instruction("and x10, x10, #0x7f");                                 // isolate the indexed-array value_type
+    emitter.instruction("cmp x10, #1");                                         // only string payloads are moved
+    emitter.instruction("b.ne __rt_array_to_hash_steal_copy");                  // every other payload keeps the copying conversion
+    emitter.instruction("sub sp, sp, #48");                                     // allocate the frame
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // set up the new frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the indexed array pointer
+    emitter.instruction("ldr x9, [x0]");                                        // load the source length
+    emitter.instruction("str x9, [sp, #16]");                                   // save the length
+    emitter.instruction("cmp x9, #8");                                          // is the length below the minimum hash capacity?
+    emitter.instruction("b.ge __rt_array_to_hash_steal_cap");                   // use the length as the capacity hint
+    emitter.instruction("mov x9, #8");                                          // clamp the capacity hint to a small minimum
+    emitter.label("__rt_array_to_hash_steal_cap");
+    emitter.instruction("mov x0, x9");                                          // capacity hint for the new hash
+    emitter.instruction("mov x1, #1");                                          // string value_type for the new hash header
+    emitter.instruction("bl __rt_hash_new");                                    // allocate the result hash, x0 = result
+    emitter.instruction("str x0, [sp, #8]");                                    // save the result hash pointer
+    emitter.instruction("str xzr, [sp, #24]");                                  // index i = 0
+    emitter.label("__rt_array_to_hash_steal_loop");
+    emitter.instruction("ldr x1, [sp, #24]");                                   // reload the index
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the length
+    emitter.instruction("cmp x1, x9");                                          // has the index reached the length?
+    emitter.instruction("b.ge __rt_array_to_hash_steal_done");                  // all strings moved
+    emitter.instruction("ldr x11, [sp, #0]");                                   // reload the source array pointer
+    emitter.instruction("add x11, x11, #24");                                   // skip the 24-byte indexed-array header
+    emitter.instruction("add x11, x11, x1, lsl #4");                            // address of the sixteen-byte string slot
+    emitter.instruction("ldr x3, [x11]");                                       // string pointer, moved as is
+    emitter.instruction("ldr x4, [x11, #8]");                                   // string length
+    emitter.instruction("ldr x0, [sp, #8]");                                    // result hash pointer
+    emitter.instruction("mov x2, #-1");                                         // key_hi = -1 marks an integer key
+    emitter.instruction("mov x5, #1");                                          // string runtime tag
+    emitter.instruction("bl __rt_hash_set");                                    // insert element[i] at integer key i
+    emitter.instruction("str x0, [sp, #8]");                                    // update the result pointer after possible reallocation
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the index
+    emitter.instruction("add x10, x10, #1");                                    // advance to the next element
+    emitter.instruction("str x10, [sp, #24]");                                  // save the advanced index
+    emitter.instruction("b __rt_array_to_hash_steal_loop");                     // continue moving elements
+    emitter.label("__rt_array_to_hash_steal_done");
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source array pointer
+    emitter.instruction("str xzr, [x9]");                                       // the hash owns the strings now: the source releases none
+    emitter.instruction("ldr x0, [sp, #8]");                                    // x0 = result hash pointer
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // deallocate the frame
+    emitter.instruction("ret");                                                 // return the result hash in x0
+    emitter.label("__rt_array_to_hash_steal_copy");
+    emitter.instruction("b __rt_array_to_hash");                                // conditional branches need a local label: tail into the copying conversion
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
