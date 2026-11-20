@@ -174,6 +174,12 @@ pub(crate) fn diagnostic_override<T: SourceToken>(
     if raw_message == "Expected '=' after constant name" {
         return Some(with_expectation(mapped.clone(), "\"=\""));
     }
+    if raw_message == "Expected ':' after list argument label" {
+        return Some(with_expectation(mapped.clone(), "\":\""));
+    }
+    if raw_message == "Expected ')' before list in unset operands" {
+        return Some(with_expectation(mapped.clone(), "\")\""));
+    }
     if raw_message == "Expected '::' after 'static'" {
         return Some(match token_after_keyword(tokens, mapped.pos, tok::T_STATIC) {
             Some(next) if tokens[next].id() == tok::T_CLOSE_TAG => ValidationError {

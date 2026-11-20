@@ -27,7 +27,7 @@ use crate::syntax::parser::stmt::expect_token;
 use crate::syntax::span::Span;
 
 use super::calls::parse_first_class_callable_parens;
-use super::{parse_args, parse_expr};
+use super::{parse_args, parse_args_in, parse_expr, ArgumentSyntax};
 
 /// Consumes a variable class-name chain for `new` (`$class[0]`, `$factory->make()`, `$c::$n`).
 ///
@@ -796,15 +796,15 @@ pub(super) fn parse_function_call_or_callable(
             span,
         ))
     } else {
-        let args = parse_args(tokens, pos, span)?;
-        if validation_only() {
-            if let Some(construct) = language_construct(&name) {
-                if construct == "unset" {
-                    // The statement dispatcher handles the standalone unset construct.
-                    return Err(CompileError::new(span, "syntax error, unexpected token \"unset\""));
-                }
-                validate_language_construct(construct, &args, tokens, *pos, span)?;
-            }
+        let construct = if validation_only() { language_construct(&name) } else { None };
+        if construct == Some("unset") {
+            // The statement dispatcher handles the standalone unset construct.
+            return Err(CompileError::new(span, "syntax error, unexpected token \"unset\""));
+        }
+        let syntax = if construct.is_some() { ArgumentSyntax::Expression } else { ArgumentSyntax::Call };
+        let args = parse_args_in(tokens, pos, span, syntax)?;
+        if let Some(construct) = construct {
+            validate_language_construct(construct, &args, tokens, *pos, span)?;
         }
         let span = crate::syntax::parser::expr::span_through_prev_token(tokens, *pos, span);
         Ok(Expr::new(ExprKind::FunctionCall { name, args }, span))
@@ -820,7 +820,7 @@ pub(crate) fn parse_statement_unset_call(
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
-    let args = parse_args(tokens, pos, span)?;
+    let args = parse_args_in(tokens, pos, span, ArgumentSyntax::Unset)?;
     if crate::syntax::parser::runtime_fragment() {
         if let Some((Token::Comma, metadata)) = pos.checked_sub(2).and_then(|index| tokens.get(index)) {
             return Err(CompileError::new(metadata.span, "Expected unset operand after ','"));

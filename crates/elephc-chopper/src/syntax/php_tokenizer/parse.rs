@@ -52,6 +52,12 @@ pub(super) fn validate(
             }
         }
         let mut error = parse_error(source, parser.pos, parser.message.clone());
+        // Zend reports the last line consumed by a multiline `yield from` token. Its
+        // byte offset still identifies the start of the token for diagnostic ordering.
+        let yield_from = const { id("T_YIELD_FROM") };
+        if let Some(token) = tokens.iter().find(|token| token.id == yield_from && token.pos == error.pos) {
+            error.line += newline_count(&source[token.pos..token.pos + token.len]);
+        }
         error.warnings = warning_list(source, &validation_warnings);
         return Err(error);
     }

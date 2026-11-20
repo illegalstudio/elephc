@@ -25,6 +25,7 @@ pub(crate) use prefix_complex::parse_statement_unset_call;
 use crate::syntax::errors::CompileError;
 use crate::syntax::lexer::{SpannedToken, Token};
 use crate::syntax::parser::ast::{Expr, ExprKind};
+use crate::syntax::parser::validation_only;
 use crate::syntax::span::Span;
 
 /// Parses a discarded computed property update with statement-owned capture names.
@@ -75,6 +76,24 @@ pub fn parse_args(
     pos: &mut usize,
     err_span: Span,
 ) -> Result<Vec<Expr>, CompileError> {
+    parse_args_in(tokens, pos, err_span, ArgumentSyntax::Call)
+}
+
+/// The PHP grammar allowed at the start of an argument.
+enum ArgumentSyntax {
+    Call,
+    Expression,
+    Unset,
+}
+
+/// Parses a parenthesized argument list under the caller's PHP grammar.
+fn parse_args_in(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    err_span: Span,
+    syntax: ArgumentSyntax,
+) -> Result<Vec<Expr>, CompileError> {
+    let validate_list = validation_only() && !matches!(&syntax, ArgumentSyntax::Expression);
     let mut args = Vec::new();
     while *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         if !args.is_empty() {
@@ -89,6 +108,9 @@ pub fn parse_args(
             if *pos < tokens.len() && tokens[*pos].0 == Token::RParen {
                 break;
             }
+        }
+        if validate_list {
+            validate_list_argument(tokens, *pos, &syntax, !args.is_empty())?;
         }
         if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
             let spread_span = tokens[*pos].1.span;
@@ -118,4 +140,34 @@ pub fn parse_args(
     }
     *pos += 1;
     Ok(args)
+}
+
+/// Preserves Zend's distinction between list expressions, call labels and unset operands.
+fn validate_list_argument(
+    tokens: &[SpannedToken],
+    pos: usize,
+    syntax: &ArgumentSyntax,
+    after_comma: bool,
+) -> Result<(), CompileError> {
+    let Some((Token::Identifier(name), metadata)) = tokens.get(pos) else {
+        return Ok(());
+    };
+    if !name.eq_ignore_ascii_case("list") || matches!(tokens.get(pos + 1), Some((Token::Backslash, _))) {
+        return Ok(());
+    }
+    match syntax {
+        ArgumentSyntax::Call if !matches!(tokens.get(pos + 1), Some((Token::LParen | Token::Colon, _))) => {
+            let span = tokens.get(pos + 1).map_or(metadata.span, |(_, next)| next.span);
+            Err(CompileError::new(span, "Expected ':' after list argument label"))
+        }
+        ArgumentSyntax::Unset => Err(CompileError::new(
+            metadata.span,
+            if after_comma {
+                "Expected ')' before list in unset operands"
+            } else {
+                "Unexpected list in unset operands"
+            },
+        )),
+        _ => Ok(()),
+    }
 }
