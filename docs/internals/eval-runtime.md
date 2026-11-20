@@ -982,7 +982,7 @@ same configuration. The blacklist is loaded once per process.
 `file_store` implements `opcache.file_cache`. Invariants:
 
 - An entry lives at
-  `<file_cache>/<crate version>-<FORMAT_VERSION>/<FNV-1a of the path bytes>.bin`.
+  `<file_cache>/<crate version>-<FORMAT_VERSION>/<path hash>-<semantic ABI>-<profile>.bin`.
   Its header carries a magic, the format version, the semantic ABI and profile
   bits, the canonical path's raw bytes, the mtime, the size and the writer's
   `revalidate`. A read checks the

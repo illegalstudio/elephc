@@ -184,12 +184,90 @@ fn strict_cache_disk_headers_require_matching_semantics() {
     let mut bytes = std::fs::read(&entry).unwrap();
     bytes[16..24].copy_from_slice(&0_u64.to_le_bytes());
     std::fs::write(&entry, &bytes).unwrap();
-    assert!(file_store::load_entry_with_semantics(&config, &fixture.source, None, 0, SemanticProfile::PERMISSIVE).is_none(),
-        "a matching header must not disguise an AST parsed under another policy");
+    assert!(
+        file_store::load_entry_with_semantics(
+            &config,
+            &fixture.source,
+            None,
+            0,
+            profile,
+        )
+        .is_none(),
+        "the requested filename must not bypass a mismatched profile header"
+    );
     bytes[16..24].copy_from_slice(&profile.bits().to_le_bytes());
     bytes[12..16].copy_from_slice(&(elephc_semantics::SEMANTICS_ABI_VERSION + 1).to_le_bytes());
     std::fs::write(&entry, bytes).unwrap();
     assert!(file_store::load_entry_with_semantics(&config, &fixture.source, None, 0, profile).is_none());
+}
+
+/// Disk cache variants keep separate files and path invalidation removes all of them.
+#[test]
+fn strict_cache_disk_profiles_keep_separate_files_and_invalidate_together() {
+    let _guard = store::lock_for_test();
+    let fixture = Fixture::new();
+    let config = fixture.configure(true);
+    std::fs::write(&fixture.source, b"<?php return 1;").unwrap();
+    let permissive = segments::segment_script_with_semantics(
+        b"<?php return 1;",
+        segments::ParseMode::Fresh,
+        SemanticProfile::PERMISSIVE,
+    );
+    let strict = segments::segment_script_with_semantics(
+        b"<?php return 1;",
+        segments::ParseMode::Fresh,
+        checked_literals(),
+    );
+
+    file_store::store_entry_with_semantics(
+        &config,
+        &fixture.source,
+        None,
+        0,
+        0,
+        &permissive,
+        SemanticProfile::PERMISSIVE,
+    );
+    file_store::store_entry_with_semantics(
+        &config,
+        &fixture.source,
+        None,
+        0,
+        0,
+        &strict,
+        checked_literals(),
+    );
+
+    assert!(
+        file_store::load_entry_with_semantics(
+            &config,
+            &fixture.source,
+            None,
+            0,
+            SemanticProfile::PERMISSIVE,
+        )
+        .is_some()
+    );
+    assert!(
+        file_store::load_entry_with_semantics(
+            &config,
+            &fixture.source,
+            None,
+            0,
+            checked_literals(),
+        )
+        .is_some()
+    );
+    let directory = std::fs::read_dir(fixture.dir.join("cache"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 2);
+
+    assert!(file_store::invalidate(&config, &fixture.source));
+    assert_eq!(std::fs::read_dir(directory).unwrap().count(), 0);
 }
 
 /// Checks that native OPcache entry points pass and validate the explicit hidden ABI.

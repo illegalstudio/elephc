@@ -164,13 +164,29 @@ fn cache_dir(config: &ScriptCacheConfig) -> Option<PathBuf> {
     Some(Path::new(&file_cache.path).join(system_id()))
 }
 
-/// Returns the file one script's entry is stored in.
+/// Returns the file one script-and-profile entry is stored in.
 ///
-/// The name is a 64-bit hash of the canonical path rather than the path itself: a path can
-/// be longer than a file name may be, and can contain separators. The full path is carried
-/// in the header, so the hash only has to spread entries out, not identify them.
+/// The name combines a 64-bit hash of the canonical path with the semantic ABI and exact
+/// profile. A path can be longer than a file name may be and can contain separators, while
+/// different eval contexts must retain independent saved scripts. The complete identity is
+/// still carried in the header, so a hash collision remains a miss rather than wrong code.
+fn entry_path_with_semantics(
+    dir: &Path,
+    canonical: &Path,
+    profile: elephc_semantics::SemanticProfile,
+) -> PathBuf {
+    dir.join(format!(
+        "{:016x}-{:08x}-{:016x}.bin",
+        stable_hash(path_bytes(canonical)),
+        elephc_semantics::SEMANTICS_ABI_VERSION,
+        profile.bits()
+    ))
+}
+
+/// Returns the permissive entry path used by format-focused tests.
+#[cfg(test)]
 fn entry_path(dir: &Path, canonical: &Path) -> PathBuf {
-    dir.join(format!("{:016x}.bin", stable_hash(path_bytes(canonical))))
+    entry_path_with_semantics(dir, canonical, elephc_semantics::SemanticProfile::PERMISSIVE)
 }
 
 /// The bytes that identify a script: the path exactly as the filesystem names it.
@@ -259,7 +275,8 @@ pub(crate) fn load_entry_with_semantics(
     profile: elephc_semantics::SemanticProfile,
 ) -> Option<DiskEntry> {
     let dir = cache_dir(config)?;
-    let bytes = std::fs::read(entry_path(&dir, canonical)).ok()?;
+    let entry_path = entry_path_with_semantics(&dir, canonical, profile);
+    let bytes = std::fs::read(&entry_path).ok()?;
     // The header is checked on the RAW BYTES, before anything is decoded. The same two fields
     // are re-checked below on the decoded struct, and that is not redundant: the decoded check
     // can only reject what the decoder already agreed to build, so it cannot protect the
@@ -316,7 +333,7 @@ pub(crate) fn load_entry_with_semantics(
         // MEASURED, a query rejects version A, then `validate_timestamps` is turned off and
         // the file included — reference runs the new source, elephc resurrected A.
         if !super::file_cache::file_cache_config().read_only {
-            let _ = std::fs::remove_file(entry_path(&dir, canonical));
+            let _ = std::fs::remove_file(&entry_path);
         }
         return None;
     }
@@ -401,7 +418,7 @@ pub(crate) fn store_entry_with_semantics(
     // name as predictable as the old `<entry>.tmp<pid>` it would truncate whatever a symlink
     // planted there pointed at. The collision half is not hypothetical even without an
     // attacker: PIDs are reused, and `--web` preforks several workers over one directory.
-    let target = entry_path(&dir, canonical);
+    let target = entry_path_with_semantics(&dir, canonical, profile);
     let Some((mut file, temp)) = create_temp_entry(&target) else {
         return;
     };
@@ -520,8 +537,9 @@ pub(crate) fn contains_with_semantics(canonical: &Path, profile: elephc_semantic
 /// UNLIKE `load`, THIS DOES NOT VALIDATE. `load` refuses an entry whose recorded mtime,
 /// size or path no longer match the source, which is right when deciding whether to EXECUTE
 /// it and wrong when deciding whether to DELETE it: a stale entry is exactly the one that
-/// most needs removing, and validating first would skip it. The path is derived from the
-/// canonical source path alone, so a mismatch cannot make this delete someone else's entry.
+/// most needs removing, and validating first would skip it. Every semantic variant of the
+/// path is removed. The legacy path-only name is removed too, so upgrading the naming scheme
+/// cannot leave an invalidated script behind as dead data.
 ///
 /// A missing directory, a missing entry and a read-only cache are all "nothing to remove"
 /// rather than errors — the same posture as `store`, which is silent when it cannot write.
@@ -538,7 +556,23 @@ pub(crate) fn invalidate(config: &ScriptCacheConfig, canonical: &Path) -> bool {
     let Some(dir) = cache_dir(config) else {
         return false;
     };
-    std::fs::remove_file(entry_path(&dir, canonical)).is_ok()
+    let path_hash = stable_hash(path_bytes(canonical));
+    let legacy = dir.join(format!("{path_hash:016x}.bin"));
+    let mut removed = std::fs::remove_file(legacy).is_ok();
+    let prefix = format!("{path_hash:016x}-");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return removed;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.starts_with(&prefix) && name.ends_with(".bin") {
+            removed |= std::fs::remove_file(entry.path()).is_ok();
+        }
+    }
+    removed
 }
 
 #[cfg(test)]
