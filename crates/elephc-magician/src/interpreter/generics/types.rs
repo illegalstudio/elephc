@@ -101,7 +101,9 @@ fn accepts_value(ty: &Type, value: RuntimeCellHandle, candidate: Option<&Referen
             return accepts_value(ty, candidate.proposed, next, context, values);
         }
     }
-    if crate::eval_ir::pending_array_contents(ty) { return Ok(true); }
+    if crate::eval_ir::pending_array_contents(ty) {
+        return Ok(candidate.is_none_or(|candidate| !candidate.matched.get()));
+    }
     if let Some(schema) = crate::eval_ir::array_contents_schema(ty) {
         return if matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
             accepts_value(schema, value, candidate, context, values)
