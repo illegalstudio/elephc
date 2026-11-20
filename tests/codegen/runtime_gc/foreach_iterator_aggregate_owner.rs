@@ -398,3 +398,18 @@ echo "\n";
     ));
     assert_clean(out, "A0f1fIAfI\n");
 }
+
+/// Static properties of eval-declared classes belong to the request; a CLI program releases
+/// them at exit like php. Forgetting them (the `--web` boundary's choice) left one boxed value
+/// per static in the heap report, which is what a destructor's `self::$count++` produced.
+#[test]
+fn test_eval_declared_static_properties_are_released_at_cli_exit() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$code = $argc > 0 ? '
+class StaticCounted { public static int $made = 0; public static array $log = []; public function __construct() { self::$made++; self::$log[] = "x"; } }
+new StaticCounted(); new StaticCounted();
+echo StaticCounted::$made, count(StaticCounted::$log);' : '';
+eval($code);
+"#);
+    assert_clean(out, "22");
+}
