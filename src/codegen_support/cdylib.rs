@@ -327,6 +327,36 @@ mod tests {
     use crate::span::Span;
     use crate::types::{FunctionSig, PhpType};
 
+    /// Hosted storage accessors assemble with the Mach-O state snapshot footer.
+    #[test]
+    #[cfg(unix)]
+    #[cfg_attr(not(target_os = "macos"), ignore = "requires clang with the Mach-O AArch64 assembler")]
+    fn phpext_hosted_storage_accessors_assemble_with_macho_subsections() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        let mut emitter = Emitter::new_cdylib(target);
+        emitter.phpext_output = true;
+        let mut data = DataSection::new();
+        emit_phpext_exports(&mut emitter, &mut data, target, &[], false, None);
+        let asm = crate::phpext::state::combine(&[&emitter.output(), &data.emit(target)], target)
+            .expect("combine hosted exports and their state");
+        let mut assembler = Command::new("clang")
+            .args(["-target", "arm64-apple-macos11", "-x", "assembler", "-c", "-", "-o", "/dev/null"])
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start Mach-O assembler");
+        assembler.stdin.take().unwrap().write_all(asm.as_bytes()).expect("write hosted assembly");
+        let output = assembler.wait_with_output().expect("assemble hosted exports");
+        assert!(
+            output.status.success(),
+            "Mach-O assembler rejected hosted exports:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     /// AArch64 host callbacks inspect C int results through w0 on every native host target.
     #[test]
     fn phpext_c_int_status_checks_use_w0_on_aarch64_hosts() {

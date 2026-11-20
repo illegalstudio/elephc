@@ -25,8 +25,9 @@ impl ReplacementOwners<'_> {
     /// Emits a C entry that counts adapter pins of one borrowed native object.
     pub fn emit_c_pin_count<E: Emitter>(self, emitter: &mut E, emit_address: fn(&mut E, &str)) {
         let entry = emitter.extern_symbol("elephc_phpext_native_replacement_pin_count");
-        let scan = "__rt_phpext_replacement_pin_count_scan";
-        let done = "__rt_phpext_replacement_pin_count_done";
+        // PHP extension state assembly uses Mach-O subsections, so keep both labels inside the C entry's atom.
+        let scan = "L_phpext_replacement_pin_count_scan";
+        let done = "L_phpext_replacement_pin_count_done";
         emitter.label_global(&entry);
         match emitter.arch() {
             Arch::AArch64 => {
