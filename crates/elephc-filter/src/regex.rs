@@ -447,8 +447,11 @@ pub(crate) fn php_pattern_with_error(
     value: &[u8],
     pattern: &[u8],
 ) -> (bool, Option<String>) {
+    // PHP keeps non-`u` patterns byte-exact. A raw byte pattern cannot go through the
+    // UTF-8-based delimiter/fallback splitter, but PCRE2 accepts the bytes directly.
     let Ok(pattern) = std::str::from_utf8(pattern) else {
-        return (false, None);
+        return preg_match_via_runtime(pattern, value)
+            .map_or((false, None), |matched| (matched, None));
     };
     let (body, modifiers) = match split_php_pattern(pattern) {
         Ok(parts) => parts,

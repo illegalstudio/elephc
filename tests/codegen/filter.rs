@@ -460,6 +460,45 @@ echo ok("foo\nbar", "/\\Afoo(?m:$)/");
     assert_eq!(out, "101010101101");
 }
 
+/// A numeric `FILTER_VALIDATE_REGEXP` id still links PCRE2 for a recursive pattern.
+#[test]
+fn test_filter_regexp_numeric_filter_id_links_pcre2() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(filter_var("aabb", 272, ["options" => ["regexp" => "/^(a(?1)?b)$/"]]));
+"#,
+    );
+    assert_eq!(out, "string(4) \"aabb\"\n");
+}
+
+/// `INPUT_ENV` is seeded even when `variables_order` omits `S`.
+#[test]
+fn test_filter_input_env_ignores_server_variables_order() {
+    let output = compile_and_run_capture_with_ini(
+        r#"<?php
+var_dump(filter_has_var(INPUT_ENV, "PATH"));
+var_dump(filter_input(INPUT_ENV, "PATH") !== null);
+"#,
+        &[("variables_order".to_string(), "E".to_string())],
+    );
+    assert_eq!(output.stdout, "bool(true)\nbool(true)\n", "{}", output.stderr);
+}
+
+/// Non-`u` patterns keep raw bytes and match a raw-byte subject.
+#[test]
+fn test_filter_regexp_byte_pattern_matches_raw_subject() {
+    let out = compile_and_run(
+        r#"<?php
+$value = "\xFF";
+$pattern = "/^\xFF$/";
+echo filter_var($value, FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => $pattern]]) === $value ? "ok" : "no";
+echo "|";
+echo filter_var("\xFE", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => $pattern]]) === false ? "no" : "ok";
+"#,
+    );
+    assert_eq!(out, "ok|no");
+}
+
 /// `add_empty` is a weak `bool` parameter: arrays/objects are rejected before any body
 /// logic, including `filter_input_array()` with an empty input.
 #[test]

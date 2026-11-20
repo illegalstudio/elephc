@@ -168,38 +168,40 @@ pub fn seed_cli_populated_superglobals(
     for name in CLI_POPULATED_SUPERGLOBALS.iter().filter(|name| spelled.contains(**name)) {
         seeds.extend(seed_for(name, server_enabled, env_enabled));
     }
-    if auto_filter_seed && server_enabled {
-        // Seed the filter prelude's raw snapshot after the CLI superglobals exist. PHP's CLI
-        // SAPI exposes exactly five server keys to filter_input(); the remaining process
-        // environment is not part of INPUT_SERVER.
-        let server_values = crate::synthetic_class::e_array_assoc(
-            ["PHP_SELF", "SCRIPT_NAME", "SCRIPT_FILENAME", "PATH_TRANSLATED", "DOCUMENT_ROOT"]
-                .into_iter()
-                .map(|key| {
-                    (
-                        crate::synthetic_class::e_str(key),
-                        crate::synthetic_class::e_index(
-                            crate::synthetic_class::e_var("_SERVER"),
+    if auto_filter_seed {
+        if server_enabled {
+            // Seed the filter prelude's raw snapshot after the CLI superglobals exist. PHP's CLI
+            // SAPI exposes exactly five server keys to filter_input(); the remaining process
+            // environment is not part of INPUT_SERVER.
+            let server_values = crate::synthetic_class::e_array_assoc(
+                ["PHP_SELF", "SCRIPT_NAME", "SCRIPT_FILENAME", "PATH_TRANSLATED", "DOCUMENT_ROOT"]
+                    .into_iter()
+                    .map(|key| {
+                        (
                             crate::synthetic_class::e_str(key),
-                        ),
-                    )
-                })
-                .collect(),
-        );
-        seeds.push(crate::synthetic_class::s_expr(
-            crate::synthetic_class::e_call(
-                "__elephc_filter_seed_request",
-                vec![
-                    crate::synthetic_class::e_const("INPUT_SERVER"),
-                    server_values,
-                    crate::synthetic_class::e_str("unsafe_raw"),
-                    crate::synthetic_class::e_int(0),
-                    crate::synthetic_class::e_bool(false),
-                    crate::synthetic_class::e_bool(true),
-                    crate::synthetic_class::e_bool(false),
-                ],
-            ),
-        ));
+                            crate::synthetic_class::e_index(
+                                crate::synthetic_class::e_var("_SERVER"),
+                                crate::synthetic_class::e_str(key),
+                            ),
+                        )
+                    })
+                    .collect(),
+            );
+            seeds.push(crate::synthetic_class::s_expr(
+                crate::synthetic_class::e_call(
+                    "__elephc_filter_seed_request",
+                    vec![
+                        crate::synthetic_class::e_const("INPUT_SERVER"),
+                        server_values,
+                        crate::synthetic_class::e_str("unsafe_raw"),
+                        crate::synthetic_class::e_int(0),
+                        crate::synthetic_class::e_bool(false),
+                        crate::synthetic_class::e_bool(true),
+                        crate::synthetic_class::e_bool(false),
+                    ],
+                ),
+            ));
+        }
         if env_enabled {
             seeds.push(crate::synthetic_class::s_expr(
                 crate::synthetic_class::e_call(

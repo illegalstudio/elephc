@@ -494,6 +494,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         ExprKind::FunctionCall { name, args } => {
             is_regex_builtin_name(name.as_str())
                 || regex_callback_dispatch_call(name.as_str(), args)
+                || filter_call_selects_regexp(name.as_str(), args)
                 || args.iter().any(expr_has_regex_call)
         }
         ExprKind::BinaryOp { left, right, .. } => {
@@ -649,6 +650,28 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         | ExprKind::PostDecrement(_)
         | ExprKind::This
         | ExprKind::MagicConstant(_) => false,
+    }
+}
+
+/// Returns true when a filter call names `FILTER_VALIDATE_REGEXP` by its numeric id.
+///
+/// The filter switch uses the numeric id internally, so a program that writes `272` instead of
+/// the constant still needs the managed PCRE2 matcher for recursive patterns.
+fn filter_call_selects_regexp(name: &str, args: &[Expr]) -> bool {
+    let name = php_symbol_key(name.trim_start_matches('\\'));
+    let index = match name.as_str() {
+        "filter_var" | "filter_var_array" => 1,
+        "filter_input" => 2,
+        _ => return false,
+    };
+    let Some(filter) = args.get(index) else { return false; };
+    match &filter.kind {
+        ExprKind::IntLiteral(272) => true,
+        ExprKind::ConstRef(constant) => constant
+            .as_str()
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("FILTER_VALIDATE_REGEXP"),
+        _ => false,
     }
 }
 
