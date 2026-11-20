@@ -20,6 +20,10 @@ pub(super) fn evaluate(expr: &EvalExpr, context: &mut ElephcEvalContext,
     match expr {
         EvalExpr::Binary { op, left, right } if !matches!(op, EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr) =>
             binary(*op, left, right, context, scope, values),
+        EvalExpr::Call { name, args } if forwarded(name, None, context) =>
+            eval_owned_builtin_call_with_source(name.trim_start_matches('\\').to_ascii_lowercase().as_str(), args, false, context, scope, values),
+        EvalExpr::NamespacedCall { name, fallback_name, args } if forwarded(name, Some(fallback_name), context) =>
+            eval_owned_builtin_call_with_source(fallback_name.trim_start_matches('\\').to_ascii_lowercase().as_str(), args, false, context, scope, values),
         EvalExpr::DynamicCall{callee,args}=>dynamic_call(callee,args,context,scope,values),
         EvalExpr::Unary { op, expr } => unary(*op, expr, context, scope, values),
         EvalExpr::Ternary { condition, then_branch: Some(then_branch), else_branch } => {
@@ -126,4 +130,10 @@ pub(super) fn unary(op: EvalUnaryOp, expr: &EvalExpr, context: &mut ElephcEvalCo
 /// Normalizes only the consumed whole-kind proof, preserving optional producer metadata in transit.
 fn whole_source(source: Option<&Type>) -> Type {
     source.cloned().map(mixed_source_proofs::value_source).unwrap_or_else(|| Type::atom("mixed"))
+}
+
+/// Identifies forwarding builtins after namespace fallback and user declaration selection.
+fn forwarded(name: &str, fallback: Option<&str>, context: &ElephcEvalContext) -> bool {
+    local_binding_origins::selected_call_builtin(name, fallback, context)
+        .is_some_and(|contract| matches!(contract.name, "call_user_func" | "call_user_func_array"))
 }

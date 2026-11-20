@@ -50,6 +50,7 @@ pub(super) fn invokable(object: RuntimeCellHandle,context: &ElephcEvalContext,
 pub(super) fn resolved(callback: &EvaluatedCallable,context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<Type>,EvalStatus> {
+    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { return Ok(None); }
     match callback {
         EvaluatedCallable::ForeignContext{callback,owner}=>{
             let context=unsafe{owner.context_ptr().as_ref()}.ok_or(EvalStatus::RuntimeFatal)?;
@@ -89,4 +90,24 @@ pub(super) fn supports(ty: &Type,context: &ElephcEvalContext) -> bool {
             || context.native_method_signature(name,"__invoke").is_some(),
         _=>false,
     }
+}
+
+/// Invokes evaluated arguments while forwarding wrapper results independently from the wrapper signature.
+pub(super) fn invoke(callback: &EvaluatedCallable, arguments: Vec<EvaluatedCallArg>, by_value: bool,
+    source: Option<Type>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<Type>), EvalStatus> {
+    if let EvaluatedCallable::ForeignContext { callback, owner } = callback {
+        let context = unsafe { owner.context_ptr().as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
+        return invoke(callback, arguments, by_value, source, context, values);
+    }
+    if let EvaluatedCallable::Named { name, .. } = callback {
+        if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+            && matches!(name.as_str(), "call_user_func" | "call_user_func_array") {
+            return eval_builtin_callback_with_arguments_and_source(name, arguments, !by_value, context, values);
+        }
+    }
+    let result = if by_value {
+        eval_evaluated_callable_with_by_value_call_args(callback, arguments, context, values)
+    } else { eval_evaluated_callable_with_call_array_args(callback, arguments, context, values) };
+    result.map(|value| (value, source))
 }

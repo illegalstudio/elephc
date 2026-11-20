@@ -75,11 +75,13 @@ mod tests {
             Type::Union(vec![Type::atom("string"),Type::atom("int")])))]);
         let encoded=br#"{"Apply":["array",[{"Atom":"int"},{"Nullable":{"Union":[{"Atom":"string"},{"Atom":"int"}]}}]]}"#;
         let parameters=[encoded.as_ptr() as u64,encoded.len() as u64,0,0];
-        let mut record=[layout::SOURCE_VERSION,2,encoded.as_ptr() as u64,encoded.len() as u64,parameters.as_ptr() as u64];
+        let record=[layout::SOURCE_VERSION,2,encoded.as_ptr() as u64,encoded.len() as u64,parameters.as_ptr() as u64];
         let mut signature=[0_u64;13];signature[layout::FLAGS_WORD]=layout::SOURCE_FLAG;
         signature[layout::SOURCE_RECORD_WORD]=record.as_ptr() as u64;
         let sources=unsafe{decode(signature.as_ptr(),2)}.unwrap();
         assert_eq!(sources.parameters,vec![Some(ty.clone()),None]);assert_eq!(sources.returned,Some(ty));
-        record[0]+=1;assert!(matches!(unsafe{decode(signature.as_ptr(),2)},Err(EvalStatus::AbiMismatch)));
+        let incompatible=[layout::SOURCE_VERSION+1,record[1],record[2],record[3],record[4]];
+        signature[layout::SOURCE_RECORD_WORD]=incompatible.as_ptr() as u64;
+        assert!(matches!(unsafe{decode(signature.as_ptr(),2)},Err(EvalStatus::AbiMismatch)));
     }
 }

@@ -76,7 +76,7 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_call_user_func_array_with_source(callback, arg_array, None, lexical_scope, context, values)
+    eval_call_user_func_array_with_source(callback, arg_array, None, lexical_scope, context, values).map(|result| result.0)
 }
 
 /// Preserves source entry metadata while using the ordinary normalized callback-array dispatcher.
@@ -84,7 +84,7 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_source(
     callback: RuntimeCellHandle, arg_array: RuntimeCellHandle, source: Option<&ArgumentSource>,
     lexical_scope: Option<&ElephcEvalScope>, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
+) -> Result<(RuntimeCellHandle, Option<elephc_generics::Type>), EvalStatus> {
     let callback_is_object = values.type_tag(callback)? == EVAL_TAG_OBJECT;
     let callback = eval_call_user_func_callback(
         callback,
@@ -93,7 +93,8 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_source(
         context,
         values,
     )?;
-    callback.with_values(context, values, |callback, context, values| {
+    callback.with_source_result(context, values, |callback, context, values| {
+        let mut result_source = crate::interpreter::mixed_callable_sources::resolved(callback, context, values)?;
         if !values.is_array_like(arg_array)? {
             return Err(EvalStatus::RuntimeFatal);
         }
@@ -119,8 +120,9 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_source(
                     }
                 }
             }
-            eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
-        })
+            crate::interpreter::mixed_callable_sources::invoke(callback, evaluated_args, false, result_source.take(), context, values)
+                .map(|(value, evidence)| { result_source = evidence; value })
+        }).map(|value| (value, result_source))
     })
 }
 

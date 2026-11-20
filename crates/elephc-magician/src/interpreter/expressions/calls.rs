@@ -286,11 +286,13 @@ pub(in crate::interpreter) fn eval_dynamic_call_with_callback_source(
         }
     }
     let callback = eval_callable(callback, context, values)?;
-    callback.with_return_source(context, values, |callback, context, values| {
-        let modes = CallArgumentModes::for_callable(&callback, context, values)?;
+    callback.with_source_result(context, values, |callback, context, values| {
+        let mut source = mixed_callable_sources::resolved(callback, context, values)?;
+        let modes = CallArgumentModes::for_callable(callback, context, values)?;
         with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |arguments, context, _, values| {
-            eval_evaluated_callable_with_call_array_args(&callback, arguments, context, values)
-        })
+            mixed_callable_sources::invoke(callback, arguments, false, source.take(), context, values)
+                .map(|(value, evidence)| { source = evidence; value })
+        }).map(|value| (value, source))
     })
 }
 
