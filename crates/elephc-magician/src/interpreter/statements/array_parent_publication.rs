@@ -1,5 +1,5 @@
 //! Purpose:
-//! Publishes ordinary empty property containers before key checks and callbacks.
+//! Publishes ordinary empty property containers at their PHP-observable mutation point.
 //!
 //! Called from:
 //! - Property dimension writes after selecting and authorizing a backing slot.
@@ -7,6 +7,7 @@
 //! Key details:
 //! - Plain stores mutate their captured value cell without replaying a removed parent slot.
 //! - Accessor and attached native storage keep their existing write-selection paths.
+//! - Exact compound keys reject before null/false promotion; plain stores remain publication-first.
 
 use super::*;
 
@@ -78,14 +79,15 @@ impl ArrayParentPlace<'_> {
 
 /// Publishes empty storage and captures plain stores before a callback can remove their parent.
 pub(super) fn prepare_empty_array_parent(
-    place: ArrayParentPlace<'_>, current: RuntimeCellHandle, append: bool, update: bool,
+    place: ArrayParentPlace<'_>, current: RuntimeCellHandle, index: Option<RuntimeCellHandle>, update: bool,
     owners: &mut Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<PreparedArrayParent, EvalStatus> {
+    checked_array_keys::before_update_parent_materialization(current, index, update, context, values)?;
     let tag = values.type_tag(current)?;
     let was_false = tag == EVAL_TAG_BOOL && !values.truthy(current)?;
     if tag != EVAL_TAG_NULL && !was_false { return Ok(PreparedArrayParent::Snapshot(current)); }
-    let empty = eval_array_autovivification(Some(current), append, context, values)?;
+    let empty = eval_array_autovivification(Some(current), index.is_none(), context, values)?;
     owners.push(empty);
     place.publish(empty, context, scope, values)?;
     if !was_false { return Ok(PreparedArrayParent::Snapshot(empty)); }

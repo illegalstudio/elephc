@@ -37,3 +37,17 @@ pub(super) fn require_key(
     if matches!(tag, EVAL_TAG_INT | EVAL_TAG_STRING) || nullable && tag == EVAL_TAG_NULL { return Ok(()); }
     eval_throw_type_error(elephc_semantics::array_keys::EXACT_KEY_MESSAGE, context, values)
 }
+
+/// Rejects an exact-policy compound key before null or false can become an array parent.
+pub(super) fn before_update_parent_materialization(
+    receiver: RuntimeCellHandle, key: Option<RuntimeCellHandle>, update: bool,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !update { return Ok(()); }
+    let Some(key) = key else { return Ok(()); };
+    let tag = values.type_tag(receiver)?;
+    let materializes = tag == EVAL_TAG_NULL
+        || tag == EVAL_TAG_BOOL && !values.truthy(receiver)?;
+    if materializes { require_key(key, false, context, values)?; }
+    Ok(())
+}

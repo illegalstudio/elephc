@@ -176,7 +176,7 @@ fn write_selected(
     {
         prepare_empty_array_parent(
             ArrayParentPlace::Instance(object, property),
-            current, index.is_none(), op.is_some(), operands, context, scope, values)?
+            current, index, op.is_some(), operands, context, scope, values)?
     } else { PreparedArrayParent::Snapshot(current) };
     let storage = if matches!(prepared, PreparedArrayParent::Captured(_)) {
         ArrayWriteStorage::Captured
@@ -258,6 +258,16 @@ pub(super) fn write_attached_value(
         operands, context, values)
 }
 
+/// Mutates a freshly published ordinary child in place without using SPL storage hooks.
+pub(super) fn write_captured_value(
+    current: RuntimeCellHandle, index: Option<RuntimeCellHandle>, op: Option<EvalBinOp>,
+    assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    write_value_in_storage(current, index, op, assigned, ArrayWriteStorage::Captured, &[],
+        operands, context, values)
+}
+
 /// Distinguishes copied snapshots, published static cells, and attached internal SPL cells.
 #[derive(Clone, Copy)]
 enum ArrayWriteStorage {
@@ -313,6 +323,9 @@ fn write_value_in_storage(
             return Ok(Some(replacement));
         }
     }
+    checked_array_keys::before_update_parent_materialization(
+        current, index, op.is_some(), context, values,
+    )?;
     if attached {
         match values.type_tag(current)? {
             EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_NULL => {}
@@ -416,7 +429,7 @@ fn static_write(
         operands.push(current);
         let prepared = prepare_empty_array_parent(
             ArrayParentPlace::Static(class_name, property),
-            current, key.is_none(), op.is_some(), &mut operands, context, scope, values)?;
+            current, key, op.is_some(), &mut operands, context, scope, values)?;
         prepared.finish_write(key, context, values, |context, values| {
             let current = prepared.value();
             let (current, storage) = if matches!(prepared, PreparedArrayParent::Captured(_)) {
