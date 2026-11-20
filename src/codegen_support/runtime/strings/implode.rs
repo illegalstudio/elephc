@@ -80,7 +80,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.label_global("__rt_implode");
 
     // -- the generic entry reads the element layout from the array header --
-    emitter.instruction("ldr x4, [x3, #-8]");                                   // load packed indexed-array metadata for element layout dispatch
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x4", "x3");
     emitter.instruction("lsr x4, x4, #8");                                      // move the indexed-array value_type tag into the low bits
     emitter.instruction("and x4, x4, #0x7f");                                   // isolate the indexed-array element value_type tag
     // An explicit branch, not a fall-through: the typed entry is its own global symbol, so on
@@ -408,9 +408,8 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_implode");
 
     // -- the generic entry reads the element layout from the array header --
-    emitter.instruction("mov rcx, QWORD PTR [rdx - 8]");                        // load packed indexed-array metadata for element layout dispatch
-    emitter.instruction("shr rcx, 8");                                          // move the indexed-array value_type tag into the low bits
-    emitter.instruction("and rcx, 0x7f");                                       // isolate the indexed-array element value_type tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rcx", "rdx");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rcx", "rcx");
     emitter.instruction("jmp __rt_implode_typed");                              // continue in the shared join body (a separate symbol, never a fall-through)
 
     // -- typed entry: rcx = element value_type chosen by the caller --

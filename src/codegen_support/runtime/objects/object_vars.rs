@@ -254,10 +254,8 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldrb w9, [x9, x12]");                                  // distinguish an owned native cell from inline or borrowed storage
     emitter.instruction("cmp w9, #11");                                         // only owned kind-eight cells have a managed cell header
     emitter.instruction("b.ne __rt_object_to_hash_wrapper_owners");             // inspect only the wrapper for other storage shapes
-    emitter.instruction("ldr w9, [x17, #-12]");                                 // native aliases retain their shared cell rather than its wrapper
-    emitter.instruction("ldr x10, [x17, #-8]");                                 // inspect collector-only cell ownership
-    emitter.instruction("ubfx x10, x10, #18, #1");                              // isolate the artificial destructor pin
-    emitter.instruction("sub w9, w9, w10");                                     // count only PHP-visible cell owners
+    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w9", "x17");
+    elephc_memoir::heap_refcount::emit_subtract_collector_pin(emitter, "x17", "w9", ("x10", "w10"));
     super::super::reference_cells::subtract_validation_pins(
         emitter, "x17", "x9", "x10", "x11", "__rt_object_to_hash_cell",
     );
@@ -275,10 +273,8 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x1, #16]");                                   // inspect the reference identity marker
     emitter.instruction("cmp x9, #1");                                          // only a persistent PHP reference preserves its binding
     emitter.instruction("b.ne __rt_object_to_hash_copy_value");                 // nested value boxes remain ordinary copies
-    emitter.instruction("ldr w9, [x1, #-12]");                                  // inspect independently retained eval or projected aliases
-    emitter.instruction("ldr x10, [x1, #-8]");                                  // exclude collector-only wrapper ownership
-    emitter.instruction("ubfx x10, x10, #18, #1");                              // isolate the wrapper's artificial destructor pin
-    emitter.instruction("sub w9, w9, w10");                                     // count only PHP-visible wrapper owners
+    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w9", "x1");
+    elephc_memoir::heap_refcount::emit_subtract_collector_pin(emitter, "x1", "w9", ("x10", "w10"));
     super::super::reference_cells::subtract_validation_pins(
         emitter, "x1", "x9", "x10", "x11", "__rt_object_to_hash_wrapper",
     );
@@ -552,11 +548,8 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r11, 4");                                          // convert the byte offset to a property index
     emitter.instruction("cmp BYTE PTR [r9 + r11], 11");                         // only owned kind-eight cells have a managed cell header
     emitter.instruction("jne __rt_object_to_hash_wrapper_owners_x");            // inspect only the wrapper for other storage shapes
-    emitter.instruction("mov r9d, DWORD PTR [r10 - 12]");                       // native aliases retain their shared cell rather than its wrapper
-    emitter.instruction("mov r11, QWORD PTR [r10 - 8]");                        // inspect collector-only cell ownership
-    emitter.instruction("shr r11, 18");                                         // position the artificial destructor pin
-    emitter.instruction("and r11d, 1");                                         // isolate the artificial destructor pin
-    emitter.instruction("sub r9d, r11d");                                       // count only PHP-visible cell owners
+    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "r9d", "r10");
+    elephc_memoir::heap_refcount::emit_subtract_collector_pin(emitter, "r10", "r9d", ("r11", "r11d"));
     super::super::reference_cells::subtract_validation_pins(
         emitter, "r10", "r9", "r11", "rcx", "__rt_object_to_hash_cell_x",
     );
@@ -572,11 +565,8 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_object_to_hash_copy_value_x");                // ordinary values get independent zval storage
     emitter.instruction("cmp QWORD PTR [rdi + 16], 1");                         // inspect the reference identity marker
     emitter.instruction("jne __rt_object_to_hash_copy_value_x");                // nested value boxes remain ordinary copies
-    emitter.instruction("mov r9d, DWORD PTR [rdi - 12]");                       // inspect independently retained eval or projected aliases
-    emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                        // exclude collector-only wrapper ownership
-    emitter.instruction("shr r11, 18");                                         // position the wrapper's artificial destructor pin
-    emitter.instruction("and r11d, 1");                                         // isolate the artificial destructor pin
-    emitter.instruction("sub r9d, r11d");                                       // count only PHP-visible wrapper owners
+    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "r9d", "rdi");
+    elephc_memoir::heap_refcount::emit_subtract_collector_pin(emitter, "rdi", "r9d", ("r11", "r11d"));
     super::super::reference_cells::subtract_validation_pins(
         emitter, "rdi", "r9", "r10", "r11", "__rt_object_to_hash_wrapper",
     );

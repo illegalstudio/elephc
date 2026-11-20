@@ -40,7 +40,7 @@ pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
         if direction == 1 {
             emitter.instruction(if arm { "add x10, x10, #1" } else { "inc r10" }); // select the write-direction table slot
         }
-        emitter.instruction(if arm { "ldr x0, [x9, x10, lsl #3]" } else { "mov rax, QWORD PTR [r9 + r10 * 8]" }); // transfer the table's object reference
+        elephc_memoir::guarded_owners::emit_load_indexed_owner(emitter, if arm { "x9" } else { "r9" }, if arm { "x10" } else { "r10" }, result);
         emitter.instruction(if arm { "cmp x1, #0" } else { "test rsi, rsi" });  // zero selects the ordinary close of every direction
         emitter.instruction(&format!("{} {detach}", if arm { "b.eq" } else { "jz" })); // a full close has no object selection filter
         emitter.instruction(if arm { "cmp x0, x1" } else { "cmp rax, rsi" });   // a refused attach owns only matching provisional roots
@@ -48,7 +48,7 @@ pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
         abi::emit_load_int_immediate(emitter, result, 0);
         abi::emit_jump(emitter, &saved);
         emitter.label(&detach);
-        emitter.instruction(if arm { "str xzr, [x9, x10, lsl #3]" } else { "mov QWORD PTR [r9 + r10 * 8], 0" }); // retire the root before any PHP callback
+        elephc_memoir::guarded_owners::emit_clear_indexed_owner(emitter, if arm { "x9" } else { "r9" }, if arm { "x10" } else { "r10" });
         emitter.instruction(if arm { "cmp x0, #0" } else { "test rax, rax" });  // preserve builtin filter IDs in slots without user objects
         emitter.instruction(&format!("{} {saved}", if arm { "b.eq" } else { "jz" })); // empty user slots have no filter ID to retire
         abi::emit_load_from_address(emitter, if arm { "x12" } else { "r8" }, frame, 0);

@@ -56,7 +56,7 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_array_get_mixed_key_null_receiver");         // sentinel-null receivers from missed reads → optional warning + Mixed(null)
 
     // -- dispatch on array storage kind --
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load packed kind metadata from the array header
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low byte (kind tag)
     emitter.instruction("cmp x9, #3");                                          // kind 3 = hash storage?
     emitter.instruction("b.eq __rt_array_get_mixed_key_hash");                  // route hash-storage arrays through hash_get
@@ -76,8 +76,8 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_array_get_mixed_key_int_missing");           // warn and return null for a negative indexed-array key
     emitter.instruction("cmp x12, x9");                                         // index >= length → null
     emitter.instruction("b.ge __rt_array_get_mixed_key_int_missing");           // warn and return null for an out-of-bounds indexed-array key
-    emitter.instruction("ldr x13, [x0, #-8]");                                  // reload kind metadata for element type tag
-    emitter.instruction("ubfx x13, x13, #8, #7");                               // extract the runtime element value_type tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x13", "x0");
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x13", "x13");
     emitter.instruction("add x10, x0, #24");                                    // skip the 24-byte array header to reach the contiguous payload
     emitter.instruction("cmp x13, #7");                                         // are indexed slots already boxed Mixed pointers?
     emitter.instruction("b.eq __rt_array_get_mixed_key_indexed_boxed");         // boxed slots are copied into a fresh zval cell before returning
@@ -274,7 +274,7 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_array_get_mixed_key_null_receiver");           // sentinel-null receivers from missed reads → optional warning + Mixed(null)
 
     // -- dispatch on array storage kind --
-    emitter.instruction("mov r9, QWORD PTR [rdi - 8]");                         // load packed kind metadata from the array header
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r9", "rdi");
     emitter.instruction("and r9, 0xff");                                        // isolate the low byte (kind tag)
     emitter.instruction("cmp r9, 3");                                           // kind 3 = hash storage?
     emitter.instruction("je __rt_array_get_mixed_key_hash");                    // route hash-storage arrays through hash_get
@@ -294,9 +294,8 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("js __rt_array_get_mixed_key_int_missing");             // warn and return null for a negative indexed-array key
     emitter.instruction("cmp r8, r9");                                          // index >= length → null
     emitter.instruction("jge __rt_array_get_mixed_key_int_missing");            // warn and return null for an out-of-bounds indexed-array key
-    emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                        // reload kind metadata for element type tag
-    emitter.instruction("shr r11, 8");                                          // shift the element type tag into the low 7 bits
-    emitter.instruction("and r11, 0x7f");                                       // mask the element type tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "rdi");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r11", "r11");
     emitter.instruction("lea r10, [rdi + 24]");                                 // skip the 24-byte array header to reach the contiguous payload
     emitter.instruction("cmp r11, 7");                                          // are indexed slots already boxed Mixed pointers?
     emitter.instruction("je __rt_array_get_mixed_key_indexed_boxed");           // boxed slots are copied into a fresh zval cell before returning

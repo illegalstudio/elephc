@@ -239,7 +239,7 @@ fn emit_insert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x11");                                        // is storage full?
     emitter.instruction("b.ne __rt_spl_dll_insert_have_capacity");              // skip growth when capacity remains
     emitter.instruction("mov x0, x9");                                          // pass current storage to array_grow
-    emitter.instruction("bl __rt_array_grow");                                  // grow internal storage
+    elephc_memoir::values::packed_slots::emit_grow(emitter);
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload receiver after growth
     emitter.instruction(&format!("str x0, [x9, #{}]", SPL_DLL_STORAGE_OFFSET)); // store possibly-grown internal storage
     emitter.instruction("str x0, [sp, #24]");                                   // save grown storage for insertion
@@ -247,21 +247,7 @@ fn emit_insert_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload storage pointer
     emitter.instruction("ldr x10, [x9]");                                       // reload current length
     emitter.instruction("ldr x12, [sp, #8]");                                   // reload clamped insertion index
-    emitter.instruction("add x11, x9, #24");                                    // point at the first storage element
-    emitter.instruction("mov x13, x10");                                        // start right-shift cursor at the old length
-    emitter.label("__rt_spl_dll_insert_shift_loop");
-    emitter.instruction("cmp x13, x12");                                        // has the cursor reached the insertion index?
-    emitter.instruction("b.le __rt_spl_dll_insert_store");                      // stop once the insertion slot is free
-    emitter.instruction("sub x14, x13, #1");                                    // source index is one slot before the cursor
-    emitter.instruction("ldr x15, [x11, x14, lsl #3]");                         // load the Mixed pointer being shifted right
-    emitter.instruction("str x15, [x11, x13, lsl #3]");                         // store the Mixed pointer one slot to the right
-    emitter.instruction("sub x13, x13, #1");                                    // move the shift cursor left
-    emitter.instruction("b __rt_spl_dll_insert_shift_loop");                    // continue shifting until the insert slot is open
-    emitter.label("__rt_spl_dll_insert_store");
-    emitter.instruction("ldr x14, [sp, #16]");                                  // reload owned Mixed value to insert
-    emitter.instruction("str x14, [x11, x12, lsl #3]");                         // store the owned Mixed value in the insertion slot
-    emitter.instruction("add x10, x10, #1");                                    // increase storage length
-    emitter.instruction("str x10, [x9]");                                       // persist new storage length
+    elephc_memoir::values::spl_storage::emit_insert_word(emitter);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release insertion state
     emitter.instruction("ret");                                                 // return void
@@ -1421,7 +1407,7 @@ fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, r11");                                        // is storage full?
     emitter.instruction("jne __rt_spl_dll_insert_have_capacity");               // skip growth when capacity remains
     emitter.instruction("mov rdi, r9");                                         // pass current storage to array_grow
-    emitter.instruction("call __rt_array_grow");                                // grow internal storage
+    elephc_memoir::values::packed_slots::emit_grow(emitter);
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload receiver after growth
     emitter.instruction(&format!("mov QWORD PTR [r9 + {}], rax", SPL_DLL_STORAGE_OFFSET)); // store possibly-grown storage
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save grown storage
@@ -1429,22 +1415,7 @@ fn emit_insert_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload storage pointer
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // reload current length
     emitter.instruction("mov r12, QWORD PTR [rbp - 16]");                       // reload clamped insertion index
-    emitter.instruction("lea r11, [r9 + 24]");                                  // point at first storage element
-    emitter.instruction("mov r13, r10");                                        // start right-shift cursor at old length
-    emitter.label("__rt_spl_dll_insert_shift_loop");
-    emitter.instruction("cmp r13, r12");                                        // has cursor reached insertion index?
-    emitter.instruction("jle __rt_spl_dll_insert_store");                       // stop once insertion slot is free
-    emitter.instruction("mov r14, r13");                                        // copy destination index for source calculation
-    emitter.instruction("sub r14, 1");                                          // source index is one slot before cursor
-    emitter.instruction("mov r15, QWORD PTR [r11 + r14 * 8]");                  // load Mixed pointer being shifted right
-    emitter.instruction("mov QWORD PTR [r11 + r13 * 8], r15");                  // store Mixed pointer one slot to the right
-    emitter.instruction("sub r13, 1");                                          // move shift cursor left
-    emitter.instruction("jmp __rt_spl_dll_insert_shift_loop");                  // continue shifting until insert slot opens
-    emitter.label("__rt_spl_dll_insert_store");
-    emitter.instruction("mov r14, QWORD PTR [rbp - 24]");                       // reload owned Mixed value to insert
-    emitter.instruction("mov QWORD PTR [r11 + r12 * 8], r14");                  // store owned Mixed value in insertion slot
-    emitter.instruction("add r10, 1");                                          // increase storage length
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // persist new storage length
+    elephc_memoir::values::spl_storage::emit_insert_word(emitter);
     emitter.instruction("add rsp, 48");                                         // release insertion state
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return void

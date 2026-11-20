@@ -152,3 +152,61 @@ fn emit_buffer_try_resolve_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("xor eax, eax");                                        // answer the null descriptor and let the access report the fault
     emitter.instruction("ret");                                                 // return without diagnosing: the resolution may be speculative
 }
+
+/// Computes an element address from a resolved descriptor and the index in x10 or r10.
+/// The optional labels select the stale-descriptor trap and an unproven index check.
+pub fn emit_element_address(
+    emitter: &mut impl crate::Emitter, descriptor: &str, live: Option<&str>, bounds: Option<&str>,
+) -> &'static str {
+    let arm = emitter.arch() == Arch::AArch64;
+    let hoisted = live.is_some();
+    let index = if arm { "x10" } else { "r10" };
+    let scratch = if arm && hoisted { "x9" } else if arm { "x12" } else { "rcx" };
+    if let Some(label) = live {
+        if arm {
+            emitter.instruction(&format!("cbnz {descriptor}, {label}"));      // zero means the hoisted handle was stale
+        } else {
+            emitter.instruction(&format!("test {descriptor}, {descriptor}")); // reject an unresolved hoisted descriptor
+            emitter.instruction(&format!("jnz {label}"));                     // continue only for a live descriptor
+        }
+        emitter.emit_jump("__rt_buffer_use_after_free");
+        emitter.label(label);
+    }
+    if let Some(label) = bounds {
+        if !arm && hoisted {
+            emitter.instruction(&format!("cmp {index}, QWORD PTR [{descriptor} + 8]")); // compare against the descriptor's logical length
+        } else {
+            emitter.emit_load_from_address(scratch, descriptor, 8);
+            emitter.instruction(&format!("cmp {index}, {scratch}"));          // unsigned comparison also rejects negative indices
+        }
+        emitter.instruction(&format!("{} {label}", if arm { "b.lo" } else { "jb" })); // proceed on an in-bounds index
+        emitter.emit_jump("__rt_buffer_bounds_fail");
+        emitter.label(label);
+    }
+    if arm {
+        if hoisted {
+            emitter.emit_load_from_address(scratch, descriptor, 16);
+            emitter.emit_load_from_address("x11", descriptor, 0);
+        } else {
+            emitter.emit_load_from_address("x11", descriptor, 0);
+            emitter.emit_load_from_address(scratch, descriptor, 16);
+        }
+        emitter.instruction(&format!("madd x11, x10, {scratch}, x11"));        // compute base plus index times stride
+        "x11"
+    } else if hoisted {
+        emitter.instruction(&format!("imul r10, QWORD PTR [{descriptor} + 16]")); // scale the checked index
+        emitter.instruction(&format!("add r10, QWORD PTR [{descriptor}]"));    // add the payload base without overwriting it
+        "r10"
+    } else {
+        emitter.emit_load_from_address("r11", descriptor, 0);
+        emitter.emit_load_from_address(scratch, descriptor, 16);
+        emitter.instruction("imul r10, rcx");                                 // scale the checked index
+        emitter.instruction("add r11, r10");                                  // add the scaled index to the payload base
+        "r11"
+    }
+}
+
+/// Loads the payload base from a descriptor returned by the checked resolver.
+pub fn emit_load_payload(emitter: &mut impl crate::Emitter, result: &str, descriptor: &str) {
+    emitter.emit_load_from_address(result, descriptor, 0);
+}

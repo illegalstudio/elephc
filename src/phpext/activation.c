@@ -920,11 +920,23 @@ void elephc_php_unsupported_result(void)
     }
 }
 
+typedef struct {
+    uintptr_t class_id;
+    const char *message;
+    size_t message_len;
+    zend_long code;
+} ep_native_throwable_fields;
+
+extern void elephc_phpext_native_throwable_fields(
+    const uintptr_t *object, ep_native_throwable_fields *fields);
+
 /* Copy compact native Throwable fields while their owned message remains live. */
 static int ep_copy_exception(ep_call *call, const uintptr_t *object, char **name,
     size_t *name_len, char **message, size_t *message_len, zend_long *code)
 {
-    uintptr_t id = object[0];
+    ep_native_throwable_fields fields;
+    elephc_phpext_native_throwable_fields(object, &fields);
+    uintptr_t id = fields.class_id;
     if (id < ep_class_name_count) {
         *name_len = ep_class_name_entries[id * 2 + 1];
         *name = ep_alloc(call, *name_len + 1);
@@ -932,12 +944,12 @@ static int ep_copy_exception(ep_call *call, const uintptr_t *object, char **name
             memcpy(*name, (void *)ep_class_name_entries[id * 2], *name_len);
         }
     }
-    *message_len = object[2];
+    *message_len = fields.message_len;
     *message = ep_alloc(call, *message_len + 1);
     if (*message) {
-        memcpy(*message, (void *)object[1], *message_len);
+        memcpy(*message, fields.message, *message_len);
     }
-    *code = (zend_long)object[3];
+    *code = fields.code;
     return call->error != NULL;
 }
 

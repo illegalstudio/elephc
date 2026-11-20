@@ -147,7 +147,7 @@ fn select_existing(emitter: &mut Emitter) {
     branch(emitter, "eq", "je", "fresh");
     sentinels::emit_branch_if_null_container(emitter, if arm { "x10" } else { "r10" }, if arm { "x13" } else { "r8" }, &format!("{NAME}_fresh"));
     if arm {
-        emitter.instruction("ldr w13, [x10, #-12]");                            // count ordinary owners of the internal value wrapper
+        elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w13", "x10");
         emitter.instruction("cmp w13, #1");                                     // shared or dying boxes cannot expose a unique nested value
         emitter.instruction("cset x13, ne");                                    // remember whether this wrapper requires child separation
         emitter.instruction("orr x12, x12, x13");                               // preserve sharing observed anywhere in the wrapper chain
@@ -155,7 +155,7 @@ fn select_existing(emitter: &mut Emitter) {
         emitter.instruction("ldr x11, [x10, #16]");                             // preserve any persistent reference marker in the child
         emitter.instruction("ldr x10, [x10, #8]");                              // follow the borrowed child without mutating a shared box
     } else {
-        emitter.instruction("cmp DWORD PTR [r10 - 12], 1");                     // distinguish one ordinary wrapper owner from shared or dying storage
+        elephc_memoir::heap_refcount::emit_compare_owner_count_x86_64(emitter, "r10", 1);
         emitter.instruction("setne cl");                                        // record whether the current wrapper requires COW
         emitter.instruction("movzx ecx, cl");                                   // normalize the wrapper-sharing predicate
         emitter.instruction("or edx, ecx");                                     // preserve sharing found in any preceding wrapper
@@ -173,12 +173,12 @@ fn select_existing(emitter: &mut Emitter) {
     emitter.instruction(if arm { "cmp x12, #0" } else { "test edx, edx" });     // any shared ordinary wrapper requires a separate child value
     branch(emitter, "ne", "jne", "clone");
     if arm {
-        emitter.instruction("ldr w13, [x10, #-12]");                            // inspect the child hash's physical owner count
+        elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w13", "x10");
         emitter.instruction("ldr x14, [x10, #48]");                             // exclude cursor pins from logical PHP ownership
         emitter.instruction("sub x13, x13, x14");                               // preserve unique identity while nested cursors keep the hash alive
         emitter.instruction("cmp x13, #1");                                     // shared or actively destroyed children require a value copy
     } else {
-        emitter.instruction("mov ecx, DWORD PTR [r10 - 12]");                   // inspect the nested hash's physical reference count
+        elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "ecx", "r10");
         emitter.instruction("sub rcx, QWORD PTR [r10 + 48]");                   // remove cursor pins from the logical owner count
         emitter.instruction("cmp rcx, 1");                                      // preserve identity only for exactly one live PHP owner
     }

@@ -28,7 +28,7 @@ pub(super) fn emit_reference_child_slot(emitter: &mut Emitter) {
     emitter.label_global(name);
     if arm {
         emitter.instruction(&format!("cbz x0, {name}_invalid"));                // reject a missing reference before reading its allocation header
-        emitter.instruction("ldurb w9, [x0, #-8]");                             // inspect the managed heap kind of the outer owner
+        elephc_memoir::heap_kind::emit_load_kind_byte(emitter, "w9", "x0");
         emitter.instruction(&format!("cmp w9, #{REFERENCE_CELL_HEAP_KIND}"));   // native aliases use a two-word ref-cell
         emitter.instruction(&format!("b.eq {name}_valid"));                     // the first word is already the writable child slot
         emitter.instruction("ldr x9, [x0]");                                    // eval references use a boxed Mixed wrapper
@@ -41,7 +41,7 @@ pub(super) fn emit_reference_child_slot(emitter: &mut Emitter) {
     } else {
         emitter.instruction("test rax, rax");                                   // reject a missing reference
         emitter.instruction(&format!("jz {name}_invalid"));                     // reject a missing reference before reading its header
-        emitter.instruction(&format!("cmp BYTE PTR [rax - 8], {REFERENCE_CELL_HEAP_KIND}")); // recognize native ref-cells
+        elephc_memoir::heap_kind::emit_compare_kind_x86_64(emitter, "rax", REFERENCE_CELL_HEAP_KIND);
         emitter.instruction(&format!("je {name}_valid"));                       // accept the native two-word reference cell
         emitter.instruction("cmp QWORD PTR [rax], 7");                          // require an eval nested Mixed wrapper
         emitter.instruction(&format!("jne {name}_invalid"));                    // reject an ordinary boxed PHP value

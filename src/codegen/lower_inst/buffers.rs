@@ -71,7 +71,7 @@ pub(super) fn lower_buffer_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction
     require_buffer(ctx.load_value_to_result(buffer)?, "buffer_ptr")?;
     abi::emit_call_label(ctx.emitter, "__rt_buffer_resolve");
     let result = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_from_address(ctx.emitter, result, result, 0);
+    elephc_memoir::buffers::emit_load_payload(ctx.emitter, result, result);
     store_if_result(ctx, inst)
 }
 
@@ -232,49 +232,15 @@ fn emit_resolved_element_address(
 ) -> Result<&'static str> {
     let live = ctx.next_label("buffer_descriptor_live");
     let bounds_ok = (!index_in_bounds).then(|| ctx.next_label("buffer_index_in_bounds"));
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            // -- load operands and validate the hoisted descriptor --
-            require_int(ctx.load_value_to_reg(index, "x10")?, "buffer_get_resolved index")?;
-            ctx.load_value_to_reg(descriptor, "x11")?;
-            ctx.emitter.instruction(&format!("cbnz x11, {}", live));            // a hoisted descriptor of zero means the handle was stale
-            ctx.emitter.instruction("b __rt_buffer_use_after_free");            // report the use-after-free at the access, like the unresolved form
-            ctx.emitter.label(&live);
-            // -- validate an unproven index --
-            if let Some(bounds_ok) = bounds_ok.as_deref() {
-                ctx.emitter.instruction("ldr x9, [x11, #8]");                   // validated descriptor logical length
-                ctx.emitter.instruction("cmp x10, x9");                         // unsigned compare also rejects every negative index
-                ctx.emitter.instruction(&format!("b.lo {}", bounds_ok));        // continue once the requested index is within bounds
-                ctx.emitter.instruction("b __rt_buffer_bounds_fail");           // abort immediately on an out-of-range buffer index
-                ctx.emitter.label(bounds_ok);
-            }
-            // -- compute the resolved element address --
-            ctx.emitter.instruction("ldr x9, [x11, #16]");                      // element stride in bytes
-            ctx.emitter.instruction("ldr x11, [x11]");                          // payload base address
-            ctx.emitter.instruction("madd x11, x10, x9, x11");                  // payload base plus index multiplied by stride
-            Ok("x11")
-        }
-        Arch::X86_64 => {
-            // -- load operands and validate the hoisted descriptor --
-            require_int(ctx.load_value_to_reg(index, "r10")?, "buffer_get_resolved index")?;
-            ctx.load_value_to_reg(descriptor, "r11")?;
-            ctx.emitter.instruction("test r11, r11");                           // a hoisted descriptor of zero means the handle was stale
-            ctx.emitter.instruction(&format!("jnz {}", live));                  // continue with a live descriptor
-            ctx.emitter.instruction("jmp __rt_buffer_use_after_free");          // report the use-after-free at the access, like the unresolved form
-            ctx.emitter.label(&live);
-            // -- validate an unproven index --
-            if let Some(bounds_ok) = bounds_ok.as_deref() {
-                ctx.emitter.instruction("cmp r10, QWORD PTR [r11 + 8]");        // unsigned compare also rejects every negative index
-                ctx.emitter.instruction(&format!("jb {}", bounds_ok));          // continue once the requested unsigned index is within bounds
-                ctx.emitter.instruction("jmp __rt_buffer_bounds_fail");         // abort immediately on an out-of-range buffer index
-                ctx.emitter.label(bounds_ok);
-            }
-            // -- compute the resolved element address --
-            ctx.emitter.instruction("imul r10, QWORD PTR [r11 + 16]");          // scale the requested index by the element stride in bytes
-            ctx.emitter.instruction("add r10, QWORD PTR [r11]");                // add the payload base address
-            Ok("r10")
-        }
-    }
+    let (index_reg, descriptor_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x10", "x11"),
+        Arch::X86_64 => ("r10", "r11"),
+    };
+    require_int(ctx.load_value_to_reg(index, index_reg)?, "buffer_get_resolved index")?;
+    ctx.load_value_to_reg(descriptor, descriptor_reg)?;
+    Ok(elephc_memoir::buffers::emit_element_address(
+        ctx.emitter, descriptor_reg, Some(&live), bounds_ok.as_deref(),
+    ))
 }
 
 /// Returns the declared buffer type for a `BufferNew` result.
@@ -363,14 +329,14 @@ fn materialize_resolved_element_address_for_get(ctx: &mut FunctionContext<'_>) -
             abi::emit_call_label(ctx.emitter, "__rt_buffer_resolve");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", 0);
             abi::emit_release_temporary_stack(ctx.emitter, 32);
-            emit_checked_address_arm64(ctx, "x0", "x10");
+            emit_checked_address(ctx, "x0");
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
             abi::emit_call_label(ctx.emitter, "__rt_buffer_resolve");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
             abi::emit_release_temporary_stack(ctx.emitter, 32);
-            emit_checked_address_x86_64(ctx, "rax", "r10");
+            emit_checked_address(ctx, "rax");
         }
     }
     match ctx.emitter.target.arch {
@@ -387,13 +353,13 @@ fn materialize_resolved_element_address_for_set(ctx: &mut FunctionContext<'_>) -
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 32);
             abi::emit_call_label(ctx.emitter, "__rt_buffer_resolve");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", 16);
-            emit_checked_address_arm64(ctx, "x0", "x10");
+            emit_checked_address(ctx, "x0");
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 32);
             abi::emit_call_label(ctx.emitter, "__rt_buffer_resolve");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 16);
-            emit_checked_address_x86_64(ctx, "rax", "r10");
+            emit_checked_address(ctx, "rax");
         }
     }
     match ctx.emitter.target.arch {
@@ -402,35 +368,10 @@ fn materialize_resolved_element_address_for_set(ctx: &mut FunctionContext<'_>) -
     }
 }
 
-/// Emits ARM64 descriptor bounds checks and computes its payload element address.
-fn emit_checked_address_arm64(ctx: &mut FunctionContext<'_>, descriptor_reg: &str, index_reg: &str) {
+/// Emits a checked address after the handle resolver has validated the descriptor.
+fn emit_checked_address(ctx: &mut FunctionContext<'_>, descriptor: &str) {
     let bounds_ok = ctx.next_label("buffer_index_in_bounds");
-    // -- validate the buffer index --
-    abi::emit_load_from_address(ctx.emitter, "x12", descriptor_reg, 8);
-    ctx.emitter.instruction(&format!("cmp {}, x12", index_reg));                // unsigned compare also rejects every negative buffer index
-    ctx.emitter.instruction(&format!("b.lo {}", bounds_ok));                    // continue once the requested index is within bounds
-    ctx.emitter.instruction("b __rt_buffer_bounds_fail");                       // abort immediately on an out-of-range buffer index
-    ctx.emitter.label(&bounds_ok);
-    // -- compute the resolved element address --
-    abi::emit_load_from_address(ctx.emitter, "x11", descriptor_reg, 0);
-    abi::emit_load_from_address(ctx.emitter, "x12", descriptor_reg, 16);
-    ctx.emitter.instruction(&format!("madd x11, {}, x12, x11", index_reg));     // compute payload base plus index multiplied by descriptor stride
-}
-
-/// Emits x86_64 descriptor bounds checks and computes its payload element address.
-fn emit_checked_address_x86_64(ctx: &mut FunctionContext<'_>, descriptor_reg: &str, index_reg: &str) {
-    let bounds_ok = ctx.next_label("buffer_index_in_bounds");
-    // -- validate the buffer index --
-    abi::emit_load_from_address(ctx.emitter, "rcx", descriptor_reg, 8);
-    ctx.emitter.instruction(&format!("cmp {}, rcx", index_reg));                // unsigned compare also rejects every negative buffer index
-    ctx.emitter.instruction(&format!("jb {}", bounds_ok));                      // continue once the requested unsigned index is within bounds
-    ctx.emitter.instruction("jmp __rt_buffer_bounds_fail");                     // abort immediately on an out-of-range buffer index
-    ctx.emitter.label(&bounds_ok);
-    // -- compute the resolved element address --
-    abi::emit_load_from_address(ctx.emitter, "r11", descriptor_reg, 0);
-    abi::emit_load_from_address(ctx.emitter, "rcx", descriptor_reg, 16);
-    ctx.emitter.instruction(&format!("imul {}, rcx", index_reg));               // scale the requested index by the element stride in bytes
-    ctx.emitter.instruction(&format!("add r11, {}", index_reg));                // compute payload base plus index multiplied by descriptor stride
+    elephc_memoir::buffers::emit_element_address(ctx.emitter, descriptor, None, Some(&bounds_ok));
 }
 
 /// Pushes the materialized BufferSet RHS so resolver and bounds code cannot clobber it.

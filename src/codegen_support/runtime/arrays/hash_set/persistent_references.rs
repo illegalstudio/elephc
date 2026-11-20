@@ -9,7 +9,7 @@
 //! - Array builders detach reference entries before publishing independent values.
 //! - Incoming owners retire before the displaced child can run a destructor.
 
-use super::{abi, hash_layout, Arch, Emitter};
+use super::{hash_layout, Arch, Emitter};
 
 /// Recognizes a persistent wrapper after the boxed invoker-marker probe has declined it.
 pub(super) fn emit_probe(emitter: &mut Emitter) {
@@ -48,12 +48,7 @@ pub(super) fn emit_write(emitter: &mut Emitter) {
             hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
             emitter.instruction("ldr x0, [x12, #24]");                          // retain the destination wrapper in its bucket
             emitter.instruction("ldr x1, [sp, #24]");                           // lend the prepared value to the shared publication helper
-            emitter.instruction("bl __rt_reference_replace");                   // publish before returning the displaced child owner
-            abi::emit_push_reg(emitter, "x0");
-            emitter.instruction("ldr x0, [sp, #40]");                           // recover the incoming owner below the displaced-child spill
-            abi::emit_call_label(emitter, "__rt_decref_any");
-            abi::emit_pop_reg(emitter, "x0");
-            abi::emit_call_label(emitter, "__rt_decref_any");
+            elephc_memoir::reference_cells::mixed_payload::emit_replace_persistent_owner(emitter, "[sp, #40]");
             emitter.instruction("b __rt_hash_set_done");                        // return the unchanged wrapper-bearing table
         }
         Arch::X86_64 => {
@@ -71,12 +66,7 @@ pub(super) fn emit_write(emitter: &mut Emitter) {
             hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
             emitter.instruction("mov rax, QWORD PTR [r12 + 24]");               // retain the destination wrapper in its bucket
             emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");               // lend the prepared value to the shared publication helper
-            emitter.instruction("call __rt_reference_replace");                 // publish before returning the displaced child owner
-            abi::emit_push_reg(emitter, "rax");
-            emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // recover the incoming owner independently of the displaced child
-            abi::emit_call_label(emitter, "__rt_decref_any");
-            abi::emit_pop_reg(emitter, "rax");
-            abi::emit_call_label(emitter, "__rt_decref_any");
+            elephc_memoir::reference_cells::mixed_payload::emit_replace_persistent_owner(emitter, "[rbp - 32]");
             emitter.instruction("jmp __rt_hash_set_reference_done_x");          // return the unchanged wrapper-bearing table
         }
     }

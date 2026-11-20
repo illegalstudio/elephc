@@ -51,7 +51,7 @@ pub fn emit_array_key_exists_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_array_key_exists_mixed_key_not_found");   // null array → not found
 
     // -- dispatch on array storage kind --
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load packed kind metadata from the array header
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low byte (kind tag)
     emitter.instruction("cmp x9, #3");                                          // kind 3 = hash storage?
     emitter.instruction("b.eq __rt_array_key_exists_mixed_key_hash");           // route hash-storage arrays through hash_get's found flag
@@ -112,7 +112,7 @@ fn emit_array_key_exists_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_array_key_exists_mixed_key_not_found");        // null array → not found
 
     // -- dispatch on array storage kind --
-    emitter.instruction("mov r9, QWORD PTR [rdi - 8]");                         // load packed kind metadata from the array header
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r9", "rdi");
     emitter.instruction("and r9, 0xff");                                        // isolate the low byte (kind tag)
     emitter.instruction("cmp r9, 3");                                           // kind 3 = hash storage?
     emitter.instruction("je __rt_array_key_exists_mixed_key_hash");             // route hash-storage arrays through hash_get's found flag

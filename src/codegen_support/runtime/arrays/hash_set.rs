@@ -158,25 +158,23 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload the current probe index
     hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
     emitter.instruction("ldr x14, [x12, #24]");                                 // reload the boxed invoker marker
-    emitter.instruction("ldr x14, [x14, #8]");                                  // load the caller's Mixed storage address
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "x14", "x14");
     crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
         emitter, "x14", "x13", "x15", "__rt_hash_set_invoker_phpref_payload",
     );
-    emitter.instruction("ldr x0, [x14]");                                       // save the previous boxed Mixed owner for release
-    emitter.instruction("ldr x13, [sp, #24]");                                  // load the owned replacement box
-    emitter.instruction("str x13, [x14]");                                      // publish the replacement before a destructor can throw
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_staged_payload(
+        emitter, "x14", "x13", "[sp, #24]", None,
+    );
     emitter.instruction("bl __rt_decref_mixed");                                // retire the previous caller-local Mixed owner
     emitter.instruction("b __rt_hash_set_done");                                // the argument hash still owns the unchanged marker wrapper
 
     emitter.label("__rt_hash_set_invoker_reference_raw");
     emitter.instruction(&format!("cmp x15, #{INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // source shape12 stores a nullable integer payload and tag
     emitter.instruction("b.eq __rt_hash_set_invoker_reference_tagged");         // decode boxed replacements before publishing both words
-    emitter.instruction("ldr x14, [x14, #8]");                                  // load the concrete caller-storage address
-    emitter.instruction("ldr x0, [x14]");                                       // retain the previous low payload for optional release
-    emitter.instruction("ldr x13, [sp, #24]");                                  // load replacement value_lo
-    emitter.instruction("str x13, [x14]");                                      // publish replacement value_lo through the marker
-    emitter.instruction("ldr x13, [sp, #32]");                                  // load replacement value_hi
-    emitter.instruction("str x13, [x14, #8]");                                  // publish replacement value_hi through the marker
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "x14", "x14");
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_staged_payload(
+        emitter, "x14", "x13", "[sp, #24]", Some("[sp, #32]"),
+    );
     emitter.instruction("cmp x15, #1");                                         // strings own their low payload
     emitter.instruction("b.eq __rt_hash_set_invoker_reference_release_any");    // release the overwritten string after publication
     emitter.instruction("cmp x15, #10");                                        // callable descriptors use their dedicated release helper
@@ -194,7 +192,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_set_done");                                // return the unchanged argument hash
 
     emitter.label("__rt_hash_set_invoker_reference_tagged");
-    emitter.instruction("ldr x14, [x14, #8]");                                  // address the caller's inline tagged-scalar slot
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "x14", "x14");
     emitter.instruction("ldr x0, [sp, #40]");                                   // inspect the replacement PHP representation
     emitter.instruction("cmp x0, #7");                                          // a Mixed replacement owns a box that must be decoded
     emitter.instruction("b.eq __rt_hash_set_invoker_reference_tagged_box");     // preserve the boxed value until both words are published
@@ -209,8 +207,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_valid");
     emitter.instruction("ldr x1, [sp, #24]");                                   // load the direct nullable-integer payload
-    emitter.instruction("str x1, [x14]");                                       // publish the scalar payload
-    emitter.instruction("str x0, [x14, #8]");                                   // publish its actual PHP tag
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_payload_pair(emitter, "x14", "x1", "x0");
     emitter.instruction("b __rt_hash_set_done");                                // the marker remains owned by the argument hash
     emitter.label("__rt_hash_set_invoker_reference_tagged_box");
     emitter.instruction("ldr x0, [sp, #24]");                                   // load the replacement box owned by this write
@@ -225,8 +222,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_valid");
     abi::emit_load_temporary_stack_slot(emitter, "x14", 8);
-    emitter.instruction("str x1, [x14]");                                       // publish the unboxed scalar payload
-    emitter.instruction("str x0, [x14, #8]");                                   // publish the unboxed null or integer tag
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_payload_pair(emitter, "x14", "x1", "x0");
     abi::emit_pop_reg_pair(emitter, "x0", "x14");
     abi::emit_call_label(emitter, "__rt_decref_mixed");
     emitter.instruction("b __rt_hash_set_done");                                // retire the consumed box without changing marker identity
@@ -431,25 +427,23 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index
     hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
     emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // reload the boxed invoker marker
-    emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // load the caller's Mixed storage address
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "r14", "r14");
     crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
         emitter, "r14", "r10", "r11", "__rt_hash_set_invoker_phpref_payload_x",
     );
-    emitter.instruction("mov rax, QWORD PTR [r14]");                            // save the previous boxed Mixed owner for release
-    emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // load the owned replacement box
-    emitter.instruction("mov QWORD PTR [r14], r13");                            // publish the replacement before a destructor can throw
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_staged_payload(
+        emitter, "r14", "r13", "[rbp - 32]", None,
+    );
     emitter.instruction("call __rt_decref_mixed");                              // retire the previous caller-local Mixed owner
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the argument hash still owns the unchanged marker wrapper
 
     emitter.label("__rt_hash_set_invoker_reference_raw_x");
     emitter.instruction(&format!("cmp r13, {INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // source shape12 stores a nullable integer payload and tag
     emitter.instruction("je __rt_hash_set_invoker_reference_tagged_x");         // decode boxed replacements before publishing both words
-    emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // load the concrete caller-storage address
-    emitter.instruction("mov rax, QWORD PTR [r14]");                            // retain the previous low payload for optional release
-    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // load replacement value_lo
-    emitter.instruction("mov QWORD PTR [r14], r11");                            // publish replacement value_lo through the marker
-    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // load replacement value_hi
-    emitter.instruction("mov QWORD PTR [r14 + 8], r11");                        // publish replacement value_hi through the marker
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "r14", "r14");
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_staged_payload(
+        emitter, "r14", "r11", "[rbp - 32]", Some("[rbp - 40]"),
+    );
     emitter.instruction("cmp r13, 1");                                          // strings own their low payload
     emitter.instruction("je __rt_hash_set_invoker_reference_release_any_x");    // release the overwritten string after publication
     emitter.instruction("cmp r13, 10");                                         // callable descriptors use their dedicated release helper
@@ -467,7 +461,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // return the unchanged argument hash
 
     emitter.label("__rt_hash_set_invoker_reference_tagged_x");
-    emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // address the caller's inline tagged-scalar slot
+    elephc_memoir::layout::emit_load_mixed_low(emitter, "r14", "r14");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // inspect the replacement PHP representation
     emitter.instruction("cmp rax, 7");                                          // a Mixed replacement owns a box that must be decoded
     emitter.instruction("je __rt_hash_set_invoker_reference_tagged_box_x");     // preserve the boxed value until both words are published
@@ -482,8 +476,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_valid_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // load the direct nullable-integer payload
-    emitter.instruction("mov QWORD PTR [r14], rdi");                            // publish the scalar payload
-    emitter.instruction("mov QWORD PTR [r14 + 8], rax");                        // publish its actual PHP tag
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_payload_pair(emitter, "r14", "rdi", "rax");
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the marker remains owned by the argument hash
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the replacement box owned by this write
@@ -498,8 +491,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_valid_x");
     abi::emit_load_temporary_stack_slot(emitter, "r14", 8);
-    emitter.instruction("mov QWORD PTR [r14], rdi");                            // publish the unboxed scalar payload
-    emitter.instruction("mov QWORD PTR [r14 + 8], rax");                        // publish the unboxed null or integer tag
+    elephc_memoir::reference_cells::mixed_payload::emit_publish_payload_pair(emitter, "r14", "rdi", "rax");
     abi::emit_pop_reg_pair(emitter, "rax", "r14");
     abi::emit_call_label(emitter, "__rt_decref_mixed");
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // retire the consumed box without changing marker identity

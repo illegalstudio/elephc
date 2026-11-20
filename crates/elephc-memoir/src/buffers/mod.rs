@@ -42,3 +42,5 @@ pub mod stream_scratch;
 pub mod stream_state;
 
 pub mod native_words;
+
+pub use resolve::{emit_element_address, emit_load_payload};

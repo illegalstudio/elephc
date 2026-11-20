@@ -173,14 +173,11 @@ fn emit_copy_fiber_start_args_to_array_aarch64(
     ));                                                                         // x10 = base of Fiber start_args storage
     emitter.instruction("ldr x0, [x10, x9]");                                   // load the boxed Mixed start argument
     emitter.instruction("bl __rt_incref");                                      // retain the boxed Mixed cell for the temporary invoker array
-    emitter.instruction("lsl x9, x23, #3");                                     // recompute the element offset after the retain helper clobbers scratch regs
-    emitter.instruction("add x11, x22, #24");                                   // x11 = first payload slot of the descriptor argument array
-    emitter.instruction("add x11, x11, x9");                                    // x11 = destination slot for the current boxed argument
-    emitter.instruction("str x0, [x11]");                                       // store the retained boxed Mixed pointer into the argument array
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "x22", "x23", "x0", "x11");
     emitter.instruction("add x23, x23, #1");                                    // advance to the next supplied start() argument
     emitter.instruction(&format!("b {}", loop_label));                          // continue copying boxed start() arguments
     emitter.label(done_label);
-    emitter.instruction("str x21, [x22]");                                      // publish the argument array length after all payload slots are initialized
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x22", "x21");
 }
 
 /// Boxes the descriptor start-argument array into the invoker's target argument register.
@@ -290,11 +287,11 @@ fn emit_copy_fiber_start_args_to_array_x86_64(
         runtime::FIBER_START_ARGS_OFFSET
     ));                                                                         // load the boxed Mixed start argument
     emitter.instruction("call __rt_incref");                                    // retain the boxed Mixed cell for the temporary invoker array
-    emitter.instruction("mov QWORD PTR [r15 + 24 + rbx * 8], rax");             // store the retained boxed Mixed pointer into the argument array
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "r15", "rbx", "rax", "r11");
     emitter.instruction("add rbx, 1");                                          // advance to the next supplied start() argument
     emitter.instruction(&format!("jmp {}", loop_label));                        // continue copying boxed start() arguments
     emitter.label(done_label);
-    emitter.instruction("mov QWORD PTR [r15], r14");                            // publish the argument array length after all payload slots are initialized
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "r15", "r14");
 }
 
 /// Spills visible parameters and hidden arguments from the Fiber's argument storage
@@ -400,15 +397,12 @@ fn spill_variadic_start_arg_array_aarch64(
     emitter.instruction("ldr x0, [x11, x10]");                                  // load the boxed Mixed tail value
     emitter.instruction("bl __rt_incref");                                      // retain the boxed Mixed cell for the variadic tail array
     emitter.instruction(&format!("ldr x12, [sp, #{}]", slot_offset));           // reload the variadic array pointer after the retain helper
-    emitter.instruction("lsl x10, x23, #3");                                    // convert the variadic tail index into an 8-byte payload offset
-    emitter.instruction("add x12, x12, #24");                                   // x12 = first payload slot of the variadic tail array
-    emitter.instruction("add x12, x12, x10");                                   // x12 = destination slot for the current tail value
-    emitter.instruction("str x0, [x12]");                                       // store the retained boxed Mixed pointer into the variadic array
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "x12", "x23", "x0", "x11");
     emitter.instruction("add x23, x23, #1");                                    // advance to the next variadic tail value
     emitter.instruction(&format!("b {}", loop_label));                          // continue copying Fiber start_args into ...$args
     emitter.label(&done_label);
     emitter.instruction(&format!("ldr x12, [sp, #{}]", slot_offset));           // reload the variadic array pointer before publishing its length
-    emitter.instruction("str x22, [x12]");                                      // publish the final variadic tail array length
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "x12", "x22");
 }
 
 /// Spills one hidden Fiber callback argument from the callable descriptor's runtime capture slots.
@@ -737,12 +731,12 @@ fn spill_variadic_start_arg_array_x86_64(
     ));                                                                         // load the boxed Mixed tail value
     emitter.instruction("call __rt_incref");                                    // retain the boxed Mixed cell for the variadic tail array
     abi::load_at_offset(emitter, "r10", slot_offset);
-    emitter.instruction("mov QWORD PTR [r10 + 24 + rbx * 8], rax");             // store the retained boxed Mixed pointer into the variadic array
+    elephc_memoir::values::packed_slots::emit_store_indexed_word(emitter, "r10", "rbx", "rax", "r11");
     emitter.instruction("add rbx, 1");                                          // advance to the next variadic tail value
     emitter.instruction(&format!("jmp {}", loop_label));                        // continue copying Fiber start_args into ...$args
     emitter.label(&done_label);
     abi::load_at_offset(emitter, "r10", slot_offset);
-    emitter.instruction("mov QWORD PTR [r10], r15");                            // publish the final variadic tail array length
+    elephc_memoir::values::packed_slots::emit_publish_length(emitter, "r10", "r15");
 }
 
 /// x86_64-specific spill of one hidden argument from descriptor runtime capture storage.

@@ -52,7 +52,7 @@ pub fn emit_hash_array_union(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the right indexed-array pointer
     emitter.instruction("ldr x10, [x9]");                                       // load the right indexed-array length
     emitter.instruction("str x10, [sp, #24]");                                  // save the right indexed-array length for loop bounds
-    emitter.instruction("ldr x11, [x9, #-8]");                                  // load the packed right indexed-array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x11", "x9");
     emitter.instruction("lsr x11, x11, #8");                                    // move the right value_type tag into the low bits
     emitter.instruction("and x11, x11, #0x7f");                                 // isolate the right value_type tag without the persistent COW flag
     emitter.instruction("str x11, [sp, #32]");                                  // save the right value_type tag for copy dispatch
@@ -148,9 +148,8 @@ fn emit_hash_array_union_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the right indexed-array pointer
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the right indexed-array length
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the right indexed-array length for loop bounds
-    emitter.instruction("mov r11, QWORD PTR [r10 - 8]");                        // load the packed right indexed-array kind word
-    emitter.instruction("shr r11, 8");                                          // move the right value_type tag into the low bits
-    emitter.instruction("and r11, 0x7f");                                       // isolate the right value_type tag without the persistent COW flag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "r10");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r11", "r11");
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the right value_type tag for copy dispatch
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // initialize the right numeric key cursor
 

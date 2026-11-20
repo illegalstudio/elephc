@@ -23,6 +23,7 @@
 //!   concatenation in progress in the surrounding expression — the same hazard the
 //!   undefined-array-key helper documents.
 
+use elephc_memoir::strings::concat_cursor::SavedConcatCursor;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -81,10 +82,7 @@ fn emit_unsupported_option_warning(
 
             emitter.instruction("str x0, [sp]");                                // save the option number across the warning fragments
 
-            elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
-            emitter.instruction("ldr x10, [x9]");                               // snapshot concat scratch state before formatting the option
-
-            emitter.instruction("str x10, [sp, #8]");                           // preserve the concat cursor across itoa
+            SavedConcatCursor::Stack(8).emit_save(emitter, "x10");
 
             abi::emit_symbol_address(emitter, "x1", prefix_symbol);
             emitter.instruction(&format!("mov x2, #{prefix_len}"));             // pass the warning prefix length
@@ -97,10 +95,7 @@ fn emit_unsupported_option_warning(
 
             abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                 // emit or suppress the formatted option number
 
-            emitter.instruction("ldr x10, [sp, #8]");                           // reload the pre-warning concat cursor
-
-            elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
-            emitter.instruction("str x10, [x9]");                               // restore concat scratch for surrounding expressions
+            SavedConcatCursor::Stack(8).emit_restore(emitter, "x10");
 
             abi::emit_symbol_address(emitter, "x1", "_diag_curl_setopt_unsupported_suffix");
             emitter.instruction(&format!("mov x2, #{suffix_len}"));             // pass the warning suffix length
@@ -123,9 +118,7 @@ fn emit_unsupported_option_warning(
 
             emitter.instruction("mov QWORD PTR [rbp - 8], rax");                // save the option number across the warning fragments
 
-            elephc_memoir::strings::concat_cursor::emit_read(emitter, "r10");     // snapshot concat scratch state before formatting the option
-
-            emitter.instruction("mov QWORD PTR [rbp - 16], r10");               // preserve the concat cursor across itoa
+            SavedConcatCursor::Frame(elephc_memoir::FrameOffset::new(16)).emit_save(emitter, "r10");
 
             abi::emit_symbol_address(emitter, "rdi", prefix_symbol);
             emitter.instruction(&format!("mov esi, {prefix_len}"));             // pass the warning prefix length
@@ -142,9 +135,7 @@ fn emit_unsupported_option_warning(
 
             abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                 // emit or suppress the formatted option number
 
-            emitter.instruction("mov r10, QWORD PTR [rbp - 16]");               // reload the pre-warning concat cursor
-
-            elephc_memoir::strings::concat_cursor::emit_write(emitter, "r10");    // restore concat scratch for surrounding expressions
+            SavedConcatCursor::Frame(elephc_memoir::FrameOffset::new(16)).emit_restore(emitter, "r10");
 
             abi::emit_symbol_address(emitter, "rdi", "_diag_curl_setopt_unsupported_suffix");
             emitter.instruction(&format!("mov esi, {suffix_len}"));             // pass the warning suffix length

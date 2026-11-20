@@ -105,11 +105,7 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use super::resource_inventory::DEFAULT_CONTEXT_PAYLOAD;
 
-/// Number of slots in `_resource_id_keys` / `_resource_id_vals`.
-///
-/// Must stay a power of two: both helpers reduce the hash with a single `and`
-/// against `SLOTS - 1` rather than a division.
-pub(crate) const RESOURCE_ID_TABLE_SLOTS: usize = 1024;
+pub(crate) use elephc_memoir::values::resource_weak::RESOURCE_ID_TABLE_SLOTS;
 
 /// Highest native payload answered directly as `payload + 1` without consulting
 /// the table: the three standard stream descriptors.

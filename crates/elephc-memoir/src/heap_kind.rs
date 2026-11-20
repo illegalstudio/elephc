@@ -10,6 +10,27 @@
 
 use crate::{Emitter, Arch};
 
+/// Loads the packed metadata word of a known-live native allocation.
+pub fn emit_load_metadata(emitter: &mut impl Emitter, destination: &str, payload: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => emitter.instruction(&format!("ldr {destination}, [{payload}, #-8]")), // read the native metadata word
+        Arch::X86_64 => emitter.instruction(&format!("mov {destination}, QWORD PTR [{payload} - 8]")), // read the native metadata word
+    }
+}
+
+/// Loads the low allocation-kind byte without interpreting any adjacent flags.
+pub fn emit_load_kind_byte(emitter: &mut impl Emitter, destination: &str, payload: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => emitter.instruction(&format!("ldurb {destination}, [{payload}, #-8]")), // the low byte is the native allocation kind
+        Arch::X86_64 => emitter.instruction(&format!("movzx {destination}, BYTE PTR [{payload} - 8]")), // zero-extend the native allocation kind
+    }
+}
+
+/// Compares a known-live x86-64 payload's allocation kind in place.
+pub fn emit_compare_kind_x86_64(emitter: &mut impl Emitter, payload: &str, kind: u32) {
+    emitter.instruction(&format!("cmp BYTE PTR [{payload} - 8], {kind}"));     // test only the low allocation-kind byte
+}
+
 /// Emits the `__rt_heap_kind` runtime helper.
 ///
 /// Returns the uniform heap kind tag for a heap-backed value by probing the

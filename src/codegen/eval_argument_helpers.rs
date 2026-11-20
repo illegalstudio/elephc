@@ -140,8 +140,8 @@ pub(super) fn emit_borrowed_argument(
             emitter.instruction(&format!("b.ne {fail_label}"));                 // do not interpret hash or scalar payloads as indexed storage
             emitter.instruction("ldr x0, [x0, #8]");                            // borrow the indexed payload rooted by the argument box
             emit_branch_if_null_container(emitter, "x0", "x9", fail_label);
-            emitter.instruction("ldr x9, [x0, #-8]");                           // read the indexed element representation
-            emitter.instruction("ubfx x9, x9, #8, #7");                         // isolate the element value tag
+            elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
+            elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x9", "x9");
             emitter.instruction("cmp x9, #7");                                  // a borrowed argument must already be a boxed Mixed cell
             emitter.instruction(&format!("b.ne {fail_label}"));                 // reject raw scalar element storage
             abi::emit_load_int_immediate(emitter, "x10", index as i64);
@@ -160,9 +160,8 @@ pub(super) fn emit_borrowed_argument(
             emitter.instruction(&format!("jne {fail_label}"));                  // do not interpret hash or scalar payloads as indexed storage
             emitter.instruction("mov rax, QWORD PTR [rax + 8]");                // borrow the indexed payload rooted by the argument box
             emit_branch_if_null_container(emitter, "rax", "r10", fail_label);
-            emitter.instruction("mov r10, QWORD PTR [rax - 8]");                // read the indexed element representation
-            emitter.instruction("shr r10, 8");                                  // shift the element value tag to the low bits
-            emitter.instruction("and r10, 127");                                // discard heap flags outside the value tag
+            elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rax");
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10");
             emitter.instruction("cmp r10, 7");                                  // a borrowed argument must already be a boxed Mixed cell
             emitter.instruction(&format!("jne {fail_label}"));                  // reject raw scalar element storage
             abi::emit_load_int_immediate(emitter, "r11", index as i64);

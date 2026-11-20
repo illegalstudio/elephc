@@ -47,7 +47,7 @@ pub fn emit_array_slice_to_hash(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #16]");                                   // cursor i = normalized window start
     emitter.instruction("add x9, x1, x2");                                      // end = start + clamped window length
     emitter.instruction("str x9, [sp, #24]");                                   // save the exclusive window end
-    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x10", "x0");
     emitter.instruction("lsr x10, x10, #8");                                    // shift the packed value_type into the low bits
     emitter.instruction("and x10, x10, #0x7f");                                 // isolate the indexed-array value_type (also the Mixed tag)
     emitter.instruction("str x10, [sp, #32]");                                  // save the value_type / runtime tag
@@ -124,9 +124,8 @@ fn emit_array_slice_to_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rsi");                                        // seed the window-end scratch from the window start
     emitter.instruction("add rax, rdx");                                        // end = start + clamped window length
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the exclusive window end
-    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load the uniform heap-kind header word
-    emitter.instruction("shr r10, 8");                                          // shift the packed value_type into the low bits
-    emitter.instruction("and r10, 127");                                        // isolate the indexed-array value_type (also the Mixed tag)
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rdi");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the value_type / runtime tag
     emitter.instruction("mov r11, QWORD PTR [rdi + 16]");                       // load the element size (stride) from the header
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the element stride

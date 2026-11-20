@@ -96,13 +96,13 @@ pub(super) fn store_borrowed_cell(ctx: &mut FunctionContext<'_>, value: ValueId,
         );
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction("ldr x11, [x0, #-8]");                  // inspect the actual container heap kind
+                elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x11", "x0");
                 ctx.emitter.instruction("and x11, x11, #255");                  // discard element tags and persistence flags
                 ctx.emitter.instruction("cmp x11, #3");                         // promoted arrays use hash storage
                 ctx.emitter.instruction("mov x11, #5");                         // the Mixed runtime tag for a hash payload
                 ctx.emitter.instruction("csel x10, x11, x10, eq");              // preserve packed storage unless this is a hash
                 if ty == PhpType::Iterable {
-                    ctx.emitter.instruction("ldr x11, [x0, #-8]");              // iterable payloads can also be iterator objects
+                    elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x11", "x0");
                     ctx.emitter.instruction("and x11, x11, #255");              // extract the object's heap kind
                     ctx.emitter.instruction("cmp x11, #4");                     // distinguish objects from array payloads
                     ctx.emitter.instruction("mov x11, #6");                     // retain object comparison semantics for iterators
@@ -110,13 +110,13 @@ pub(super) fn store_borrowed_cell(ctx: &mut FunctionContext<'_>, value: ValueId,
                 }
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("mov r11, QWORD PTR [rax - 8]");        // inspect the actual container heap kind
+                elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r11", "rax");
                 ctx.emitter.instruction("and r11, 255");                        // discard element tags and persistence flags
                 ctx.emitter.instruction("cmp r11, 3");                          // promoted arrays use hash storage
                 ctx.emitter.instruction("mov r11, 5");                          // the Mixed runtime tag for a hash payload
                 ctx.emitter.instruction("cmove r10, r11");                      // preserve packed storage unless this is a hash
                 if ty == PhpType::Iterable {
-                    ctx.emitter.instruction("mov r11, QWORD PTR [rax - 8]");    // iterable payloads can also be iterator objects
+                    elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r11", "rax");
                     ctx.emitter.instruction("and r11, 255");                    // extract the object's heap kind
                     ctx.emitter.instruction("cmp r11, 4");                      // distinguish objects from array payloads
                     ctx.emitter.instruction("mov r11, 6");                      // retain object comparison semantics for iterators

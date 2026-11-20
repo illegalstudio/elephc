@@ -15,7 +15,7 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::RuntimeFeatures;
-use elephc_memoir::values::resource_weak::{self, CELL_OFFSET, CLOSED, ID_OFFSET, PAYLOAD_OFFSET, RETIRED, STATE_OFFSET, SUBTYPE_OFFSET};
+use elephc_memoir::values::resource_weak::{self, CELL_OFFSET, ID_OFFSET, PAYLOAD_OFFSET, RETIRED, STATE_OFFSET, SUBTYPE_OFFSET};
 
 /// Synthetic payload reserved for PHP's implicit default stream context, resource id 4.
 pub(crate) const DEFAULT_CONTEXT_PAYLOAD: i64 = (1_i64 << 62) - 1;
@@ -104,16 +104,7 @@ fn emit_register_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                   // save the resource subtype
     emitter.instruction("cmp x0, #4");                                          // standard streams and the implicit context are synthesized
     emitter.instruction("b.le __rt_resource_inventory_register_standard");      // synthesized entries need no canonical inventory cell
-    abi::emit_symbol_address(emitter, "x9", "_resource_inventory_head");
-    emitter.instruction("ldr x10, [x9]");                                       // load the first recorded incarnation
-    emitter.label("__rt_resource_inventory_register_find");
-    emitter.instruction("cbz x10, __rt_resource_inventory_register_new");       // a missing id needs a fresh node
-    emitter.instruction(&format!("ldr x11, [x10, #{ID_OFFSET}]"));              // load the node's PHP id
-    emitter.instruction("cmp x11, x0");                                         // compare with the incoming PHP id
-    emitter.instruction("b.eq __rt_resource_inventory_register_found");         // aliases share the existing incarnation node
-    emitter.instruction("ldr x10, [x10, #0]");                                  // follow the creation-order next pointer
-    emitter.instruction("b __rt_resource_inventory_register_find");             // continue until the id is found or the list ends
-
+    resource_weak::emit_find_registration_aarch64(emitter);
     emitter.label("__rt_resource_inventory_register_new");
     resource_weak::emit_append_node(emitter);
     emitter.label("__rt_resource_inventory_register_found");
@@ -136,20 +127,7 @@ fn emit_close_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #32");                                     // preserve caller scratch still holding box and native handle
     emitter.instruction("stp x9, x10, [sp, #0]");                               // save inventory search scratch pair
     emitter.instruction("str x11, [sp, #16]");                                  // save the close caller's native-handle register
-    abi::emit_symbol_address(emitter, "x9", "_resource_inventory_head");
-    emitter.instruction("ldr x9, [x9]");                                        // start at the oldest resource incarnation
-    emitter.label("__rt_resource_inventory_close_find");
-    emitter.instruction("cbz x9, __rt_resource_inventory_close_done");          // an untracked id needs no update
-    emitter.instruction(&format!("ldr x10, [x9, #{ID_OFFSET}]"));               // load the node's PHP id
-    emitter.instruction("cmp x10, x0");                                         // is this the resource being closed?
-    emitter.instruction("b.eq __rt_resource_inventory_close_hit");              // update the matching node
-    emitter.instruction("ldr x9, [x9, #0]");                                    // follow the next pointer
-    emitter.instruction("b __rt_resource_inventory_close_find");                // continue the linear search
-    emitter.label("__rt_resource_inventory_close_hit");
-    emitter.instruction(&format!("mov x10, #{CLOSED}"));                        // materialize the closed marker
-    emitter.instruction(&format!("str x10, [x9, #{STATE_OFFSET}]"));            // retain the node but mark it Unknown
-    emitter.instruction("neg x10, x0");                                         // closed resources carry their stable id as -id
-    emitter.instruction(&format!("str x10, [x9, #{PAYLOAD_OFFSET}]"));          // replace the now-invalid native payload
+    resource_weak::emit_mark_closed_aarch64(emitter);
     emitter.label("__rt_resource_inventory_close_done");
     emitter.instruction("ldr x11, [sp, #16]");                                  // restore caller native-handle register
     emitter.instruction("ldp x9, x10, [sp, #0]");                               // restore caller box and scratch registers
@@ -373,17 +351,7 @@ fn emit_register_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save resource subtype
     emitter.instruction("cmp rdi, 4");                                          // ids 1 through 4 are synthesized
     emitter.instruction("jle __rt_resource_inventory_register_standard_x86");   // synthesized entries need no canonical inventory cell
-    abi::emit_symbol_address(emitter, "r10", "_resource_inventory_head");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load first node
-    emitter.label("__rt_resource_inventory_register_find_x86");
-    emitter.instruction("test r10, r10");                                       // did the list end?
-    emitter.instruction("jz __rt_resource_inventory_register_new_x86");         // allocate a node for a new id
-    emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {ID_OFFSET}]"));    // load stored PHP id
-    emitter.instruction("cmp r11, QWORD PTR [rbp - 8]");                        // compare with incoming id
-    emitter.instruction("je __rt_resource_inventory_register_found_x86");       // aliases share the existing incarnation node
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // follow next pointer
-    emitter.instruction("jmp __rt_resource_inventory_register_find_x86");       // continue search
-
+    resource_weak::emit_find_registration_x86_64(emitter);
     emitter.label("__rt_resource_inventory_register_new_x86");
     resource_weak::emit_append_node(emitter);
     emitter.label("__rt_resource_inventory_register_found_x86");
@@ -405,20 +373,7 @@ fn emit_close_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_resource_inventory_close");
     emitter.instruction("push r10");                                            // preserve native handle held by the close caller
     emitter.instruction("push r11");                                            // preserve resource Mixed box pointer held by the close caller
-    abi::emit_symbol_address(emitter, "r10", "_resource_inventory_head");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // start at oldest incarnation
-    emitter.label("__rt_resource_inventory_close_find_x86");
-    emitter.instruction("test r10, r10");                                       // did the list end?
-    emitter.instruction("jz __rt_resource_inventory_close_done_x86");           // an untracked id is a no-op
-    emitter.instruction(&format!("cmp QWORD PTR [r10 + {ID_OFFSET}], rax"));    // compare node id with the closing id
-    emitter.instruction("je __rt_resource_inventory_close_hit_x86");            // update matching node
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // follow next pointer
-    emitter.instruction("jmp __rt_resource_inventory_close_find_x86");          // continue search
-    emitter.label("__rt_resource_inventory_close_hit_x86");
-    emitter.instruction(&format!("mov QWORD PTR [r10 + {STATE_OFFSET}], {CLOSED}")); // mark resource Unknown
-    emitter.instruction("mov r11, rax");                                        // copy stable PHP id
-    emitter.instruction("neg r11");                                             // closed payload sentinel = -id
-    emitter.instruction(&format!("mov QWORD PTR [r10 + {PAYLOAD_OFFSET}], r11")); // discard the invalid native payload
+    resource_weak::emit_mark_closed_x86_64(emitter);
     emitter.label("__rt_resource_inventory_close_done_x86");
     emitter.instruction("pop r11");                                             // restore resource Mixed box pointer
     emitter.instruction("pop r10");                                             // restore native handle

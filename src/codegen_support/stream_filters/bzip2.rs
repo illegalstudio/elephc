@@ -36,7 +36,7 @@ use crate::codegen_support::emit::Emitter;
 const BZ_STREAM_SIZE: i64 = 80;
 /// Capacity of the shared `_stream_filter_buf` scratch used as the compress
 /// output window.
-const FILTER_BUF_SIZE: i64 = 65536;
+const FILTER_BUF_SIZE: i64 = elephc_memoir::buffers::stream_scratch::CAPACITY;
 
 /// Emits the reusable ARM64 `bzip2.decompress` read-filter body.
 pub(crate) fn emit_decompress_arm64<F>(emitter: &mut Emitter, next_label: F)
@@ -90,7 +90,7 @@ pub(crate) fn emit_compress_arm64(
     // -- compress loop: drain next_in into the scratch window and write it out --
     emitter.label(&format!("{}_loop", fwrite_label));
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the bz_stream pointer
-    abi::emit_symbol_address(emitter, "x11", "_stream_filter_buf");
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "x11");
     emitter.instruction("str x11, [x10, #24]");                                 // bz_stream.next_out = scratch window base
     emitter.instruction(&format!("mov w12, #{}", FILTER_BUF_SIZE & 0xFFFF));    // low half of the scratch window capacity
     emitter.instruction(&format!("movk w12, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
@@ -105,7 +105,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction(&format!("movk w13, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
     emitter.instruction("sub w12, w13, w12");                                   // produced = capacity - avail_out
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd = the saved file descriptor
-    abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "x1");
     emitter.instruction("uxtw x2, w12");                                        // produced byte count as the write length
     emitter.syscall(4);
     // -- repeat while input remains OR the output window filled completely --
@@ -139,7 +139,7 @@ pub(crate) fn emit_compress_arm64(
     // -- flush loop: compress with BZ_FINISH until BZ_STREAM_END --
     emitter.label(&format!("{}_loop", close_label));
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the bz_stream pointer
-    abi::emit_symbol_address(emitter, "x11", "_stream_filter_buf");
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "x11");
     emitter.instruction("str x11, [x10, #24]");                                 // bz_stream.next_out = scratch window base
     emitter.instruction(&format!("mov w12, #{}", FILTER_BUF_SIZE & 0xFFFF));    // low half of the scratch window capacity
     emitter.instruction(&format!("movk w12, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
@@ -155,7 +155,7 @@ pub(crate) fn emit_compress_arm64(
     emitter.instruction(&format!("movk w13, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
     emitter.instruction("sub w12, w13, w12");                                   // produced = capacity - avail_out
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd = the saved file descriptor
-    abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "x1");
     emitter.instruction("uxtw x2, w12");                                        // produced byte count as the write length
     emitter.syscall(4);
     emitter.instruction("ldr x12, [sp, #16]");                                  // reload the saved compress return code
@@ -250,7 +250,7 @@ pub(crate) fn emit_compress_x86_64(
     // -- compress loop: drain next_in into the scratch window and write it out --
     emitter.label(&format!("{}_loop", fwrite_label));
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the bz_stream pointer
-    abi::emit_symbol_address(emitter, "r11", "_stream_filter_buf"); // scratch window base
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "r11"); // scratch window base
     emitter.instruction("mov QWORD PTR [r10 + 24], r11");                       // bz_stream.next_out = scratch window base
     emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); // bz_stream.avail_out = scratch window capacity
     emitter.instruction("mov rdi, r10");                                        // arg 0 = bz_stream pointer
@@ -262,7 +262,7 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("sub eax, DWORD PTR [r10 + 32]");                       // produced = capacity - avail_out
     emitter.instruction("mov edx, eax");                                        // produced byte count as the write length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd = the saved file descriptor
-    abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf"); // write buffer = the scratch window base
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "rsi"); // write buffer = the scratch window base
     emitter.instruction("call write");                                          // write the compressed chunk through libc write()
                                        // -- repeat while input remains OR the output window filled completely --
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the bz_stream pointer
@@ -296,7 +296,7 @@ pub(crate) fn emit_compress_x86_64(
     // -- flush loop: compress with BZ_FINISH until BZ_STREAM_END --
     emitter.label(&format!("{}_loop", close_label));
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the bz_stream pointer
-    abi::emit_symbol_address(emitter, "r11", "_stream_filter_buf"); // scratch window base
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "r11"); // scratch window base
     emitter.instruction("mov QWORD PTR [r10 + 24], r11");                       // bz_stream.next_out = scratch window base
     emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); // bz_stream.avail_out = scratch window capacity
     emitter.instruction("mov rdi, r10");                                        // arg 0 = bz_stream pointer
@@ -309,7 +309,7 @@ pub(crate) fn emit_compress_x86_64(
     emitter.instruction("sub eax, DWORD PTR [r10 + 32]");                       // produced = capacity - avail_out
     emitter.instruction("mov edx, eax");                                        // produced byte count as the write length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd = the preserved file descriptor
-    abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf"); // write buffer = the scratch window base
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "rsi"); // write buffer = the scratch window base
     emitter.instruction("call write");                                          // write the compressed tail chunk through libc write()
     emitter.instruction("cmp QWORD PTR [rbp - 24], 4");                         // did BZ2_bzCompress report BZ_STREAM_END?
     emitter.instruction(&format!("jne {}_loop", close_label));                  // not finished yet: flush another chunk

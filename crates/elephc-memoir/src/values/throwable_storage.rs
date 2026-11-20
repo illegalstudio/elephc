@@ -138,3 +138,16 @@ pub fn emit_error_with_auxiliary_zero(
     }
     emit_throwable_creation_line_unknown(emitter, result);
 }
+
+/// Projects borrowed compact Throwable fields into a four-word C result buffer.
+pub fn emit_c_projection(emitter: &mut impl Emitter) {
+    emitter.label_global(&emitter.extern_symbol("elephc_phpext_native_throwable_fields"));
+    let object = emitter.int_arg_reg_name(0);
+    let output = emitter.int_arg_reg_name(1);
+    let scratch = emitter.secondary_scratch_reg();
+    for (index, offset) in [CLASS_ID, MESSAGE_POINTER, MESSAGE_LENGTH, CODE].into_iter().enumerate() {
+        emitter.emit_load_from_address(scratch, object, offset);
+        emitter.emit_store_to_address(scratch, output, index * 8);
+    }
+    emitter.emit_return();
+}

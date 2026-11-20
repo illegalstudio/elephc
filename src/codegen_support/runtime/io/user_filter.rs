@@ -194,6 +194,7 @@ pub fn emit_resolve_user_filter_id(emitter: &mut Emitter) {
 ///         Simple callbacks transfer owned returns and persist borrowed returns.
 ///         The brigade path returns its non-heap output scratch buffer.
 pub fn emit_apply_user_stream_filter(emitter: &mut Emitter) {
+    stream_scratch::emit_acquire_filter_input(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_apply_user_stream_filter_linux_x86_64(emitter);
         return;
@@ -244,7 +245,7 @@ pub fn emit_apply_user_stream_filter(emitter: &mut Emitter) {
 
     emitter.label("__rt_aufs_passthrough");
     // An absent callback still returns independently releasable bytes.
-    abi::emit_call_label(emitter, "__rt_str_persist");
+    abi::emit_call_label(emitter, "__rt_filter_acquire_input");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the original buf/len unchanged
@@ -300,7 +301,7 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     // rsi=buf, rdx=len; expose them as the elephc string-result pair.
     emitter.instruction("mov rax, rsi");                                        // copy buf pointer into the string-result ptr register
     // rdx already holds the length in the string-result len register.
-    abi::emit_call_label(emitter, "__rt_str_persist");
+    abi::emit_call_label(emitter, "__rt_filter_acquire_input");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the original buf/len unchanged
 }

@@ -84,7 +84,7 @@ fn emit_array_edge_value_linux_x86_64(emitter: &mut Emitter) {
     emit_normalize_x86_64(emitter, "__rt_aedge_val", "__rt_aedge_val_null");
     emitter.instruction("test r11, r11");                                       // is the container empty?
     emitter.instruction("je __rt_aedge_val_null");                              // an empty container has no edge value
-    emitter.instruction("movzx eax, BYTE PTR [rdi - 8]");                       // reload the low-byte heap kind after normalization
+    elephc_memoir::heap_kind::emit_load_kind_byte(emitter, "eax", "rdi");
     emitter.instruction("cmp eax, 3");                                          // is the container an associative hash?
     emitter.instruction("je __rt_aedge_val_hash");                              // hashes read the head/tail slot directly
     emitter.instruction("test rsi, rsi");                                       // which == 0 keeps rsi = 0, the first index?

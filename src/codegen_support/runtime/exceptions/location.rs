@@ -172,7 +172,7 @@ pub(crate) fn emit_creation_line_load(
     let done = format!("{stem}_line_loaded");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldurb {scratch_w}, [{object}, #-8]", scratch_w = scratch.replacen('x', "w", 1))); // inspect the physical layout without GC metadata bits
+            elephc_memoir::heap_kind::emit_load_kind_byte(emitter, &scratch.replacen('x', "w", 1), object);
             emitter.instruction(&format!("cmp {scratch}, #6"));                 // compact runtime Throwables retain their fixed metadata word
             emitter.instruction(&format!("b.eq {compact}"));                    // select the compact payload layout
             emitter.instruction(&format!("ldr {scratch}, [{object}]"));         // resolve the ordinary class id
@@ -185,7 +185,7 @@ pub(crate) fn emit_creation_line_load(
             emitter.instruction(&format!("ldr {result}, [{object}, #32]"));     // read the compact Throwable creation line
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("movzx {scratch}, BYTE PTR [{object} - 8]")); // inspect the heap kind without GC or magic bits
+            elephc_memoir::heap_kind::emit_load_kind_byte(emitter, scratch, object);
             emitter.instruction(&format!("cmp {scratch}, 6"));                  // compact runtime Throwables retain their fixed metadata word
             emitter.instruction(&format!("je {compact}"));                      // select the compact payload layout
             emitter.instruction(&format!("mov {scratch}, QWORD PTR [{object}]")); // resolve the ordinary class id

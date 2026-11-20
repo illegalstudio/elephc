@@ -5997,6 +5997,36 @@ fclose($nestedFilterStream);
     assert_eq!(out, "beg:INNER:70006:end");
 }
 
+/// A caught filter exception releases each stabilized read buffer under the same heap limit.
+#[test]
+fn test_user_stream_filter_large_nested_read_releases_input_on_throw() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+class ThrowingReadFilter {
+    public function filter(string $data): string {
+        throw new RuntimeException("filter " . strlen($data));
+    }
+}
+stream_filter_register("throws.read", "ThrowingReadFilter");
+$file = fopen("php://memory", "r+");
+fwrite($file, str_repeat("X", 70000));
+stream_filter_append($file, "throws.read", STREAM_FILTER_READ);
+for ($index = 0; $index < 16; $index++) {
+    rewind($file);
+    try {
+        fread($file, 80000);
+    } catch (RuntimeException $error) {
+        echo $error->getMessage(), "\n";
+        unset($error);
+    }
+}
+fclose($file);
+"#,
+        512 * 1024,
+    );
+    assert_eq!(out.trim_end().lines().collect::<Vec<_>>(), vec!["filter 70000"; 16]);
+}
+
 /// Verifies compiled PHP output for user stream filter params exposed on `$this`.
 #[test]
 fn test_user_stream_filter_params_are_exposed_on_this() {

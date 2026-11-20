@@ -31,17 +31,78 @@ pub fn emit_append_bytes(emitter: &mut impl Emitter) {
     }
 }
 
+/// Per-level word arrays carrying the handler owners.
+const HANDLER_OWNERS: [&str; 3] = ["_ob_handler_stubs", "_ob_handler_envs", "_ob_name_ptrs"];
+/// Per-level fields cleared when the owners detach.
+const HANDLER_METADATA: [&str; 4] = ["_ob_name_lens", "_ob_chunk_sizes", "_ob_flags", "_ob_started"];
+
+/// Declares the handler rows with the same level limit as the output storage.
+pub fn append_handler_storage(out: &mut String, target: &impl crate::data::DataTarget) {
+    for field in HANDLER_OWNERS.into_iter().chain(HANDLER_METADATA) {
+        out.push_str(&target.common(field, MAX_LEVELS as usize * 8));
+    }
+}
+
+/// Publishes initialized handler storage and then makes the next output level visible.
+pub fn emit_publish_slot(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::AArch64 {
+        emitter.emit_symbol_address("x11", "_ob_handler_stubs");              // materialize the handler-stub slot array
+        emitter.instruction("ldr x12, [sp, #0]");                                   // reload the handler stub
+        emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the handler stub
+        emitter.emit_symbol_address("x11", "_ob_handler_envs");               // materialize the handler-env slot array
+        emitter.instruction("ldr x12, [sp, #8]");                                   // reload the handler env word
+        emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the handler env word
+        emitter.emit_symbol_address("x11", "_ob_name_ptrs");                  // materialize the handler-name pointer array
+        emitter.instruction("ldr x12, [sp, #32]");                                  // reload the owned name pointer
+        emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the owned name pointer
+        emitter.emit_symbol_address("x11", "_ob_name_lens");                  // materialize the handler-name length array
+        emitter.instruction("ldr x12, [sp, #40]");                                  // reload the owned name length
+        emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the owned name length
+        emitter.emit_symbol_address("x11", "_ob_chunk_sizes");                // materialize the chunk-size slot array
+        emitter.instruction("ldr x12, [sp, #16]");                                  // reload the chunk size
+        emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the chunk size
+        emitter.emit_symbol_address("x11", "_ob_flags");                      // materialize the flags slot array
+        emitter.instruction("ldr x12, [sp, #24]");                                  // reload the flags word
+        emitter.instruction("and x12, x12, #0xfffffffffffffff0");                   // handler type is selected by the runtime rather than caller flags
+        emitter.instruction("bic x12, x12, #0xf000");                               // PHP 8.4 and later forbid caller-supplied status bits
+        emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the flags word
+        emitter.emit_symbol_address("x11", "_ob_started");                    // materialize the started-flag slot array
+        emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // the handler has not run yet
+        emitter.instruction("add x10, x10, #1");                                    // the stack is now one level deeper
+        emitter.instruction("str x10, [x9]");                                       // publish the new depth
+    } else {
+        emitter.emit_symbol_address("r11", "_ob_handler_stubs");              // materialize the handler-stub slot array
+        emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the handler stub
+        emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the handler stub
+        emitter.emit_symbol_address("r11", "_ob_handler_envs");               // materialize the handler-env slot array
+        emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the handler env word
+        emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the handler env word
+        emitter.emit_symbol_address("r11", "_ob_name_ptrs");                  // materialize the handler-name pointer array
+        emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the owned name pointer
+        emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the owned name pointer
+        emitter.emit_symbol_address("r11", "_ob_name_lens");                  // materialize the handler-name length array
+        emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the owned name length
+        emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the owned name length
+        emitter.emit_symbol_address("r11", "_ob_chunk_sizes");                // materialize the chunk-size slot array
+        emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the chunk size
+        emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the chunk size
+        emitter.emit_symbol_address("r11", "_ob_flags");                      // materialize the flags slot array
+        emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the flags word
+        emitter.instruction("and rcx, -61456");                                     // clear caller-supplied handler type and lifecycle status bits
+        emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the flags word
+        emitter.emit_symbol_address("r11", "_ob_started");                    // materialize the started-flag slot array
+        emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");                      // the handler has not run yet
+        emitter.instruction("add r10, 1");                                          // the stack is now one level deeper
+        emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the new depth
+    }
+}
+
 /// Detaches the top slot and frees its byte storage and owned name before handler retirement.
-/// Handler fields are ordered stub, environment and owned name pointer. The caller selects
-/// the release path using the returned stub and environment in the native result registers.
-pub fn emit_pop_storage(
-    emitter: &mut impl Emitter,
-    handler_fields: [&str; 3],
-    metadata: &[&str],
-) {
+/// The caller selects the release path using the returned stub and environment.
+pub fn emit_pop_storage(emitter: &mut impl Emitter) {
     match emitter.arch() {
-        Arch::AArch64 => aarch64_pop_storage(emitter, handler_fields, metadata),
-        Arch::X86_64 => x86_64_pop_storage(emitter, handler_fields, metadata),
+        Arch::AArch64 => aarch64_pop_storage(emitter, HANDLER_OWNERS, &HANDLER_METADATA),
+        Arch::X86_64 => x86_64_pop_storage(emitter, HANDLER_OWNERS, &HANDLER_METADATA),
     }
 }
 
@@ -378,4 +439,99 @@ fn x86_64_pop_storage(emitter: &mut impl Emitter, handler_fields: [&str; 3], met
 fn x86_64_pop_empty_return(emitter: &mut impl Emitter) {
     emitter.instruction("leave");                                               // restore the caller when the output stack was empty
     emitter.instruction("ret");                                                 // complete the no-op pop
+}
+
+/// Emits the borrowed handler row queries used by the eval C interface.
+pub fn emit_handler_queries(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::AArch64 {
+        emitter.label_global(&emitter.extern_symbol("__elephc_eval_ob_slot_meta"));
+        emitter.emit_symbol_address("x9", "_ob_level");       // materialize the address of the buffer-stack depth
+        emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
+        emitter.instruction("cmp x0, x10");                                         // is the requested slot index within the stack?
+        emitter.instruction("b.hs __elephc_eval_ob_slot_meta_none");                // out-of-range index — report failure
+        emitter.emit_symbol_address("x11", "_ob_chunk_sizes"); // materialize the chunk-size slot array
+        emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's chunk size
+        emitter.instruction("str x12, [x1]");                                       // store it through the caller's out_chunk
+        emitter.emit_symbol_address("x11", "_ob_flags");      // materialize the flags slot array
+        emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's stored flags word
+        emitter.instruction("str x12, [x2]");                                       // store it through the caller's out_flags
+        emitter.emit_symbol_address("x11", "_ob_handler_stubs"); // materialize the handler-stub slot array
+        emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's handler stub
+        emitter.instruction("cmp x12, #0");                                         // is a user handler installed?
+        emitter.instruction("cset x12, ne");                                        // bit 0 = user-handler flag
+        emitter.emit_symbol_address("x11", "_ob_started");    // materialize the started-flag slot array
+        emitter.instruction("ldr x13, [x11, x0, lsl #3]");                          // load the slot's started flag
+        emitter.instruction("cmp x13, #0");                                         // has the handler run at least once?
+        emitter.instruction("cset x13, ne");                                        // normalize the started flag to 0/1
+        emitter.instruction("orr x12, x12, x13, lsl #1");                           // bit 1 = started flag
+        emitter.instruction("str x12, [x3]");                                       // store the packed user/started bits
+        emitter.instruction("mov x0, #1");                                          // report success to Rust
+        emitter.instruction("ret");                                                 // return to Rust
+        emitter.label("__elephc_eval_ob_slot_meta_none");
+        emitter.instruction("mov x0, #0");                                          // report "no such buffer" to Rust
+        emitter.instruction("ret");                                                 // return to Rust
+
+        emitter.label_global(&emitter.extern_symbol("__elephc_eval_ob_slot_name"));
+        emitter.emit_symbol_address("x9", "_ob_level");       // materialize the address of the buffer-stack depth
+        emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
+        emitter.instruction("cmp x0, x10");                                         // is the requested slot index within the stack?
+        emitter.instruction("b.hs __elephc_eval_ob_slot_name_none");                // out-of-range index — report failure
+        emitter.emit_symbol_address("x11", "_ob_name_ptrs");  // materialize the handler-name pointer array
+        emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's display-name pointer
+        emitter.instruction("str x12, [x1]");                                       // store it through the caller's out_ptr
+        emitter.emit_symbol_address("x11", "_ob_name_lens");  // materialize the handler-name length array
+        emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's display-name length
+        emitter.instruction("str x12, [x2]");                                       // store it through the caller's out_len
+        emitter.instruction("mov x0, #1");                                          // report success to Rust (bytes copied immediately)
+        emitter.instruction("ret");                                                 // return to Rust
+        emitter.label("__elephc_eval_ob_slot_name_none");
+        emitter.instruction("mov x0, #0");                                          // report "no such buffer" to Rust
+        emitter.instruction("ret");                                                 // return to Rust
+    } else {
+        emitter.label_global(&emitter.extern_symbol("__elephc_eval_ob_slot_meta"));
+        emitter.emit_symbol_address("r9", "_ob_level");       // materialize the address of the buffer-stack depth
+        emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
+        emitter.instruction("cmp rdi, r10");                                        // is the requested slot index within the stack?
+        emitter.instruction("jae __elephc_eval_ob_slot_meta_none_x86");             // out-of-range index — report failure
+        emitter.emit_symbol_address("r11", "_ob_chunk_sizes"); // materialize the chunk-size slot array
+        emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's chunk size
+        emitter.instruction("mov QWORD PTR [rsi], rax");                            // store it through the caller's out_chunk
+        emitter.emit_symbol_address("r11", "_ob_flags");      // materialize the flags slot array
+        emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's stored flags word
+        emitter.instruction("mov QWORD PTR [rdx], rax");                            // store it through the caller's out_flags
+        emitter.emit_symbol_address("r11", "_ob_handler_stubs"); // materialize the handler-stub slot array
+        emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's handler stub
+        emitter.instruction("test rax, rax");                                       // is a user handler installed?
+        emitter.instruction("setnz al");                                            // bit 0 = user-handler flag
+        emitter.instruction("movzx rax, al");                                       // zero-extend the packed bits
+        emitter.emit_symbol_address("r11", "_ob_started");    // materialize the started-flag slot array
+        emitter.instruction("mov r10, QWORD PTR [r11 + rdi*8]");                    // load the slot's started flag
+        emitter.instruction("test r10, r10");                                       // has the handler run at least once?
+        emitter.instruction("jz __elephc_eval_ob_slot_meta_store_x86");             // an unstarted handler keeps bit 1 clear
+        emitter.instruction("or rax, 2");                                           // bit 1 = started flag
+        emitter.label("__elephc_eval_ob_slot_meta_store_x86");
+        emitter.instruction("mov QWORD PTR [rcx], rax");                            // store the packed user/started bits
+        emitter.instruction("mov eax, 1");                                          // report success to Rust
+        emitter.instruction("ret");                                                 // return to Rust
+        emitter.label("__elephc_eval_ob_slot_meta_none_x86");
+        emitter.instruction("xor eax, eax");                                        // report "no such buffer" to Rust
+        emitter.instruction("ret");                                                 // return to Rust
+
+        emitter.label_global(&emitter.extern_symbol("__elephc_eval_ob_slot_name"));
+        emitter.emit_symbol_address("r9", "_ob_level");       // materialize the address of the buffer-stack depth
+        emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
+        emitter.instruction("cmp rdi, r10");                                        // is the requested slot index within the stack?
+        emitter.instruction("jae __elephc_eval_ob_slot_name_none_x86");             // out-of-range index — report failure
+        emitter.emit_symbol_address("r11", "_ob_name_ptrs");  // materialize the handler-name pointer array
+        emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's display-name pointer
+        emitter.instruction("mov QWORD PTR [rsi], rax");                            // store it through the caller's out_ptr
+        emitter.emit_symbol_address("r11", "_ob_name_lens");  // materialize the handler-name length array
+        emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's display-name length
+        emitter.instruction("mov QWORD PTR [rdx], rax");                            // store it through the caller's out_len
+        emitter.instruction("mov eax, 1");                                          // report success to Rust (bytes copied immediately)
+        emitter.instruction("ret");                                                 // return to Rust
+        emitter.label("__elephc_eval_ob_slot_name_none_x86");
+        emitter.instruction("xor eax, eax");                                        // report "no such buffer" to Rust
+        emitter.instruction("ret");                                                 // return to Rust
+    }
 }

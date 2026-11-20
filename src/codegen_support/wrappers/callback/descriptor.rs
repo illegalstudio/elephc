@@ -360,17 +360,10 @@ fn emit_store_current_mixed_arg_array_element(
         Arch::AArch64 => "x10",
         Arch::X86_64 => "r11",
     };
-    let elem_offset = 24 + idx * 8;
-
     abi::load_at_offset(emitter, array_reg, array_frame_offset);
-    abi::emit_store_to_address(
-        emitter,
-        abi::int_result_reg(emitter),
-        array_reg,
-        elem_offset,
+    elephc_memoir::values::packed_slots::emit_publish_word_at(
+        emitter, array_reg, abi::int_result_reg(emitter), len_reg, idx,
     );
-    abi::emit_load_int_immediate(emitter, len_reg, (idx + 1) as i64);
-    abi::emit_store_to_address(emitter, len_reg, array_reg, 0);
 }
 
 /// Boxes the prepared indexed argument array as the second descriptor-invoker argument.

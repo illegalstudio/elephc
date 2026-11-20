@@ -60,11 +60,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
     branch(emitter, "ne", "jne", "failed");
     if arm {
         emitter.instruction("ldr x0, [sp, #8]");                                // recover the verified indexed allocation
-        emitter.instruction("ldr w9, [x0, #-12]");                              // read the number of distinct payload owners
+        elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w9", "x0");
         emitter.instruction("cmp w9, #1");                                      // promotion can preserve all observers only for a unique payload
     } else {
         emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                    // adapt the verified allocation to the indexed conversion ABI
-        emitter.instruction("cmp DWORD PTR [rdi - 12], 1");                     // shared payloads need an identity-preserving representation adapter
+        elephc_memoir::heap_refcount::emit_compare_owner_count_x86_64(emitter, "rdi", 1);
     }
     branch(emitter, "ne", "jne", "failed");
     abi::emit_call_label(emitter, "__rt_array_to_hash");

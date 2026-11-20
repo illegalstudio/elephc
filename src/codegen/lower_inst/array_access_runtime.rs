@@ -477,7 +477,7 @@ pub(super) fn lower_mixed_to_mixed_indexed_array(ctx: &mut FunctionContext<'_>) 
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed-array payload to the Mixed conversion helper
-            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before Mixed-slot conversion
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x1", "x0");
             ctx.emitter.instruction("and x9, x1, #0xff");                       // isolate the runtime storage kind
             ctx.emitter.instruction("cmp x9, #3");                              // kind 3 = a hash promoted by a skipping key
             ctx.emitter.instruction(&format!("b.eq {keep_hash}"));              // a promoted hash already holds tagged values
@@ -485,13 +485,12 @@ pub(super) fn lower_mixed_to_mixed_indexed_array(ctx: &mut FunctionContext<'_>) 
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load indexed-array metadata before Mixed-slot conversion
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "rsi", "rdi");
             ctx.emitter.instruction("mov r10, rsi");                            // copy the header to test the storage kind
             ctx.emitter.instruction("and r10, 0xff");                           // isolate the runtime storage kind
             ctx.emitter.instruction("cmp r10, 3");                              // kind 3 = a hash promoted by a skipping key
             ctx.emitter.instruction(&format!("je {keep_hash}"));                // a promoted hash already holds tagged values
-            ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "rsi", "rsi");
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
@@ -539,16 +538,15 @@ fn emit_boxed_element_slots_fatal_guard(ctx: &mut FunctionContext<'_>) {
     let ok = ctx.next_label("unbox_slots_raw");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the unboxed array's packed kind word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x9", "x0");
             ctx.emitter.instruction("lsr x9, x9, #8");                          // shift the runtime value_type tag into the low bits
             ctx.emitter.instruction("and x9, x9, #0x7f");                       // isolate the value_type, dropping the COW bit
             ctx.emitter.instruction("cmp x9, #7");                              // 7 = every slot is a boxed Mixed cell
             ctx.emitter.instruction(&format!("b.ne {}", ok));                   // raw slots: the typed contract is exact
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, QWORD PTR [rax - 8]");            // load the unboxed array's packed kind word
-            ctx.emitter.instruction("shr r10, 8");                              // shift the runtime value_type tag into the low bits
-            ctx.emitter.instruction("and r10, 0x7f");                           // isolate the value_type, dropping the COW bit
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r10", "rax");
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "r10", "r10");
             ctx.emitter.instruction("cmp r10, 7");                              // 7 = every slot is a boxed Mixed cell
             ctx.emitter.instruction(&format!("jne {}", ok));                    // raw slots: the typed contract is exact
         }

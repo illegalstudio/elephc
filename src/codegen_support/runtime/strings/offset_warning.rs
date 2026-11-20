@@ -11,6 +11,7 @@
 //! - The helpers are warning-only: callers still materialize their own fallback result.
 //! - `__rt_itoa` uses `_concat_buf`, so `_concat_off` is restored before returning.
 
+use elephc_memoir::strings::concat_cursor::SavedConcatCursor;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -74,9 +75,7 @@ fn emit_offset_warning_aarch64(emitter: &mut Emitter, spec: &OffsetWarning) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish a stable runtime warning frame
     emitter.instruction("str x0, [sp, #0]");                                    // save the offending offset across warning fragments
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
-    emitter.instruction("ldr x10, [x9]");                                       // snapshot concat scratch state before formatting the offset
-    emitter.instruction("str x10, [sp, #8]");                                   // preserve the concat cursor across itoa
+    SavedConcatCursor::Stack(8).emit_save(emitter, "x10");
 
     // -- emit prefix --
     abi::emit_symbol_address(emitter, "x1", spec.prefix_symbol);
@@ -87,9 +86,7 @@ fn emit_offset_warning_aarch64(emitter: &mut Emitter, spec: &OffsetWarning) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the offending offset for decimal formatting
     abi::emit_call_label(emitter, "__rt_itoa");                                  // format the offset into concat scratch
     abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                // append the formatted offset value
-    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the pre-warning concat cursor
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
-    emitter.instruction("str x10, [x9]");                                       // restore concat scratch state for surrounding expressions
+    SavedConcatCursor::Stack(8).emit_restore(emitter, "x10");
 
     // -- emit newline suffix --
     abi::emit_symbol_address(emitter, "x1", "_diag_string_offset_nl");
@@ -113,8 +110,7 @@ fn emit_offset_warning_x86_64(emitter: &mut Emitter, spec: &OffsetWarning) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable runtime warning frame
     emitter.instruction("sub rsp, 32");                                         // reserve saved offset and concat cursor while keeping calls aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the offending offset across warning fragments
-    elephc_memoir::strings::concat_cursor::emit_read(emitter, "r10");             // snapshot concat scratch state before formatting the offset
-    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // preserve the concat cursor across itoa
+    SavedConcatCursor::Frame(elephc_memoir::FrameOffset::new(16)).emit_save(emitter, "r10");
 
     // -- emit prefix --
     abi::emit_symbol_address(emitter, "rdi", spec.prefix_symbol);
@@ -127,8 +123,7 @@ fn emit_offset_warning_x86_64(emitter: &mut Emitter, spec: &OffsetWarning) {
     emitter.instruction("mov rdi, rax");                                        // pass the formatted offset pointer to the warning helper
     emitter.instruction("mov rsi, rdx");                                        // pass the formatted offset length to the warning helper
     abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                // append the formatted offset value
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the pre-warning concat cursor
-    elephc_memoir::strings::concat_cursor::emit_write(emitter, "r10");            // restore concat scratch state for surrounding expressions
+    SavedConcatCursor::Frame(elephc_memoir::FrameOffset::new(16)).emit_restore(emitter, "r10");
 
     // -- emit newline suffix --
     abi::emit_symbol_address(emitter, "rdi", "_diag_string_offset_nl");

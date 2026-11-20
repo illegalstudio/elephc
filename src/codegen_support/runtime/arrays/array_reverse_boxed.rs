@@ -62,8 +62,8 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #48]");                                  // preserve the original integer key
     emitter.instruction("mov x9, #-1");                                         // integer keys use the negative high-word marker
     emitter.instruction("str x9, [sp, #56]");                                   // record the source key kind
-    emitter.instruction("ldr x0, [x11, #-8]");                                  // read the packed element metadata
-    emitter.instruction("ubfx x0, x0, #8, #7");                                 // isolate the runtime value tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x0", "x11");
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x0", "x0");
     emitter.instruction("ldr x12, [x11, #16]");                                 // packed strings require a sixteen-byte stride
     emitter.instruction("madd x11, x10, x12, x11");                             // address this slot relative to the source header
     emitter.instruction("ldr x1, [x11, #24]");                                  // read the low payload word after the array header
@@ -187,9 +187,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // advance before calling any helper
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // preserve the original integer key
     emitter.instruction("mov QWORD PTR [rbp - 64], -1");                        // mark this key as an integer
-    emitter.instruction("mov rax, QWORD PTR [r11 - 8]");                        // read the packed element metadata
-    emitter.instruction("shr rax, 8");                                          // move the runtime value tag into the low bits
-    emitter.instruction("and rax, 127");                                        // exclude heap and copy-on-write flags
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rax", "r11");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rax", "rax");
     emitter.instruction("mov rcx, QWORD PTR [r11 + 16]");                       // read the actual packed element stride
     emitter.instruction("imul r10, rcx");                                       // locate this slot within the packed payload
     emitter.instruction("add r11, r10");                                        // keep the source header offset separate

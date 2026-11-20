@@ -1414,7 +1414,7 @@ pub fn emit_var_dump_indexed(emitter: &mut Emitter) {
     // on, and the hash walker takes its argument in the same register, so this is a tail
     // jump. The conditional branch skips OVER an unconditional one because AArch64 cannot
     // point a conditional branch at an external label.
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
     emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
     emitter.instruction("b.ne __rt_var_dump_indexed_packed");                   // packed storage walks inline below
@@ -1429,7 +1429,7 @@ pub fn emit_var_dump_indexed(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #8]");                                   // index = 0
     emitter.instruction("ldr x9, [x0]");                                        // load the element count from the header
     emitter.instruction("str x9, [sp, #16]");                                   // save the element count
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("lsr x9, x9, #8");                                      // shift the value_type stamp into the low byte
     emitter.instruction("and x9, x9, #0x0f");                                   // isolate the value_type field (low nibble), dropping the COW bit
     emitter.instruction("str x9, [sp, #24]");                                   // save the element value_type stamp
@@ -1503,7 +1503,7 @@ fn emit_var_dump_indexed_linux_x86_64(emitter: &mut Emitter) {
     // -- hand a run-time promoted array to the hash walker --
     // Same runtime-promotion probe as the AArch64 path; see its comment for why a statically
     // indexed argument can arrive holding hash storage.
-    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rax", "rdi");
     emitter.instruction("and rax, 0xff");                                       // isolate the low-byte heap kind
     emitter.instruction("cmp rax, 3");                                          // kind 3 = associative hash storage
     emitter.instruction("jne __rt_var_dump_indexed_packed");                    // packed storage walks inline below
@@ -1518,7 +1518,7 @@ fn emit_var_dump_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // index = 0
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the element count from the header
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the element count
-    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // load the packed array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rax", "rdi");
     emitter.instruction("shr rax, 8");                                          // shift the value_type stamp into the low byte
     emitter.instruction("and rax, 0x0f");                                       // isolate the value_type field (low nibble), dropping the COW bit
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the element value_type stamp

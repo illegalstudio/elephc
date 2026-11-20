@@ -10,6 +10,39 @@
 
 use crate::{Arch, AssemblyEmitter, Emitter, TargetAbi};
 
+/// Reads the unmasked count of a known-live allocation into a 32-bit register.
+pub fn emit_load_owner_count(emitter: &mut impl Emitter, count: &str, payload: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => emitter.instruction(&format!("ldr {count}, [{payload}, #-12]")), // read the compact owner count
+        Arch::X86_64 => emitter.instruction(&format!("mov {count}, DWORD PTR [{payload} - 12]")), // read the compact owner count
+    }
+}
+
+/// Compares a known-live x86-64 allocation's raw count without clobbering a register.
+pub fn emit_compare_owner_count_x86_64(emitter: &mut impl Emitter, payload: &str, count: u32) {
+    emitter.instruction(&format!("cmp DWORD PTR [{payload} - 12], {count}"));    // check the complete physical owner count
+}
+
+/// Drops the collector-only pin from a physical owner count with no native call.
+/// The flags register pair identifies the same scratch register at each needed width.
+pub fn emit_subtract_collector_pin(
+    emitter: &mut impl Emitter, payload: &str, count: &str, flags: (&str, &str),
+) {
+    let (word, low) = flags;
+    crate::heap_kind::emit_load_metadata(emitter, word, payload);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ubfx {word}, {word}, #18, #1"));      // isolate the collector-only owner bit
+            emitter.instruction(&format!("sub {count}, {count}, {low}"));      // keep only the externally assigned owners
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("shr {word}, 18"));                    // position the collector-only owner bit
+            emitter.instruction(&format!("and {low}, 1"));                      // isolate the collector-only owner bit
+            emitter.instruction(&format!("sub {count}, {low}"));                // keep only the externally assigned owners
+        }
+    }
+}
+
 /// Drops the original allocation owner after a fresh boxed owner has retained it.
 pub fn emit_drop_after_boxing(emitter: &mut (impl AssemblyEmitter + TargetAbi)) {
     match emitter.arch() {
@@ -167,10 +200,8 @@ pub fn emit_logical_reference_sharing(emitter: &mut impl Emitter) {
         emitter.instruction("ldr x9, [x0, #16]");                               // inspect the persistent reference flag
         emitter.instruction("cmp x9, #1");                                      // flag one identifies a PHP reference
         emitter.instruction("b.ne __elephc_eval_reference_unshared");           // unrelated nested boxes remain ordinary
-        emitter.instruction("ldr w9, [x0, #-12]");                              // read the wrapper's physical owner count
-        emitter.instruction("ldr x10, [x0, #-8]");                              // inspect an artificial collector pin
-        emitter.instruction("ubfx x10, x10, #18, #1");                          // isolate the collector-only owner bit
-        emitter.instruction("sub w9, w9, w10");                                 // PHP sharing excludes collector pins
+        emit_load_owner_count(emitter, "w9", "x0");
+        emit_subtract_collector_pin(emitter, "x0", "w9", ("x10", "w10"));
         crate::reference_cells::validation_pins::subtract(
             emitter, "x0", "x9", "x10", "x11", "__elephc_eval_reference_shared",
         );
@@ -187,11 +218,8 @@ pub fn emit_logical_reference_sharing(emitter: &mut impl Emitter) {
         emitter.instruction("jne __elephc_eval_reference_unshared");            // ordinary boxes have no writable reference
         emitter.instruction("cmp QWORD PTR [rdi + 16], 1");                     // inspect the persistent reference flag
         emitter.instruction("jne __elephc_eval_reference_unshared");            // unrelated nested boxes remain ordinary
-        emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                   // read the wrapper's physical owner count
-        emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                    // inspect an artificial collector pin
-        emitter.instruction("shr r10, 18");                                     // position the collector-only owner bit
-        emitter.instruction("and r10d, 1");                                     // isolate the collector pin
-        emitter.instruction("sub eax, r10d");                                   // PHP sharing excludes collector pins
+        emit_load_owner_count(emitter, "eax", "rdi");
+        emit_subtract_collector_pin(emitter, "rdi", "eax", ("r10", "r10d"));
         crate::reference_cells::validation_pins::subtract(
             emitter, "rdi", "rax", "r10", "r11", "__elephc_eval_reference_shared",
         );

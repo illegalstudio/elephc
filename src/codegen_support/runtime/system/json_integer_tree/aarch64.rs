@@ -41,7 +41,7 @@ pub(super) fn emit_entry(emitter: &mut Emitter, prefix: &str) {
     emitter.instruction(&format!("cbnz x9, {fallback}"));                       // only the top-level container owns the exact result buffer
 
     // -- keep provably bounded direct integer arrays on the existing one-pass encoder --
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed array value type from the heap header
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("lsr x9, x9, #8");                                      // move the value type into the low bits
     emitter.instruction("and x9, x9, #0x7f");                                   // discard copy-on-write and other header flags
     emitter.instruction(&format!("cbnz x9, {attempt}"));                        // nested and boxed layouts still need the complete proof
@@ -122,7 +122,7 @@ fn emit_probe(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x9]");                                        // load the caller-selected JSON depth limit
     emitter.instruction("cmp x1, x9");                                          // would this container exceed the PHP depth budget?
     emitter.instruction("b.gt __rt_json_integer_tree_probe_unsupported");       // let the general encoder publish the depth error
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load packed heap kind and indexed-array value type
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x10, x9, #0xff");                                  // isolate the uniform top-level heap kind
     emitter.instruction("cmp x10, #2");                                         // kind 2 identifies indexed-array storage
     emitter.instruction("b.ne __rt_json_integer_tree_probe_unsupported");       // hashes and other containers need the general encoder
@@ -132,7 +132,7 @@ fn emit_probe(emitter: &mut Emitter) {
     emitter.instruction("mov x11, #2");                                         // every accepted array contributes '[' and ']'
     emitter.instruction("str x11, [x29, #-24]");                                // initialize the exact serialized byte count
     emitter.instruction("cbz x10, __rt_json_integer_tree_probe_success");       // every valid empty indexed array serializes as []
-    emitter.instruction("ldr x11, [x0, #16]");                                  // load the array element stride
+    elephc_memoir::values::array_header::emit_load_element_stride(emitter, "x0", "x11");
     emitter.instruction("cmp x11, #8");                                         // accepted payload families occupy one machine word per slot
     emitter.instruction("b.ne __rt_json_integer_tree_probe_unsupported");       // wider layouts belong to the general encoder
     emitter.instruction("lsr x9, x9, #8");                                      // move the packed value type into the low bits
@@ -170,7 +170,7 @@ fn emit_probe(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_json_integer_tree_probe_array");             // recurse for direct nested indexed-array slots
 
     emit_branch_if_null_container(emitter, "x12", "x13", "__rt_json_integer_tree_probe_unsupported");
-    emitter.instruction("ldr x13, [x12, #-8]");                                 // load the boxed-cell heap kind
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x13", "x12");
     emitter.instruction("and x13, x13, #0xff");                                 // isolate the uniform kind byte
     emitter.instruction("cmp x13, #5");                                         // accepted boxed elements must be real Mixed cells
     emitter.instruction("b.ne __rt_json_integer_tree_probe_unsupported");       // reference cells and other owners keep general semantics
@@ -237,7 +237,7 @@ fn emit_writer(emitter: &mut Emitter) {
     emitter.instruction("str x1, [x29, #-16]");                                 // persist the advanced cursor
     emitter.instruction("ldr x10, [x0]");                                       // load the source array length
     emitter.instruction("str x10, [x29, #-32]");                                // save it for the element loop
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load packed indexed-array metadata
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("lsr x9, x9, #8");                                      // move the value type into the low bits
     emitter.instruction("and x9, x9, #0x7f");                                   // isolate the stable value type
     emitter.instruction("str x9, [x29, #-40]");                                 // save the value type for dispatch

@@ -21,7 +21,7 @@ pub(super) fn emit_setter(emitter: &mut Emitter) {
             emitter.instruction(&format!("orr x1, x1, #{}", THROWABLE_SCANNED_LOCATION_FLAG)); // distinguish buffer locations from ordinary source spans
             emitter.instruction("cbz x0, __rt_tokenizer_location_done");        // an invalid internal receiver has no writable metadata
             // -- resolve compact or ordinary Throwable metadata storage --
-            emitter.instruction("ldurb w9, [x0, #-8]");                         // inspect the physical heap kind
+            elephc_memoir::heap_kind::emit_load_kind_byte(emitter, "w9", "x0");
             emitter.instruction("mov x10, #32");                                // compact Throwables reserve the fixed creation-line word
             emitter.instruction("cmp w9, #6");                                  // kind six is the compact Throwable payload
             emitter.instruction("b.eq __rt_tokenizer_location_store");          // preserve the compact storage layout
@@ -42,7 +42,7 @@ pub(super) fn emit_setter(emitter: &mut Emitter) {
             emitter.instruction("test rax, rax");                               // an invalid internal receiver has no writable metadata
             emitter.instruction("jz __rt_tokenizer_location_done");             // skip the metadata write for a missing object
             // -- resolve compact or ordinary Throwable metadata storage --
-            emitter.instruction("movzx r9, BYTE PTR [rax - 8]");                // inspect the physical heap kind
+            elephc_memoir::heap_kind::emit_load_kind_byte(emitter, "r9", "rax");
             emitter.instruction("mov r10, 32");                                 // compact Throwables reserve the fixed creation-line word
             emitter.instruction("cmp r9, 6");                                   // kind six is the compact Throwable payload
             emitter.instruction("je __rt_tokenizer_location_store");            // preserve the compact storage layout

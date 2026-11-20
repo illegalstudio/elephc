@@ -2576,7 +2576,7 @@ fn load_current_dynamic_indexed_value_as_mixed_aarch64(
     let done = ctx.next_label("iter_dynamic_indexed_done");
     abi::load_at_offset_scratch(ctx.emitter, "x11", offset - ITER_SOURCE_OFFSET_DELTA, "x9");
     abi::load_at_offset(ctx.emitter, "x0", offset - ITER_CURSOR_OFFSET_DELTA);
-    ctx.emitter.instruction("ldr x5, [x11, #-8]");                              // load the packed indexed-array heap metadata
+    elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x5", "x11");
     ctx.emitter.instruction("lsr x5, x5, #8");                                  // move the runtime value_type tag into the low bits
     ctx.emitter.instruction("and x5, x5, #0x7f");                               // isolate the indexed-array value_type tag
     ctx.emitter.instruction("cmp x5, #1");                                      // does this indexed array store string slots?
@@ -2623,9 +2623,8 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
     let done = ctx.next_label("iter_dynamic_indexed_done");
     abi::load_at_offset(ctx.emitter, "r11", offset - ITER_SOURCE_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "r10", offset - ITER_CURSOR_OFFSET_DELTA);
-    ctx.emitter.instruction("mov r9, QWORD PTR [r11 - 8]");                     // load the packed indexed-array heap metadata
-    ctx.emitter.instruction("shr r9, 8");                                       // move the runtime value_type tag into the low bits
-    ctx.emitter.instruction("and r9, 0x7f");                                    // isolate the indexed-array value_type tag
+    elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r9", "r11");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "r9", "r9");
     ctx.emitter.instruction("cmp r9, 1");                                       // does this indexed array store string slots?
     ctx.emitter.instruction(&format!("je {}", string_case));                    // branch to the 16-byte string-slot loader
     ctx.emitter.instruction("add r11, 24");                                     // skip the indexed-array header to the 8-byte payload slots

@@ -10,13 +10,15 @@
 
 use crate::codegen_support::emit::Emitter;
 
+use elephc_memoir::values::reference_registry;
+
 /// Registers a boxed array at the caller-reserved decode ordinal.
 pub(super) fn emit_register_array(emitter: &mut Emitter) {
-    elephc_memoir::values::reference_registry::emit_register_cell(
+    reference_registry::emit_register_cell(
         emitter,
         "__rt_unserialize_register_array",
         "_unser_values",
-        65_536,
+        reference_registry::UNSERIALIZE_CAPACITY,
         "__rt_unserialize_defer_data",
     );
 }

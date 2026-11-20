@@ -1665,11 +1665,11 @@ fn verify_full_decimal_map(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(map, "x9")?;
-            ctx.emitter.instruction("ldr x10, [x9, #-8]");                      // load the packed array metadata
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x10", "x9");
             ctx.emitter.instruction("and w11, w10, #0xff");                     // isolate the top-level heap kind
             ctx.emitter.instruction("cmp w11, #2");                             // is this a packed indexed array?
             ctx.emitter.instruction(&format!("b.ne {fallback}"));               // other array shapes use the bridge
-            ctx.emitter.instruction("ubfx x10, x10, #8, #7");                   // isolate the packed element type
+            elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(ctx.emitter, "x10", "x10");
             ctx.emitter.instruction(&format!("cbnz x10, {fallback}"));          // non-int arrays use the bridge
             ctx.emitter.instruction("ldr x10, [x9]");                           // load the map entry count
             ctx.emitter.instruction("cmp x10, #4");                             // does the map contain four bounds?
@@ -1692,12 +1692,11 @@ fn verify_full_decimal_map(
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(map, "r10")?;
-            ctx.emitter.instruction("mov r11, QWORD PTR [r10 - 8]");            // load the packed array metadata
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r11", "r10");
             ctx.emitter.instruction("movzx eax, r11b");                         // isolate the top-level heap kind
             ctx.emitter.instruction("cmp eax, 2");                              // is this a packed indexed array?
             ctx.emitter.instruction(&format!("jne {fallback}"));                // other array shapes use the bridge
-            ctx.emitter.instruction("shr r11, 8");                              // move the packed element type down
-            ctx.emitter.instruction("and r11d, 0x7f");                          // isolate the element type
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "r11", "r11d");
             ctx.emitter.instruction(&format!("jnz {fallback}"));                // non-int arrays use the bridge
             ctx.emitter.instruction("cmp QWORD PTR [r10], 4");                  // does the map contain four bounds?
             ctx.emitter.instruction(&format!("jne {fallback}"));                // other maps use the bridge

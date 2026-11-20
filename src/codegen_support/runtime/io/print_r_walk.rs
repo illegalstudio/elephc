@@ -503,7 +503,7 @@ pub fn emit_print_r_indexed(emitter: &mut Emitter) {
     // `__rt_array_edge_key` dispatches on; the hash walker takes the array in x0 and the base
     // indent in x1 exactly as this one does, so it is a tail jump. The conditional branch
     // skips OVER an unconditional one because AArch64 cannot name an external label in one.
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
     emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
     emitter.instruction("b.ne __rt_print_r_indexed_packed");                    // packed storage walks inline below
@@ -522,7 +522,7 @@ pub fn emit_print_r_indexed(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x0]");                                       // load the element count from the header
     emitter.instruction("str x10, [sp, #24]");                                  // save the element count
     emitter.instruction("str xzr, [sp, #32]");                                  // index = 0
-    emitter.instruction("ldr x11, [x0, #-8]");                                  // load the packed array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x11", "x0");
     emitter.instruction("lsr x11, x11, #8");                                    // shift the value_type stamp into the low byte
     emitter.instruction("and x11, x11, #0x0f");                                 // isolate the value_type field (low nibble), dropping the COW bit
     emitter.instruction("str x11, [sp, #40]");                                  // save the element value_type stamp
@@ -606,7 +606,7 @@ fn emit_print_r_indexed_linux_x86_64(emitter: &mut Emitter) {
     // -- hand a run-time promoted array to the hash walker --
     // Same runtime-promotion probe as the AArch64 path; the hash walker takes the array in
     // rdi and the base indent in rsi exactly as this one does.
-    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rax", "rdi");
     emitter.instruction("and rax, 0xff");                                       // isolate the low-byte heap kind
     emitter.instruction("cmp rax, 3");                                          // kind 3 = associative hash storage
     emitter.instruction("jne __rt_print_r_indexed_packed");                     // packed storage walks inline below
@@ -626,7 +626,7 @@ fn emit_print_r_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the element count from the header
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the element count
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // index = 0
-    emitter.instruction("mov rax, QWORD PTR [rdi - 8]");                        // load the packed array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rax", "rdi");
     emitter.instruction("shr rax, 8");                                          // shift the value_type stamp into the low byte
     emitter.instruction("and rax, 0x0f");                                       // isolate the value_type field (low nibble), dropping the COW bit
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the element value_type stamp

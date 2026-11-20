@@ -30,7 +30,7 @@ pub fn emit_array_edge_key(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_edge_key ---");
     emitter.label_global("__rt_array_edge_key");
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
     emitter.instruction("cmp x9, #5");                                          // is the container a boxed mixed cell?
     emitter.instruction("b.eq __rt_array_edge_key_mixed");                      // mixed cells are unwrapped first
@@ -102,7 +102,7 @@ fn emit_array_edge_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_edge_key ---");
     emitter.label_global("__rt_array_edge_key");
-    emitter.instruction("movzx eax, BYTE PTR [rdi - 8]");                       // load the low-byte heap kind from the uniform header
+    elephc_memoir::heap_kind::emit_load_kind_byte(emitter, "eax", "rdi");
     emitter.instruction("cmp eax, 5");                                          // is the container a boxed mixed cell?
     emitter.instruction("je __rt_array_edge_key_mixed");                        // mixed cells are unwrapped first
     emitter.instruction("cmp eax, 2");                                          // is the container an indexed array?

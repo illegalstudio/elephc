@@ -288,13 +288,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // registry id for eval handlers), the persisted handler display name
     // (ptr/len), the auto-flush chunk size, the ob_start() flags word, and the
     // started flag (set at the first handler invocation; feeds PHP started bits).
-    out.push_str(&comm_directive("_ob_handler_stubs", 512, target));
-    out.push_str(&comm_directive("_ob_handler_envs", 512, target));
-    out.push_str(&comm_directive("_ob_name_ptrs", 512, target));
-    out.push_str(&comm_directive("_ob_name_lens", 512, target));
-    out.push_str(&comm_directive("_ob_chunk_sizes", 512, target));
-    out.push_str(&comm_directive("_ob_flags", 512, target));
-    out.push_str(&comm_directive("_ob_started", 512, target));
+    elephc_memoir::buffers::output::append_handler_storage(&mut out, &target);
     // _ob_in_handler: non-zero while a user output handler runs. Output produced
     // inside a handler is discarded (PHP behavior) via the __rt_stdout_write and
     // __rt_pr_write branches, and ob_start() inside a handler is a fatal error.
@@ -381,8 +375,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_ser_obj_count", 8, target));
     out.push_str(&comm_directive("_ser_obj_ptrs", 524288, target));
     out.push_str(&comm_directive("_ser_obj_idxs", 524288, target));
-    out.push_str(&comm_directive("_unser_count", 8, target));
-    out.push_str(&comm_directive("_unser_values", 524288, target));
+    elephc_memoir::values::reference_registry::append_unserialize_storage(&mut out, &target);
     out.push_str(&comm_directive("_strtotime_clock", 8, target));
     // Scratch copy a one-digit-month/day ISO date (`2020-1-5`) is zero-padded into before the
     // fixed-offset ISO parser reads it (see `system::strtotime::iso_date`).
@@ -652,20 +645,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // resource payloads are not heap-block addresses: descriptors are tiny integers
     // and bridge handles come from the C allocator, so neither has a granule to index.
     // Occupancy lives in the value word (id 0 = empty slot; minted ids start at 5).
-    out.push_str(&comm_directive(
-        "_resource_id_keys",
-        crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS * 8,
-        target,
-    ));
-    out.push_str(&comm_directive(
-        "_resource_id_vals",
-        crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS * 8,
-        target,
-    ));
-    // Per-resource incarnation inventory used by get_resources(). Unlike the
-    // payload-to-id hash, this list keeps closed resources after descriptor reuse.
-    out.push_str(&comm_directive("_resource_inventory_head", 8, target));
-    out.push_str(&comm_directive("_resource_inventory_tail", 8, target));
+    elephc_memoir::values::resource_weak::append_storage(&mut out, &target);
     elephc_memoir::data::append_gc_state(&mut out, &target);
     out.push_str(&format!(
         ".globl _php_error_reporting\n_php_error_reporting:\n    .quad {}\n",

@@ -86,9 +86,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_unser_options_done_x");                       // policy is already published
     emitter.instruction("lea r10, [r9 + 1]");                                   // advance index before nested helper calls
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // preserve next index across conversion helpers
-    emitter.instruction("mov r11, QWORD PTR [r8 - 8]");                         // packed array metadata precedes payload header
-    emitter.instruction("shr r11, 8");                                          // move runtime element tag to low bits
-    emitter.instruction("and r11, 0x7f");                                       // isolate seven-bit runtime element tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "r8");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r11", "r11");
     emitter.instruction("cmp r11, 1");                                          // direct string payload?
     emitter.instruction("je __rt_unser_options_indexed_string_x");              // direct strings append without conversion
     emitter.instruction("cmp r11, 6");                                          // direct object pointer payload?

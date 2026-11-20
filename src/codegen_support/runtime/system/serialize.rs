@@ -430,7 +430,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     // byte, the same one `__rt_array_edge_key` dispatches on. It runs BEFORE the `a:` prefix
     // is appended, because `__rt_serialize_hash` appends its own — jumping after would emit
     // it twice. The hash entry takes the pointer in x0 exactly as this one does.
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
     emitter.instruction("cmp x9, #3");                                          // kind 3 = associative hash storage
     emitter.instruction("b.ne __rt_serialize_indexed_packed");                  // packed storage appends its own prefix below
@@ -448,7 +448,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the array pointer
     emitter.instruction("ldr x1, [x0]");                                        // load the element count from the header
     emitter.instruction("str x1, [sp, #8]");                                    // save the element count
-    emitter.instruction("ldur x2, [x0, #-8]");                                  // load the packed array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x2", "x0");
     emitter.instruction("lsr x2, x2, #8");                                      // shift the value_type field into the low bits
     emitter.instruction("and x2, x2, #0x7f");                                   // isolate the 7-bit value_type
     emitter.instruction("str x2, [sp, #16]");                                   // save the array value_type
@@ -1407,7 +1407,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     // Same runtime-promotion probe as the AArch64 path, before the `a:` prefix for the same
     // reason. NOTE the register: this serializer carries the array in RAX, not rdi, so the
     // probe reads through rax and the scratch is a different register.
-    emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "rax");
     emitter.instruction("and r11, 0xff");                                       // isolate the low-byte heap kind
     emitter.instruction("cmp r11, 3");                                          // kind 3 = associative hash storage
     emitter.instruction("jne __rt_serialize_indexed_packed");                   // packed storage appends its own prefix below
@@ -1425,9 +1425,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the array pointer
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load the element count from the header
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the element count
-    emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // load the packed array kind word
-    emitter.instruction("shr rcx, 8");                                          // shift the value_type field into the low bits
-    emitter.instruction("and rcx, 0x7f");                                       // isolate the 7-bit value_type
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rcx", "rax");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rcx", "rcx");
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the array value_type
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the element count
     emitter.instruction("call __rt_serialize_uint");                            // append the element count digits

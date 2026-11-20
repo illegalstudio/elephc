@@ -123,7 +123,7 @@ pub(super) fn emit_x86_64_casts(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_from_raw_heap_word");
     emitter.instruction("test rdi, rdi");                                       // reject null raw heap words before reading their header
     emitter.instruction("jz __elephc_eval_value_from_raw_heap_word_miss_x86");  // null raw heap words cannot be boxed
-    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load the uniform x86_64 heap kind word for tag recovery
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rdi");
     emitter.instruction("and r10, 0xff");                                       // isolate the low-byte heap kind tag
     emitter.instruction("cmp r10, 2");                                          // heap kind 2 stores indexed-array payloads
     emitter.instruction("je __elephc_eval_value_from_raw_heap_word_array_x86"); // box indexed arrays with runtime tag 4

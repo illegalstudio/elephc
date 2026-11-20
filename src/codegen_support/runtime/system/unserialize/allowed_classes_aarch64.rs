@@ -99,8 +99,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_unser_options_done");                        // publish is already complete
     emitter.instruction("add x11, x10, #1");                                    // advance index before any nested helper call
     emitter.instruction("str x11, [sp, #16]");                                  // preserve next index across conversion helpers
-    emitter.instruction("ldr x11, [x9, #-8]");                                  // packed array metadata precedes the payload header
-    emitter.instruction("ubfx x11, x11, #8, #7");                               // extract the runtime element tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x11", "x9");
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x11", "x11");
     emitter.instruction("cmp x11, #1");                                         // direct string payload?
     emitter.instruction("b.eq __rt_unser_options_indexed_string");              // direct strings append without conversion
     emitter.instruction("cmp x11, #6");                                         // direct object pointer payload?

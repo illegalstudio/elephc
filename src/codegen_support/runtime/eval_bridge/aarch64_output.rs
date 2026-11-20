@@ -129,49 +129,7 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_ob_release_string");
     emitter.instruction("b __rt_decref_any");                                   // release one bridge-returned owned string
 
-    label_c_global(emitter, "__elephc_eval_ob_slot_meta");
-    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_level");       // materialize the address of the buffer-stack depth
-    emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
-    emitter.instruction("cmp x0, x10");                                         // is the requested slot index within the stack?
-    emitter.instruction("b.hs __elephc_eval_ob_slot_meta_none");                // out-of-range index — report failure
-    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_chunk_sizes"); // materialize the chunk-size slot array
-    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's chunk size
-    emitter.instruction("str x12, [x1]");                                       // store it through the caller's out_chunk
-    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_flags");      // materialize the flags slot array
-    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's stored flags word
-    emitter.instruction("str x12, [x2]");                                       // store it through the caller's out_flags
-    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_handler_stubs"); // materialize the handler-stub slot array
-    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's handler stub
-    emitter.instruction("cmp x12, #0");                                         // is a user handler installed?
-    emitter.instruction("cset x12, ne");                                        // bit 0 = user-handler flag
-    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_started");    // materialize the started-flag slot array
-    emitter.instruction("ldr x13, [x11, x0, lsl #3]");                          // load the slot's started flag
-    emitter.instruction("cmp x13, #0");                                         // has the handler run at least once?
-    emitter.instruction("cset x13, ne");                                        // normalize the started flag to 0/1
-    emitter.instruction("orr x12, x12, x13, lsl #1");                           // bit 1 = started flag
-    emitter.instruction("str x12, [x3]");                                       // store the packed user/started bits
-    emitter.instruction("mov x0, #1");                                          // report success to Rust
-    emitter.instruction("ret");                                                 // return to Rust
-    emitter.label("__elephc_eval_ob_slot_meta_none");
-    emitter.instruction("mov x0, #0");                                          // report "no such buffer" to Rust
-    emitter.instruction("ret");                                                 // return to Rust
-
-    label_c_global(emitter, "__elephc_eval_ob_slot_name");
-    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_level");       // materialize the address of the buffer-stack depth
-    emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
-    emitter.instruction("cmp x0, x10");                                         // is the requested slot index within the stack?
-    emitter.instruction("b.hs __elephc_eval_ob_slot_name_none");                // out-of-range index — report failure
-    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_name_ptrs");  // materialize the handler-name pointer array
-    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's display-name pointer
-    emitter.instruction("str x12, [x1]");                                       // store it through the caller's out_ptr
-    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_name_lens");  // materialize the handler-name length array
-    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's display-name length
-    emitter.instruction("str x12, [x2]");                                       // store it through the caller's out_len
-    emitter.instruction("mov x0, #1");                                          // report success to Rust (bytes copied immediately)
-    emitter.instruction("ret");                                                 // return to Rust
-    emitter.label("__elephc_eval_ob_slot_name_none");
-    emitter.instruction("mov x0, #0");                                          // report "no such buffer" to Rust
-    emitter.instruction("ret");                                                 // return to Rust
+    elephc_memoir::buffers::output::emit_handler_queries(emitter);
 
     label_c_global(emitter, "__elephc_eval_value_string_bytes");
     emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for output pointers
@@ -216,7 +174,7 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_final_object_identity");
     emitter.instruction("cbz x0, __elephc_eval_value_final_object_none");       // null handles cannot release an object
     emitter.label("__elephc_eval_value_final_object_loop");
-    emitter.instruction("ldr w9, [x0, #-12]");                                  // load the current Mixed wrapper refcount
+    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w9", "x0");
     emitter.instruction("cmp w9, #1");                                          // only the last Mixed owner can free the wrapped payload
     emitter.instruction("b.ne __elephc_eval_value_final_object_none");          // non-final wrapper releases cannot run destructors yet
     emitter.instruction("ldr x9, [x0]");                                        // load the current Mixed runtime tag
@@ -235,7 +193,7 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
         "x10",
         "__elephc_eval_value_final_object_none",
     );
-    emitter.instruction("ldr w10, [x9, #-12]");                                 // load the object refcount that the Mixed release will decrement
+    elephc_memoir::heap_refcount::emit_load_owner_count(emitter, "w10", "x9");
     emitter.instruction("cmp w10, #1");                                         // only the final object owner can run the destructor
     emitter.instruction("csel x0, x9, xzr, eq");                                // return object identity only for the final release
     emitter.instruction("ret");                                                 // return the candidate object identity to Rust

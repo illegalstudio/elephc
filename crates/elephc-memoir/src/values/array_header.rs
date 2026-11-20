@@ -104,3 +104,20 @@ pub fn emit_result_value_type_stamp(emitter: &mut impl Emitter, tag: ValueTag) {
         Arch::X86_64 => emit_value_type_stamp_x86_64(emitter, "rax", tag, "r11"),
     }
 }
+
+/// Decodes the packed element tag from an AArch64 metadata word without the COW bit.
+pub fn emit_extract_value_tag_aarch64(emitter: &mut impl Emitter, destination: &str, metadata: &str) {
+    emitter.instruction(&format!("ubfx {destination}, {metadata}, #8, #7"));    // keep only the seven indexed-element tag bits
+}
+
+/// Loads the byte stride from the native packed array's descriptor.
+pub fn emit_load_element_stride(emitter: &mut impl Emitter, array: &str, stride: &str) {
+    emitter.emit_load_from_address(stride, array, 16);
+}
+
+/// Decodes the x86-64 packed element tag from its shifted metadata word.
+/// Both register names refer to the same register, at the required operand widths.
+pub fn emit_extract_value_tag_x86_64(emitter: &mut impl Emitter, metadata: &str, tag: &str) {
+    emitter.instruction(&format!("shr {metadata}, 8"));                        // position the packed tag in the low byte
+    emitter.instruction(&format!("and {tag}, 0x7f"));                           // discard ownership flags and heap magic
+}
