@@ -16,6 +16,8 @@ mod arrays;
 mod array_mutations;
 pub(super) use array_mutations::{finish_array_mutation, replacement_element_source};
 mod source_views;
+mod calls;
+pub(super) use calls::builtin as selected_call_builtin;
 mod declared_sources;
 pub(super) use declared_sources::resolve_type as resolve_declared_source_type;
 pub(super) use declared_sources::method_result as declared_method_result;
@@ -80,15 +82,8 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
                 _ => mixed(),
             })
         }
-        EvalExpr::Call { name, .. } => {
-            let name = name.trim_start_matches('\\').to_ascii_lowercase();
-            let builtin = elephc_builtin_contract::lookup(&name)
-                .map(|contract| parameter_type(&builtin_producer_type(contract.returns)));
-            builtin.or_else(|| context.function(&name).and_then(|function| function.return_type()).cloned())
-                .or_else(|| context.native_function(&name).and_then(|function| function.return_type().cloned()))
-                .map(|ty| if arrays || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { ty }
-                    else { parameter_type(&binding_kind_type(generic_type(&ty))) })
-        }
+        EvalExpr::Call { name, .. } => calls::producer(name, None, context),
+        EvalExpr::NamespacedCall { name, fallback_name, .. } => calls::producer(name, Some(fallback_name), context),
         EvalExpr::DynamicCall { .. } | EvalExpr::DynamicMethodCall { .. }
             | EvalExpr::DynamicStaticMethodCall { .. } => None,
         _ => declared_sources::producer(expr, context, scope),

@@ -44,7 +44,7 @@ pub(in crate::interpreter) fn eval_call(
 }
 
 /// Normalizes mixed-case lookup keys without allocating for ordinary lowercase calls.
-fn call_lookup_name(name: &str) -> Cow<'_, str> {
+pub(in crate::interpreter) fn call_lookup_name(name: &str) -> Cow<'_, str> {
     if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
         Cow::Owned(name.to_ascii_lowercase())
     } else {

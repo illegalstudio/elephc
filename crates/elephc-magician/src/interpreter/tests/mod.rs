@@ -154,3 +154,5 @@ mod strict_mixed_stored_sources;
 mod strict_mixed_native_sources;
 mod strict_mixed_result_sources;
 mod strict_mixed_callable_results;
+
+mod strict_mixed_namespace_sources;

@@ -20,9 +20,13 @@ pub(super) fn record(condition: &EvalExpr, truthy: bool,
     if let EvalExpr::Unary { op: EvalUnaryOp::LogicalNot, expr } = condition {
         record(expr, !truthy, context, scope); return;
     }
-    let EvalExpr::Call { name, args } = condition else { return; };
-    if args.len() != 1 || context.function(name).is_some() { return; }
-    let Some(contract) = elephc_builtin_contract::lookup(name.trim_start_matches('\\')) else { return; };
+    let (name, fallback, args) = match condition {
+        EvalExpr::Call { name, args } => (name, None, args),
+        EvalExpr::NamespacedCall { name, fallback_name, args } => (name, Some(fallback_name.as_str()), args),
+        _ => return,
+    };
+    if args.len() != 1 { return; }
+    let Some(contract) = local_binding_origins::selected_call_builtin(name, fallback, context) else { return; };
     let EvalExpr::LoadVar(name) = args[0].value() else { return; };
     let target = match contract.name {
         "is_int" | "is_integer" | "is_long" => Type::atom("int"),
