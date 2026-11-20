@@ -203,8 +203,8 @@ fn execute_program_json_enum_depth_cleanup_failure_is_not_json() {
     let outer = values.alloc(FakeValue::Array(vec![inner]));
     let flags = values.int(0).expect("allocate JSON flags");
     let depth = values.int(1).expect("allocate JSON depth");
-    // Skip flag/depth conversions and the scalar read; fail the inner array cleanup.
-    values.fail_release_call = Some(3);
+    // Skip flag/depth conversions, traversal keys and the scalar read; fail the inner array cleanup.
+    values.fail_release_call = Some(5);
     let result = eval_json_encode_values_result(&[outer, flags, depth], &mut context, &mut values);
     assert!(matches!(result, Err(EvalStatus::UncaughtThrowable)));
     assert_eq!(values.releases.last(), Some(&inner));
