@@ -372,13 +372,18 @@ fn branch_if_raw_at_runtime(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) ->
     })?;
     let raw = ctx.next_label("consuming_split_raw_slot");
     let state_reg = abi::secondary_scratch_reg(ctx.emitter);
+    // -- skip the split's extra owner while the slot is still raw at runtime --
     abi::load_at_offset(ctx.emitter, state_reg, state_offset);
     match ctx.emitter.target.arch {
         crate::codegen::platform::Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz {}, {}", state_reg, raw));     // a raw slot keeps its own owner
+            ctx.emitter.instruction(                                            // a raw slot keeps its own owner
+                &format!("cbz {}, {}", state_reg, raw)
+            );
         }
         crate::codegen::platform::Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+            ctx.emitter.instruction(                                            // test the slot's runtime representation flag
+                &format!("test {}, {}", state_reg, state_reg)
+            );
             ctx.emitter.instruction(&format!("je {}", raw));                    // a raw slot keeps its own owner
         }
     }
