@@ -22,11 +22,11 @@ mod evaluation;
 mod owned;
 
 use owned::*;
-pub(in crate::interpreter) use owned::{copy_scope_value, eval_output_expr, eval_output_value};
+pub(in crate::interpreter) use owned::{copy_scope_value, eval_output_expr, eval_output_value, eval_static_property_get_with_result_ownership};
 
 pub(in crate::interpreter) use evaluation::{
     eval_array_access_object_matches, eval_array_get_result, eval_array_get_reference_result, eval_array_get_quiet_result, eval_binary_result, eval_cast_value,
-    eval_dynamic_class_name, eval_dynamic_member_name, eval_match_expr,
+    eval_dynamic_class_name, eval_dynamic_class_name_fetch_result, eval_dynamic_member_name, eval_match_expr, eval_new_object_result,
 };
 use evaluation::*;
 
@@ -106,6 +106,10 @@ fn eval_expr_with_result_ownership(
     own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+        && mixed_class_sources::handles(expr) {
+        return mixed_class_sources::evaluate(expr,context,scope,values).map(|result|result.0);
+    }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
         && nullsafe_chains::receiver(expr).is_some() {
         return nullsafe_chains::evaluate_with_source(expr,false,false,context,scope,values)?
             .map_or_else(||values.null(),|result|Ok(result.0));
@@ -115,10 +119,6 @@ fn eval_expr_with_result_ownership(
         && super::nullsafe_chains::has_nullsafe(expr) {
         return super::nullsafe_chains::evaluate_receiver(expr, false, context, scope, values)?
             .map_or_else(|| values.null(), Ok);
-    }
-    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
-        && mixed_method_results::handles(expr) {
-        return mixed_method_results::evaluate(expr,context,scope,values).map(|result|result.0);
     }
     match expr {
         EvalExpr::DeferredDefaultError(message) => throwables::eval_throw_error(message, context, values),

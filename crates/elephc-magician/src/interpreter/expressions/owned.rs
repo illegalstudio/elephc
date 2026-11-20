@@ -102,7 +102,7 @@ pub(super) fn eval_property_get_with_result_ownership(
 }
 
 /// Selects an ordinary or owned static-property read without changing access checks.
-pub(super) fn eval_static_property_get_with_result_ownership(
+pub(in crate::interpreter) fn eval_static_property_get_with_result_ownership(
     class_name: &str,
     property: &str,
     context: &mut ElephcEvalContext,

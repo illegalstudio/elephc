@@ -114,7 +114,7 @@ pub(in crate::interpreter) use native_static_references::*;
 use native_property_unset::*;
 pub(in crate::interpreter) use native_static_dispatch::*;
 use property_constant_validation::*;
-use property_dispatch::*;
+pub(in crate::interpreter) use property_dispatch::execute_property_stmt;
 use property_dimension_unset::{eval_property_dimension_unset, eval_missing_unset_property};
 use property_dimension_writes::{
     eval_property_dimension_write, DimensionProperty,

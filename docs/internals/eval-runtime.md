@@ -816,6 +816,12 @@ results use the same iterable check. `Mixed + Bools` also checks the declared
 `valid()` result. Source metadata stays outside runtime owner slots, while the
 existing value-before-key publication and destructor cleanup order remains intact.
 ArrayTypes loop content origins preserve their separate conditional role.
+Dynamic class consumers share a class operand scope. Class source validation and
+resolution precede member selectors and later arguments. Constructors preserve
+the selected nominal result; static reads and first-class methods keep immutable
+declaration metadata. Dynamic static writes normalize to the ordinary static
+statement dispatcher, with the class owner retained through RHS effects and
+released on success or failure.
 
 Native descriptor signatures retain their original twelve physical metadata words.
 Flag bit 1 marks an appended logical-source record pointer at word 12. The

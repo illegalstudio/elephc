@@ -90,10 +90,6 @@ pub(super) fn eval_discarded_core_expr(
         return nullsafe_chains::evaluate_with_source(expression,false,true,context,scope,values)?
             .map_or_else(||values.null(),|result|Ok(result.0));
     }
-    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
-        && mixed_method_results::handles(expression) {
-        return mixed_method_results::discarded(expression,context,scope,values);
-    }
     match expression {
         EvalExpr::MethodCall { object, method, args }
         | EvalExpr::NullsafeMethodCall { object, method, args } => {

@@ -10,12 +10,16 @@
 use super::*;
 
 /// Executes one property-oriented statement selected by the exhaustive statement dispatcher.
-pub(super) fn execute_property_stmt(
+pub(in crate::interpreter) fn execute_property_stmt(
     stmt: &EvalStmt,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+        && mixed_class_sources::handles_statement(stmt) {
+        return mixed_class_sources::execute_statement(stmt,context,scope,values);
+    }
     match stmt {
         EvalStmt::PropertyReferenceBind {
             object,

@@ -258,7 +258,7 @@ pub(in crate::interpreter) fn eval_cast_value(
 }
 
 /// Constructs an object after the target class name and constructor arguments have been evaluated.
-pub(super) fn eval_new_object_result(
+pub(in crate::interpreter) fn eval_new_object_result(
     class_name: &str,
     args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
@@ -335,7 +335,7 @@ pub(in crate::interpreter) fn eval_dynamic_class_name(
 }
 
 /// Returns the runtime class name for `$object::class` and rejects non-object dynamic receivers.
-pub(super) fn eval_dynamic_class_name_fetch_result(
+pub(in crate::interpreter) fn eval_dynamic_class_name_fetch_result(
     class_name: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

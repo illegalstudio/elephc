@@ -98,6 +98,12 @@ pub(super) fn producer(expr: &EvalExpr, context: &ElephcEvalContext,
             receiver_result(&mixed_source_proofs::value_source(receiver),context,
                 &mut |class,context|method_result(class,class,method,false,context))?
         }
+        EvalExpr::ClassConstantFetch {class_name:name,constant}=> {
+            let class=class_name(name,context)?;
+            let (_,constant)=context.class_constant(&class,constant)?;
+            if !matches!(constant.value(),EvalExpr::Const(_)) {return None;}
+            generic_type(&local_producer_contract(constant.value(),context,scope)?)
+        }
         EvalExpr::StaticPropertyGet {class_name:name,property}=> {
             let class=class_name(name,context)?;
             if let Some((owner,property))=context.class_property(&class,property) {

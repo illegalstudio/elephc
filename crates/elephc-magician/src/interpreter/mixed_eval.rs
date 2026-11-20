@@ -17,11 +17,11 @@ use crate::runtime_hooks::owner_frames::with_runtime_owners;
 pub(super) fn evaluate(expr: &EvalExpr, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<Type>), EvalStatus> {
+    if mixed_class_sources::handles(expr) {return mixed_class_sources::evaluate(expr,context,scope,values);}
     if nullsafe_chains::receiver(expr).is_some() {
         return nullsafe_chains::evaluate_with_source(expr,false,false,context,scope,values)?
             .map_or_else(||values.null().map(|value|(value,Some(Type::atom("null")))),Ok);
     }
-    if mixed_method_results::handles(expr) { return mixed_method_results::evaluate(expr,context,scope,values); }
     match expr {
         EvalExpr::Binary { op, left, right } if !matches!(op, EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr) =>
             binary(*op, left, right, context, scope, values),
