@@ -360,7 +360,9 @@ fn lower_array_assign_from_value(
     // The raw IR types are the ones `array_set_op` maps to `Op::RuntimeCall` for a plain scalar.
     if matches!(
         ctx.peek_local_load_ir_type(array),
-        IrType::I64 | IrType::F64
+        IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)
+            | IrType::I64
+            | IrType::F64
     ) && !matches!(value.kind, ExprKind::ArrayReference(_))
     {
         lower_boxed_array_set(ctx, array, index, value, span, key_already_diagnosed);
