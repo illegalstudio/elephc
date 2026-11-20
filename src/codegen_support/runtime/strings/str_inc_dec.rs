@@ -32,6 +32,7 @@
 //!   `--` on a non-numeric string. elephc has no runtime deprecation channel, so only the
 //!   resulting VALUE is reproduced here.
 
+use elephc_memoir::heap_kind::{HeapStart, emit_branch_outside_heap};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::{abi, platform::Arch};
 
@@ -157,7 +158,7 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the delta to tell the two empty-string rules apart
     emitter.instruction("cmp x3, #0");                                          // is this a decrement of the empty string?
     emitter.instruction("b.lt __rt_sid_empty_dec");                             // decrementing the empty string yields PHP's int(-1)
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x9");
     emitter.instruction("mov w10, #49");                                        // ASCII '1' is the whole result of incrementing the empty string
     emitter.instruction("strb w10, [x9]");                                      // materialize the one-byte result in the shared scratch buffer
     emitter.instruction("mov x1, x9");                                          // pass the scratch pointer as the boxing helper's string payload
@@ -185,9 +186,9 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
 
     // -- copy the operand into scratch, leaving one spare byte for a 'z' -> 'aa' growth --
     emitter.label("__rt_sid_carry");
-    abi::emit_symbol_address(emitter, "x6", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x6");
     emitter.instruction("ldr x8, [x6]");                                        // load the current shared scratch write offset
-    abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x7");
     emitter.instruction("add x9, x7, x8");                                      // compute the scratch cursor for this result
     emitter.instruction("add x9, x9, #16");                                     // keep a header-sized gap so the heap-kind probe never reads before the buffer
     emitter.instruction("ldr x10, [sp, #0]");                                   // x10 = source cursor over the operand string
@@ -396,7 +397,7 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_sid_empty_x86");
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // is this a decrement of the empty string?
     emitter.instruction("jl __rt_sid_empty_dec_x86");                           // decrementing the empty string yields PHP's int(-1)
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r8");
     emitter.instruction("mov BYTE PTR [r8], 49");                               // ASCII '1' is the whole result of incrementing the empty string
     emitter.instruction("mov rdi, r8");                                         // pass the scratch pointer as the boxing helper's string payload
     emitter.instruction("mov rsi, 1");                                          // the incremented empty string is exactly one byte long
@@ -422,9 +423,9 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
 
     // -- copy the operand into scratch, leaving one spare byte for a 'z' -> 'aa' growth --
     emitter.label("__rt_sid_carry_x86");
-    abi::emit_symbol_address(emitter, "rcx", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "rcx");
     emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // load the current shared scratch write offset
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r8");
     emitter.instruction("add r8, rcx");                                         // compute the scratch cursor for this result
     emitter.instruction("add r8, 16");                                          // keep a header-sized gap so the heap-kind probe never reads before the buffer
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // r9 = source cursor over the operand string
@@ -539,25 +540,12 @@ pub fn emit_mixed_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_mid_slow");                               // a null pointer needs the generic nullable path
     emitter.instruction("ldr x9, [x0]");                                        // load the boxed cell's runtime tag
     emitter.instruction("cbnz x9, __rt_mid_slow");                              // only a concrete integer cell can update in place
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_buf");
-    emitter.instruction("add x10, x10, #16");                                   // first possible managed payload base
-    emitter.instruction("cmp x0, x10");                                         // is the cell below the managed heap window?
-    emitter.instruction("b.lo __rt_mid_slow");                                  // static and stack cells keep the generic path
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_buf");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_off");
-    emitter.instruction("ldr x12, [x12]");                                      // load the live bump extent
-    emitter.instruction("add x12, x11, x12");                                   // derive the current heap end
-    emitter.instruction("cmp x0, x12");                                         // is the cell outside the live heap window?
-    emitter.instruction("b.hs __rt_mid_slow");                                  // foreign pointers keep the generic path
-    emitter.instruction("ldr w12, [x0, #-12]");                                 // load the heap block's reference count
-    emitter.instruction("cmp w12, #1");                                         // is this the sole owner of the cell?
-    emitter.instruction("b.ne __rt_mid_slow");                                  // shared cells must not be mutated through one alias
+    emit_branch_outside_heap(emitter, HeapStart::Payload, "__rt_mid_slow");
+    elephc_memoir::heap_refcount::emit_require_unique_cell(emitter, "__rt_mid_slow");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the integer payload
     emitter.instruction("adds x10, x9, x1");                                    // apply the +1/-1 delta with PHP's overflow check
     emitter.instruction("b.vs __rt_mid_slow");                                  // an overflowing integer promotes to float in the generic path
-    emitter.instruction("str x10, [x0, #8]");                                   // publish the incremented payload in place
-    emitter.instruction("add w12, w12, #1");                                    // retain one reference for the owned result
-    emitter.instruction("str w12, [x0, #-12]");                                 // record the retained result owner
+    elephc_memoir::heap_refcount::emit_commit_unique_integer(emitter);
     emitter.instruction("ret");                                                 // return the same cell as the owned result
 
     emitter.label("__rt_mid_slow");
@@ -611,24 +599,12 @@ fn emit_mixed_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the boxed cell's runtime tag
     emitter.instruction("test r10, r10");                                       // only a concrete integer cell can update in place
     emitter.instruction("jnz __rt_mid_slow_x86");                               // non-integer tags keep the generic dispatch
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_buf");
-    emitter.instruction("lea r8, [r11 + 16]");                                  // first possible managed payload base
-    emitter.instruction("cmp rax, r8");                                         // is the cell below the managed heap window?
-    emitter.instruction("jb __rt_mid_slow_x86");                                // static and stack cells keep the generic path
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_off");
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the live bump extent
-    emitter.instruction("add r9, r11");                                         // derive the current heap end
-    emitter.instruction("cmp rax, r9");                                         // is the cell outside the live heap window?
-    emitter.instruction("jae __rt_mid_slow_x86");                               // foreign pointers keep the generic path
-    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the heap block's reference count
-    emitter.instruction("cmp r10d, 1");                                         // is this the sole owner of the cell?
-    emitter.instruction("jne __rt_mid_slow_x86");                               // shared cells must not be mutated through one alias
+    emit_branch_outside_heap(emitter, HeapStart::Payload, "__rt_mid_slow_x86");
+    elephc_memoir::heap_refcount::emit_require_unique_cell(emitter, "__rt_mid_slow_x86");
     emitter.instruction("mov r8, QWORD PTR [rax + 8]");                         // load the integer payload
     emitter.instruction("add r8, rdi");                                         // apply the +1/-1 delta with PHP's overflow check
     emitter.instruction("jo __rt_mid_slow_x86");                                // an overflowing integer promotes to float in the generic path
-    emitter.instruction("mov QWORD PTR [rax + 8], r8");                         // publish the incremented payload in place
-    emitter.instruction("add r10d, 1");                                         // retain one reference for the owned result
-    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // record the retained result owner
+    elephc_memoir::heap_refcount::emit_commit_unique_integer(emitter);
     emitter.instruction("ret");                                                 // return the same cell as the owned result
 
     emitter.label("__rt_mid_slow_x86");

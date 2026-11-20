@@ -93,7 +93,7 @@ pub fn emit_json_decode(emitter: &mut Emitter) {
     // -- reserve the decoded result before the decode loop writes anything --
     emitter.instruction("mov x0, x2");                                          // the decoded string cannot exceed the trimmed quoted slice length
     emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_buf"); // classify the reservation by its arena offset
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x9"); // classify the reservation by its arena offset
     emitter.instruction("sub x10, x0, x9");                                     // compute the candidate scratch offset
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64); // load the arena capacity
     emitter.instruction("cmp x10, x11");                                        // is the reservation outside the scratch window?

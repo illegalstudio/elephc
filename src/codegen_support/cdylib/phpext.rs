@@ -100,8 +100,7 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     abi::emit_store_reg_to_symbol(emitter, result, PHPEXT_REPLACEMENT_OWNER_BASE, 0);
     boundary::emit_initialize_hidden_collector_owner(emitter, hidden);
     emitter.bl_c("elephc_php_stack_floor");                                      // use the current PHP thread or Fiber boundary instead of process stack limits
-    abi::emit_store_reg_to_symbol(emitter, result, "_stack_limit", 0);
-    abi::emit_store_reg_to_symbol(emitter, result, "_stack_limit_main", 0);
+    elephc_memoir::stacks::emit_publish_main_floor(emitter, result);
     if heap_debug { abi::emit_enable_heap_debug_flag(emitter); }
     emit_clear_error_inline(emitter);
     emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);

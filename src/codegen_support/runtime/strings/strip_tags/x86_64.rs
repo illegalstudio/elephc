@@ -148,7 +148,7 @@ pub(super) fn emit_strip_tags_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [rbp - 192], 0");                        // was a full string result requested?
     emitter.instruction("je __rt_strip_tags_publish_x86");                      // full string results publish and persist the reservation
     emitter.instruction("mov QWORD PTR [rbp - 192], rdx");                      // preserve the counted length across an optional heap release
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r10");
     emitter.instruction("mov r11, rax");                                        // classify the reservation by its offset from concat scratch
     emitter.instruction("sub r11, r10");                                        // scratch reservations stay inside the shared window
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "r10", emitter.concat_capacity as i64);

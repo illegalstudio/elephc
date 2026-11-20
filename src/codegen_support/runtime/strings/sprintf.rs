@@ -118,9 +118,9 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("add x22, sp, #704");                                   // argument record base (just past this frame)
 
     // -- set up the concat_buf destination and its hard write limit --
-    abi::emit_symbol_address(emitter, "x25", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x25");
     emitter.instruction("ldr x8, [x25]");                                       // current concat-buffer write offset
-    abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x7");
     emitter.instruction("add x23, x7, x8");                                     // write cursor = buffer base + offset
     emitter.instruction("mov x24, x23");                                        // remember where this result starts
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x9", cap as i64); // total concat-buffer capacity in bytes
@@ -176,7 +176,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     emitter.instruction("sub x2, x23, x24");                                    // result byte length
 
     // -- update concat_off --
-    abi::emit_symbol_address(emitter, "x8", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x8");
     emitter.instruction("sub x8, x23, x8");                                     // derive the absolute cursor after nested concat-producing conversions
     emitter.instruction("str x8, [x25]");                                       // publish the exact new write offset without double-counting
 
@@ -460,7 +460,7 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.instruction("b __rt_sprintf_t_int");                                // format through the integer path
 
     emitter.label("__rt_sprintf_str_mixed");
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x9");
     emitter.instruction("sub x10, x23, x9");                                    // publish bytes already written before a nested __toString call
     emitter.instruction("str x10, [x25]");                                      // make nested concat users start after the partial sprintf result
     emitter.instruction("mov x0, x5");                                          // pass the deferred record tag

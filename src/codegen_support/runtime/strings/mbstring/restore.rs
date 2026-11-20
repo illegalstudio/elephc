@@ -56,9 +56,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mbstring_build_new_list");
     emitter.instruction("mov x1, #8");                                          // store owned Mixed cell pointers in indexed elements
     abi::emit_call_label(emitter, "__rt_array_new");
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // preserve allocation and indexed heap metadata
-    emitter.instruction("orr x9, x9, #0x700");                                  // mark boxed Mixed elements for cleanup and traversal
-    emitter.instruction("str x9, [x0, #-8]");                                   // publish indexed ownership before any element allocation
+    elephc_memoir::values::packed_mixed_header::emit_enable(emitter);
     emitter.label("__rt_mbstring_build_new_ready");
     emitter.instruction("str x0, [sp, #32]");                                   // own the fresh unique table until returning it
     emitter.label("__rt_mbstring_build_loop");
@@ -150,7 +148,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mbstring_build_new_list");
     emitter.instruction("mov esi, 8");                                          // store owned Mixed cell pointers in indexed elements
     abi::emit_call_label(emitter, "__rt_array_new");
-    emitter.instruction("or QWORD PTR [rax - 8], 1792");                        // select boxed Mixed element cleanup metadata
+    elephc_memoir::values::packed_mixed_header::emit_enable(emitter);
     emitter.label("__rt_mbstring_build_new_ready");
     emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // own the fresh unique table until returning it
     emitter.label("__rt_mbstring_build_loop");

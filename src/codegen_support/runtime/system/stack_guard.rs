@@ -20,13 +20,7 @@
 use crate::codegen_support::runtime::data::STACK_OVERFLOW_MSG;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
-/// Symbol holding the low-water stack address for the currently running context.
-/// Zero means "guard disabled"; every prologue check is an unsigned compare against it.
-pub(crate) const STACK_LIMIT_SYMBOL: &str = "_stack_limit";
-
-/// Symbol holding the OS-thread (non-fiber) stack floor, used to restore
-/// `_stack_limit` when a fiber switch returns to the main context.
-pub(crate) const STACK_LIMIT_MAIN_SYMBOL: &str = "_stack_limit_main";
+pub(crate) use elephc_memoir::stacks::STACK_LIMIT_SYMBOL;
 
 /// Bytes kept in reserve below the published limit.
 ///
@@ -120,8 +114,7 @@ fn emit_stack_limit_init_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // zero disables the guard for the rest of the process
 
     emitter.label("__rt_stack_limit_init_store");
-    abi::emit_store_reg_to_symbol(emitter, "x0", STACK_LIMIT_SYMBOL, 0);
-    abi::emit_store_reg_to_symbol(emitter, "x0", STACK_LIMIT_MAIN_SYMBOL, 0);
+    elephc_memoir::stacks::emit_publish_main_floor(emitter, "x0");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the rlimit buffer and frame footer
     emitter.instruction("ret");                                                 // return to the process entry prologue
@@ -171,8 +164,7 @@ fn emit_stack_limit_init_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // zero disables the guard for the rest of the process
 
     emitter.label("__rt_stack_limit_init_store");
-    abi::emit_store_reg_to_symbol(emitter, "rax", STACK_LIMIT_SYMBOL, 0);
-    abi::emit_store_reg_to_symbol(emitter, "rax", STACK_LIMIT_MAIN_SYMBOL, 0);
+    elephc_memoir::stacks::emit_publish_main_floor(emitter, "rax");
     emitter.instruction("mov rsp, rbp");                                        // release the rlimit output buffer
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the process entry prologue

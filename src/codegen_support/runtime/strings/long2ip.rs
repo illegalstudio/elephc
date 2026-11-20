@@ -7,15 +7,15 @@
 //!
 //! Key details:
 //! - Each octet is written without leading zeros; the result is a borrowed
-//!   `_concat_buf` slice, matching `__rt_itoa`'s string-result convention.
+//!   temporary string slice, matching `__rt_itoa`'s string-result convention.
 
-use crate::codegen_support::abi::emit_symbol_address;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-use crate::codegen_support::abi;
+
+use elephc_memoir::strings::staged_concat::emit_copy_staged_result;
 
 /// long2ip: format the low 32 bits of an integer as `A.B.C.D`.
 /// Input:  x0 = IP integer
-/// Output: x1 = string pointer (in concat_buf), x2 = length
+/// Output: x1 = string pointer in the standard string result convention, x2 = length
 pub fn emit_long2ip(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_long2ip_linux_x86_64(emitter);
@@ -26,11 +26,10 @@ pub fn emit_long2ip(emitter: &mut Emitter) {
     emitter.comment("--- runtime: long2ip ---");
     emitter.label_global("__rt_long2ip");
 
-    // -- record the result start inside the concat buffer --
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer offset
-    emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x12, x11, x10");                                   // compute the result start pointer
+    emitter.instruction("sub sp, sp, #32");                                     // reserve the formatted octets and caller frame
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve the frame and return link
+    emitter.instruction("add x29, sp, #16");                                    // anchor the frame above the output buffer
+    emitter.instruction("mov x12, sp");                                         // start output in the private 16-byte slot
     emitter.instruction("mov x13, x12");                                        // x13 is the running write cursor
 
     // -- write the four dotted octets, most significant first --
@@ -42,11 +41,10 @@ pub fn emit_long2ip(emitter: &mut Emitter) {
     // -- return the slice and publish the new concat-buffer offset --
     emitter.instruction("sub x2, x13, x12");                                    // result length = cursor - start
     emitter.instruction("mov x1, x12");                                         // result pointer = start
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // reload the concat-buffer offset
-    emitter.instruction("add x10, x10, x2");                                    // advance it past the formatted address
-    emitter.instruction("str x10, [x9]");                                       // publish the updated concat-buffer offset
-    emitter.instruction("ret");                                                 // return the dotted-quad string slice
+    emit_copy_staged_result(emitter, "__rt_long2ip_copied");
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame and return link
+    emitter.instruction("add sp, sp, #32");                                     // release the output staging area
+    emitter.instruction("ret");                                                 // return the completed string
 }
 
 /// Emits one octet `(n >> shift) & 0xff` as 1-3 decimal digits with no leading
@@ -97,9 +95,10 @@ fn emit_long2ip_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: long2ip ---");
     emitter.label_global("__rt_long2ip");
 
-    abi::emit_symbol_address(emitter, "rax", "_concat_buf");                    // concat-buffer base address
-    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // current concat-buffer offset
-    emitter.instruction("lea r11, [rax + rcx]");                                // r11 = result start pointer
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // anchor the output slot
+    emitter.instruction("sub rsp, 16");                                         // reserve aligned space for at most 15 bytes
+    emitter.instruction("mov r11, rsp");                                        // start output in the private slot
     emitter.instruction("mov r10, r11");                                        // r10 is the running write cursor
 
     emit_octet_x86(emitter, 24, 0, true);
@@ -110,10 +109,9 @@ fn emit_long2ip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, r10");                                        // cursor
     emitter.instruction("sub rdx, r11");                                        // result length = cursor - start
     emitter.instruction("mov rax, r11");                                        // result pointer = start
-    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // reload the concat-buffer offset
-    emitter.instruction("add rcx, rdx");                                        // advance it past the formatted address
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the updated offset
-    emitter.instruction("ret");                                                 // return the dotted-quad string slice
+    emit_copy_staged_result(emitter, "__rt_long2ip_copied");
+    emitter.instruction("leave");                                               // release the output and restore the caller frame
+    emitter.instruction("ret");                                                 // return the completed string
 }
 
 /// x86_64 counterpart of `emit_octet_aarch64`. Cursor is r10; n stays rdi.

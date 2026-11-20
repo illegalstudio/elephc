@@ -56,6 +56,12 @@ It also emits fixed heap, GC, buffer, reference-root, handle-table and string-sc
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
 
+Memoir also owns the runtime heap-limit write, stack-floor publication,
+weak-cache indexing, packed Mixed headers, borrowed scalar cell layout,
+and the scratch reservation and spill-ring storage used by formatters.
+The compiler supplies labels, selects PHP operations, and measures the OS
+stack before it publishes the floor.
+
 The `Emitter` facade composes three independent host capabilities:
 
 | Capability | Responsibility |

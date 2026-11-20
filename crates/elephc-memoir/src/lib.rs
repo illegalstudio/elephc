@@ -52,6 +52,7 @@ pub mod heap_free;
 pub mod heap_grow_tail;
 pub mod heap_kind;
 pub mod heap_live_bases;
+pub mod heap_refcount;
 pub mod incref;
 pub mod memory;
 

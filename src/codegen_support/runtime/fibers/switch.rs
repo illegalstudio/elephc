@@ -23,7 +23,7 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::system::{
-    STACK_GUARD_RESERVE_BYTES, STACK_LIMIT_MAIN_SYMBOL, STACK_LIMIT_SYMBOL,
+    STACK_GUARD_RESERVE_BYTES,
 };
 
 use super::alloc::FIBER_GUARD_PAGE_SIZE;
@@ -169,8 +169,7 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x14", "_magic_set_guard_head", 0);  // detach any suspended fiber's stack-backed guard chain
     abi::emit_load_symbol_to_reg(emitter, "x14", "_fiber_main_saved_gc_release_suppressed", 0);
     abi::emit_store_reg_to_symbol(emitter, "x14", "_gc_release_suppressed", 0);
-    abi::emit_load_symbol_to_reg(emitter, "x14", STACK_LIMIT_MAIN_SYMBOL, 0);   // x14 = the OS-thread call-stack floor measured at process start
-    abi::emit_store_reg_to_symbol(emitter, "x14", STACK_LIMIT_SYMBOL, 0);       // restore the main-thread floor now that the main stack is current again
+    elephc_memoir::stacks::emit_restore_main_floor(emitter, "x14");
     abi::emit_load_symbol_to_reg(emitter, "x11", "_fiber_main_saved_sp", 0);    // x11 = main thread's saved SP
     emitter.instruction("mov sp, x11");                                         // adopt the main thread's stack
 
@@ -207,7 +206,7 @@ fn emit_adopt_fiber_stack_limit_aarch64(emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, "x15", FIBER_STACK_FLOOR_OFFSET);
     emitter.instruction("add x14, x14, x15");                                   // skip the guard page and the shared reserve to get the usable floor
     emitter.label("__rt_fiber_switch_limit_ready");
-    abi::emit_store_reg_to_symbol(emitter, "x14", STACK_LIMIT_SYMBOL, 0);       // publish the coroutine floor for every prologue that runs on this stack
+    elephc_memoir::stacks::emit_publish_active_floor(emitter, "x14");
 }
 
 /// Publishes the incoming fiber's call-stack floor into `_stack_limit` (x86_64 SysV).
@@ -225,7 +224,7 @@ fn emit_adopt_fiber_stack_limit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_fiber_switch_limit_ready");                    // an unallocated stack publishes zero and disables the guard
     emitter.instruction(&format!("add rax, {}", FIBER_STACK_FLOOR_OFFSET));     // skip the guard page and the shared reserve to get the usable floor
     emitter.label("__rt_fiber_switch_limit_ready");
-    abi::emit_store_reg_to_symbol(emitter, "rax", STACK_LIMIT_SYMBOL, 0);       // publish the coroutine floor for every prologue that runs on this stack
+    elephc_memoir::stacks::emit_publish_active_floor(emitter, "rax");
 }
 
 /// Returns the total bytes reserved on a freshly-created fiber stack for the entry frame.
@@ -354,8 +353,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_magic_set_guard_head", 0);  // detach any suspended fiber's stack-backed guard chain
     abi::emit_load_symbol_to_reg(emitter, "r11", "_fiber_main_saved_gc_release_suppressed", 0);
     abi::emit_store_reg_to_symbol(emitter, "r11", "_gc_release_suppressed", 0);
-    abi::emit_load_symbol_to_reg(emitter, "rax", STACK_LIMIT_MAIN_SYMBOL, 0);   // rax = the OS-thread call-stack floor measured at process start
-    abi::emit_store_reg_to_symbol(emitter, "rax", STACK_LIMIT_SYMBOL, 0);       // restore the main-thread floor now that the main stack is current again
+    elephc_memoir::stacks::emit_restore_main_floor(emitter, "rax");
     abi::emit_load_symbol_to_reg(emitter, "rsp", "_fiber_main_saved_sp", 0);    // adopt the main thread's saved stack pointer
 
     // -- restore callee-saved state from the target stack and return into it --

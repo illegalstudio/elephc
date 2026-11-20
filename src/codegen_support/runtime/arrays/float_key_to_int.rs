@@ -37,7 +37,7 @@ fn emit_aarch64(e: &mut Emitter) {
     e.instruction("str d0, [sp, #0]");                                          // retain the source float across diagnostic callbacks
     abi::emit_call_label(e, "__rt_php_float_to_int");
     e.instruction("str x9, [sp, #8]");                                          // save PHP's modulo-converted integer key
-    abi::emit_symbol_address(e, "x9", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(e, "x9");
     e.instruction("ldr x10, [x9]");                                             // read the caller's concat scratch cursor
     e.instruction("str x10, [sp, #16]");                                        // restore concat scratch after float formatting
 
@@ -80,7 +80,7 @@ fn emit_diagnostic_aarch64(e: &mut Emitter, prefix: &str, prefix_len: usize, suf
     abi::emit_call_label(e, "__rt_ftoa_repr");
     abi::emit_call_label(e, "__rt_diag_warning_fragment");
     e.instruction("ldr x10, [sp, #16]");                                        // reload the caller's concat cursor
-    abi::emit_symbol_address(e, "x9", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(e, "x9");
     e.instruction("str x10, [x9]");                                             // release formatter scratch before invoking the handler
     abi::emit_symbol_address(e, "x1", suffix);
     abi::emit_load_int_immediate(e, "x2", suffix_len as i64);
@@ -98,7 +98,7 @@ fn emit_x86_64(e: &mut Emitter) {
     e.instruction("movsd QWORD PTR [rbp - 8], xmm0");                           // retain the source float across diagnostic callbacks
     abi::emit_call_label(e, "__rt_php_float_to_int");
     e.instruction("mov QWORD PTR [rbp - 16], r11");                             // save PHP's modulo-converted integer key
-    abi::emit_load_symbol_to_reg(e, "r10", "_concat_off", 0);
+    elephc_memoir::strings::concat_cursor::emit_read(e, "r10");
     e.instruction("mov QWORD PTR [rbp - 24], r10");                             // restore concat scratch after formatting
 
     e.instruction("ucomisd xmm0, xmm0");                                        // identify NaN before ordered range comparisons
@@ -142,7 +142,7 @@ fn emit_diagnostic_x86_64(e: &mut Emitter, prefix: &str, prefix_len: usize, suff
     e.instruction("mov rsi, rdx");                                              // pass the formatted float length to the dispatcher
     abi::emit_call_label(e, "__rt_diag_warning_fragment");
     e.instruction("mov r10, QWORD PTR [rbp - 24]");                             // reload the caller's concat cursor
-    abi::emit_store_reg_to_symbol(e, "r10", "_concat_off", 0);
+    elephc_memoir::strings::concat_cursor::emit_write(e, "r10");
     abi::emit_symbol_address(e, "rdi", suffix);
     abi::emit_load_int_immediate(e, "rsi", suffix_len as i64);
     abi::emit_call_label(e, "__rt_diag_warning");

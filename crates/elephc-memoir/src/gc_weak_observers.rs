@@ -42,12 +42,7 @@ pub fn emit(emitter: &mut impl Emitter) {
         emitter.instruction("and x10, x10, #0xff");                             // isolate the graph node's heap kind
         emitter.instruction("cmp x10, #4");                                     // only ordinary objects can be weak map keys
         emitter.instruction("b.ne __rt_gc_weak_next");                          // container pins only protect callback data
-        abi::emit_symbol_address(emitter, "x9", "_heap_buf");
-        emitter.instruction("sub x10, x0, x9");                                 // derive the candidate's weak-cache granule
-        emitter.instruction("lsr x10, x10, #4");                                // convert the byte offset to its direct cache index
-        abi::emit_symbol_address(emitter, "x9", "_obj_weak_reference_index");
-        emitter.instruction("ldr x10, [x9, x10, lsl #3]");                      // only observed keys can invoke PHP cleanup
-        emitter.instruction("cbz x10, __rt_gc_weak_next");                      // unobserved candidates need no recount
+        crate::weak_cache::emit_branch_if_unobserved(emitter, "x10", "__rt_gc_weak_next");
     } else {
         emitter.instruction("mov r10, rax");                                    // retain the current native snapshot chunk
         emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                    // read the number of initialized candidate pointers
@@ -61,13 +56,7 @@ pub fn emit(emitter: &mut impl Emitter) {
         emitter.instruction("and r10d, 0xff");                                  // isolate the graph-node heap kind
         emitter.instruction("cmp r10d, 4");                                     // only ordinary objects can be weak map keys
         emitter.instruction("jne __rt_gc_weak_next");                           // container pins only protect callback data
-        abi::emit_symbol_address(emitter, "r11", "_heap_buf");
-        emitter.instruction("mov r10, rax");                                    // preserve the receiver while deriving its direct cache index
-        emitter.instruction("sub r10, r11");                                    // derive its heap-relative allocation offset
-        emitter.instruction("shr r10, 4");                                      // convert the byte offset to a weak-cache granule
-        abi::emit_symbol_address(emitter, "r11", "_obj_weak_reference_index");
-        emitter.instruction("cmp QWORD PTR [r11 + r10 * 8], 0");                // only observed keys can invoke PHP cleanup
-        emitter.instruction("je __rt_gc_weak_next");                            // unobserved candidates need no recount
+        crate::weak_cache::emit_branch_if_unobserved(emitter, "x10", "__rt_gc_weak_next");
     }
     abi::store_at_offset(emitter, result, 40);
     abi::emit_call_label(emitter, "__rt_gc_destructor_begin");

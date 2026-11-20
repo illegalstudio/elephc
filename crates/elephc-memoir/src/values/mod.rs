@@ -81,7 +81,9 @@ pub mod throwable_previous;
 
 pub mod fixed_array_storage;
 pub mod packed_mixed_copy;
+pub mod packed_mixed_header;
 pub mod packed_mixed_prefix;
 pub mod packed_slice;
 pub mod destructor_header;
 pub mod spl_storage;
+pub mod stack_cell;

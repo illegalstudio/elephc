@@ -35,9 +35,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x2");                                          // request capacity for exactly the reported element count
     emitter.instruction("mov x1, #8");                                          // store one owned Mixed cell pointer in each element slot
     emitter.instruction("bl __rt_array_new");                                   // allocate an exclusively owned indexed array
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // preserve the indexed-array heap and copy-on-write flags
-    emitter.instruction("orr x9, x9, #0x700");                                  // select boxed Mixed elements for the neutral array contract
-    emitter.instruction("str x9, [x0, #-8]");                                   // publish the correct element ownership metadata
+    elephc_memoir::values::packed_mixed_header::emit_enable(emitter);
     emitter.instruction("str x0, [sp, #32]");                                   // retain the array owner across element allocations
     emitter.label("__rt_mbstring_array_loop");
     emitter.instruction("ldp x9, x10, [sp, #16]");                              // reload the expected count and next insertion index
@@ -91,7 +89,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rdx");                                        // request capacity for exactly the reported element count
     emitter.instruction("mov esi, 8");                                          // store one owned Mixed cell pointer in each element slot
     emitter.instruction("call __rt_array_new");                                 // allocate an exclusively owned indexed array
-    emitter.instruction("or QWORD PTR [rax - 8], 0x700");                       // select boxed Mixed elements while preserving heap magic and COW
+    elephc_memoir::values::packed_mixed_header::emit_enable(emitter);
     emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // retain the array owner across element allocations
     emitter.label("__rt_mbstring_array_loop");
     emitter.instruction("mov r10, QWORD PTR [rsp + 24]");                       // reload the next insertion index

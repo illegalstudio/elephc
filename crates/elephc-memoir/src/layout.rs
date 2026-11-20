@@ -102,3 +102,13 @@ pub const MIXED_KIND: crate::HeapKind = crate::HeapKind::new(MIXED_HEAP_KIND);
 pub const fn object_declared_slot_offset(index: usize) -> usize {
     8 + index * 16
 }
+
+/// Loads the tag from an already selected raw Mixed cell.
+pub fn emit_load_mixed_tag(emitter: &mut impl crate::TargetAbi, dest: &str, cell: &str) {
+    emitter.emit_load_from_address(dest, cell, 0);
+}
+
+/// Loads the first payload word from an already selected raw Mixed cell.
+pub fn emit_load_mixed_low(emitter: &mut impl crate::TargetAbi, dest: &str, cell: &str) {
+    emitter.emit_load_from_address(dest, cell, 8);
+}

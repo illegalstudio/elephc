@@ -10,13 +10,12 @@
 
 use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-use crate::codegen_support::abi;
 
 
 /// Emits the `__rt_tempnam` runtime helper for creating a unique temporary filename.
 ///
 /// Uses libc `mkstemp` to create and immediately close a temp file — only the path is
-/// returned, not an open descriptor. The returned string is heap-allocated and persisted.
+/// returned, with ownership of the heap-backed template.
 ///
 /// Input (ARM64): x1/x2=dir string ptr/len, x3/x4=prefix string ptr/len
 /// Output (ARM64): x1=temp filename ptr, x2=temp filename len
@@ -39,9 +38,12 @@ pub fn emit_tempnam(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save dir ptr and len
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save prefix ptr and len
 
-    // -- build template path: dir + "/" + prefix + "XXXXXX" in _cstr_buf --
-    abi::emit_symbol_address(emitter, "x9", "_cstr_buf");                       // load page address of cstr buffer
-    emitter.instruction("mov x10, x9");                                         // save buffer start
+    // -- reserve mutable owned storage for the path and its C terminator --
+    emitter.instruction("add x0, x2, x4");                                      // include the directory and prefix byte counts
+    emitter.instruction("add x0, x0, #8");                                      // add the slash, six template bytes and NUL
+    emit_allocate_owned_string(emitter);
+    emitter.instruction("mov x9, x0");                                          // use the allocated string as the write cursor
+    emitter.instruction("mov x10, x0");                                         // preserve the template start
 
     // -- copy dir bytes --
     emitter.instruction("ldp x1, x2, [sp, #0]");                                // reload dir ptr and len
@@ -94,9 +96,7 @@ pub fn emit_tempnam(emitter: &mut Emitter) {
     emitter.instruction("add x2, x2, #1");                                      // increment length
     emitter.instruction("b __rt_tempnam_len");                                  // continue scanning
 
-    // -- copy result to concat_buf for safe return --
     emitter.label("__rt_tempnam_copy");
-    emitter.instruction("bl __rt_str_persist");                                 // copy to heap, x1=new ptr, x2=len
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address

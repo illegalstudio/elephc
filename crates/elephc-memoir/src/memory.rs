@@ -52,3 +52,48 @@ pub fn emit_memory(emitter: &mut impl Emitter) {
         emitter.instruction("ret");                                             // preserve the measured allocation count while returning
     }
 }
+
+/// Installs a ceiling from the integer result register and returns a refusal flag there.
+///
+/// The unlimited sentinel selects the arena capacity. A finite request outside that capacity
+/// leaves the current ceiling intact. The caller provides fresh labels for inline emission.
+pub fn emit_set_limit(
+    emitter: &mut impl Emitter, unlimited: &str, publish: &str, rejected: &str, done: &str,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("cmn x0, #1");                                  // is the request exactly -1 (PHP's unlimited spelling)?
+            emitter.instruction(&format!("b.eq {unlimited}"));                  // -1 selects the reserved arena capacity
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_heap_max", 0);
+            emitter.instruction("cmp x0, x9");                                  // compare the request against the reserved capacity
+            emitter.instruction(&format!("b.hi {rejected}"));                   // a finite request above the arena cannot be honored
+            emitter.instruction(&format!("b {publish}"));                       // publish an in-arena ceiling
+            emitter.label(unlimited);
+            abi::emit_load_symbol_to_reg(emitter, "x0", "_heap_max", 0);   // unlimited is the whole reserved arena
+            emitter.label(publish);
+            abi::emit_store_reg_to_symbol(emitter, "x0", "_heap_limit", 0);
+            emitter.instruction("mov x0, #0");                                  // report a successful installation
+            emitter.instruction(&format!("b {done}"));                          // skip the rejection status
+            emitter.label(rejected);
+            emitter.instruction("mov x0, #1");                                  // report a request the arena cannot grow to
+            emitter.label(done);
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, -1");                                 // is the request exactly -1 (PHP's unlimited spelling)?
+            emitter.instruction(&format!("je {unlimited}"));                    // -1 selects the reserved arena capacity
+            abi::emit_load_symbol_to_reg(emitter, "r10", "_heap_max", 0);
+            emitter.instruction("cmp rax, r10");                                // compare the request against the reserved capacity
+            emitter.instruction(&format!("ja {rejected}"));                     // a finite request above the arena cannot be honored
+            emitter.instruction(&format!("jmp {publish}"));                     // publish an in-arena ceiling
+            emitter.label(unlimited);
+            abi::emit_load_symbol_to_reg(emitter, "rax", "_heap_max", 0);  // unlimited is the whole reserved arena
+            emitter.label(publish);
+            abi::emit_store_reg_to_symbol(emitter, "rax", "_heap_limit", 0);
+            emitter.instruction("xor eax, eax");                                // report a successful installation
+            emitter.instruction(&format!("jmp {done}"));                        // skip the rejection status
+            emitter.label(rejected);
+            emitter.instruction("mov eax, 1");                                  // report a request the arena cannot grow to
+            emitter.label(done);
+        }
+    }
+}

@@ -46,11 +46,11 @@ pub fn emit_resource_to_string(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address before calling itoa
     emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp]");                                        // preserve the native resource payload while building the output prefix
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer cursor
     emitter.instruction("str x9, [sp, #8]");                                    // preserve the concat cursor address across the itoa call
     emitter.instruction("str x10, [sp, #16]");                                  // preserve the original concat-buffer offset
-    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x11");
     emitter.instruction("add x12, x11, x10");                                   // compute the final output start inside concat_buf
     emitter.instruction("str x12, [sp, #24]");                                  // preserve the final output start across the itoa call
     abi::emit_symbol_address(emitter, "x13", "_resource_id_prefix");
@@ -102,11 +102,11 @@ fn emit_resource_to_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the helper body
     emitter.instruction("sub rsp, 48");                                         // reserve aligned locals for offsets and output pointers
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the native resource payload while building the output prefix
-    abi::emit_symbol_address(emitter, "r8", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "r8");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer cursor
     emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // preserve the concat cursor address across the itoa call
     emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // preserve the original concat-buffer offset
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r10");
     emitter.instruction("lea r11, [r10 + r9]");                                 // compute the final output start inside concat_buf
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // preserve the final output start across the itoa call
     abi::emit_symbol_address(emitter, "rcx", "_resource_id_prefix");

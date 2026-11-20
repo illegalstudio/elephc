@@ -61,8 +61,7 @@ pub fn emit_zval_unpack_array(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #8]");                                    // save the rebuilt array pointer
 
     // -- fix the kind word: value_type 7 marks Mixed-cell element storage --
-    emitter.instruction("mov x9, #0x8702");                                     // kind = indexed(2) | value_type 7 | COW(0x8000)
-    emitter.instruction("str x9, [x0, #-8]");                                   // install the Mixed-element kind word in the heap header
+    elephc_memoir::values::packed_mixed_header::emit_stamp_fresh(emitter);
 
     // -- set the length = nNumUsed so the array reports its occupied size --
     emitter.instruction("ldr x12, [sp, #24]");                                  // reload nNumUsed
@@ -227,8 +226,7 @@ fn emit_zval_unpack_array_linux_x86_64(emitter: &mut Emitter) {
     // (`0x454C5048` in the high 32 bits) that `__rt_array_new` stamped; without
     // it `__rt_heap_kind` reports kind 0 and foreach/heap_free treat the rebuilt
     // array as a non-heap value (arm64 has no such marker).
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0x8702))); // x86_64 heap marker | indexed(2) | value_type 7 | COW(0x8000)
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the Mixed-element kind word in the heap header
+    elephc_memoir::values::packed_mixed_header::emit_stamp_fresh(emitter);
 
     // -- set the length = nNumUsed so the array reports its occupied size --
     emitter.instruction("mov r12, QWORD PTR [rbp - 32]");                       // reload nNumUsed

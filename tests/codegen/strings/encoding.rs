@@ -67,11 +67,16 @@ echo ord("\xFF") . ":" . ord("\777") . ":" . bin2hex("\xC3\xA9") . ":" . bin2hex
     assert_eq!(out, "255:255:c3a9:eda080:ee8080");
 }
 
-/// Verifies `chr()` returns the single-character string "A" for ASCII code 65.
+/// Exercises runtime byte wrapping and the escape of a freshly formatted result.
 #[test]
 fn test_chr() {
-    let out = compile_and_run("<?php echo chr(65);");
-    assert_eq!(out, "A");
+    let out = compile_and_run(r#"<?php
+function runtime_chr(int $value): string {
+    return chr($value);
+}
+echo chr(65), runtime_chr($argc + 64), "|", bin2hex(runtime_chr($argc - 2));
+"#);
+    assert_eq!(out, "AA|ff");
 }
 
 /// Verifies `addslashes()` escapes double quotes and apostrophes with backslashes.
