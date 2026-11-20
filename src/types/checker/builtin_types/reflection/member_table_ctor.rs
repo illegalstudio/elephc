@@ -481,6 +481,7 @@ fn method_constructor() -> ClassMethod {
         "__has_return_type",
         e_binop(e_var("return_type"), BinOp::StrictNotEq, crate::synthetic_class::e_null()),
     ));
+    fill.push(s_prop_assign(e_this(), "__string", pool_one(mw(member::STRING))));
     fill.push(s_prop_assign(e_this(), "__required_parameter_count", mw(member::COUNT)));
     fill.push(s_prop_assign(e_this(), "__parameter_count", mw(member::PARAMETER_COUNT)));
     fill.push(s_prop_assign(e_this(), "__parameters_row", mw(member::PARAMETERS)));
@@ -628,6 +629,7 @@ fn parameter_constructor() -> ClassMethod {
     body.push(s_prop_assign(e_this(), "__name", pool_one(mw(member::NAME))));
     body.push(s_prop_assign(e_this(), "name", pool_one(mw(member::NAME))));
     body.push(s_prop_assign(e_this(), "__position", mw(member::COUNT)));
+    body.push(s_prop_assign(e_this(), "__string", pool_one(mw(member::PARAMETER_STRING))));
     for (property, bit) in [
         ("__optional", member_flag::OPTIONAL),
         ("__variadic", member_flag::VARIADIC),
@@ -914,6 +916,7 @@ fn function_constructor() -> ClassMethod {
         "__has_return_type",
         e_binop(e_var("return_type"), BinOp::StrictNotEq, crate::synthetic_class::e_null()),
     ));
+    fill.push(s_prop_assign(e_this(), "__string", pool_one(mw(member::STRING))));
     fill.push(s_prop_assign(e_this(), "__required_parameter_count", mw(member::COUNT)));
     fill.push(s_prop_assign(e_this(), "__parameter_count", mw(member::PARAMETER_COUNT)));
     fill.push(s_prop_assign(e_this(), "__parameters_row", mw(member::PARAMETERS)));

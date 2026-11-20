@@ -123,6 +123,9 @@ pub mod member {
     pub const PROTOTYPE_CLASS: usize = 13;
     /// Pool of one: the name of a method's prototype.
     pub const PROTOTYPE_NAME: usize = 14;
+    /// Pool of one: a parameter's `__toString()` text (parameter rows carry no prototype, so the
+    /// word is free there; [`STRING`] holds the default's constant name).
+    pub const PARAMETER_STRING: usize = 14;
     /// Pool of one: the name of the function declaring a parameter.
     pub const FUNCTION: usize = 9;
     /// A function row's first and last source line (valid with [`super::member_flag::HAS_FILE`]);

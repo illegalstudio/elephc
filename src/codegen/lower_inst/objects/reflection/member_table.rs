@@ -405,6 +405,8 @@ fn method_row(
     words[member::FLAGS] = DataWord::U64(flags as u64);
     words[member::TYPE] = encode_type(ctx.data, listed.type_metadata.as_ref());
     words[member::COUNT] = DataWord::U64(listed.required_parameter_count as u64);
+    let text = reflection_listed_method_to_string(ctx, listed);
+    words[member::STRING] = pool(ctx.data, std::slice::from_ref(&text));
     if !listed.attr_names.is_empty() {
         let identity = format!("{declaring}::{}()", listed.name);
         let label = member_extras_label(
@@ -460,6 +462,8 @@ fn parameter_row(
     words[member::FLAGS] = DataWord::U64(flags as u64);
     words[member::TYPE] = encode_type(ctx.data, parameter.type_metadata.as_ref());
     words[member::COUNT] = DataWord::U64(parameter.position as u64);
+    let text = reflection_parameter_to_string(parameter);
+    words[member::PARAMETER_STRING] = pool(ctx.data, std::slice::from_ref(&text));
     if let Some(constant) = &parameter.default_value_constant_name {
         words[member::STRING] = pool(ctx.data, std::slice::from_ref(constant));
     }
@@ -569,7 +573,7 @@ pub(super) fn collect_function_members(
             prototype_member: None,
             parameters: metadata.parameter_members.clone(),
         };
-        tables.add_function(ctx, &key_name, &listed, is_closure, location)?;
+        tables.add_function(ctx, &key_name, &listed, is_closure, false, location)?;
     }
     for name in builtin_names {
         let key_name = php_symbol_key(name);
@@ -600,7 +604,7 @@ pub(super) fn collect_function_members(
             prototype_member: None,
             parameters: metadata.parameter_members.clone(),
         };
-        tables.add_function(ctx, &key_name, &listed, false, None)?;
+        tables.add_function(ctx, &key_name, &listed, false, true, None)?;
     }
     Ok(())
 }
@@ -618,6 +622,7 @@ impl MemberTables {
         key_name: &str,
         listed: &ReflectionListedMember,
         is_closure: bool,
+        is_internal: bool,
         location: Option<(String, u32, u32)>,
     ) -> Result<()> {
         let identity = (member_kind::FUNCTION, String::new(), key_name.to_string());
@@ -629,7 +634,7 @@ impl MemberTables {
             let row = parameter_row(ctx, "", &listed.name, parameter)?;
             self.rows.push(row);
         }
-        let mut row = function_row(ctx, listed, is_closure, location)?;
+        let mut row = function_row(ctx, listed, is_closure, is_internal, location)?;
         if !listed.parameters.is_empty() {
             row[member::PARAMETERS] = DataWord::U64(first as u64 + 1);
         }
@@ -699,6 +704,7 @@ fn function_row(
     ctx: &mut FunctionContext<'_>,
     listed: &ReflectionListedMember,
     is_closure: bool,
+    is_internal: bool,
     location: Option<(String, u32, u32)>,
 ) -> Result<Vec<DataWord>> {
     let mut words = vec![DataWord::U64(0); ROW_WORDS];
@@ -721,6 +727,15 @@ fn function_row(
     words[member::FLAGS] = DataWord::U64(flags as u64);
     words[member::TYPE] = encode_type(ctx.data, listed.type_metadata.as_ref());
     words[member::COUNT] = DataWord::U64(listed.required_parameter_count as u64);
+    let text = reflection_function_to_string(
+        &listed.name,
+        is_internal,
+        listed.is_deprecated,
+        listed.returns_reference,
+        &listed.parameters,
+        listed.type_metadata.as_ref(),
+    );
+    words[member::STRING] = pool(ctx.data, std::slice::from_ref(&text));
     if !listed.attr_names.is_empty() {
         let identity = format!("{}()", listed.name);
         let label = member_extras_label(
