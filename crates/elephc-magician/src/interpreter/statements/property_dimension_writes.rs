@@ -430,7 +430,7 @@ fn static_write(
                 }
                 None => (current, ArrayWriteStorage::Snapshot),
             } };
-            let contracts = eval_static_property_array_contracts(class_name, property, context)?;
+            let contracts = eval_static_property_array_contracts(class_name, property, context, values)?;
             if matches!(values.type_tag(current)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_STRING) {
                 if let Some(key) = key {
                     let source = write_source_domains::source_type(key_source.as_ref(), key, context, values)?;

@@ -705,30 +705,32 @@ pub(super) fn eval_write_public_dynamic_property(
     Ok(())
 }
 
-/// Binds one eval object property to a by-reference source parameter.
-/// Checks an AOT array property before forwarding a write to its native setter.
+/// Checks native array kind and structural contents before forwarding a candidate to its setter.
 pub(super) fn validate_eval_native_array_property_assignment(
-    declaring_class: &str,
-    property_name: &str,
-    value: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
+    declaring_class: &str, property_name: &str, value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let Some(property_type) = context.native_property_type(declaring_class, property_name) else {
-        return Ok(());
-    };
-    let requires_array = !property_type.allows_null()
-        && !property_type.is_intersection()
-        && !property_type.variants().is_empty()
-        && property_type.variants().iter().all(|variant| matches!(variant, EvalParameterTypeVariant::Array));
-    if !requires_array || matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-        return Ok(());
+    let Some(property_type) = context.native_property_type(declaring_class, property_name) else { return Ok(()); };
+    let requires_array = !property_type.allows_null() && !property_type.is_intersection()
+        && !property_type.variants().is_empty() && property_type.variants().iter().all(|variant| match variant {
+            EvalParameterTypeVariant::Array => true,
+            EvalParameterTypeVariant::Generic(elephc_generics::Type::Apply(name, _)) => name == "array",
+            _ => false,
+        });
+    let array = matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC);
+    if requires_array && !array {
+        return eval_throw_type_error(&format!("Cannot assign value to property {}::{} of type array",
+            declaring_class, property_name), context, values);
     }
-    eval_throw_type_error(
-        &format!("Cannot assign value to property {}::{} of type array", declaring_class, property_name),
-        context,
-        values,
-    )
+    if array && context.semantic_profile().checked_property_references() {
+        let declared = local_binding_origins::resolve_declared_source_type(&crate::eval_ir::generic_type(&property_type),
+            Some(declaring_class), Some(declaring_class), context)?;
+        if let Some(schema) = local_binding_origins::array_source_schema(&declared)
+            .and_then(crate::eval_ir::array_contents_type) {
+            validate_generic_local(&crate::eval_ir::parameter_type(&schema), property_name, value, context, values)?;
+        }
+    }
+    Ok(())
 }
 
 /// Binds a writable instance property to a source reference and publishes its initialized storage.

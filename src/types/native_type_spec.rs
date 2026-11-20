@@ -55,6 +55,7 @@ pub(crate) fn member_specs(members: &[PhpType]) -> Option<String> {
 /// Retains full declared array/value terms separately from PHP reflection and storage spellings.
 pub(crate) fn logical_type(php_type: &PhpType,allow_return_atoms: bool) -> Option<elephc_generics::Type> {
     use elephc_generics::Type;
+    if php_type.is_php_array() { return Some(Type::atom("array")); }
     Some(match php_type {
         PhpType::Array(element)=>Type::Apply("array".into(),vec![Type::atom("int"),logical_type(element,false)?]),
         PhpType::AssocArray{key,value}=>Type::Apply("array".into(),vec![logical_type(key,false)?,logical_type(value,false)?]),
@@ -101,5 +102,34 @@ mod logical_source_tests {
         let array=PhpType::Array(Box::new(PhpType::Int));
         assert_eq!(php_type_spec(&array,false).as_deref(),Some("array"));
         assert_eq!(logical_type(&array,false),Some(Type::Apply("array".into(),vec![Type::atom("int"),Type::atom("int")])));
+    }
+}
+
+/// Encodes a complete checked declaration independently from its PHP reflection spelling.
+pub(crate) fn logical_type_spec(ty: &PhpType, allow_return_atoms: bool) -> Option<String> {
+    logical_type(ty, allow_return_atoms).map(|ty| logical_term_spec(&ty))
+}
+
+/// Encodes one already normalized structural term for the trusted native registration boundary.
+pub(crate) fn logical_term_spec(ty: &elephc_generics::Type) -> String {
+    format!("{}{}", elephc_semantics::native_callable_sources::TYPE_SPEC_PREFIX,
+        serde_json::to_string(ty).expect("neutral Type is JSON serializable"))
+}
+
+#[cfg(test)]
+mod registration_source_tests {
+    use super::*;
+
+    /// Structural declarations retain array keys/elements while ordinary PHP array remains explicitly open.
+    #[test]
+    fn strict_native_registration_specs_keep_full_structural_terms() {
+        let ty = PhpType::Array(Box::new(PhpType::Int));
+        let encoded = logical_type_spec(&ty, false).unwrap();
+        let encoded = encoded.strip_prefix(elephc_semantics::native_callable_sources::TYPE_SPEC_PREFIX).unwrap();
+        let actual: elephc_generics::Type = serde_json::from_str(encoded).unwrap();
+        assert_eq!(actual, elephc_generics::Type::Apply("array".into(),
+            vec![elephc_generics::Type::atom("int"), elephc_generics::Type::atom("int")]));
+        assert_eq!(logical_type(&PhpType::php_array(), false), Some(elephc_generics::Type::atom("array")));
+        assert_eq!(php_type_spec(&ty, false).as_deref(), Some("array"));
     }
 }

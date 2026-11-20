@@ -99,3 +99,40 @@ fn strict_member_promises_native_eval_array_aliases_and_float_defaults() {
     assert_eq!(String::from_utf8_lossy(&output.stdout),"FDERTIS11:double:double:3","{stderr}");
     assert!(stderr.contains("HEAP DEBUG: leak summary: clean"),"{stderr}");
 }
+
+/// Native registration carries structural declarations on all five targets independently from reflection names.
+#[test]
+fn strict_native_registration_structural_terms_emit_on_every_target() {
+    let source = "<?php function nativeMetadataValues(array<int> $values):array<int>{return $values;} \
+        class NativeMetadataArray{public array<int> $items=[1];public static array<int> $cached=[2];} \
+        $code=$argc>0?'echo 1;':'';eval($code);";
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts,true);
+    for name in ["macos-aarch64","ios-arm64","ios-sim-arm64","linux-aarch64","linux-x86_64"] {
+        let module = super::semantic_sources::lower_capturing_arguments(source,Target::parse(name).unwrap(),profile,false,SourceMode::Php);
+        crate::ir::validate_module(&module).unwrap();
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module,false,false).unwrap();
+        assert!(assembly.contains(elephc_semantics::native_callable_sources::TYPE_SPEC_PREFIX),"{name}");
+    }
+}
+
+/// An integrated profile checks native structural member metadata, PHP reflection names and mutation atomicity.
+#[cfg(any(all(target_os="macos",target_arch="aarch64"),all(target_os="linux",any(target_arch="x86_64",target_arch="aarch64"))))]
+#[test]
+fn strict_native_registration_array_members_reflection_and_owners() {
+    let fragment="$reflection=new ReflectionFunction('nativeMetadataValues'); \
+        echo $reflection->getParameters()[0]->getType()->getName(),':',$reflection->getReturnType()->getName(),':'; \
+        $object=new NativeMetadataArray();try{$object->items[]='bad';}catch(TypeError $error){echo 'I';} \
+        echo count($object->items),':';try{NativeMetadataArray::$cached[]='bad';}catch(TypeError $error){echo 'S';} \
+        echo count(NativeMetadataArray::$cached);";
+    let escaped=fragment.replace('\\',"\\\\").replace('\'',"\\'");
+    let source=format!("<?php function nativeMetadataValues(array<int> $values):array<int>{{return $values;}} \
+        class NativeMetadataArray{{public array<int> $items=[1];public static array<int> $cached=[2];}} \
+        $code=$argc>0?'{escaped}':'';eval($code);");
+    let profile=SemanticProfile::PERMISSIVE.with(StrictFeature::Casts,true);
+    let module=super::semantic_sources::lower_capturing_arguments(&source,Target::detect_host(),profile,true,SourceMode::Php);
+    let output=super::native_module::run(&module);
+    let stderr=String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(),"{:?}: stdout={}; {stderr}",output.status,String::from_utf8_lossy(&output.stdout));
+    assert_eq!(String::from_utf8_lossy(&output.stdout),"array:array:I1:S1","{stderr}");
+    assert!(stderr.contains("HEAP DEBUG: leak summary: clean"),"{stderr}");
+}

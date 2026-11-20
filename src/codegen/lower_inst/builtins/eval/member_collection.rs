@@ -227,7 +227,7 @@ pub(super) fn collect_eval_native_instance_property_types(
         if !class_info.property_slot_is_declared(slot, property_name) {
             continue;
         }
-        let Some(type_spec) = eval_native_php_type_spec(php_type, false) else {
+        let Some(type_spec) = crate::types::native_type_spec::logical_type_spec(php_type, false) else {
             continue;
         };
         registrations.push(EvalNativePropertyTypeRegistration {
@@ -256,7 +256,7 @@ pub(super) fn collect_eval_native_static_property_types(
         {
             continue;
         }
-        let Some(type_spec) = eval_native_php_type_spec(php_type, false) else {
+        let Some(type_spec) = crate::types::native_type_spec::logical_type_spec(php_type, false) else {
             continue;
         };
         registrations.push(EvalNativePropertyTypeRegistration {

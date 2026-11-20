@@ -166,8 +166,9 @@ pub(super) fn eval_native_callable_param_type_specs(signature: &FunctionSig) -> 
                 .param_type_exprs
                 .get(index)
                 .and_then(Option::as_ref)
-                .and_then(eval_native_type_expr_spec)
-                .or_else(|| eval_native_php_type_spec(php_type, false))
+                .map(|expr| crate::types::native_type_spec::logical_term_spec(
+                    &crate::types::native_type_spec::logical_parameter_type(expr)))
+                .or_else(|| crate::types::native_type_spec::logical_type_spec(php_type, false))
         })
         .collect()
 }
@@ -176,49 +177,8 @@ pub(super) fn eval_native_callable_param_type_specs(signature: &FunctionSig) -> 
 pub(super) fn eval_native_callable_return_type_spec(signature: &FunctionSig) -> Option<String> {
     signature
         .declared_return
-        .then(|| eval_native_php_type_spec(&signature.return_type, true))
+        .then(|| crate::types::native_type_spec::logical_type_spec(&signature.return_type, true))
         .flatten()
-}
-
-/// Formats one parsed PHP type expression for eval native metadata registration.
-pub(super) fn eval_native_type_expr_spec(type_expr: &TypeExpr) -> Option<String> {
-    match type_expr {
-        // `eval` sees the runtime shape, and that is a bare callable: a declared signature is
-        // checked ahead of time and leaves nothing for a runtime fragment to verify.
-        TypeExpr::CallableSig { .. } => Some("callable".to_string()),
-        TypeExpr::Int => Some("int".to_string()),
-        TypeExpr::Float => Some("float".to_string()),
-        TypeExpr::Bool => Some("bool".to_string()),
-        TypeExpr::False => Some("false".to_string()),
-        TypeExpr::Str => Some("string".to_string()),
-        TypeExpr::Void => Some("null".to_string()),
-        TypeExpr::Never => None,
-        TypeExpr::Iterable => Some("iterable".to_string()),
-        // Both array forms report the PHP-visible name. A type argument is an elephc
-        // extension with no PHP reflection equivalent, so `array<string, Foo>` is `array`
-        // here, exactly as `array<int>` is.
-        TypeExpr::Array(_) | TypeExpr::AssocArray { .. } => Some("array".to_string()),
-        TypeExpr::Ptr(_) | TypeExpr::Buffer(_) => None,
-        TypeExpr::Named(name) => Some(name.as_str().to_string()),
-        // The instantiated class is an ordinary class by the time reflection runs; should
-        // one reach here uninstantiated, its head is the name PHP would print.
-        TypeExpr::GenericClass { name, .. } => Some(name.as_str().to_string()),
-        TypeExpr::Nullable(inner) => {
-            let inner = eval_native_type_expr_spec(inner)?;
-            Some(format!("?{}", inner))
-        }
-        TypeExpr::Union(members) => eval_native_type_expr_member_specs(members, "|"),
-        TypeExpr::Intersection(members) => eval_native_type_expr_member_specs(members, "&"),
-    }
-}
-
-/// Formats a compound parsed type expression with the requested separator.
-pub(super) fn eval_native_type_expr_member_specs(members: &[TypeExpr], separator: &str) -> Option<String> {
-    members
-        .iter()
-        .map(eval_native_type_expr_spec)
-        .collect::<Option<Vec<_>>>()
-        .map(|members| members.join(separator))
 }
 
 pub(super) use crate::types::native_type_spec::php_type_spec as eval_native_php_type_spec;

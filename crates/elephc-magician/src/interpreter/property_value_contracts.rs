@@ -53,10 +53,14 @@ fn declared_property_array_origin(declared: Option<&EvalParameterType>) -> Optio
 
 /// Copies static declaration and binding origins before a published array payload can change.
 pub(in crate::interpreter) fn eval_static_property_array_contracts(class: &str, name: &str,
-    context: &ElephcEvalContext,
+    context: &ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalParameterType>, EvalStatus> {
     let class = resolve_eval_static_member_class_name(class, context)?;
-    let Some((owner, property)) = context.class_property(&class, name) else { return Ok(Vec::new()); };
+    let Some((owner, property)) = context.class_property(&class, name) else {
+        let Some((owner, _, _, true)) = eval_reflection_aot_static_property_access_metadata(&class, name, context, values)?
+            else { return Ok(Vec::new()); };
+        return Ok(context.native_property_type(&owner, name).into_iter().collect());
+    };
     Ok(property.property_type().into_iter().chain(context.static_property_array_type(&owner, property.name())).cloned().collect())
 }
 

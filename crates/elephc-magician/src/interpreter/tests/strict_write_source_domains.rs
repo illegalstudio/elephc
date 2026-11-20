@@ -1,11 +1,11 @@
 //! Purpose:
-//! Exercises pending property mutations and original operand domains at mutable array/member consumers.
+//! Exercises original operand domains at mutable array and member consumers.
 //!
 //! Called from:
-//! - Focused ArrayTypes pending-origin and Mixed write-domain regressions.
+//! - Focused Mixed write-domain and operand lifetime regressions.
 //!
 //! Key details:
-//! - Declared bottom arrays stay closed; inferred empties wait for an informative successful write.
+//! - Guarded writes use the same receiver, key and exact element domains across storage shapes.
 
 use super::strict_array_contents::run_source;
 use super::support::FakeValue;

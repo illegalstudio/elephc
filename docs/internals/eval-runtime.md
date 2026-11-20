@@ -1078,3 +1078,11 @@ checks share packet/reference-epoch validation with PHP argument binding, while
 PHP scalar parameters keep their selected weak conversion policy. Computed and
 nested receivers project the selected declaration without inspecting their boxed
 occupants to manufacture a logical proof. Quiet unset traversal remains quiet.
+
+Generated native registration carries full structural `Type` terms through the
+trusted `@logical-type:` encoding. PHP Reflection projects structural arrays and
+callables to their PHP display names separately. Exact bare PHP `array` remains
+open rather than acquiring a storage-derived key/element constraint. Native
+instance/static field contents are checked before storage publication and their
+physical declarations feed the shared element-write planner. The compact legacy
+registration grammar remains accepted for existing producers.

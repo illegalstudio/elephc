@@ -18,3 +18,6 @@ pub const SOURCE_RECORD_WORD: usize = 12;
 pub const SOURCE_VERSION: u64 = 1;
 /// Bound for one trusted static declaration payload.
 pub const MAX_SOURCE_BYTES: usize = 65536;
+
+/// Trusted generated signature spelling containing JSON of the shared structural Type vocabulary.
+pub const TYPE_SPEC_PREFIX: &str = "@logical-type:";

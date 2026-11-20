@@ -185,6 +185,12 @@ fn native_callable_type_from_spec(
     if type_spec.is_empty() {
         return None;
     }
+    if let Some(encoded) = type_spec.strip_prefix(elephc_semantics::native_callable_sources::TYPE_SPEC_PREFIX) {
+        let ty: elephc_generics::Type = serde_json::from_str(encoded).ok()?;
+        if !matches!(position, NativeCallableTypePosition::LocalBinding)
+            && crate::eval_ir::array_contents_schema(&ty).is_some() { return None; }
+        return Some(crate::eval_ir::parameter_type(&ty));
+    }
     if type_spec == elephc_semantics::native_local_contract::PENDING_ARRAY_CONTENTS_TYPE_NAME {
         return matches!(position, NativeCallableTypePosition::LocalBinding)
             .then(|| crate::eval_ir::parameter_type(&crate::eval_ir::pending_array_contents_type()));
@@ -393,4 +399,29 @@ mod tests {
         }
     }
 
+}
+
+#[cfg(test)]
+mod logical_registration_tests {
+    use super::*;
+
+    /// Trusted structural terms round-trip without exposing conditional local origins as parameter declarations.
+    #[test]
+    fn strict_native_registration_decodes_full_terms_and_preserves_local_roles() {
+        use elephc_generics::Type;
+        let ty = Type::Apply("array".into(), vec![Type::atom("string"),
+            Type::Union(vec![Type::atom("int"), Type::atom("null")])]);
+        let spec = format!("{}{}", elephc_semantics::native_callable_sources::TYPE_SPEC_PREFIX,
+            serde_json::to_string(&ty).unwrap());
+        for position in [NativeCallableTypePosition::Parameter, NativeCallableTypePosition::Return,
+            NativeCallableTypePosition::LocalBinding] {
+            let parsed = native_callable_type_from_spec(&spec, position).unwrap();
+            assert_eq!(crate::eval_ir::generic_type(&parsed), ty);
+        }
+        let pending = crate::eval_ir::pending_array_contents_type();
+        let spec = format!("{}{}", elephc_semantics::native_callable_sources::TYPE_SPEC_PREFIX,
+            serde_json::to_string(&pending).unwrap());
+        assert!(native_callable_type_from_spec(&spec, NativeCallableTypePosition::Parameter).is_none());
+        assert!(native_callable_type_from_spec(&spec, NativeCallableTypePosition::LocalBinding).is_some());
+    }
 }

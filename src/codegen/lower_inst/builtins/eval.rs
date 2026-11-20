@@ -23,7 +23,7 @@ use crate::codegen::{
 };
 use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Module, Op, ValueId};
 use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Visibility};
 use crate::types::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, FunctionSig, InterfaceInfo, PhpType,
     PropertyHookContract,

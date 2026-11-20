@@ -69,14 +69,6 @@ pub(super) fn prepare_property_write_receiver<'a>(
     })
 }
 
-/// Resolves a prepared receiver after the RHS while retaining every traversed parent.
-pub(super) fn finish_property_write_receiver(
-    plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    finish_receiver(plan, owners, context, scope, values, false, false).map(|(value, _)| value)
-}
-
 /// Fetches unset properties for write while keeping every dimension hop non-creating and quiet.
 pub(super) fn finish_property_unset_receiver(
     plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
