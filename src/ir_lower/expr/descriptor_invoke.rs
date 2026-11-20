@@ -54,7 +54,21 @@ pub(super) fn emit_rooted_expr_call(
     let (callback, callback_owner) = root_owned_call_operand(ctx, callback, span);
     let mut operands = vec![callback.value];
     let reference_property_guard_mark = ctx.reference_property_guards.len();
-    operands.extend(super::closure_calls::lower_bound_method_args(ctx, signature, args, guard_description, span));
+    // A checked bound method lowers its arguments in an argument-evaluation scope, as the
+    // ordinary bound-method call does: each owned argument is rooted while a later one is
+    // evaluated or checked, so a refused argument's `TypeError` releases them.
+    let checked = guard_description.is_some();
+    if checked {
+        begin_call_argument_evaluation(ctx);
+    }
+    let mut arg_values =
+        super::closure_calls::lower_bound_method_args(ctx, signature, args, guard_description, span);
+    let evaluation_intermediates = if checked {
+        finish_call_argument_evaluation(ctx, &mut arg_values)
+    } else {
+        Vec::new()
+    };
+    operands.extend(arg_values);
     let conversion_roots = root_unpublished_argument_conversions(ctx, &mut operands[1..], span);
     // `ExprCall` can dispatch a first-class `__construct` callable; publish the invocation
     // site's `strict_types` after the arguments are evaluated.
@@ -71,6 +85,7 @@ pub(super) fn emit_rooted_expr_call(
     for slot in conversion_roots.into_iter().rev() {
         retire_owned_call_operand(ctx, slot, span);
     }
+    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     super::enum_argument_guards::drain_reference_property_guards(
         ctx,
         reference_property_guard_mark,
