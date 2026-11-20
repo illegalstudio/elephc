@@ -835,6 +835,21 @@ the ABI `(descriptor, argument array) -> Mixed`. The invoker saves and restores
 the caller's callee-saved registers it scratches — `x19`-`x26` on AArch64 and
 `r12`, `rbx`, `r13`-`r15` on x86_64 — in a dedicated frame save area.
 
+Converting a boxed callable into a descriptor (`Closure::fromCallable()`, a
+declared `callable` that is invoked or stored, callback-taking builtins) has to
+consider every candidate in the program: function and builtin names, static
+methods, and every class's instance methods for callable arrays and invokable
+objects. Those sites call a shared selector
+(`src/codegen/lower_inst/callables/shared_selector.rs`) instead of expanding
+that inventory inline. One `_eir_callable_selector_N` is emitted per conversion
+policy (operation name, error surfaces, host arity, retain and fresh-Closure
+behaviour, effective and declared name sets) after the module's bodies, so the
+inventory is paid once per policy rather than once per site. A conversion inside
+a class keeps only its scope-only candidates (private and protected methods,
+private shadows) inline, tried before the shared public selector. A function
+that owns an eval context keeps the inline expansion, because the selector
+cannot reach that frame slot.
+
 The EIR module fixed point can specialize an already-direct numeric closure
 call when every actual argument, including captures, is exactly `int` or
 `float`. `src/ir_passes/numeric_closure_calls.rs` recognizes bounded

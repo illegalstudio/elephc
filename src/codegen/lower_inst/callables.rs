@@ -42,7 +42,10 @@ use crate::codegen::{CodegenIrError, Result};
 mod instance_expr;
 pub(super) mod results;
 mod scope;
+mod shared_selector;
 use scope::{factory_method_visible, inherits_lexical_private_static};
+pub(in crate::codegen) use shared_selector::{emit_pending_callable_selectors, SharedCallableSelectorKey};
+use shared_selector::SelectorPolicy;
 
 const MIXED_METHOD_TAG_OFFSET: usize = 0;
 const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
@@ -410,8 +413,8 @@ fn lower_mixed_callable_descriptor_invoke(
 }
 
 /// Catchable error selected by a callable-conversion surface.
-#[derive(Clone, Copy)]
-enum CallableConversionError { Type(&'static str), Error(&'static str) }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::codegen) enum CallableConversionError { Type(&'static str), Error(&'static str) }
 
 /// Emits the conversion surface's PHP exception class.
 fn emit_callable_conversion_error(ctx: &mut FunctionContext<'_>, error: CallableConversionError) {
@@ -529,6 +532,10 @@ pub(in crate::codegen) fn emit_runtime_unary_callback_descriptor_value(
 }
 
 /// Implements boxed callable descriptor selection with a configurable string-name miss path.
+///
+/// Calls the module's shared selector for this policy when the site allows it (see
+/// `shared_selector`), so equivalent sites do not each expand the whole candidate inventory.
+#[allow(clippy::too_many_arguments)]
 fn emit_runtime_mixed_callable_descriptor_value_impl(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
@@ -540,6 +547,36 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     scoped: bool,
     fresh_closure: bool,
 ) -> Result<()> {
+    let policy = SelectorPolicy {
+        op_name,
+        retain_existing_descriptor,
+        string_type_error,
+        invalid_type_error,
+        arity,
+        scoped,
+        fresh_closure,
+    };
+    if shared_selector::emit_shared_selector_site(ctx, callable, policy)? {
+        return Ok(());
+    }
+    emit_inline_mixed_callable_descriptor_value(ctx, callable, policy)
+}
+
+/// Expands boxed callable descriptor selection over every candidate at this site.
+fn emit_inline_mixed_callable_descriptor_value(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    policy: SelectorPolicy<'_>,
+) -> Result<()> {
+    let SelectorPolicy {
+        op_name,
+        retain_existing_descriptor,
+        string_type_error,
+        invalid_type_error,
+        arity,
+        scoped,
+        fresh_closure,
+    } = policy;
     let instance_targets = runtime_array_instance_method_targets_with_scope(ctx, scoped);
     let invokable_targets = instance_targets
         .iter()
