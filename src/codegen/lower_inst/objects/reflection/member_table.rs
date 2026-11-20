@@ -77,7 +77,10 @@ impl MemberTables {
         listed: &ReflectionListedMember,
     ) -> Result<()> {
         let key_name = php_symbol_key(&listed.name);
-        let identity = (member_kind::METHOD, declaring.to_string(), key_name.clone());
+        // The dump differs by how the reflecting class sees the method (`inherits Q` against
+        // `overwrites P`), so a row is shared only between views that print the same.
+        let text = reflection_listed_method_to_string(ctx, listed);
+        let identity = (member_kind::METHOD, format!("{declaring}\0{text}"), key_name.clone());
         let position = match self.identities.get(&identity) {
             Some(position) => *position,
             None => {
@@ -86,7 +89,7 @@ impl MemberTables {
                     let row = parameter_row(ctx, declaring, &listed.name, parameter)?;
                     self.rows.push(row);
                 }
-                let mut row = method_row(ctx, declaring, listed)?;
+                let mut row = method_row(ctx, declaring, listed, &text)?;
                 if let Some(location) = method_location(ctx, declaring, &listed.name) {
                     let flags = match row[member::FLAGS] {
                         DataWord::U64(flags) => flags,
@@ -159,6 +162,14 @@ pub(super) fn collect_constant_members(
 }
 
 /// Splits the visibility and finality bits of a member's flags into row flag bits.
+/// Interns a `__toString()` text as a pool of one. A dump spells php's raw bytes with private-use
+/// characters (`reflection_dump_text`), which `literal_bytes` turns back into the bytes themselves.
+fn dump_pool(data: &mut DataSection, text: &str) -> DataWord {
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(text);
+    let (label, length) = data.add_string(&bytes);
+    DataWord::Symbol(data.add_words(vec![DataWord::Symbol(label), DataWord::U64(length as u64)]))
+}
+
 fn visibility_bits(flags: &ReflectionMemberFlags) -> i64 {
     let mut bits = 0;
     if flags.is_public {
@@ -333,7 +344,7 @@ fn property_row(
         listed.type_metadata.as_ref(),
         listed.default_value.as_ref(),
     );
-    words[member::STRING] = pool(ctx.data, std::slice::from_ref(&text));
+    words[member::STRING] = dump_pool(ctx.data, &text);
     let needs_extras = !listed.attr_names.is_empty()
         || !listed.property_hook_members.is_empty()
         || !default_in_row;
@@ -381,6 +392,7 @@ fn method_row(
     ctx: &mut FunctionContext<'_>,
     declaring: &str,
     listed: &ReflectionListedMember,
+    text: &str,
 ) -> Result<Vec<DataWord>> {
     let mut words = vec![DataWord::U64(0); ROW_WORDS];
     words[member::NAME] = pool(ctx.data, std::slice::from_ref(&listed.name));
@@ -405,8 +417,7 @@ fn method_row(
     words[member::FLAGS] = DataWord::U64(flags as u64);
     words[member::TYPE] = encode_type(ctx.data, listed.type_metadata.as_ref());
     words[member::COUNT] = DataWord::U64(listed.required_parameter_count as u64);
-    let text = reflection_listed_method_to_string(ctx, listed);
-    words[member::STRING] = pool(ctx.data, std::slice::from_ref(&text));
+    words[member::STRING] = dump_pool(ctx.data, text);
     if !listed.attr_names.is_empty() {
         let identity = format!("{declaring}::{}()", listed.name);
         let label = member_extras_label(
@@ -463,7 +474,7 @@ fn parameter_row(
     words[member::TYPE] = encode_type(ctx.data, parameter.type_metadata.as_ref());
     words[member::COUNT] = DataWord::U64(parameter.position as u64);
     let text = reflection_parameter_to_string(parameter);
-    words[member::PARAMETER_STRING] = pool(ctx.data, std::slice::from_ref(&text));
+    words[member::PARAMETER_STRING] = dump_pool(ctx.data, &text);
     if let Some(constant) = &parameter.default_value_constant_name {
         words[member::STRING] = pool(ctx.data, std::slice::from_ref(constant));
     }
@@ -735,7 +746,7 @@ fn function_row(
         &listed.parameters,
         listed.type_metadata.as_ref(),
     );
-    words[member::STRING] = pool(ctx.data, std::slice::from_ref(&text));
+    words[member::STRING] = dump_pool(ctx.data, &text);
     if !listed.attr_names.is_empty() {
         let identity = format!("{}()", listed.name);
         let label = member_extras_label(
