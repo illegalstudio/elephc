@@ -130,6 +130,9 @@ struct RuntimeCallableInvokerCacheEntry {
     captures: Vec<(String, PhpType, bool)>,
     owns_string_return: bool,
     php_return_status: bool,
+    /// Whether the invoker checks boxed arguments bound to declared scalar parameters (a user
+    /// callable outside the internal `ext/uri` classes).
+    scalar_guarded: bool,
     /// The static callee name a closure invoker's scalar-parameter `TypeError` uses, if any.
     guard_callee: Option<String>,
     /// The RESOLVED defaults the body materializes. Two signatures can be identical as ABI and
@@ -452,6 +455,7 @@ impl SharedCodegenState {
         owns_string_return: bool,
         php_return_status: bool,
         defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
+        scalar_guarded: bool,
         guard_callee: Option<&str>,
     ) -> Option<String> {
         self.runtime_callable_invokers
@@ -462,6 +466,7 @@ impl SharedCodegenState {
                     && entry.owns_string_return == owns_string_return
                     && entry.php_return_status == php_return_status
                     && entry.defaults == defaults
+                    && entry.scalar_guarded == scalar_guarded
                     && entry.guard_callee.as_deref() == guard_callee
             })
             .map(|entry| entry.label.clone())
@@ -475,6 +480,7 @@ impl SharedCodegenState {
         owns_string_return: bool,
         php_return_status: bool,
         defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
+        scalar_guarded: bool,
         guard_callee: Option<&str>,
         label: &str,
     ) {
@@ -484,6 +490,7 @@ impl SharedCodegenState {
                 captures: captures.to_vec(),
                 owns_string_return,
                 php_return_status,
+                scalar_guarded,
                 guard_callee: guard_callee.map(str::to_string),
                 defaults: defaults.to_vec(),
                 label: label.to_string(),

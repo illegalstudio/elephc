@@ -2066,3 +2066,29 @@ foreach ($names as $n) {
          [false,false,false,false,false,false]\n"
     );
 }
+
+/// The URI methods keep coercing a runtime `null` when they are called through a callable
+/// value (the descriptor invoker), as their direct calls do; a user method with the same
+/// parameter is still refused.
+#[test]
+fn test_uri_methods_called_through_a_callable_coerce_a_runtime_null() {
+    let out = compile_and_run(
+        r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
+function box(mixed $v): mixed { return $v; }
+class P { public function withPath(string $p): string { return "[" . $p . "]"; } }
+$n = box(null);
+$u = new Uri\Rfc3986\Uri("https://example.com/x");
+echo call_user_func_array($u->withPath(...), [$n])->toString(), "\n";
+echo call_user_func([$u, "withPath"], $n)->toString(), "\n";
+$f = $u->withPath(...);
+echo $f($n)->toString(), "\n";
+echo call_user_func([new Uri\WhatWg\Url("https://example.com/"), "withQuery"], $n)->toAsciiString(), "\n";
+try { echo call_user_func([new P, "withPath"], $n), "\n"; } catch (TypeError $e) { echo get_class($e), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "https://example.com\nhttps://example.com\nhttps://example.com\nhttps://example.com/\nTypeError\n"
+    );
+}
