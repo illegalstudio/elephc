@@ -12,6 +12,8 @@
 //!   string-result owner contract. Every invoker binds the same container layout, so two
 //!   wrappers agreeing on those three can safely share one emitted body.
 //! - Receiver-bearing descriptors cache only immutable templates; each call still captures its object.
+//! - Boxed-callable selectors are queued by conversion policy and emitted after the bodies,
+//!   so equivalent sites call one selector instead of each expanding every candidate.
 //! - Owns the module-wide assembly label counter. It must not be per function: the readable part
 //!   of a label is a lossy fragment of the PHP function/block name, so only a module-unique
 //!   trailing id keeps two functions with similar names from emitting the same label.
@@ -88,6 +90,15 @@ pub(crate) struct SharedCodegenState {
     reflection_class_builders: Vec<(String, String, String)>,
     /// How many of `reflection_class_builders` have been emitted.
     reflection_class_builders_emitted: usize,
+    /// Boxed-callable selectors shared by every conversion site with the same policy, as
+    /// `(key, label)` in request order. Emitted after the module's bodies; emitting one can
+    /// request more (a builtin wrapper it reaches may convert its own callback).
+    callable_selectors: Vec<(
+        crate::codegen::lower_inst::callables::SharedCallableSelectorKey,
+        String,
+    )>,
+    /// How many of `callable_selectors` have been emitted.
+    callable_selectors_emitted: usize,
 }
 
 /// Reusable static descriptor template for one public instance method.
@@ -163,6 +174,29 @@ impl SharedCodegenState {
             self.reflection_class_builders.get(self.reflection_class_builders_emitted)?.clone();
         self.reflection_class_builders_emitted += 1;
         Some((class_name, label))
+    }
+
+    /// Returns the global label of the shared selector for `key`, queuing its body the first
+    /// time a conversion site asks for that policy.
+    pub(super) fn request_callable_selector(
+        &mut self,
+        key: &crate::codegen::lower_inst::callables::SharedCallableSelectorKey,
+    ) -> String {
+        if let Some((_, label)) = self.callable_selectors.iter().find(|(existing, _)| existing == key) {
+            return label.clone();
+        }
+        let label = format!("_eir_callable_selector_{}", self.callable_selectors.len());
+        self.callable_selectors.push((key.clone(), label.clone()));
+        label
+    }
+
+    /// Takes the next requested shared callable selector that has not been emitted yet.
+    pub(super) fn next_pending_callable_selector(
+        &mut self,
+    ) -> Option<(crate::codegen::lower_inst::callables::SharedCallableSelectorKey, String)> {
+        let pending = self.callable_selectors.get(self.callable_selectors_emitted)?.clone();
+        self.callable_selectors_emitted += 1;
+        Some(pending)
     }
 
     /// Records dependencies introduced by a synthetic wrapper that was not present during the
