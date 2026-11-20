@@ -88,12 +88,20 @@ pub(in crate::interpreter) fn bind_method_scope_args(
         }
         if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
             || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
-            let source = parameter_types.get(position).and_then(Option::as_ref)
-                .map(crate::eval_ir::generic_type).unwrap_or_else(|| elephc_generics::Type::atom("mixed"));
+            let declared = parameter_types.get(position).and_then(Option::as_ref);
+            let supplied = if declared.is_none()
+                && parameter_is_by_ref.get(position).copied().unwrap_or(false) {
+                bound_arg.source_type.as_ref()
+            } else { None };
+            let source = declared.map(crate::eval_ir::generic_type)
+                .or_else(|| supplied.map(|source| crate::eval_ir::generic_type(&source.ty)))
+                .unwrap_or_else(|| elephc_generics::Type::atom("mixed"));
             let source = if parameter_is_variadic.get(position).copied().unwrap_or(false) {
                 elephc_generics::Type::Apply("array".to_string(), vec![elephc_generics::Type::atom("int"), source])
             } else { source };
-            method_scope.record_local_source_view(name.clone(), crate::eval_ir::parameter_type(&source), context.source_view_epoch());
+            let epoch = supplied.map_or_else(|| context.source_view_epoch(), |source| source.write_epoch);
+            method_scope.record_local_source_view(name.clone(), crate::eval_ir::parameter_type(&source), epoch);
+            if let Some(source) = supplied { method_scope.record_local_argument_source(name.clone(), source.clone()); }
         }
     }
     alias_duplicate_method_ref_args(method_scope, params, bound_args, context, values)
