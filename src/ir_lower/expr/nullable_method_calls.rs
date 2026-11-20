@@ -274,10 +274,17 @@ fn lower_method_call_with_binding(
                 .or_else(|| selected_enum.then(|| enum_static_args::lower_arguments(
                     ctx, signature, args, &class, dispatch_method, expr.span,
                 )).flatten())));
+    // PHP checks the parameters of the method the receiver's runtime class selects.
+    let guard_dispatch = receiver_class.clone().map(|class| super::GuardDispatch::Receiver {
+        receiver: object.value,
+        class,
+        is_static: false,
+    });
     let call_description = receiver_class
         .map(|class_name| super::scalar_param_guards::method_guard_description(ctx, &class_name, dispatch_method, false))
         .unwrap_or_else(|| dispatch_method.to_string());
     let previous_description = ctx.call_description.replace(call_description);
+    let previous_dispatch = std::mem::replace(&mut ctx.call_guard_dispatch, guard_dispatch);
     let previous_call_site = ctx.call_site_span.replace(expr.span);
     let ref_place_rewrite = if enum_args.is_none() {
         sig.as_ref().and_then(|signature| {
@@ -292,6 +299,7 @@ fn lower_method_call_with_binding(
     let arg_values =
         enum_args.unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), call_args));
     ctx.call_description = previous_description;
+    ctx.call_guard_dispatch = previous_dispatch;
     ctx.call_site_span = previous_call_site;
     let mut arg_values = arg_values;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);

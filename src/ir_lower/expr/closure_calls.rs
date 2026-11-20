@@ -35,6 +35,9 @@ pub(super) fn lower_bound_method_args(
     span: Span,
 ) -> Vec<crate::ir::ValueId> {
     let previous_description = ctx.call_description.take();
+    // The bound callable's method is resolved from the receiver's static class (#2466), so its
+    // selection stays unknown and an override that binds differently leaves it unchecked.
+    let previous_dispatch = ctx.call_guard_dispatch.take();
     let previous_call_site = ctx.call_site_span;
     if let Some(description) = guard_description {
         ctx.call_description = Some(description);
@@ -44,6 +47,7 @@ pub(super) fn lower_bound_method_args(
     let values = lower_args_with_signature(ctx, signature, args);
     ctx.scalar_guards_unrecorded = false;
     ctx.call_description = previous_description;
+    ctx.call_guard_dispatch = previous_dispatch;
     ctx.call_site_span = previous_call_site;
     values
 }

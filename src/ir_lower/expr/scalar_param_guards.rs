@@ -24,8 +24,13 @@
 //!   and extern calls clear `call_description`, so neither is ever guarded. Methods of the
 //!   internal `ext/uri` prelude classes are skipped in coercive mode (PHP coerces `null` for
 //!   them) and checked without a "called in" suffix under `strict_types=1`.
-//! - A method whose overrides (subclasses, implementors) declare a different parameter is not
-//!   checked: the guard only knows the receiver's static class, PHP binds the selected method.
+//! - PHP checks the parameter of the method selected at run time. A statically bound call
+//!   (`A::m()`, `self::`, `parent::`, `new A`) names it exactly. For a virtual call (`$o->m()`,
+//!   `static::m()`) every class the receiver can be is known at compile time: when an override
+//!   binds the parameter differently (a wider type, or only another name in the message), the
+//!   guard carries the receiver and a per-class table, read only on its cold path, so the
+//!   inline tag test stays the same. A call whose selection is unknown (a bound callable) is
+//!   left unchecked when an override differs.
 //! - `?T`, unions, `mixed` and a `T $p = null` default stay accepting `null`.
 //! - The checker records each such argument (`CheckResult::scalar_guard_arg_sites`) so the AST
 //!   optimizer keeps the call `may_throw`; both sides share `types::param_binding`'s predicates.
@@ -228,9 +233,7 @@ pub(super) fn guarded_scalar_param(
     let declared = crate::types::param_binding::runtime_scalar_guard_param(sig, index)?;
     // The check uses the signature lowering resolved from the receiver's static class, but PHP
     // binds the method the object selects at run time: an override may accept more.
-    if !overrides_keep_scalar_param(ctx, description, index, declared) {
-        return None;
-    }
+    override_groups(ctx, description, sig, index, declared)?;
     if !matches!(
         ctx.builder.value_type(value),
         IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)
@@ -256,6 +259,158 @@ fn is_internal_uri_callee(description: &str) -> bool {
     description
         .rsplit_once("::")
         .is_some_and(|(class, _)| crate::uri_prelude::is_internal_uri_class(class))
+}
+
+/// How the method a call's scalar-parameter checks name is selected at run time; set beside
+/// `LoweringContext::call_description` by the call lowering.
+#[derive(Clone, Debug)]
+pub(crate) enum GuardDispatch {
+    /// The call names the method PHP runs: `A::m()`, `self::m()`, `parent::m()`, `new A()`.
+    Exact,
+    /// The receiver object's runtime class selects the method (`$o->m()`, `$o::s()`); `class`
+    /// is the receiver's static class and `is_static` picks the static-method table.
+    Receiver { receiver: crate::ir::ValueId, class: String, is_static: bool },
+    /// The late-bound called class selects it (`static::s()`), within `class`'s subtree.
+    LateStatic { class: String, is_static: bool },
+}
+
+/// The receiver classes whose selected method binds a guarded parameter differently from the
+/// method the call names: they accept the value as before this check existed (`accept`), or
+/// refuse it with their own message and parameter line.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct OverrideGroup {
+    accept: bool,
+    classes: Vec<String>,
+    prefix: String,
+    site: Option<Span>,
+}
+
+/// The `TypeError` message up to the given value's type name for parameter `index` of `sig`,
+/// named `callee` (`C::m(): Argument #1 ($s) must be of type string, `).
+fn guard_message_prefix(callee: &str, sig: &FunctionSig, index: usize, declared: &PhpType) -> String {
+    let argument = sig.params.iter().take(index).filter(|(name, _)| {
+        name != crate::func_args::HIDDEN_ARGC_PARAM && name != crate::func_args::HIDDEN_ARGS_PARAM
+    }).count() + 1;
+    format!(
+        "{callee}(): Argument #{argument} (${}) must be of type {}, ",
+        sig.params[index].0,
+        crate::types::diagnostic_names::php_type_name(declared),
+    )
+}
+
+/// Decides how the check of parameter `index` follows the method PHP selects at run time.
+///
+/// `None` leaves the argument unchecked; `Some` with no group checks it as `description`
+/// names it; each group lists the receiver classes whose selected method differs (see
+/// [`GuardDispatch`]). A plain function (no `::`) has no overrides.
+pub(super) fn override_groups(
+    ctx: &LoweringContext<'_, '_>,
+    description: &str,
+    sig: &FunctionSig,
+    index: usize,
+    declared: &PhpType,
+) -> Option<Vec<OverrideGroup>> {
+    if !description.contains("::") {
+        return Some(Vec::new());
+    }
+    let (class, is_static) = match &ctx.call_guard_dispatch {
+        Some(GuardDispatch::Exact) => return Some(Vec::new()),
+        Some(GuardDispatch::Receiver { class, is_static, .. } | GuardDispatch::LateStatic { class, is_static }) => {
+            (class.trim_start_matches('\\'), *is_static)
+        }
+        None => {
+            return overrides_keep_scalar_param(ctx, description, index, declared).then(Vec::new);
+        }
+    };
+    let (_, method) = description.rsplit_once("::")?;
+    let method_key = crate::names::php_symbol_key(method);
+    let class_key = crate::names::php_symbol_key(class);
+    // `static::m()` on an instance method dispatches like `$this->m()`.
+    let is_static = is_static
+        && ctx.classes.get(class).is_none_or(|info| info.static_methods.contains_key(&method_key));
+    let label = guard_callee_label(ctx, description);
+    let default = OverrideGroup {
+        accept: false,
+        classes: Vec::new(),
+        prefix: guard_message_prefix(&label, sig, index, declared),
+        site: param_decl_site(description, index),
+    };
+    let mut groups: Vec<OverrideGroup> = Vec::new();
+    let mut names = ctx.classes.keys().collect::<Vec<_>>();
+    names.sort();
+    for name in names {
+        let info = &ctx.classes[name];
+        let related = super::property_access::class_extends_class(ctx, name, class)
+            || info.interfaces.iter().any(|interface| crate::names::php_symbol_key(interface) == class_key);
+        // An abstract class has no instance of its own, but `static::` can name it.
+        if !related || (info.is_abstract && !is_static) {
+            continue;
+        }
+        let table = if is_static { &info.static_methods } else { &info.methods };
+        let Some(selected) = table.get(&method_key) else {
+            continue;
+        };
+        let selected_description = method_guard_description(ctx, name, method, is_static);
+        let outcome = match crate::types::param_binding::runtime_scalar_guard_param(selected, index) {
+            // PHP requires an override's parameter to accept everything the overridden one
+            // does, so a different guarded scalar cannot occur; stay unchecked if it does.
+            Some(other) if other != declared => return None,
+            Some(_) => OverrideGroup {
+                accept: false,
+                classes: Vec::new(),
+                prefix: guard_message_prefix(
+                    &guard_callee_label(ctx, &selected_description),
+                    selected,
+                    index,
+                    declared,
+                ),
+                site: param_decl_site(&selected_description, index),
+            },
+            None => OverrideGroup { accept: true, classes: Vec::new(), prefix: String::new(), site: None },
+        };
+        if outcome == default {
+            continue;
+        }
+        match groups.iter_mut().find(|group| {
+            group.accept == outcome.accept && group.prefix == outcome.prefix && group.site == outcome.site
+        }) {
+            Some(group) => group.classes.push(name.clone()),
+            None => groups.push(OverrideGroup { classes: vec![name.clone()], ..outcome }),
+        }
+    }
+    // Only a receiver the guard can read selects a group at run time.
+    if !groups.is_empty() && dispatch_receiver(ctx).is_none() {
+        return None;
+    }
+    Some(groups)
+}
+
+/// The receiver operand and table encoding of the current call's dispatch, if it has one.
+fn dispatch_receiver(ctx: &LoweringContext<'_, '_>) -> Option<(char, Option<crate::ir::ValueId>)> {
+    match &ctx.call_guard_dispatch {
+        Some(GuardDispatch::Receiver { receiver, .. }) => Some(('o', Some(*receiver))),
+        Some(GuardDispatch::LateStatic { .. }) => Some(('l', None)),
+        _ => None,
+    }
+}
+
+/// Encodes the per-class table after the message suffix: the receiver kind (`o`: the last
+/// operand is the receiver object; `l`: the late-bound called class), then one record per
+/// group (`a` accepts as an unchecked binding, `t` throws with its own prefix and line).
+fn encode_override_groups(kind: char, groups: &[OverrideGroup]) -> String {
+    let mut encoded = format!("\u{1e}{kind}");
+    for group in groups {
+        let site = group.site.map_or_else(String::new, |site| {
+            format!("{}:{}:{}", site.line, site.col, site.source_id())
+        });
+        encoded.push_str(&format!(
+            "\u{1d}{}\u{1c}{}\u{1c}{}\u{1c}{site}",
+            if group.accept { 'a' } else { 't' },
+            group.classes.join(","),
+            group.prefix,
+        ));
+    }
+    encoded
 }
 
 /// Returns whether the method `description` names (`Declaring::method`) is the one PHP binds
@@ -352,15 +507,21 @@ pub(super) fn guard_scalar_param(
     }
     releases.extend(also_release.iter().copied());
     let release = if releases.is_empty() { "" } else { "r" };
-    // Operand 0 is the checked value; with the `r` flag the rest are released on refusal.
+    // Operand 0 is the checked value; with the `r` flag the rest are released on refusal,
+    // except a receiver the per-class table reads, which comes last.
     let mut guard_operands = vec![value.value];
     if !releases.is_empty() {
         guard_operands.extend(releases);
     }
-    let argument = sig.params.iter().take(index).filter(|(name, _)| {
-        name != crate::func_args::HIDDEN_ARGC_PARAM && name != crate::func_args::HIDDEN_ARGS_PARAM
-    }).count() + 1;
     let callable = ctx.call_description.clone().unwrap_or_default();
+    let groups = override_groups(ctx, &callable, sig, index, &declared).unwrap_or_default();
+    let dispatch = match dispatch_receiver(ctx) {
+        Some((kind, receiver)) if !groups.is_empty() => {
+            guard_operands.extend(receiver);
+            encode_override_groups(kind, &groups)
+        }
+        _ => String::new(),
+    };
     let source_path = ctx.source_path().unwrap_or("unknown").to_string();
     // PHP's "called in" names the line where the call starts, not the argument's line. An
     // internal method's refusal (a URI method under `strict_types=1`) has no such suffix.
@@ -371,10 +532,8 @@ pub(super) fn guard_scalar_param(
         format!(", called in {source_path} on line {line}")
     };
     let encoded = format!(
-        "{mode}{release}\u{1f}{}(): Argument #{argument} (${}) must be of type {}, \u{1f} given{called_in}",
-        guard_callee_label(ctx, &callable),
-        sig.params[index].0,
-        crate::types::diagnostic_names::php_type_name(&declared),
+        "{mode}{release}\u{1f}{}\u{1f} given{called_in}{dispatch}",
+        guard_message_prefix(&guard_callee_label(ctx, &callable), sig, index, &declared),
     );
     let data = ctx.intern_string(&encoded);
     if matches!(declared, PhpType::Int | PhpType::Float) {
