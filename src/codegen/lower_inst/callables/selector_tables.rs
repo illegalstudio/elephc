@@ -15,6 +15,10 @@
 //!   non-null object and the method a string before the scan, exactly as each case checked.
 //! - A matched receiver row binds through one shared sequence: a fresh runtime descriptor
 //!   copied from the row's template, owning one retained receiver capture.
+//! - A Closure factory's binding also draws an object handle. Otherwise the caller marks the
+//!   copy (array origin, or the ObjectInvoke kind for an invokable object) after the bind.
+//! - An owned string conversion's rows point at static descriptor variants that already record
+//!   the string origin, so selecting one costs no allocation.
 //! - The scan keeps its cursor and remaining-row count in a 16-byte temporary slot, because
 //!   `__rt_strcasecmp` clobbers every caller-saved register. Both exits leave the caller's
 //!   temporary stack exactly as they found it.
