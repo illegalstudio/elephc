@@ -176,6 +176,18 @@ pub(in crate::codegen) fn runtime_builtin_wrapper_sig(name: &str, sig: &Function
             *ty = None;
         }
     }
+    // `proc_terminate()`/`proc_nice()` hand their raw operands to a prelude helper that
+    // applies php-src's checks: an `int` slot here would let the invoker cast `[9]` to `1`.
+    if crate::builtins::proc::callable_takes_boxed_operands(name) {
+        for (index, (_, ty)) in sig.params.iter_mut().enumerate() {
+            if !sig.ref_params.get(index).copied().unwrap_or(false) {
+                *ty = PhpType::Mixed;
+                if let Some(type_expr) = sig.param_type_exprs.get_mut(index) {
+                    *type_expr = None;
+                }
+            }
+        }
+    }
     if let Some(def) = crate::builtins::registry::lookup(name) {
         if let crate::builtins::semantics::BuiltinRuntimeFunctions::One(runtime_fn) =
             def.spec.semantics.runtime_functions
@@ -282,7 +294,10 @@ fn build_runtime_call_wrapper_function(
                 && elephc_builtin_contract::lookup(name)
                     .is_some_and(|contract| contract.module == elephc_builtin_contract::PhpModule::Gmp)
         });
-        if prepared_eir_lowering || crate::builtins::registry::lookup(name).is_some_and(|def| matches!(
+        // The boxed proc wrappers reuse it too, so the helper sees the caller's strict_types.
+        if prepared_eir_lowering
+            || crate::builtins::proc::callable_takes_boxed_operands(name)
+            || crate::builtins::registry::lookup(name).is_some_and(|def| matches!(
             def.spec.semantics.argument_lowering,
             crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { .. }
         )) {

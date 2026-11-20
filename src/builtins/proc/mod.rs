@@ -70,6 +70,14 @@ pub(crate) fn dynamic_wrapper_helpers(name: &str) -> &'static [&'static str] {
     }
 }
 
+/// Whether `name` is a callable proc builtin whose helper converts a scalar operand itself
+/// (`proc_terminate()`'s signal, `proc_nice()`'s priority). Its runtime callable wrapper must
+/// take every operand boxed and lower through the direct-call path, so the invoker never
+/// casts `[9]` to `1` before the helper's TypeError, precision and strict-mode checks run.
+pub(crate) fn callable_takes_boxed_operands(name: &str) -> bool {
+    matches!(name, "proc_terminate" | "proc_nice")
+}
+
 /// Returns the prelude helpers to root when `name` is a public proc builtin: only that
 /// builtin's own twins, so a program calling just `proc_nice()` prunes the spawning half.
 pub(crate) fn prelude_helpers_for(name: &str) -> impl Iterator<Item = &'static str> {
