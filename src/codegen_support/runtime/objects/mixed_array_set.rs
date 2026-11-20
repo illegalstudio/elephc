@@ -120,7 +120,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the requested integer index
     emitter.instruction("str x9, [sp, #40]");                                   // preserve the target index across growth and release helpers
 
-    AttachedPackedSlots { array: 16, index: 8, owner: 48 }
+    AttachedPackedSlots { array: 32, index: 40, owner: 0 }
         .emit_grow_to_index(emitter, "__rt_mixed_array_set");
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the final array pointer
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload the target index

@@ -196,9 +196,9 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_array_gfw_return");                       // finish after installing the autovivified element
 
     emitter.label("__rt_mixed_array_gfw_extend");
-    AttachedPackedSlots { array: 24, index: 16, owner: 48 }
+    AttachedPackedSlots { array: 24, index: 32, owner: 0 }
         .emit_grow_to_index(emitter, "__rt_mixed_array_gfw");
-    abi::load_at_offset(emitter, "x11", 8);
+    emitter.instruction("ldr x11, [sp, #40]");                                   // start filling at the captured logical length
     packed_slots::emit_publish_mixed_extension(emitter, "__rt_mixed_array_gfw", true);
     emitter.instruction("b __rt_mixed_array_gfw_fill_slot");                    // install the autovivified element into the new slot
 

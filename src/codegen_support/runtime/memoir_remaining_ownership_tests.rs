@@ -42,3 +42,60 @@ fn memoir_remaining_ownership_preserves_runtime_assembly() {
     }
     assert_eq!(fingerprints.join("\n"), include_str!("memoir_remaining_ownership_baseline.txt").trim());
 }
+
+
+/// Native Mixed array writers use the exact slots of their active frame on every target.
+#[test]
+fn attached_packed_growth_uses_native_writer_frame_slots() {
+    use crate::codegen_support::{emit::Emitter, platform::Target};
+
+    let runtime_emitters = [
+        (
+            "__rt_mixed_array_set",
+            objects::emit_mixed_array_set as fn(&mut Emitter),
+            (32, 40),
+            (40, 48),
+        ),
+        (
+            "__rt_mixed_array_gfw",
+            objects::emit_mixed_array_fetch_for_write,
+            (24, 32),
+            (32, 40),
+        ),
+    ];
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        for (label, emit, (arm_array, arm_index), (x86_array, x86_index)) in runtime_emitters {
+            let mut emitter = Emitter::new(target);
+            emit(&mut emitter);
+            let assembly = emitter.output();
+            let (_, growth) = assembly.split_once(&format!("{label}_grow_check:")).unwrap();
+            let (growth, _) = growth.split_once(&format!("{label}_grow_ready:")).unwrap();
+            let expected = if name == "linux-x86_64" {
+                [
+                    format!("mov r10, QWORD PTR [rbp - {x86_array}]"),
+                    format!("mov r9, QWORD PTR [rbp - {x86_index}]"),
+                    "call __rt_array_grow".into(),
+                    format!("mov QWORD PTR [rbp - {x86_array}], rax"),
+                    "mov r10, QWORD PTR [rbp - 8]".into(),
+                    "mov QWORD PTR [r10 + 8], rax".into(),
+                ]
+            } else {
+                [
+                    format!("ldr x10, [sp, #{arm_array}]"),
+                    format!("ldr x9, [sp, #{arm_index}]"),
+                    "bl __rt_array_grow".into(),
+                    format!("str x0, [sp, #{arm_array}]"),
+                    "ldr x10, [sp, #0]".into(),
+                    "str x0, [x10, #8]".into(),
+                ]
+            };
+            let mut rest = growth;
+            for instruction in expected {
+                rest = rest.split_once(&instruction)
+                    .unwrap_or_else(|| panic!("{name} {label} missing {instruction}: {growth}"))
+                    .1;
+            }
+        }
+    }
+}

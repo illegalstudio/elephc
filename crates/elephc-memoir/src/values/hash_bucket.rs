@@ -112,10 +112,11 @@ pub fn emit_branch_if_shared_reference(emitter: &mut impl Emitter, absent: &str,
     match emitter.arch() {
         Arch::AArch64 => {
             emitter.instruction(&format!("cbz x4, {absent}"));                  // a missing key cannot own a reference
-            emitter.instruction("ldr x5, [x4, #40]");                           // load the stored payload tag
+            emitter.instruction("mov x6, x4");                                  // keep the matching bucket during the probe
+            emitter.instruction("ldr x3, [x6, #24]");                           // load the managed cell pointer for a reference entry
+            emitter.instruction("ldr x5, [x6, #40]");                           // load the stored payload tag
             emitter.instruction("cmp x5, #11");                                 // check for the managed reference-cell tag
             emitter.instruction(&format!("b.ne {absent}"));                     // other entries carry values
-            emitter.instruction("ldr x3, [x4, #24]");                           // load the managed cell pointer
             emitter.instruction("ldr w10, [x3, #-12]");                         // read its unadjusted physical owner count
             emitter.instruction("cmp w10, #1");                                 // count owners beyond the entry itself
             emitter.instruction(&format!("b.hi {shared}"));                     // preserve a reference used by another owner
@@ -123,10 +124,13 @@ pub fn emit_branch_if_shared_reference(emitter: &mut impl Emitter, absent: &str,
         Arch::X86_64 => {
             emitter.instruction("test r8, r8");                                 // a missing key cannot own a reference
             emitter.instruction(&format!("jz {absent}"));                       // leave the probe false on a missing key
-            emitter.instruction("cmp QWORD PTR [r8 + 40], 11");                 // check for the managed reference-cell tag
+            emitter.instruction("mov r10, r8");                                 // keep the matching bucket during the probe
+            emitter.instruction("mov rcx, QWORD PTR [r10 + 24]");               // load the managed cell pointer for a reference entry
+            emitter.instruction("mov r9, QWORD PTR [r10 + 40]");                // load the stored payload tag
+            emitter.instruction("cmp r9, 11");                                  // check for the managed reference-cell tag
             emitter.instruction(&format!("jne {absent}"));                      // other entries carry values
-            emitter.instruction("mov rcx, QWORD PTR [r8 + 24]");                // load the managed cell pointer
-            emitter.instruction("cmp DWORD PTR [rcx - 12], 1");                 // count owners beyond the entry itself
+            emitter.instruction("mov r10d, DWORD PTR [rcx - 12]");              // read the unadjusted physical owner count
+            emitter.instruction("cmp r10d, 1");                                 // count owners beyond the entry itself
             emitter.instruction(&format!("ja {shared}"));                       // preserve a reference used by another owner
         }
     }
