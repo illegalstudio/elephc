@@ -219,3 +219,31 @@ detachedStringCaptures($argc + 1);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{assembly}", out.stderr);
     assert_eq!(compile_and_run_tagged(source), expected);
 }
+
+/// A by-reference capture in the second branch of an if/elseif promotes its own cell: the first
+/// branch's promotion is not a fact about the alternative, and skipping it leaked both versions.
+#[test]
+fn test_elseif_reference_capture_promotes_its_own_cell() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ElseifCaptureOwner {
+    public static int $destroyed = 0;
+    public function __destruct() { self::$destroyed++; }
+}
+function elseifCapture(int $mode): void {
+    $item = new ElseifCaptureOwner(); $copy = $item;
+    if ($mode === 0) {
+        $change = function() use (&$item): int { $item = new ElseifCaptureOwner(); return 1; };
+        echo $change();
+    } elseif ($mode === 1) {
+        $change = function() use (&$item): int { $item = new ElseifCaptureOwner(); return 2; };
+        echo $change();
+    }
+    unset($copy, $item, $change);
+}
+elseifCapture($argc);
+echo ElseifCaptureOwner::$destroyed;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "22");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

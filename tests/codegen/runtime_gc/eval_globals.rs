@@ -322,3 +322,21 @@ echo ':', $GLOBALS['unit_runs'];
         "main.php",
     )
 }
+
+/// A function declared by `eval()` inside a helper function retains its context and the
+/// program-global scope that owns `$argv`/`$argc`. The CLI request must finalize that context at
+/// exit even though `main` itself holds no eval context, so the heap stays clean.
+#[test]
+fn test_eval_function_declaration_in_helper_releases_retained_context_at_exit() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function declareInHelper(bool $run): void {
+    $code = $run ? 'function retainedByEval($v) { return $v + 1; }' : '';
+    eval($code);
+}
+declareInHelper($argc > 0);
+echo 'ok';
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
