@@ -1302,12 +1302,20 @@ pieces must stay in agreement:
    `runtime_callable_invoker::scalar_param_args` checks the boxed arguments
    bound to guarded parameters, taking strictness from the invocation profile
    word. Whether an invoker checks is part of its cache key, next to the
-   signature and the `{closure:file:line}` callee label a closure needs.
+   signature and the `{closure:file:line}` callee label a closure needs. A
+   callable the compiler resolves statically (`$f = $o->m(...); $f($v)`,
+   `call_user_func_array([$o, "m"], [$v])`, `$f = "f"; $f($v)`) does not reach
+   the invoker: lowering emits the direct call with `scalar_guards_unrecorded`
+   set, so its arguments are checked from their value types.
 8. **Exemptions.** Builtins (`declared_params: false`) and `extern` calls (their
-   `call_description` is cleared) are never checked. Neither are the methods of
-   the internal `ext/uri` prelude classes, either called directly or through an
-   invoker whose declaring class is one of them: PHP only deprecates a `null`
-   bound to an internal function's scalar parameter.
+   `call_description` is cleared) are never checked. The methods of the
+   internal `ext/uri` prelude classes, called directly or through an invoker
+   whose declaring class is one of them, are checked only under
+   `strict_types=1` (without the "called in" suffix): in coercive mode PHP only
+   deprecates a `null` bound to an internal function's scalar parameter. A
+   method is not checked when an override in a subclass or implementor declares
+   a different parameter, since lowering only knows the receiver's static class
+   and PHP binds the method selected at run time.
 
 ### Eval and Dynamic Symbols
 
