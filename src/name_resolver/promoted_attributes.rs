@@ -15,11 +15,14 @@
 //!   a user class, which is not split. User attributes stay on both owners.
 //! - Only this class's own constructor parameters are promoted; an inherited promoted property
 //!   of the same name does not make a child's plain parameter promoted.
+//! - Targets follow the compile profile: below 8.5 `#[Override]` matches neither owner, so it
+//!   stays on both and the checker reports the parameter.
 
 use crate::parser::ast::{AttributeGroup, ClassMethod, ClassProperty};
-
-const TARGET_PROPERTY: i64 = 8;
-const TARGET_PARAMETER: i64 = 32;
+use crate::types::checker::core_attributes;
+use elephc_builtin_contract::{
+    CORE_ATTRIBUTE_TARGET_PARAMETER as TARGET_PARAMETER, CORE_ATTRIBUTE_TARGET_PROPERTY as TARGET_PROPERTY,
+};
 
 /// Drops each promoted parameter's Core attributes from the owner whose target they do not
 /// match: the property keeps the property-only ones, the parameter the parameter-only ones.
@@ -55,7 +58,7 @@ fn without_other_target(groups: &[AttributeGroup], own: i64, other: i64) -> Vec<
                 .attributes
                 .iter()
                 .filter(|attribute| {
-                    elephc_builtin_contract::core_attribute_flags(&attribute.name.as_canonical())
+                    core_attributes::flags(attribute.name.as_str())
                         .is_none_or(|flags| flags & own != 0 || flags & other == 0)
                 })
                 .cloned()
