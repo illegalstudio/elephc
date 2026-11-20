@@ -10,7 +10,8 @@
 //!   module tree itself compiled the whole compiler a second time, after the library.
 
 use crate::{
-    cli, linker, monitor, native_deps, opcache, php_ext, pipeline, project_ini, repl, test_command,
+    cli, linker, monitor, native_deps, opcache, php_ext, pipeline, project_ini, project_monitoring, repl,
+    test_command,
 };
 
 /// Runs the command named by the process arguments, as the `elephc` binary's entry point.
@@ -37,6 +38,7 @@ pub fn run() {
         cli::Command::Repl(command) => std::process::exit(repl::run(command)),
         cli::Command::Build(mut config) => {
             apply_project_ini(&mut config);
+            apply_project_monitoring(&mut config);
             emit_ini_override_warnings(&config);
             pipeline::compile(config);
         }
@@ -56,6 +58,35 @@ pub(crate) fn apply_project_ini(config: &mut cli::CliConfig) {
         Ok(mut entries) => {
             entries.append(&mut config.ini_overrides);
             config.ini_overrides = entries;
+        }
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Fills what the command line left unset from the project's `elephc.toml` `[monitoring]` and
+/// `[apm]` tables (with the entry file's `[entry."<path>"]` overrides), and says what the
+/// manifest turned on. A manifest that cannot be used stops the compile, as for `[ini]`.
+fn apply_project_monitoring(config: &mut cli::CliConfig) {
+    let source = std::path::PathBuf::from(&config.filename);
+    let outcome = project_monitoring::discover(&source).and_then(|found| {
+        let Some(found) = found else {
+            return Ok(Vec::new());
+        };
+        let (monitoring, apm) = found.settings.for_entry(&found.root, &source);
+        config.apm_include = apm.include.clone().unwrap_or_default();
+        config.apm_exclude = apm.exclude.clone().unwrap_or_default();
+        project_monitoring::apply_to_build(config, &monitoring, &apm, &found.manifest.display().to_string())
+    });
+    match outcome {
+        Ok(notes) => {
+            if !config.quiet {
+                for note in notes {
+                    eprintln!("  note: {note}");
+                }
+            }
         }
         Err(message) => {
             eprintln!("error: {message}");

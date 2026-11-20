@@ -35,21 +35,25 @@ pub(crate) fn io_of(graph: &crate::call_graph::CallGraph) -> Io {
 /// A run that exits 0 counts in the 2xx class and any other end — a non-zero
 /// exit, a signal — in the 5xx class, so failed runs read as errors wherever
 /// routes' errors do. The wall time is the process's own, measured by the
-/// launcher, so it holds even when the run died before writing a profile.
-pub(crate) fn cli_run_window(name: &str, succeeded: bool, wall_ns: u64, io: Io, ended_ms: u64) -> Window {
+/// launcher, so it holds even when the run died before writing a profile. The
+/// exact `exit_code` is kept too (a signal as 128 + its number, as a shell says it).
+pub(crate) fn cli_run_window(name: &str, exit_code: i32, wall_ns: u64, io: Io, ended_ms: u64) -> Window {
+    let succeeded = exit_code == 0;
     let mut stats = RouteStats::empty(name);
     stats.count = 1;
     stats.status[if succeeded { 1 } else { 4 }] = 1;
     stats.sum_ns = wall_ns;
     stats.hist[apm::bucket_of(wall_ns)] = 1;
     Window {
+        build: String::new(),
         t: ended_ms,
         span_ms: wall_ns / 1_000_000,
         epoch: 0,
         source: String::new(),
-        routes: vec![RouteWindow { io, ..RouteWindow::from_stats(&stats) }],
+        routes: vec![RouteWindow { io, exits: vec![(exit_code, 1)], ..RouteWindow::from_stats(&stats) }],
         // A run is not a stretch of the service's time: no service resources.
         res: None,
+        errors: Vec::new(),
     }
 }
 
@@ -61,18 +65,36 @@ pub(crate) fn cli_run_window(name: &str, succeeded: bool, wall_ns: u64, io: Io, 
 /// table is this run alone.
 pub(crate) fn record_cli_run(
     cmd: &MonitorCommand,
-    succeeded: bool,
+    exit_code: i32,
     wall_ns: u64,
     io: Io,
     status_label: &str,
+    graph: Option<&crate::call_graph::CallGraph>,
 ) -> Result<(String, Window), String> {
     let name = cli_transaction_name(&cmd.target, &cmd.target_args);
     let now = store::now_ms();
-    let window = cli_run_window(&name, succeeded, wall_ns, io, now);
+    let succeeded = exit_code == 0;
+    let window = cli_run_window(&name, exit_code, wall_ns, io, now);
     let history = match &cmd.apm_store {
         Some(dir) => {
             let store = Store::open(dir, cmd.apm_retention_days)?;
             store.append(&window)?;
+            // The run's exact profile, dated beside it: the page finds a run's
+            // profile by its period, as it finds a captured request's.
+            if let Some(graph) = graph {
+                let record = super::captures::CaptureRecord {
+                    id: super::captures::next_capture_id(now),
+                    source: String::new(),
+                    t: now,
+                    kind: "run".to_string(),
+                    route: name.clone(),
+                    status: Some(if succeeded { 200 } else { 500 }),
+                    duration_ns: wall_ns,
+                    functions: graph.nodes.len(),
+                    queries: graph.queries.iter().map(|(_, n)| n).sum(),
+                };
+                store.append_capture(&record, graph)?;
+            }
             // A store fed only by cron runs has no collector to keep it in
             // bounds, so a run prunes it — but only when told how long to keep:
             // the default must not cut a collector's longer retention.

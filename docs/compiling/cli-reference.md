@@ -135,7 +135,7 @@ automatically; see [Hosting PHP extensions](../beyond-php/php-extensions.md).
 | `monitor <address>` | `<host:port\|http://host\|https://host\|/path/to.sock> [--key <file>] [--out <file>] [--pprof <file>] [--dot <file>] [--html <file>]` | Profile a service already running. Sampled CPU time, allocation attribution and route tags by default; no blocked wall time or combined-build SQL/wait summary. `--exact` returns the measured table for the next completed request. Needs the build key. |
 | `monitor --attach` | `<pid> [--live] [--duration <seconds>]` | Monitor an already-running local process (and its worker children) instead of spawning one. Sampled, and reads the process from the outside, so the target must have been built with `--keep-symbols` and the OS must permit tracing it. |
 | `monitor --live` | `<program\|source.php> [--duration <seconds>] [--html <file>] [--serve <host:port>]` | Top-style table refreshed once per window. Sampled — it answers from the ring — but on every platform: it launches the program, so it asks over the same control channel the exact path uses rather than reading it from the outside. |
-| `monitor --apm` | `<host:port\|socket> [--key <file>] [--live] [--duration <seconds>] [--route <label>] [--capture-every <seconds>] [--store <dir>] [--retention <days>] [--resolution <seconds>] [--serve <host:port>]`, or `<host:port\|socket> --reset-routes`, or `--listen <host:port> [--key <file>] [--live] [--store <dir>] [--serve <host:port>] [--alert ...]`, or `<program\|source.php> [--store <dir>] [--html <file>] [--route <label>] [-- <args>...]`, or `--store <dir> [--serve <host:port>]` | Transaction monitoring. Against a `--web` service built with `--with-monitoring` and started with `--apm`: per-route requests, rate, mean, p50/p95/p99, 4xx/5xx shares and share of wall time, with the service's CPU and memory; `--live` refreshes with per-route sparklines, `--route` adds a latency histogram, `--store` keeps a daily history, `--serve` serves the monitor page with a Transactions view and on-demand profile capture, plus Prometheus `/metrics`; `--capture-every <seconds>` keeps exact profiles of the slowest and failed requests of each route; `--alert <metric>:<route><op><value>` budgets are checked continuously with an `--alert-exec` hook, or once (exit 2 when broken) without a collector, where `--capture-every`, `--alert-exec` and `--alert-window` are refused; routes also carry database statements and wait. Against a program: records the run as `CLI <script> [<command>]` (failed when it does not exit 0), prints that transaction's runs, and exits with the program's code. `--reset-routes` empties the service's route table (the page has the same action). `--listen` receives the counters of programs built with `--apm-collector` (each proving the build key), as sources of one history. With only `--store`: the stored history in the terminal, or on the page with `--serve`. See [Transaction monitoring](../beyond-php/apm.md). |
+| `monitor --apm` | `<host:port\|socket> [--key <file>] [--live] [--duration <seconds>] [--route <label>] [--capture-every <seconds>] [--store <dir>] [--retention <days>] [--retention-full <days>] [--retention-minute <days>] [--resolution <seconds>] [--serve <host:port>]`, or `<host:port\|socket> --reset-routes`, or `--listen <host:port> [--key <file>] [--live] [--store <dir>] [--serve <host:port>] [--alert ...]`, or `<program\|source.php> [--store <dir>] [--html <file>] [--route <label>] [-- <args>...]`, or `--store <dir> [--serve <host:port>]` | Transaction monitoring. Against a `--web` service built with `--with-monitoring` and started with `--apm`: per-route requests, rate, mean, p50/p95/p99, 4xx/5xx shares and share of wall time, with the service's CPU and memory; `--live` refreshes with per-route sparklines, `--route` adds a latency histogram, `--otlp <endpoint>` pushes the counters as OTLP metrics, `--store` keeps a daily history, rolled up by the minute past `--retention-full` days and by the hour past `--retention-minute` days, `--serve` serves the monitor page with a Transactions view and on-demand profile capture, plus Prometheus `/metrics`; `--capture-every <seconds>` keeps exact profiles of the slowest and failed requests of each route; `--alert <metric>:<route><op><value>` budgets are checked continuously with an `--alert-exec` hook, or once (exit 2 when broken) without a collector, where `--capture-every`, `--alert-exec` and `--alert-window` are refused; routes also carry database statements and wait. Against a program: records the run as `CLI <script> [<command>]` (failed when it does not exit 0), prints that transaction's runs, and exits with the program's code. `--reset-routes` empties the service's route table (the page has the same action). `--listen` receives the counters of programs built with `--apm-collector` (each proving the build key), as sources of one history. With only `--store`: the stored history in the terminal, or on the page with `--serve`. See [Transaction monitoring](../beyond-php/apm.md). |
 | `monitor --stitch` | `<log> [<log>...] [--html <file>] [--otlp <endpoint>] [--prometheus <file>]` | Correlate per-request slices from several services into distributed traces, joined by W3C trace id; summarise them per service and route, and export them as OpenTelemetry spans or Prometheus metrics. |
 
 `elephc monitor` runs the program and renders what it measured: a per-function
@@ -251,7 +251,7 @@ eight dimensions, and true edge counts instead of statistical shares.
 `network`, `network_wait_ms` and `time_pct`; the operator is one of `<=`, `>=`,
 `==`, `<`, `>`; `*` as the
 function name means the whole run. Any failure exits 2. Repeat the flag for several budgets. A project's
-standing budget lives in a `.elephc` file found by walking up from the source,
+standing budget lives in the `[budgets]` table of its `elephc.toml`, found by walking up from the source,
 so `--assert` is for one-off checks and the file is for the ones you keep; both
 are reported in the page's ✓ Checks view. `--save <file.json>` writes the exact
 capture and `--baseline <file.json>` reads one back, colouring the graph red and
@@ -890,6 +890,14 @@ values are passed through unchanged, so a relative path means what it means
 with `--ini`. `examples/project-ini` is a program compiled this way; it prints
 what PHP prints with the same values given as `-d` flags.
 
+The same file holds a project's monitoring: `[monitoring]` and `[apm]` stand for
+`--with-monitoring`, `--with-apm`, `--apm-collector` and `--apm-transaction`,
+with route and command `include`/`exclude` patterns and per-entry
+`[entry."<path>"]` overrides (see [Transaction monitoring](../beyond-php/apm.md#in-the-project-file)),
+and `[budgets]` holds the rules `elephc monitor` checks a run against (see
+[Profiling](../beyond-php/profiling.md#a-budget-per-project)). There too the
+command line wins.
+
 ### Runtime overrides: `ELEPHC_INI_*`
 
 Once a binary is built, a directive can still be re-pointed for a single run
@@ -1032,6 +1040,15 @@ overrides. Native-package variables select the cache and target C toolchain:
 
 `TARGET_ENV` is the uppercase target with hyphens replaced by underscores, such
 as `LINUX_AARCH64`. All three tool overrides are required for a non-host target.
+
+A build that links the probe (`--with-monitoring`, `--with-apm`) also reads these. They
+have no flag:
+
+| Variable | Values | Effect |
+|---|---|---|
+| `ELEPHC_PROBE_KEY` | 64 hex characters | The build key, in place of a random one per build |
+| `ELEPHC_BUILD_ID` | text, one line | The build's label in what it reports, which marks [deploys](../beyond-php/apm.md#deploys); defaults to the git checkout's short commit |
+| `SOURCE_DATE_EPOCH` | Unix seconds | The build's time in that identity, for reproducible builds |
 
 The variables in this table are read by the **compiler**. A separate family,
 `ELEPHC_INI_<directive>`, is read by the **compiled binary** at run time — see

@@ -541,6 +541,10 @@ pub(crate) fn emit_runtime_data_fixed(
     // --probe; the exact runtime forwards database and network events through
     // it, so --apm counts them per route in a combined build.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_apm_event_fn"), 8, target));
+    // elephc_probe_trace_fn: filled with elephc_probe_trace_begin under --probe; in a
+    // combined build the exact runtime owns the web bridge's trace slot and hands each
+    // request's `traceparent` on through it, so --apm links errors to traces.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_trace_fn"), 8, target));
     // elephc_probe_reap_fn: filled with elephc_probe_reap under --probe; the
     // --web master calls it for every worker it reaps, so a request that died
     // with its worker is counted as a server error under --apm.
@@ -576,6 +580,10 @@ pub(crate) fn emit_runtime_data_fixed(
     // it. One check, in one place: repeating it would consume the control
     // channel's marker twice and the second reader would see nothing.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_monitor_active"), 8, target));
+    // elephc_trace_active: 1 while a transaction-monitoring build (`--with-apm`) has
+    // published the current request's W3C trace context, so curl propagates it without
+    // the exact profiler's capture being on. Zero in every other binary.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_trace_active"), 8, target));
     // elephc_monitor_event_active_fn: optional callback for a monitoring
     // consumer whose shared event window is not represented by the exact-slice
     // word above. The sampled probe installs it so bridges can avoid clock reads
@@ -592,6 +600,11 @@ pub(crate) fn emit_runtime_data_fixed(
     // names it; a Rust crate resolving it directly would break every ELF link.
     // Handing over a pointer keeps that name inside the assembly.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_allocs_ptr"), 8, target));
+    // elephc_instr_live_ptr: the ADDRESS of `_gc_live`, published under
+    // --instrument so the exact profiler can note the heap's bytes at the end of
+    // each call it records for the profile page's timeline. A pointer for the
+    // same reason as the slot above.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_live_ptr"), 8, target));
     // elephc_instr_io_fn: a function-pointer slot filled with elephc_instr_io
     // under --instrument, else zero. I/O builtins (PDO queries) read it and call
     // through it when non-null, so the exact profiler can count queries per
