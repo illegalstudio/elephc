@@ -15,27 +15,18 @@ use elephc_memoir::handler_owners::{self, PENDING};
 
 /// Emits the two handler kinds through the same ownership and linked-stack protocol.
 pub(super) fn emit_handler_state(emitter: &mut Emitter) {
-    for kind in ["error", "exception"] {
+    for (kind, fields) in [
+        ("error", handler_owners::ERROR_FIELDS.as_slice()),
+        ("exception", handler_owners::EXCEPTION_FIELDS.as_slice()),
+    ] {
         let prefix = format!("__rt_core_{kind}_handler");
-        let fields = fields(kind);
-        let fields = fields.iter().map(String::as_str).collect::<Vec<_>>();
         let context = fields.len() - 2;
         handler_owners::emit_release(
             emitter, &prefix, [fields[1], fields[2], fields[context], fields[context + 1]],
             emit_finish_cleanup,
         );
-        handler_owners::emit_pop(emitter, &prefix, &fields, emit_finish_cleanup);
+        handler_owners::emit_pop(emitter, &prefix, fields, emit_finish_cleanup);
     }
-}
-
-/// Returns handler fields in their ABI-defined linked-node order.
-fn fields(kind: &str) -> Vec<String> {
-    let mut suffixes = vec!["stack", "value", "callable"];
-    if kind == "error" {
-        suffixes.push("mask");
-    }
-    suffixes.extend(["context", "context_release"]);
-    suffixes.iter().map(|suffix| format!("_php_{kind}_handler_{suffix}")).collect()
 }
 
 /// Propagates a pending destructor throw only after the caller has finished its handler cleanup.

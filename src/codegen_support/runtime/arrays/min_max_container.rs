@@ -23,11 +23,13 @@
 //! - String payloads stay **borrowed** from the container: nothing is persisted, retained
 //!   or released here.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
 /// Byte offset of the first payload slot inside an indexed-array allocation.
-const ARRAY_DATA_OFFSET: i64 = 24;
+const ARRAY_DATA_OFFSET: i64 = packed_slots::PACKED_PAYLOAD_OFFSET as i64;
 
 /// Emits `__rt_min_max_mixed`: reduces an indexed array of boxed `Mixed` cells.
 ///

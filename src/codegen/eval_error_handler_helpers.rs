@@ -18,16 +18,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::Module;
 use elephc_memoir::callables::storage::{self, CaptureSlot};
-
-const ERROR_HANDLER_FIELDS: [&str; 6] = [
-    "_php_error_handler_stack",
-    "_php_error_handler_value",
-    "_php_error_handler_callable",
-    "_php_error_handler_mask",
-    "_php_error_handler_context",
-    "_php_error_handler_context_release",
-];
-const ERROR_HANDLER_NODE_BYTES: i64 = (ERROR_HANDLER_FIELDS.len() * 8) as i64;
+use elephc_memoir::handler_owners::ERROR_FIELDS;
 
 /// Emits eval-facing error-reporting, handler registration, restore, and dispatch wrappers.
 pub(super) fn emit_eval_error_handler_helpers(
@@ -99,9 +90,9 @@ fn emit_set_error_handler_aarch64(
     emitter.instruction("str x1, [sp, #8]");                                    // save the nullable boxed callback value
     emitter.instruction("str x2, [sp, #16]");                                   // save the selected PHP error-level mask
     emitter.instruction("str x3, [sp, #24]");                                   // save writable previous-callback output storage
-    elephc_memoir::handler_owners::emit_allocate_node(emitter, ERROR_HANDLER_NODE_BYTES);
+    elephc_memoir::handler_owners::emit_allocate_node(emitter, &ERROR_FIELDS);
     emitter.instruction("str x0, [sp, #32]");                                   // preserve the node across symbol loads and calls
-    elephc_memoir::handler_owners::emit_save_node(emitter, "x0", "x9", &ERROR_HANDLER_FIELDS, true);
+    elephc_memoir::handler_owners::emit_save_node(emitter, "x0", "x9", &ERROR_FIELDS, true);
     abi::emit_load_symbol_to_reg(emitter, "x0", "_php_error_handler_value", 0);
     emitter.instruction(&format!("cbz x0, {no_previous}"));                     // an empty prior registration returns a null raw pointer
     emitter.instruction("bl __rt_incref");                                      // give the PHP return value an independent owner
@@ -167,9 +158,9 @@ fn emit_set_error_handler_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the nullable boxed callback value
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the selected PHP error-level mask
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save writable previous-callback output storage
-    elephc_memoir::handler_owners::emit_allocate_node(emitter, ERROR_HANDLER_NODE_BYTES);
+    elephc_memoir::handler_owners::emit_allocate_node(emitter, &ERROR_FIELDS);
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the node across symbol loads and calls
-    elephc_memoir::handler_owners::emit_save_node(emitter, "rax", "r10", &ERROR_HANDLER_FIELDS, true);
+    elephc_memoir::handler_owners::emit_save_node(emitter, "rax", "r10", &ERROR_FIELDS, true);
     abi::emit_load_symbol_to_reg(emitter, "rax", "_php_error_handler_value", 0);
     emitter.instruction("test rax, rax");                                       // check for an existing callback value
     emitter.instruction(&format!("jz {no_previous}"));                          // an empty prior registration returns a null raw pointer

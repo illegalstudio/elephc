@@ -367,7 +367,18 @@ fn emit_zero_x86_64(emitter: &mut impl Emitter, wide: bool, array_reg: &str, ind
 }
 
 /// Byte width of the length, capacity and stride words preceding packed slots.
-const PACKED_PAYLOAD: usize = 24;
+/// Byte offset of the first slot after the packed array header.
+pub const PACKED_PAYLOAD_OFFSET: usize = 24;
+
+/// Forms the AArch64 payload base from a validated packed array pointer.
+pub fn emit_packed_payload_aarch64(emitter: &mut impl Emitter, destination: &str, array: &str) {
+    emitter.instruction(&format!("add {destination}, {array}, #{PACKED_PAYLOAD_OFFSET}")); // skip the packed array header
+}
+
+/// Forms the x86_64 payload base from a validated packed array pointer.
+pub fn emit_packed_payload_x86_64(emitter: &mut impl Emitter, destination: &str, array: &str) {
+    emitter.instruction(&format!("lea {destination}, [{array} + {PACKED_PAYLOAD_OFFSET}]")); // skip the packed array header
+}
 
 /// Writes one prepared owner into a reserved word-sized slot at a dynamic index.
 pub fn emit_store_indexed_word(
@@ -375,11 +386,11 @@ pub fn emit_store_indexed_word(
 ) {
     match emitter.arch() {
         Arch::AArch64 => {
-            emitter.instruction(&format!("add {address}, {array}, #{PACKED_PAYLOAD}")); // select payload storage after the indexed header
+            emit_packed_payload_aarch64(emitter, address, array);
             emitter.instruction(&format!("str {value}, [{address}, {index}, lsl #3]")); // transfer the prepared word to its slot
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov QWORD PTR [{array} + {index} * 8 + {PACKED_PAYLOAD}], {value}")); // transfer the prepared word to its slot
+            emitter.instruction(&format!("mov QWORD PTR [{array} + {index} * 8 + {PACKED_PAYLOAD_OFFSET}], {value}")); // transfer the prepared word to its slot
         }
     }
 }
@@ -388,7 +399,7 @@ pub fn emit_store_indexed_word(
 pub fn emit_publish_word_at(
     emitter: &mut impl Emitter, array: &str, value: &str, length: &str, index: usize,
 ) {
-    emitter.emit_store_to_address(value, array, PACKED_PAYLOAD + index * 8);
+    emitter.emit_store_to_address(value, array, PACKED_PAYLOAD_OFFSET + index * 8);
     emitter.emit_load_int_immediate(length, (index + 1) as i64);
     emit_publish_length(emitter, array, length);
 }

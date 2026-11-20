@@ -13,7 +13,7 @@ use super::*;
 use crate::codegen::lower_inst::{callables, callable_argument_normalizer};
 use crate::codegen_support::{callable_descriptor, sentinels};
 
-const BORROWED_BYTES: usize = 96;
+const BORROWED_BYTES: usize = 3 * elephc_memoir::values::stack_cell::BORROWED_MIXED_ARG_CELL_BYTES;
 
 /// Converts borrowed operands to the uniform reduction ABI without narrowing the carry type.
 pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {

@@ -21,6 +21,8 @@
 //!   string = 16-byte ptr+len slots) are read directly. The array is NOT
 //!   mutated — elements are only read.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits `__rt_vsprintf(array_ptr, fmt_ptr, fmt_len) -> string`.
@@ -53,7 +55,7 @@ pub fn emit_vsprintf(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_vsprintf_empty");                         // null array → format with zero args
     emitter.instruction("ldr x9, [x0]");                                        // array logical length
     emitter.instruction("str x9, [x29, #32]");                                  // save the argument count
-    emitter.instruction("add x10, x0, #24");                                    // skip the 24-byte array header to the slot payload
+    packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("str x10, [x29, #40]");                                 // save the slot base pointer
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x11", "x0");
     emitter.instruction("lsr x11, x11, #8");                                    // shift the runtime value_type into the low byte

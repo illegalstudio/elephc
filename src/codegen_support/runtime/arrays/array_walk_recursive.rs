@@ -8,6 +8,8 @@
 //! Key details:
 //! - Mirrors `__rt_array_walk` (scalar leaf passed in one word, env optional) but descends into array-valued elements.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -54,7 +56,7 @@ pub fn emit_array_walk_recursive(emitter: &mut Emitter) {
     emitter.instruction("cmp x13, x12");                                        // has the index reached the length?
     emitter.instruction("b.ge __rt_array_walk_recursive_done");                 // finish once every element is visited
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the array pointer
-    emitter.instruction("add x1, x1, #24");                                     // skip the 24-byte indexed-array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x1", "x1");
     emitter.instruction("ldr x0, [x1, x13, lsl #3]");                           // load the scalar leaf at element[i]
     emitter.instruction("cbz x20, __rt_array_walk_recursive_idx_call");         // no environment keeps the one-argument callback ABI
     emitter.instruction("mov x1, x20");                                         // pass the callback environment as the second argument
@@ -70,7 +72,7 @@ pub fn emit_array_walk_recursive(emitter: &mut Emitter) {
     emitter.instruction("cmp x13, x12");                                        // has the index reached the length?
     emitter.instruction("b.ge __rt_array_walk_recursive_done");                 // finish once every sub-array is visited
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the array pointer
-    emitter.instruction("add x1, x1, #24");                                     // skip the 24-byte indexed-array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x1", "x1");
     emitter.instruction("ldr x1, [x1, x13, lsl #3]");                           // load the sub-array pointer at element[i]
     emitter.instruction("mov x0, x19");                                         // pass the callback address to the recursive call
     emitter.instruction("mov x2, x20");                                         // pass the callback environment to the recursive call

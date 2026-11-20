@@ -29,7 +29,7 @@ use elephc_memoir::hash_entry_references::REFERENCE_CELL_VALUE_TAG;
 /// never collide with one. `IterNext` stores it for a done cursor and for a positive cursor whose
 /// successor has no following entry. A post-last cursor instead stores the TAIL key it just
 /// yielded, so the walk can resume from that key's live successor.
-pub(super) const NO_SUCCESSOR_KEY_MARKER: i64 = -2;
+use elephc_memoir::values::iterator_storage::NO_SUCCESSOR_KEY_MARKER;
 
 /// Emits every hash-entry reference helper for the current target.
 pub fn emit_hash_entry_reference(emitter: &mut Emitter) {

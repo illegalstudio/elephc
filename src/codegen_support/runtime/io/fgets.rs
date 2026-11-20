@@ -12,6 +12,8 @@
 //!   A line longer than the 64 KiB concat scratch therefore produces owned heap storage
 //!   instead of running past `_concat_buf` into the adjacent BSS globals.
 
+use elephc_memoir::buffers::io_scratch;
+
 use elephc_memoir::strings::concat_window::{self, ReadAhead, WindowSlots};
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
@@ -138,8 +140,8 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("cbz x2, __rt_fgets_wrapper_done");                     // defensive: empty read also ends the line
     emitter.instruction("ldrb w13, [x1]");                                      // load the read byte
     emitter.instruction("ldr x10, [sp, #8]");                                   // current line length
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_user_wrapper_drain_buf");
-    emitter.instruction("strb w13, [x12, x10]");                                // append the byte to the line buffer
+    io_scratch::WRAPPER_DRAIN.emit_address(emitter, "x12");
+    io_scratch::emit_store_wrapper_byte(emitter, "x12", "x10", "w13");
     emitter.instruction("add x10, x10, #1");                                    // advance the line length
     emitter.instruction("str x10, [sp, #8]");                                   // store the updated line length
     emitter.instruction("strb w13, [sp, #32]");                                 // remember the byte across the chunk-release calls
@@ -149,7 +151,7 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_fgets_wrapper_done");                        // newline: finish the line
     emitter.instruction("b __rt_fgets_wrapper_loop");                           // read the next byte
     emitter.label("__rt_fgets_wrapper_done");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_user_wrapper_drain_buf"); // line pointer
+    io_scratch::WRAPPER_DRAIN.emit_address(emitter, "x1"); // line pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // line length
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
@@ -278,8 +280,8 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the chunk ptr across the per-chunk release
     emitter.instruction("movzx ecx, BYTE PTR [rax]");                           // load the read byte
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // current line length
-    abi::emit_symbol_address(emitter, "r11", "_user_wrapper_drain_buf");        // line buffer base
-    emitter.instruction("mov BYTE PTR [r11 + r10], cl");                        // append the byte to the line buffer
+    io_scratch::WRAPPER_DRAIN.emit_address(emitter, "r11");        // line buffer base
+    io_scratch::emit_store_wrapper_byte(emitter, "r11", "r10", "cl");
     emitter.instruction("add r10, 1");                                          // advance the line length
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // store the updated line length
     emitter.instruction("mov BYTE PTR [rbp - 48], cl");                         // remember the byte across the chunk-release calls
@@ -289,7 +291,7 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_fgets_wrapper_done_x86");                      // newline: finish the line
     emitter.instruction("jmp __rt_fgets_wrapper_loop_x86");                     // read the next byte
     emitter.label("__rt_fgets_wrapper_done_x86");
-    abi::emit_symbol_address(emitter, "rax", "_user_wrapper_drain_buf");        // line pointer
+    io_scratch::WRAPPER_DRAIN.emit_address(emitter, "rax");        // line pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // line length
     emitter.instruction("add rsp, 48");                                         // release the fgets() spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

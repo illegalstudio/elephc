@@ -13,6 +13,8 @@
 //! - A set passed as `null` arrives as a zero array pointer and is skipped on both passes.
 //!   The three resource arrays are compacted in place to the ready subset.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 
 /// stream_select: select across three resource arrays, compacting each to the
@@ -96,7 +98,7 @@ fn emit_build_fdset_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, s
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x4", "x9");
     emitter.instruction("lsr x4, x4, #8");                                      // shift the value_type tag into the low byte
     emitter.instruction("and x4, x4, #0x7f");                                   // isolate the value_type tag
-    emitter.instruction("add x12, x9, #24");                                    // skip the array header to the data region
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x9");
     emitter.instruction("mov x11, #0");                                         // descriptor index
     emitter.label(&loop_l);
     emitter.instruction("cmp x11, x10");                                        // have all descriptors been scanned?
@@ -163,7 +165,7 @@ fn emit_compact_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x4", "x9");
     emitter.instruction("lsr x4, x4, #8");                                      // shift the value_type tag into the low byte
     emitter.instruction("and x4, x4, #0x7f");                                   // isolate the value_type tag
-    emitter.instruction("add x12, x9, #24");                                    // skip the array header to the data region
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x9");
     emitter.instruction("mov x11, #0");                                         // source descriptor index
     emitter.instruction("mov x13, #0");                                         // destination (kept) descriptor index
     emitter.label(&loop_l);

@@ -9,12 +9,8 @@ extern const uintptr_t ep_class_name_entries[] __asm__("_class_name_entries");
 extern uintptr_t ep_native_stack_limit __asm__("_stack_limit");
 extern uintptr_t ep_native_stack_limit_main __asm__("_stack_limit_main");
 extern uintptr_t ep_boundary_status __asm__("_elephc_boundary_status");
-extern uintptr_t ep_replacement_owner_count
-    __asm__("_elephc_phpext_replacement_owner_count");
-extern const uintptr_t *ep_replacement_owners[]
-    __asm__("_elephc_phpext_replacement_owners");
-
 extern uint32_t elephc_phpext_native_owner_count(const uintptr_t *object);
+extern size_t elephc_phpext_native_replacement_pin_count(const uintptr_t *object);
 
 typedef void (*ep_native_function)(const zval *const *);
 static pthread_mutex_t ep_native_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -372,18 +368,6 @@ static const char *ep_infrastructure_error(uintptr_t status)
         case 6: return "PHP extension exception chain exceeds the maximum live replacement pin count (64)";
         default: return NULL;
     }
-}
-
-/* Count every adapter pin for one native identity across the synchronous export stack. */
-static size_t ep_replacement_pin_count(const uintptr_t *object)
-{
-    size_t count = ep_replacement_owner_count;
-    if (count > EP_HOST_PREDECESSOR_LIMIT) { count = EP_HOST_PREDECESSOR_LIMIT; }
-    size_t pins = 0;
-    for (size_t i = 0; i < count; i++) {
-        if (ep_replacement_owners[i] == object) { pins++; }
-    }
-    return pins;
 }
 
 /* Repeated replacement events for one live native object share one non-reusable identity. */
@@ -761,7 +745,7 @@ void elephc_php_discard_exception(const uintptr_t *object)
         ep_defer_host_exception_discard(call);
         return;
     }
-    size_t pins = ep_replacement_pin_count(object);
+    size_t pins = elephc_phpext_native_replacement_pin_count(object);
     bool transient = call->discard_chain_transient
         && elephc_phpext_native_owner_count(object) == pins + 1;
     call->discard_chain_transient = transient;

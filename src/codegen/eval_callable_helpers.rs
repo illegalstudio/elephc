@@ -40,11 +40,7 @@ pub(super) mod argument_owners;
 pub(super) use shared_cast::{emit_aarch64_cast_eval_callable_arg, emit_x86_64_cast_eval_callable_arg};
 
 const EVAL_RECEIVER_CAPTURE_PARAM: &str = "__elephc_eval_callable_receiver";
-const MIXED_METHOD_TAG_OFFSET: usize = 0;
-const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
-const MIXED_RECEIVER_TAG_OFFSET: usize = 32;
-const MIXED_RECEIVER_PAYLOAD_OFFSET: usize = 48;
-const MIXED_SELECTOR_BYTES: usize = 64;
+use elephc_memoir::callables::storage::{MIXED_METHOD_TAG_OFFSET, MIXED_METHOD_PAYLOAD_OFFSET, MIXED_RECEIVER_TAG_OFFSET, MIXED_RECEIVER_PAYLOAD_OFFSET, MIXED_SELECTOR_BYTES};
 const SAVED_OBJECT_RECEIVER_BYTES: usize = 16;
 const MIXED_TAG_STRING: i64 = 1;
 const MIXED_TAG_OBJECT: i64 = 6;

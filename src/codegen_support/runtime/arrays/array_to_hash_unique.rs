@@ -16,6 +16,8 @@
 //! - Payload handling is `__rt_array_to_hash_reverse`'s, slot for slot: strings are persisted
 //!   into independent copies and heap-backed values retained, so the result owns its payloads.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -59,7 +61,7 @@ pub fn emit_array_to_hash_unique(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x11");                                        // have all source elements been visited?
     emitter.instruction("b.ge __rt_array_to_hash_uniq_done");                   // every element has been considered
     emitter.instruction("ldr x11, [sp, #0]");                                   // reload the indexed array pointer
-    emitter.instruction("add x11, x11, #24");                                   // skip the 24-byte indexed-array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x11");
     emitter.instruction("ldr x12, [sp, #40]");                                  // reload the element stride
     emitter.instruction("mul x13, x10, x12");                                   // byte offset of element[i]
     emitter.instruction("add x14, x11, x13");                                   // x14 = address of element[i]
@@ -98,7 +100,7 @@ pub fn emit_array_to_hash_unique(emitter: &mut Emitter) {
     emitter.instruction("ldr x7, [sp, #64]");                                   // scan index j
     emitter.instruction("ldr x10, [sp, #16]");                                  // candidate index i
     emitter.instruction("ldr x11, [sp, #0]");                                   // indexed array pointer
-    emitter.instruction("add x11, x11, #24");                                   // skip the 24-byte indexed-array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x11");
     emitter.instruction("ldr x12, [sp, #40]");                                  // element stride
     emitter.instruction("ldr x6, [sp, #48]");                                   // candidate element low word
     emitter.label("__rt_array_to_hash_uniq_scan_next");
@@ -179,7 +181,7 @@ fn emit_array_to_hash_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // have all source elements been visited?
     emitter.instruction("jge __rt_array_to_hash_uniq_done");                    // every element has been considered
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the indexed array pointer
-    emitter.instruction("add r10, 24");                                         // skip the 24-byte indexed-array header
+    emitter.instruction(&format!("add r10, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                                         // skip the 24-byte indexed-array header
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the element stride
     emitter.instruction("imul r11, rax");                                       // byte offset of element[i]
     emitter.instruction("add r11, r10");                                        // r11 = address of element[i]
@@ -218,7 +220,7 @@ fn emit_array_to_hash_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 80]");                        // scan index j
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // candidate index i
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // indexed array pointer
-    emitter.instruction("add r10, 24");                                         // skip the 24-byte indexed-array header
+    emitter.instruction(&format!("add r10, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                                         // skip the 24-byte indexed-array header
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // candidate element low word
     emitter.label("__rt_array_to_hash_uniq_scan_next");
     emitter.instruction("add r9, 1");                                           // advance the backward scan

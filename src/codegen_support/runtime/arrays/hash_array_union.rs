@@ -8,6 +8,8 @@
 //! Key details:
 //! - PHP array union uses normalized integer keys for indexed positions, so left hash keys like `0` or `"0"` block right index `0`.
 
+use elephc_memoir::values::packed_slots;
+
 use elephc_memoir::values::hash_payload;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -94,7 +96,7 @@ pub fn emit_hash_array_union(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #0]");                                   // reload the right indexed-array pointer
     emitter.instruction("lsl x13, x9, #4");                                     // compute the byte offset for a 16-byte string slot
     emitter.instruction("add x11, x11, x13");                                   // advance to the selected string slot
-    emitter.instruction("add x11, x11, #24");                                   // skip the indexed-array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x11");
     hash_payload::emit_persist_indexed_pair_for_insert(emitter);
 
     emitter.label("__rt_hash_array_union_insert");

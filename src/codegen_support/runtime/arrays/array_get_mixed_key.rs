@@ -15,6 +15,8 @@
 //! - Inputs are array pointer, normalized key pair, and warning/fetch-mode flags. The result is
 //!   always a boxed `Mixed` pointer in the target result register (caller owns it).
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::abi;
 use crate::codegen_support::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
 use crate::codegen_support::emit::Emitter;
@@ -78,7 +80,7 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_array_get_mixed_key_int_missing");           // warn and return null for an out-of-bounds indexed-array key
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x13", "x0");
     elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x13", "x13");
-    emitter.instruction("add x10, x0, #24");                                    // skip the 24-byte array header to reach the contiguous payload
+    packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("cmp x13, #7");                                         // are indexed slots already boxed Mixed pointers?
     emitter.instruction("b.eq __rt_array_get_mixed_key_indexed_boxed");         // boxed slots are copied into a fresh zval cell before returning
     emitter.instruction("cmp x13, #1");                                         // do indexed slots contain string pointer/length pairs?
@@ -296,7 +298,7 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_array_get_mixed_key_int_missing");            // warn and return null for an out-of-bounds indexed-array key
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "r11", "rdi");
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r11", "r11");
-    emitter.instruction("lea r10, [rdi + 24]");                                 // skip the 24-byte array header to reach the contiguous payload
+    packed_slots::emit_packed_payload_x86_64(emitter, "r10", "rdi");
     emitter.instruction("cmp r11, 7");                                          // are indexed slots already boxed Mixed pointers?
     emitter.instruction("je __rt_array_get_mixed_key_indexed_boxed");           // boxed slots are copied into a fresh zval cell before returning
     emitter.instruction("cmp r11, 1");                                          // do indexed slots contain string pointer/length pairs?

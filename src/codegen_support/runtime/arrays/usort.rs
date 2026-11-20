@@ -12,6 +12,8 @@
 //!   terminate: a comparator that answers "greater" both ways (PHP's `<=>` against `NAN`, or a
 //!   user callback that ignores its arguments) used to swap the same pair forever (#1353).
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -61,7 +63,7 @@ pub fn emit_usort(emitter: &mut Emitter) {
 
     // -- load adjacent elements --
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload array pointer
-    emitter.instruction("add x9, x9, #24");                                     // skip header to data region
+    packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x9");
     emitter.instruction("ldr x0, [x9, x22, lsl #3]");                           // x0 = data[j] (first element)
     emitter.instruction("add x10, x22, #1");                                    // x10 = j + 1
     emitter.instruction("ldr x1, [x9, x10, lsl #3]");                           // x1 = data[j+1] (second element)

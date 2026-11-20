@@ -139,14 +139,9 @@ pub(super) fn emit_borrowed_stack_mixed_arg_cell(
     ctx.emitter
         .instruction(&format!("mov {}, {}", payload_reg, result_reg)); // preserve the scalar payload before writing the borrowed Mixed tag
     abi::emit_temporary_stack_address(ctx.emitter, cell_reg, base_offset + borrowed.offset);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        result_reg,
-        runtime_value_tag(&borrowed.source_ty) as i64,
+    elephc_memoir::values::stack_cell::emit_borrowed_argument(
+        ctx.emitter, cell_reg, payload_reg, runtime_value_tag(&borrowed.source_ty) as i64,
     );
-    abi::emit_store_to_address(ctx.emitter, result_reg, cell_reg, 0);
-    abi::emit_store_to_address(ctx.emitter, payload_reg, cell_reg, 8);
-    abi::emit_store_zero_to_address(ctx.emitter, cell_reg, 16);
     move_reg_to_int_result(ctx, cell_reg);
 }
 

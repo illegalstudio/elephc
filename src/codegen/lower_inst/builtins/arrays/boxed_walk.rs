@@ -11,7 +11,7 @@
 
 use super::*;
 
-const CALLBACK_STACK_BYTES: usize = 64;
+const CALLBACK_STACK_BYTES: usize = 2 * elephc_memoir::values::stack_cell::BORROWED_MIXED_ARG_CELL_BYTES;
 
 /// Lowers a boxed `array_walk` variant and returns whether this path handled the operand.
 pub(super) fn lower_boxed_array_walk(

@@ -24,12 +24,10 @@
 //!   hooks are honored, and `$this->params` is seeded before `onCreate()`.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-use elephc_memoir::buffers::stream_scratch;
+use elephc_memoir::buffers::{stream_scratch, stream_tables};
 
 mod attach;
 pub use attach::emit_stream_filter_attach_user;
-
-const USER_FILTER_REGISTRATIONS_CAP: u32 = 128;
 
 /// `__rt_stream_filter_register`: scan `_user_filter_registry` for the
 /// first empty slot, store the (filter_name, class_name) tuple, and
@@ -62,9 +60,9 @@ pub fn emit_stream_filter_register(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x4", "_user_filter_registry");
     emitter.instruction("mov x5, #0");                                          // filter slot index
     emitter.label("__rt_sfr_scan");
-    emitter.instruction(&format!("cmp x5, #{USER_FILTER_REGISTRATIONS_CAP}"));  // is the filter registry full?
+    emitter.instruction(&format!("cmp x5, #{}", stream_tables::FILTER_REGISTRATION_CAPACITY));  // is the filter registry full?
     emitter.instruction("b.ge __rt_sfr_full");                                  // no empty slot remains
-    emitter.instruction("add x6, x4, x5, lsl #5");                              // slot base = table + index * 32
+    emitter.instruction(&format!("add x6, x4, x5, lsl #{}", stream_tables::REGISTRATION_SHIFT));                              // slot base = table + index * 32
     emitter.instruction("ldr x7, [x6]");                                        // load the slot's filter-name pointer
     emitter.instruction("cbz x7, __rt_sfr_store");                              // a null pointer marks an empty slot
     emitter.instruction("add x5, x5, #1");                                      // advance the slot index
@@ -99,10 +97,10 @@ fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r8", "_user_filter_registry");           // registry base
     emitter.instruction("xor r9, r9");                                          // filter slot index
     emitter.label("__rt_sfr_scan_x86");
-    emitter.instruction(&format!("cmp r9, {}", USER_FILTER_REGISTRATIONS_CAP)); // is the filter registry full?
+    emitter.instruction(&format!("cmp r9, {}", stream_tables::FILTER_REGISTRATION_CAPACITY)); // is the filter registry full?
     emitter.instruction("jge __rt_sfr_full_x86");                               // no empty slot remains
     emitter.instruction("mov r10, r9");                                         // copy the slot index for scaling
-    emitter.instruction("shl r10, 5");                                          // slot offset = index * 32
+    emitter.instruction(&format!("shl r10, {}", stream_tables::REGISTRATION_SHIFT));                                          // slot offset = index * 32
     emitter.instruction("add r10, r8");                                         // slot base = table + offset
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the slot's filter-name pointer
     emitter.instruction("test r11, r11");                                       // a null pointer marks an empty slot
@@ -147,9 +145,9 @@ pub fn emit_resolve_user_filter_id(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x4", "_user_filter_registry");
     emitter.instruction("mov x5, #0");                                          // filter slot index
     emitter.label("__rt_rufi_scan");
-    emitter.instruction(&format!("cmp x5, #{USER_FILTER_REGISTRATIONS_CAP}"));  // scanned every registry slot?
+    emitter.instruction(&format!("cmp x5, #{}", stream_tables::FILTER_REGISTRATION_CAPACITY));  // scanned every registry slot?
     emitter.instruction("b.ge __rt_rufi_miss");                                 // no match found
-    emitter.instruction("add x6, x4, x5, lsl #5");                              // slot base = table + index * 32
+    emitter.instruction(&format!("add x6, x4, x5, lsl #{}", stream_tables::REGISTRATION_SHIFT));                              // slot base = table + index * 32
     emitter.instruction("ldr x7, [x6]");                                        // stored filter-name pointer
     emitter.instruction("cbz x7, __rt_rufi_next");                              // skip empty slots
     emitter.instruction("ldr x8, [x6, #8]");                                    // stored filter-name length
@@ -315,10 +313,10 @@ fn emit_resolve_user_filter_id_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r8", "_user_filter_registry");           // registry base
     emitter.instruction("xor r9, r9");                                          // filter slot index
     emitter.label("__rt_rufi_scan_x86");
-    emitter.instruction(&format!("cmp r9, {}", USER_FILTER_REGISTRATIONS_CAP)); // scanned every registry slot?
+    emitter.instruction(&format!("cmp r9, {}", stream_tables::FILTER_REGISTRATION_CAPACITY)); // scanned every registry slot?
     emitter.instruction("jge __rt_rufi_miss_x86");                              // no match found
     emitter.instruction("mov r10, r9");                                         // copy the slot index for scaling
-    emitter.instruction("shl r10, 5");                                          // slot offset = index * 32
+    emitter.instruction(&format!("shl r10, {}", stream_tables::REGISTRATION_SHIFT));                                          // slot offset = index * 32
     emitter.instruction("add r10, r8");                                         // slot base = table + offset
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // stored filter-name pointer
     emitter.instruction("test rax, rax");                                       // is this slot empty?

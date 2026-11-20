@@ -36,6 +36,8 @@
 //!      no scratch at all and hands the whole buffer back to the cast by restoring the entry
 //!      offset.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL;
@@ -146,7 +148,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_implode_tagged_scalar_elem");                // render payload/tag slots as int or empty null
     emitter.instruction("lsl x12, x11, #4");                                    // compute byte offset: index * 16
     emitter.instruction("add x12, x3, x12");                                    // add to array base
-    emitter.instruction("add x12, x12, #24");                                   // skip 24-byte array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x12");
     emitter.instruction("ldr x1, [x12]");                                       // load element string pointer
     emitter.instruction("ldr x2, [x12, #8]");                                   // load element string length
     emitter.instruction("b __rt_implode_copy_value");                           // copy the loaded string payload into the result buffer
@@ -154,7 +156,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.label("__rt_implode_tagged_scalar_elem");
     emitter.instruction("lsl x12, x11, #4");                                    // compute byte offset: index * 16 for tagged scalar slots
     emitter.instruction("add x12, x3, x12");                                    // add the tagged slot offset to the array base
-    emitter.instruction("add x12, x12, #24");                                   // skip the 24-byte array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x12");
     emitter.instruction("ldr x13, [x12, #8]");                                  // load the runtime tag beside the nullable integer payload
     emitter.instruction(&format!("cmp x13, #{}", TAGGED_SCALAR_TAG_NULL));      // is this tagged nullable integer PHP null?
     emitter.instruction("b.eq __rt_implode_tagged_scalar_null");                // null contributes an empty string
@@ -163,7 +165,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the array pointer after possible growth
     emitter.instruction("lsl x12, x11, #4");                                    // recompute the tagged scalar slot offset
     emitter.instruction("add x12, x3, x12");                                    // add the slot offset to the array base
-    emitter.instruction("add x12, x12, #24");                                   // skip the array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x12");
     emitter.instruction("ldr x0, [x12]");                                       // load the non-null integer payload
     emitter.instruction("str x9, [sp, #56]");                                   // preserve the live result cursor across formatting
     emitter.instruction("str x10, [sp, #64]");                                  // preserve array length across formatting
@@ -191,7 +193,7 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the array pointer the growth call clobbered
     emitter.instruction("lsl x12, x11, #3");                                    // compute byte offset: index * 8 for Mixed pointer slots
     emitter.instruction("add x12, x3, x12");                                    // add the Mixed slot offset to the array base
-    emitter.instruction("add x12, x12, #24");                                   // skip 24-byte array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x12");
     emitter.instruction("ldr x0, [x12]");                                       // load the boxed Mixed element pointer
     emitter.instruction("str x9, [sp, #56]");                                   // save destination cursor across the mixed string cast
     emitter.instruction("str x10, [sp, #64]");                                  // save array length across the mixed string cast
@@ -358,7 +360,7 @@ fn emit_x86_64_scalar_copy_setup(emitter: &mut Emitter) {
 fn emit_aarch64_scalar_slot_address(emitter: &mut Emitter) {
     emitter.instruction("lsl x12, x11, #3");                                    // compute byte offset: index * 8 for raw scalar slots
     emitter.instruction("add x12, x3, x12");                                    // add the scalar slot offset to the array base
-    emitter.instruction("add x12, x12, #24");                                   // skip the 24-byte array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x12");
 }
 
 /// Reserves `MIXED_CAST_HEADROOM` destination bytes on AArch64, then re-addresses the current

@@ -11,6 +11,7 @@
 //!   lives in this frame, so a `serialize()` inside a hook gets its own stream. The enclosing
 //!   stream is reinstated on every exit, and a grown buffer is freed when a hook throws.
 
+use elephc_memoir::values::serialize_registry;
 use elephc_memoir::{FrameOffset, strings::scoped_stream::StreamScope, values::stack_registry_snapshot::StackRegistrySnapshot};
 
 use crate::codegen_support::{abi, emit::Emitter};
@@ -31,8 +32,8 @@ const STREAM: usize = 120; // 32-byte `__rt_strbuf_*` descriptor owned by this c
 const OUTER: usize = 128; // the enclosing call's `_ser_stream`, reinstated on every exit
 
 const REGISTRY: StackRegistrySnapshot<'static> = StackRegistrySnapshot {
-    pointers: "_ser_obj_ptrs",
-    indices: "_ser_obj_idxs",
+    pointers: serialize_registry::POINTERS.symbol,
+    indices: serialize_registry::INDICES.symbol,
     count: FrameOffset::new(COUNT),
     saved: FrameOffset::new(SNAPSHOT),
     label_prefix: "__rt_serialize_context",
@@ -60,7 +61,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, result, "_ser_legacy_active", 0);
     abi::store_at_offset(emitter, result, LEGACY);
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_serialize_context_ready");
-    for (symbol, offset) in [("_ser_value_counter", COUNTER), ("_ser_obj_count", COUNT)] {
+    for (symbol, offset) in [("_ser_value_counter", COUNTER), (serialize_registry::COUNT, COUNT)] {
         abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
         abi::store_at_offset(emitter, result, offset);
     }
@@ -80,7 +81,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, result, LEGACY);
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_serialize_context_restored");
     REGISTRY.emit_copy(emitter, true);
-    for (symbol, offset) in [("_ser_value_counter", COUNTER), ("_ser_obj_count", COUNT)] {
+    for (symbol, offset) in [("_ser_value_counter", COUNTER), (serialize_registry::COUNT, COUNT)] {
         abi::load_at_offset(emitter, result, offset);
         abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
     }

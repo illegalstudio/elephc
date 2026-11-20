@@ -11,6 +11,14 @@
 use crate::layout::{OBJECT_HEAP_KIND, THROWABLE_HEAP_KIND, object_declared_slot_offset};
 use crate::{Emitter, HeapKind};
 
+/// Emits a C entry that projects the class id of a live borrowed native object.
+pub fn emit_c_class_id(emitter: &mut impl Emitter) {
+    let symbol = emitter.extern_symbol("elephc_phpext_native_object_class_id");
+    emitter.label_global(&symbol);
+    emitter.emit_load_from_address(emitter.int_result_reg(), emitter.int_arg_reg_name(0), 0);
+    emitter.emit_return();
+}
+
 /// Computes payload bytes from the declared slots and optional trailing owner and metadata words.
 pub const fn declared_object_bytes(properties: usize, dynamic_hash: bool, creation_line: bool) -> usize {
     object_declared_slot_offset(properties) + (dynamic_hash as usize + creation_line as usize) * 8

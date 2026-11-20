@@ -11,6 +11,8 @@
 //!   original exception is rethrown.
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Main frame: context slots below the frame footer and the cleanup-guard spill area.
@@ -128,7 +130,7 @@ fn emit_body_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x20, x9");                                         // has every source element been mapped?
     emitter.instruction("b.ge __rt_array_map_body_done");                       // finish the loop
     emitter.instruction(&format!("ldr x1, [x19, #{}]", context_offset(SOURCE)));// load the source array pointer
-    emitter.instruction("add x1, x1, #24");                                     // skip the indexed-array header to the payload base
+    packed_slots::emit_packed_payload_aarch64(emitter, "x1", "x1");
     emitter.instruction(&format!("ldr x10, [x19, #{}]", context_offset(WIDTH)));// load the source element width
     emitter.instruction("cmp x10, #16");                                        // does the source hold string pointer/length pairs?
     emitter.instruction("b.eq __rt_array_map_body_str");                        // use the string callback ABI
@@ -172,7 +174,7 @@ fn emit_body_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r13, r10");                                        // has every source element been mapped?
     emitter.instruction("jge __rt_array_map_body_done");                        // finish the loop
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", context_offset(SOURCE))); // load the source array pointer
-    emitter.instruction("add r10, 24");                                         // skip the indexed-array header to the payload base
+    emitter.instruction(&format!("add r10, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                                         // skip the indexed-array header to the payload base
     emitter.instruction(&format!("mov r11, QWORD PTR [r12 + {}]", context_offset(WIDTH))); // load the source element width
     emitter.instruction("cmp r11, 16");                                         // does the source hold string pointer/length pairs?
     emitter.instruction("je __rt_array_map_body_str");                          // use the string callback ABI

@@ -43,6 +43,7 @@ struct ep_object_request {
 };
 
 extern void elephc_php_native_object_retain(const void *object);
+extern uintptr_t elephc_phpext_native_object_class_id(const void *object);
 
 static ep_object_request *ep_objects_request(ep_call *call)
 {
@@ -58,7 +59,7 @@ static ep_object_request *ep_objects_request(ep_call *call)
 static ep_class_descriptor *ep_object_native_class(const void *native)
 {
     if (!native) { return NULL; }
-    uintptr_t id = *(const uintptr_t *)native;
+    uintptr_t id = elephc_phpext_native_object_class_id(native);
     for (size_t i = 0; i < sizeof(ep_classes) / sizeof(ep_classes[0]); i++) {
         if (ep_classes[i].native_id == id) { return &ep_classes[i]; }
     }

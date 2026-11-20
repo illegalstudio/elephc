@@ -19,6 +19,8 @@
 //! - PHP's `preserve_keys` result is key-identical to the sliced source region, which is exactly
 //!   what a hash records and elephc's dense indexed array cannot represent.
 
+use elephc_memoir::values::packed_slots;
+
 use elephc_memoir::values::hash_payload;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -67,7 +69,7 @@ pub fn emit_array_slice_to_hash(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x9");                                         // has the cursor reached the end of the window?
     emitter.instruction("b.ge __rt_array_slice_to_hash_done");                  // the whole window has been copied
     emitter.instruction("ldr x11, [sp, #0]");                                   // reload the indexed array pointer
-    emitter.instruction("add x11, x11, #24");                                   // skip the 24-byte indexed-array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x11");
     emitter.instruction("ldr x12, [sp, #40]");                                  // reload the element stride
     emitter.instruction("mul x13, x10, x12");                                   // byte offset of element[i]
     emitter.instruction("add x11, x11, x13");                                   // x11 = address of element[i]
@@ -142,7 +144,7 @@ fn emit_array_slice_to_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, QWORD PTR [rbp - 72]");                       // has the cursor reached the end of the window?
     emitter.instruction("jge __rt_array_slice_to_hash_done");                   // the whole window has been copied
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the indexed array pointer
-    emitter.instruction("add r10, 24");                                         // skip the 24-byte indexed-array header
+    emitter.instruction(&format!("add r10, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                                         // skip the 24-byte indexed-array header
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the element stride
     emitter.instruction("imul r11, rax");                                       // byte offset of element[i]
     emitter.instruction("add r10, r11");                                        // r10 = address of element[i]

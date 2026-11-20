@@ -90,3 +90,9 @@ pub mod spl_storage;
 pub mod stack_cell;
 
 pub mod packed_slots;
+
+pub mod diagnostic_stack;
+
+pub mod serialize_registry;
+
+pub mod iterator_storage;

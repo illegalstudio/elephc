@@ -32,3 +32,15 @@ pub fn emit_scalar_cell(emitter: &mut impl TargetAbi, cell: FrameOffset, payload
     abi::emit_load_int_immediate(emitter, payload, 0);
     abi::store_at_offset(emitter, payload, offset - 16);
 }
+
+/// Aligned storage reserved per borrowed call-argument cell.
+pub const BORROWED_MIXED_ARG_CELL_BYTES: usize = (crate::layout::MIXED_CELL_SIZE + 15) & !15;
+
+/// Writes a borrowed scalar cell once the address and original payload are materialized.
+pub fn emit_borrowed_argument(emitter: &mut impl TargetAbi, cell: &str, payload: &str, tag: i64) {
+    let result = emitter.int_result_reg();
+    emitter.emit_load_int_immediate(result, tag);
+    emitter.emit_store_to_address(result, cell, 0);
+    emitter.emit_store_to_address(payload, cell, 8);
+    emitter.emit_store_zero_to_address(cell, 16);
+}

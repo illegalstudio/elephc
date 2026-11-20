@@ -292,12 +292,7 @@ fn emit_hash_set_value_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_hash_set_value_forward");                 // a missing key is an ordinary insert
     emitter.instruction("ldr x9, [x4, #40]");                                   // load the existing entry's runtime value tag
     persistent_references::emit_value_detach_probe(emitter);
-    emitter.instruction("ldr x0, [x4, #24]");                                   // load the managed reference cell this entry owns
-    emitter.instruction("str xzr, [x4, #24]");                                  // retire the detached payload before releasing it
-    emitter.instruction("str xzr, [x4, #32]");                                  // reference entries carry no high payload word
-    emitter.instruction("mov x9, #8");                                          // runtime value tag 8 = null
-    emitter.instruction("str x9, [x4, #40]");                                   // the slot reads as null until the replacement lands
-    emitter.instruction("bl __rt_decref_any");                                  // drop this table's ownership of the reference cell
+    hash_bucket::emit_detach_reference_owner(emitter);
     emitter.label("__rt_hash_set_value_forward");
     emitter.instruction("ldr x0, [sp, #40]");                                   // forward the unique table pointer
     emitter.instruction("ldr x1, [sp, #0]");                                    // forward key_lo
@@ -560,11 +555,7 @@ fn emit_hash_set_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did the destination already contain this key?
     emitter.instruction("jz __rt_hash_set_value_forward_x");                    // a missing key is an ordinary insert
     persistent_references::emit_value_detach_probe(emitter);
-    emitter.instruction("mov rax, QWORD PTR [r8 + 24]");                        // load the managed reference cell this entry owns
-    emitter.instruction("mov QWORD PTR [r8 + 24], 0");                          // retire the detached payload before releasing it
-    emitter.instruction("mov QWORD PTR [r8 + 32], 0");                          // reference entries carry no high payload word
-    emitter.instruction("mov QWORD PTR [r8 + 40], 8");                          // the slot reads as null until the replacement lands
-    emitter.instruction("call __rt_decref_any");                                // drop this table's ownership of the reference cell
+    hash_bucket::emit_detach_reference_owner(emitter);
     emitter.label("__rt_hash_set_value_forward_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // forward the unique table pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // forward key_lo

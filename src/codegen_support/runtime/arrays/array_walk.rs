@@ -8,6 +8,8 @@
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -50,7 +52,7 @@ pub fn emit_array_walk(emitter: &mut Emitter) {
 
     // -- load element from source array --
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload source array pointer
-    emitter.instruction("add x1, x1, #24");                                     // skip header to data region
+    packed_slots::emit_packed_payload_aarch64(emitter, "x1", "x1");
     emitter.instruction("ldr x0, [x1, x20, lsl #3]");                           // x0 = source[i]
     emitter.instruction("ldr x9, [sp, #16]");                                   // load optional callback environment pointer
     emitter.instruction("cbz x9, __rt_array_walk_call");                        // keep legacy one-argument callback ABI when no environment is present

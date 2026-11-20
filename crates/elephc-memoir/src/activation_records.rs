@@ -33,6 +33,67 @@ pub const OWNER_VISITOR: usize = PREFIX_BYTES + 16;
 /// Size of an ordinary frame or another extended owner activation.
 pub const EXTENDED_BYTES: usize = OWNER_VISITOR + 8;
 
+/// Saves the three values that a native exception rewind record must restore.
+pub fn emit_save_try_prefix<E: TargetAbi>(
+    emitter: &mut E,
+    scratch: &str,
+    mut store: impl FnMut(&mut E, &str, usize),
+) {
+    for (symbol, offset) in [
+        ("_exc_handler_top", 0),
+        ("_exc_call_frame_top", 8),
+        ("_rt_diag_suppression", crate::layout::TRY_HANDLER_DIAG_DEPTH_OFFSET),
+    ] {
+        emitter.emit_load_symbol_to_reg(scratch, symbol, 0);
+        store(emitter, scratch, offset);
+    }
+}
+
+/// Saves a rewind prefix in a native frame addressed by a positive fp displacement.
+pub fn emit_save_frame_try_prefix(emitter: &mut impl TargetAbi, scratch: &str, offset: usize) {
+    emit_save_try_prefix(emitter, scratch, |emitter, source, field| {
+        emitter.store_at_offset(source, offset - field);
+    });
+}
+
+/// Saves a rewind prefix relative to the current stack pointer.
+pub fn emit_save_sp_try_prefix(emitter: &mut impl TargetAbi, scratch: &str, offset: usize) {
+    emit_save_try_prefix(emitter, scratch, |emitter, source, field| {
+        emitter.emit_store_to_sp(source, offset + field);
+    });
+}
+
+/// Saves a rewind prefix in an AArch64 runtime frame with explicit stack displacements.
+pub fn emit_save_arm_runtime_try_prefix(emitter: &mut impl crate::Emitter, scratch: &str) {
+    emit_save_try_prefix(emitter, scratch, |emitter, source, field| {
+        emitter.instruction(&format!("str {source}, [sp, #{field}]"));          // save the rewind record field
+    });
+}
+
+/// Saves a rewind prefix at a positive displacement from the AArch64 frame pointer.
+pub fn emit_save_arm_fp_try_prefix(emitter: &mut impl crate::Emitter, scratch: &str, offset: usize) {
+    emit_save_try_prefix(emitter, scratch, |emitter, source, field| {
+        emitter.instruction(&format!("str {source}, [x29, #{}]", offset + field)); // save the rewind record field
+    });
+}
+
+/// Saves a rewind prefix at a record address already materialized by the caller.
+pub fn emit_save_addressed_try_prefix(emitter: &mut impl TargetAbi, scratch: &str, base: &str) {
+    emit_save_try_prefix(emitter, scratch, |emitter, source, field| {
+        emitter.emit_store_to_address(source, base, field);
+    });
+}
+
+/// Publishes the address of the initialized rewind record.
+pub fn emit_publish_try_handler(emitter: &mut impl TargetAbi, address: &str) {
+    emitter.emit_store_reg_to_symbol(address, "_exc_handler_top", 0);
+}
+
+/// Updates the owner held by a detached or active guard after its value relocates.
+pub fn emit_update_guard_owner(emitter: &mut impl TargetAbi, record: &str, owner: &str) {
+    emitter.emit_store_to_address(owner, record, GUARD_OWNER);
+}
+
 /// Optional symbols selected by the compiler for one ordinary frame activation.
 pub struct FrameActivation<'a> {
     /// Writable symbol holding the currently active frame.

@@ -18,6 +18,39 @@
 use crate::layout::STRING_HEAP_KIND;
 use crate::{abi, Arch, Emitter, HeapKind};
 
+/// Replaces a work allocation with a larger one, preserving its initialized prefix.
+///
+/// Inputs use sp/rsp-relative spills and the requested capacity in the native result.
+/// Returns the replacement in x9/r9 and installs it in the owner slot.
+pub fn emit_replace_work_buffer(
+    emitter: &mut impl Emitter, owner: usize, length: usize, replacement: usize,
+) {
+    emit_allocate_owned_string(emitter);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("str x0, [sp, #{replacement}]"));      // park the new owner until the copy and release complete
+            emitter.instruction(&format!("ldr x1, [sp, #{owner}]"));            // load the old data pointer
+            emitter.instruction(&format!("ldr x2, [sp, #{length}]"));           // copy only initialized bytes
+            crate::strings::strcopy::emit_copy_bytes(emitter);
+            emitter.instruction(&format!("ldr x0, [sp, #{owner}]"));            // retire the allocation superseded by the copy
+            emitter.emit_call_label("__rt_heap_free_safe");
+            emitter.instruction(&format!("ldr x9, [sp, #{replacement}]"));      // recover the surviving owner
+            emitter.instruction(&format!("str x9, [sp, #{owner}]"));            // publish the replacement to the caller
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov QWORD PTR [rsp + {replacement}], rax")); // park the new owner across copy and release
+            emitter.instruction("mov rdi, rax");                                // pass the new data buffer as the copy destination
+            emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {owner}]")); // load the old data pointer
+            emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {length}]")); // copy only initialized bytes
+            crate::strings::strcopy::emit_copy_bytes(emitter);
+            emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {owner}]")); // retire the allocation superseded by the copy
+            emitter.emit_call_label("__rt_heap_free_safe");
+            emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {replacement}]")); // recover the surviving owner
+            emitter.instruction(&format!("mov QWORD PTR [rsp + {owner}], r9")); // publish the replacement to the caller
+        }
+    }
+}
+
 /// Emits an inline owned-string allocation with the byte count supplied by the caller.
 pub fn emit_allocate_owned_string(emitter: &mut impl Emitter) {
     crate::heap_alloc::emit_fresh_with_kind(emitter, HeapKind::new(STRING_HEAP_KIND));

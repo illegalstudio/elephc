@@ -7,6 +7,8 @@
 //! Key details:
 //! - Option values are normalized into owned direct-string arrays before object hydration.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::data::{
     UNSER_ALLOWED_CLASSES_ENTRY_PREFIX, UNSER_ALLOWED_CLASSES_POLICY_PREFIX,
@@ -214,7 +216,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r10");                                        // preserve the list cursor while deriving a byte offset
     emitter.instruction("shl rax, 4");                                          // scale the cursor by the 16-byte direct-string pair stride
     emitter.instruction("add r11, rax");                                        // advance the list base to the selected direct-string pair
-    emitter.instruction("add r11, 24");                                         // skip the indexed-array header before reading the string pair
+    emitter.instruction(&format!("add r11, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                                         // skip the indexed-array header before reading the string pair
     emitter.instruction("jmp __rt_unser_class_allowed_compare_x");              // compare against the requested class name
     emitter.label("__rt_unser_class_allowed_mixed_cell_x");
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8 + 24]");             // validated boxed string cell

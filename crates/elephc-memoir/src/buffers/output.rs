@@ -14,6 +14,32 @@ use crate::{Arch, Emitter};
 /// Number of slots in the output-buffer stack.
 pub const MAX_LEVELS: i64 = 64;
 
+/// One field of the per-level native output storage.
+pub enum BufferField {
+    /// The owned byte allocation, borrowed by this read.
+    Pointer,
+    /// The initialized byte count.
+    Length,
+    /// The allocated byte capacity.
+    Capacity,
+}
+
+/// Loads the requested field for a level already checked by the caller.
+pub fn emit_load_buffer_field(
+    emitter: &mut impl Emitter, field: BufferField, address: &str, level: &str, destination: &str,
+) {
+    let symbol = match field {
+        BufferField::Pointer => "_ob_ptrs",
+        BufferField::Length => "_ob_lens",
+        BufferField::Capacity => "_ob_caps",
+    };
+    emitter.emit_symbol_address(address, symbol);
+    match emitter.arch() {
+        Arch::AArch64 => emitter.instruction(&format!("ldr {destination}, [{address}, {level}, lsl #3]")), // project one field of the selected slot
+        Arch::X86_64 => emitter.instruction(&format!("mov {destination}, QWORD PTR [{address} + {level}*8]")), // project one field of the selected slot
+    }
+}
+
 /// Allocates and publishes the slot's byte storage from the capacity selected by the caller.
 /// Keeps the depth and slot index in their native start-helper registers.
 pub fn emit_allocate_slot(emitter: &mut impl Emitter) {

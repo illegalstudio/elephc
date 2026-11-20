@@ -140,14 +140,7 @@ fn emit_owned_args_entry(emitter: &mut Emitter, label: &str, owns_descriptor: bo
 /// Saves the enclosing handler, activation boundary, and diagnostics before publishing this record.
 fn save_handler_state(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_handler_top", HANDLER_OFFSET),
-        ("_exc_call_frame_top", HANDLER_OFFSET - 8),
-        ("_rt_diag_suppression", HANDLER_OFFSET - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
-        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
-        abi::store_at_offset(emitter, result, offset);
-    }
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER_OFFSET);
     abi::emit_frame_slot_address(emitter, result, HANDLER_OFFSET);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
 }

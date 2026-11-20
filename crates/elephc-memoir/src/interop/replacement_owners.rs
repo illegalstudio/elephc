@@ -22,6 +22,55 @@ pub struct ReplacementOwners<'a> {
 }
 
 impl ReplacementOwners<'_> {
+    /// Emits a C entry that counts adapter pins of one borrowed native object.
+    pub fn emit_c_pin_count<E: Emitter>(self, emitter: &mut E, emit_address: fn(&mut E, &str)) {
+        let entry = emitter.extern_symbol("elephc_phpext_native_replacement_pin_count");
+        let scan = "__rt_phpext_replacement_pin_count_scan";
+        let done = "__rt_phpext_replacement_pin_count_done";
+        emitter.label_global(&entry);
+        match emitter.arch() {
+            Arch::AArch64 => {
+                emitter.emit_load_symbol_to_reg("x10", self.count, 0);
+                emit_address(emitter, "x11");
+                emitter.instruction(&format!("mov x12, #{}", self.limit));      // bound the published count by the reservation
+                emitter.instruction("cmp x10, x12");                            // compare unsigned row counts
+                emitter.instruction("csel x10, x10, x12, ls");                  // use only the initialized, in-bounds prefix
+                emitter.instruction("mov x9, #0");                              // initialize the cursor
+                emitter.instruction("mov x12, #0");                             // initialize the pin total
+                emitter.label(scan);
+                emitter.instruction("cmp x9, x10");                             // finish after the published prefix
+                emitter.instruction(&format!("b.hs {done}"));                   // return the pin total
+                emitter.instruction("ldr x13, [x11, x9, lsl #3]");              // borrow one recorded owner
+                emitter.instruction("cmp x13, x0");                             // compare against the requested object
+                emitter.instruction("cinc x12, x12, eq");                       // count each matching pin independently
+                emitter.instruction("add x9, x9, #1");                          // advance to the next owner word
+                emitter.instruction(&format!("b {scan}"));                      // inspect the next published row
+                emitter.label(done);
+                emitter.instruction("mov x0, x12");                             // return the total in the C result register
+            }
+            Arch::X86_64 => {
+                emitter.emit_load_symbol_to_reg("r10", self.count, 0);
+                emit_address(emitter, "r11");
+                emitter.instruction(&format!("mov rdx, {}", self.limit));       // bound the published count by the reservation
+                emitter.instruction("cmp r10, rdx");                            // compare unsigned row counts
+                emitter.instruction("cmova r10, rdx");                          // use only the initialized, in-bounds prefix
+                emitter.instruction("xor ecx, ecx");                            // initialize the cursor
+                emitter.instruction("xor eax, eax");                            // initialize the pin total
+                emitter.label(scan);
+                emitter.instruction("cmp rcx, r10");                            // finish after the published prefix
+                emitter.instruction(&format!("jae {done}"));                    // return the pin total
+                emitter.instruction("xor edx, edx");                            // zero-extend the comparison result
+                emitter.instruction("cmp QWORD PTR [r11 + rcx*8], rdi");        // compare the borrowed owner against the requested object
+                emitter.instruction("sete dl");                                 // count a matching pin as one
+                emitter.instruction("add rax, rdx");                            // accumulate matching pins
+                emitter.instruction("inc rcx");                                 // advance to the next owner word
+                emitter.instruction(&format!("jmp {scan}"));                    // inspect the next published row
+                emitter.label(done);
+            }
+        }
+        emitter.emit_return();
+    }
+
     /// Branches to the caller's overflow path when the owner table is full.
     pub fn emit_check_capacity(self, emitter: &mut impl Emitter, overflow: &str) {
         match emitter.arch() {

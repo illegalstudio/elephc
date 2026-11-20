@@ -16,13 +16,12 @@
 //!   bracket payload is what `__rt_inet_addr_parse` resolved, and rustls accepts
 //!   a bracketless form via the peer-name path; an IP SNI is simply ignored by a
 //!   server, which is the safe PHP-compatible outcome.
-//! - The host bytes are persisted with `__rt_str_persist` (heap-owned, never
-//!   freed — one slot per fd, overwritten on the next connect to the same fd) and
-//!   stored as `(ptr, len)` at `_stream_connect_host[fd * 16]`.
+//! - Memoir persists and publishes the host pair for an in-range descriptor.
+//!   The ordinary close path detaches and retires that pair.
 //! - The fd passes through unchanged (in on arg0, out in the result register) so
 //!   the builtin can wrap the call transparently.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits `__rt_stash_connect_host(fd, addr_ptr, addr_len) -> fd`.
 ///
@@ -51,7 +50,7 @@ pub fn emit_stash_connect_host(emitter: &mut Emitter) {
     // -- range-check the fd: only descriptors 0..256 get a table slot --
     emitter.instruction("cmp x0, #0");                                          // is the fd negative (failed connect)?
     emitter.instruction("b.lt __rt_sch_done");                                  // negative fd → passthrough, no stash
-    emitter.instruction("cmp x0, #256");                                        // is the fd within the table bound?
+    emitter.instruction(&format!("cmp x0, #{}", elephc_memoir::buffers::stream_tables::FD_CAPACITY));                                        // is the fd within the table bound?
     emitter.instruction("b.ge __rt_sch_done");                                  // out-of-range fd → passthrough, no stash
 
     // -- strip a leading "scheme://" by scanning for "://" --
@@ -103,12 +102,7 @@ pub fn emit_stash_connect_host(emitter: &mut Emitter) {
     emitter.instruction("mov x2, x11");                                         // x2 = host length (trimmed of any :port)
 
     // -- persist the host bytes (heap-owned) and store (ptr, len) in the table --
-    abi::emit_call_label(emitter, "__rt_str_persist");                          // x1 = persisted host ptr, x2 = len (unchanged)
-    abi::emit_symbol_address(emitter, "x10", "_stream_connect_host");
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the fd for the table index
-    emitter.instruction("add x10, x10, x9, lsl #4");                            // slot = table + fd * 16 (ptr, len pair)
-    emitter.instruction("str x1, [x10, #0]");                                   // _stream_connect_host[fd].ptr = persisted host
-    emitter.instruction("str x2, [x10, #8]");                                   // _stream_connect_host[fd].len = host length
+    elephc_memoir::buffers::stream_tables::emit_stash_connect_host(emitter);
 
     emitter.label("__rt_sch_done");
     emitter.instruction("ldr x0, [sp, #0]");                                    // return the fd unchanged
@@ -133,7 +127,7 @@ fn emit_stash_connect_host_linux_x86_64(emitter: &mut Emitter) {
     // -- range-check the fd: only descriptors 0..256 get a table slot --
     emitter.instruction("cmp rdi, 0");                                          // is the fd negative (failed connect)?
     emitter.instruction("jl __rt_sch_done_x86");                                // negative fd → passthrough, no stash
-    emitter.instruction("cmp rdi, 256");                                        // is the fd within the table bound?
+    emitter.instruction(&format!("cmp rdi, {}", elephc_memoir::buffers::stream_tables::FD_CAPACITY));                                        // is the fd within the table bound?
     emitter.instruction("jge __rt_sch_done_x86");                               // out-of-range fd → passthrough, no stash
 
     // -- strip a leading "scheme://" by scanning for "://" (rsi=ptr, rdx=len) --
@@ -181,13 +175,7 @@ fn emit_stash_connect_host_linux_x86_64(emitter: &mut Emitter) {
     // -- persist the host bytes; __rt_str_persist takes rax=ptr, rdx=len --
     emitter.instruction("mov rax, rsi");                                        // str_persist source pointer = host pointer
     emitter.instruction("mov rdx, r11");                                        // str_persist length = trimmed host length
-    abi::emit_call_label(emitter, "__rt_str_persist");                          // rax = persisted host ptr, rdx = len (unchanged)
-    abi::emit_symbol_address(emitter, "r10", "_stream_connect_host");           // base of the per-fd connect-host table
-    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the fd for the table index
-    emitter.instruction("shl r9, 4");                                           // fd * 16 (ptr, len pair stride)
-    emitter.instruction("add r10, r9");                                         // slot address = table + fd * 16
-    emitter.instruction("mov QWORD PTR [r10 + 0], rax");                        // _stream_connect_host[fd].ptr = persisted host
-    emitter.instruction("mov QWORD PTR [r10 + 8], rdx");                        // _stream_connect_host[fd].len = host length
+    elephc_memoir::buffers::stream_tables::emit_stash_connect_host(emitter);
 
     emitter.label("__rt_sch_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the fd unchanged

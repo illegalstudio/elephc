@@ -8,6 +8,8 @@
 //! - Borrowed cells preserve actual arity, omitted defaults, and original PHP types.
 //! - The shared coordinator owns conversion and returns a single owned Mixed result.
 
+use elephc_memoir::values::packed_slots;
+
 use elephc_memoir::strings::concat_cursor::SavedConcatCursor;
 use super::*;
 use elephc_builtin_contract::RuntimeBuiltinId;
@@ -32,7 +34,7 @@ pub(super) fn warn_indexed_nonreference_roots(
         Arch::AArch64 => {
             emitter.instruction(&format!("mov x9, #{element_stride}"));         // select the indexed argument's physical stride
             emitter.instruction("mul x9, x23, x9");                             // locate this argument beyond the array header
-            emitter.instruction("add x9, x9, #24");                             // skip the indexed array header
+            packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x9");
             emitter.instruction(&format!("ldr {cell}, [{array_reg}, x9]"));     // load the original Mixed argument cell
         }
         Arch::X86_64 => {

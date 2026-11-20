@@ -14,6 +14,8 @@
 //!   retire only the caller's lease, leaving any captured lease intact.
 //! - Constructor-promoted borrowed properties still use the separate persistent-cell fallback.
 
+use elephc_memoir::values::packed_slots;
+
 use super::*;
 
 /// Loads lexical instance-call arguments using local `this`, tracking coercion owners for cleanup.
@@ -1265,7 +1267,7 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
             ctx.emitter.instruction("ldr x11, [x10]");                          // load the element count
             ctx.emitter.instruction("cmp x9, x11");                             // has every element been checked?
             ctx.emitter.instruction(&format!("b.ge {}", done));                 // yes: the array fits the typed contract
-            ctx.emitter.instruction("add x10, x10, #24");                       // skip the 24-byte array header to the slots
+            packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
             ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load this element's payload pointer
         }
         Arch::X86_64 => {
@@ -1319,13 +1321,13 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                 ctx.emitter.instruction("str x0, [sp, #-16]!");                 // keep it while the slot's old array is released
                 ctx.emitter.instruction("ldr x10, [sp, #16]");                  // reload the (unique) outer array
                 ctx.emitter.instruction("ldr x9, [sp, #24]");                   // reload the element index
-                ctx.emitter.instruction("add x10, x10, #24");                   // skip the 24-byte array header to the slots
+                packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
                 ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");           // load the empty nested array the slot still owns
                 abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
                 ctx.emitter.instruction("ldr x0, [sp], #16");                   // recover the fresh empty array
                 ctx.emitter.instruction("ldr x10, [sp]");                       // reload the outer array
                 ctx.emitter.instruction("ldr x9, [sp, #8]");                    // reload the element index
-                ctx.emitter.instruction("add x10, x10, #24");                   // skip the 24-byte array header to the slots
+                packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
                 ctx.emitter.instruction("str x0, [x10, x9, lsl #3]");           // the slot now owns the fresh empty array
                 ctx.emitter.instruction(&format!("b {}", next));                // nothing else to check in it
                 ctx.emitter.label(&nonempty);
@@ -1339,7 +1341,7 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                     ctx.emitter.instruction("bl __rt_array_to_mixed");          // widen the slot's nested array into boxed cells (consumes it)
                     ctx.emitter.instruction("ldr x10, [sp]");                   // reload the (unique) outer array
                     ctx.emitter.instruction("ldr x9, [sp, #8]");                // reload the element index
-                    ctx.emitter.instruction("add x10, x10, #24");               // skip the 24-byte array header to the slots
+                    packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
                     ctx.emitter.instruction("str x0, [x10, x9, lsl #3]");       // the slot now owns the widened copy
                 } else if nested_convertible {
                     ctx.emitter.instruction(&format!("cmp x9, #{}", boxed_tag)); // are the nested slots boxed Mixed cells?
@@ -1350,13 +1352,13 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                     ctx.emitter.instruction("str x0, [sp, #-16]!");             // keep the converted copy while the boxed one is released
                     ctx.emitter.instruction("ldr x10, [sp, #16]");              // reload the (unique) outer array
                     ctx.emitter.instruction("ldr x9, [sp, #24]");               // reload the element index
-                    ctx.emitter.instruction("add x10, x10, #24");               // skip the 24-byte array header to the slots
+                    packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
                     ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");       // load the boxed nested array the slot still owns
                     abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
                     ctx.emitter.instruction("ldr x0, [sp], #16");               // recover the converted copy
                     ctx.emitter.instruction("ldr x10, [sp]");                   // reload the outer array
                     ctx.emitter.instruction("ldr x9, [sp, #8]");                // reload the element index
-                    ctx.emitter.instruction("add x10, x10, #24");               // skip the 24-byte array header to the slots
+                    packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
                     ctx.emitter.instruction("str x0, [x10, x9, lsl #3]");       // the slot now owns the converted copy
                 } else {
                     ctx.emitter.instruction(&format!("b {}", fail));            // no: the typed local cannot read them
@@ -1428,7 +1430,7 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
                 Arch::AArch64 => {
                     ctx.emitter.instruction("ldr x10, [sp]");                   // reload the outer array
                     ctx.emitter.instruction("ldr x9, [sp, #8]");                // reload the element index
-                    ctx.emitter.instruction("add x10, x10, #24");               // skip the 24-byte array header to the slots
+                    packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
                     ctx.emitter.instruction("str x0, [x10, x9, lsl #3]");       // store the nested array the check returned
                 }
                 Arch::X86_64 => {
