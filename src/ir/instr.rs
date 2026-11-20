@@ -236,6 +236,10 @@ pub enum Immediate {
     /// limited to user functions, static methods and the builtin names written as literals at
     /// declared callables (`Module::declared_callable_names`).
     DeclaredCallableNames,
+    /// Marks a callable-factory `NormalizeCallable` (`Closure::fromCallable()`, or the dynamic
+    /// factory when `true`) whose source is a value declared `callable`: its runtime names are
+    /// limited exactly like `DeclaredCallableNames`, so the conversion and `$callable()` agree.
+    DeclaredCallableFactory(bool),
     Data(DataId),
     /// Data-pool reference carrying the strict-PHP profile of its physical call site.
     ProfiledData {
