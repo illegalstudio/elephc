@@ -54,6 +54,26 @@ pub(in crate::codegen) fn emit_aarch64_cast_eval_callable_arg(
     support: &EvalCallableDescriptorSupport, _label_prefix: &str, fail_label: &str,
     context_offset: i64, value_offset: i64,
 ) {
+    emit_aarch64_resolve(emitter, support, fail_label, context_offset, value_offset, true);
+}
+
+/// Resolves like [`emit_aarch64_cast_eval_callable_arg`] for a caller that stores the descriptor.
+///
+/// The result is an owned descriptor the caller publishes itself (a typed property slot). Such a
+/// bridge has no argument-owner collection, so adopting the descriptor into one would leave the
+/// adoption node, and the head slot it writes, undrained.
+pub(in crate::codegen) fn emit_aarch64_cast_eval_callable_arg_owned(
+    emitter: &mut Emitter, support: &EvalCallableDescriptorSupport, fail_label: &str,
+    context_offset: i64, value_offset: i64,
+) {
+    emit_aarch64_resolve(emitter, support, fail_label, context_offset, value_offset, false);
+}
+
+/// Calls the shared resolver, then optionally adopts the descriptor into the bridge's owners.
+fn emit_aarch64_resolve(
+    emitter: &mut Emitter, support: &EvalCallableDescriptorSupport, fail_label: &str,
+    context_offset: i64, value_offset: i64, keep: bool,
+) {
     if support.is_empty() && !support.has_dynamic_descriptor() {
         abi::emit_jump(emitter, fail_label);
         return;
@@ -62,7 +82,9 @@ pub(in crate::codegen) fn emit_aarch64_cast_eval_callable_arg(
     emitter.instruction(&format!("ldr x1, [x29, #{}]", value_offset));          // pass the boxed eval callback from this bridge's argument home
     abi::emit_call_label(emitter, ENTRY);
     abi::emit_branch_if_int_result_zero(emitter, fail_label);
-    super::argument_owners::keep(emitter, 64);
+    if keep {
+        super::argument_owners::keep(emitter, 64);
+    }
 }
 
 /// Passes the System V bridge's context and argument homes to the same module resolver.
@@ -70,6 +92,22 @@ pub(in crate::codegen) fn emit_x86_64_cast_eval_callable_arg(
     _module: &Module, emitter: &mut Emitter, _data: &mut DataSection,
     support: &EvalCallableDescriptorSupport, _label_prefix: &str, fail_label: &str,
     context_frame_offset: usize, value_frame_offset: usize,
+) {
+    emit_x86_64_resolve(emitter, support, fail_label, context_frame_offset, value_frame_offset, true);
+}
+
+/// The x86_64 twin of [`emit_aarch64_cast_eval_callable_arg_owned`].
+pub(in crate::codegen) fn emit_x86_64_cast_eval_callable_arg_owned(
+    emitter: &mut Emitter, support: &EvalCallableDescriptorSupport, fail_label: &str,
+    context_frame_offset: usize, value_frame_offset: usize,
+) {
+    emit_x86_64_resolve(emitter, support, fail_label, context_frame_offset, value_frame_offset, false);
+}
+
+/// Calls the shared resolver, then optionally adopts the descriptor into the bridge's owners.
+fn emit_x86_64_resolve(
+    emitter: &mut Emitter, support: &EvalCallableDescriptorSupport, fail_label: &str,
+    context_frame_offset: usize, value_frame_offset: usize, keep: bool,
 ) {
     if support.is_empty() && !support.has_dynamic_descriptor() {
         abi::emit_jump(emitter, fail_label);
@@ -79,7 +117,9 @@ pub(in crate::codegen) fn emit_x86_64_cast_eval_callable_arg(
     abi::load_at_offset(emitter, "rsi", value_frame_offset);
     abi::emit_call_label(emitter, ENTRY);
     abi::emit_branch_if_int_result_zero(emitter, fail_label);
-    super::argument_owners::keep(emitter, context_frame_offset);
+    if keep {
+        super::argument_owners::keep(emitter, context_frame_offset);
+    }
 }
 
 #[cfg(test)]

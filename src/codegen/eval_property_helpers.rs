@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 
 use crate::codegen::data_section::DataSection;
 use crate::codegen::eval_callable_helpers::{
-    emit_aarch64_cast_eval_callable_arg, emit_x86_64_cast_eval_callable_arg,
+    emit_aarch64_cast_eval_callable_arg_owned, emit_x86_64_cast_eval_callable_arg_owned,
     EvalCallableDescriptorSupport,
 };
 use crate::codegen::emit::Emitter;
@@ -1521,12 +1521,9 @@ fn emit_aarch64_store_property_slot(
         // The interpreter hands over a BOXED callback; the slot holds a DESCRIPTOR. This is the
         // same conversion a `callable` parameter gets, pointed at this helper's own frame.
         PhpType::Callable => {
-            emit_aarch64_cast_eval_callable_arg(
-                module,
+            emit_aarch64_cast_eval_callable_arg_owned(
                 emitter,
-                data,
                 callable_support,
-                &slot_body_label_raw(slot, "set"),
                 fail_label,
                 AARCH64_SET_CONTEXT_FROM_FP_OFFSET,
                 AARCH64_SET_VALUE_FROM_FP_OFFSET,
@@ -1599,12 +1596,9 @@ fn emit_x86_64_store_property_slot(
         }
         // See the ARM64 twin.
         PhpType::Callable => {
-            emit_x86_64_cast_eval_callable_arg(
-                module,
+            emit_x86_64_cast_eval_callable_arg_owned(
                 emitter,
-                data,
                 callable_support,
-                &slot_body_label_raw(slot, "set"),
                 fail_label,
                 X86_64_SET_CONTEXT_FRAME_OFFSET,
                 X86_64_SET_VALUE_FRAME_OFFSET,

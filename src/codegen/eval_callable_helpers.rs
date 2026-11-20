@@ -40,7 +40,10 @@ use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
 mod tests;
 mod shared_cast;
 pub(super) mod argument_owners;
-pub(super) use shared_cast::{emit_aarch64_cast_eval_callable_arg, emit_x86_64_cast_eval_callable_arg};
+pub(super) use shared_cast::{
+    emit_aarch64_cast_eval_callable_arg, emit_aarch64_cast_eval_callable_arg_owned,
+    emit_x86_64_cast_eval_callable_arg, emit_x86_64_cast_eval_callable_arg_owned,
+};
 
 const EVAL_RECEIVER_CAPTURE_PARAM: &str = "__elephc_eval_callable_receiver";
 /// Frame slot the eval ARGUMENT bridges stage a boxed value in before a cast reads it.
