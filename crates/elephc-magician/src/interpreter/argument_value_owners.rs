@@ -215,11 +215,11 @@ mod tests {
         let value = RuntimeCellHandle::from_raw(8usize as *mut RuntimeCell);
         let key = RuntimeCellHandle::from_raw(16usize as *mut RuntimeCell);
         let arguments = vec![
-            BoundMethodArg { value, ref_target: None, variadic_ref_targets: vec![
+            BoundMethodArg { source_type: None, value, ref_target: None, variadic_ref_targets: vec![
                 (key, EvalReferenceTarget::Cell { cell: value.borrowed() }),
             ] },
-            BoundMethodArg { value, ref_target: None, variadic_ref_targets: Vec::new() },
-            BoundMethodArg { value: value.borrowed(), ref_target: None, variadic_ref_targets: Vec::new() },
+            BoundMethodArg { source_type: None, value, ref_target: None, variadic_ref_targets: Vec::new() },
+            BoundMethodArg { source_type: None, value: value.borrowed(), ref_target: None, variadic_ref_targets: Vec::new() },
         ];
         let mut slots = Vec::new();
         arguments.visit_owned_slots(&mut |slot| slots.push(slot as usize));

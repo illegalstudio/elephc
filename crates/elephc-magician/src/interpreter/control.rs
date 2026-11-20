@@ -29,11 +29,25 @@ pub enum EvalOutcome {
     Throwable(RuntimeCellHandle),
 }
 
+/// A source producer snapshot whose write stamp matters only for a shared argument.
+#[derive(Clone)]
+pub(super) struct ArgumentSource {
+    pub(super) ty: crate::eval_ir::EvalParameterType,
+    pub(super) write_epoch: u64,
+}
+
+impl ArgumentSource {
+    /// Captures declaration metadata without retaining or inspecting its runtime value.
+    pub(super) fn capture(ty: crate::eval_ir::EvalParameterType,
+        context: &crate::context::ElephcEvalContext,
+    ) -> Self { Self { ty, write_epoch: context.source_view_epoch() } }
+}
+
 /// One already evaluated function-like call argument.
 #[derive(Clone)]
 pub(super) struct EvaluatedCallArg {
     /// Logical producer alternatives captured before later argument effects.
-    pub(super) source_type: Option<crate::eval_ir::EvalParameterType>,
+    pub(super) source_type: Option<ArgumentSource>,
     /// Exact source-evaluation lease, preserved through binding without copying its owner.
     pub(super) evaluation_owner: Option<ArgumentValueOwner>,
     pub(super) name: Option<String>,
@@ -44,6 +58,7 @@ pub(super) struct EvaluatedCallArg {
 /// One method argument after PHP parameter-order binding and default materialization.
 #[derive(Clone)]
 pub(super) struct BoundMethodArg {
+    pub(super) source_type: Option<ArgumentSource>,
     pub(super) value: RuntimeCellHandle,
     pub(super) ref_target: Option<EvalReferenceTarget>,
     pub(super) variadic_ref_targets: Vec<(RuntimeCellHandle, EvalReferenceTarget)>,

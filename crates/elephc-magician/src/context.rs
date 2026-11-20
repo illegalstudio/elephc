@@ -34,6 +34,7 @@ mod reflection_registry;
 mod runtime_state;
 mod semantic_profile;
 mod source_views;
+mod return_sources;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -54,6 +55,7 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 pub use alias_metadata::*;
 pub use closure_metadata::*;
 pub use core::*;
+pub(crate) use return_sources::ReturnSourceContract;
 use core::EvalStaticLocal;
 pub use functions::{EvalNativeGlobalConstant, EvalNativeUserConstant};
 pub(crate) use global_registry::*;

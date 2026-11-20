@@ -210,9 +210,10 @@ pub(in crate::interpreter) fn execute_stmt(
                 execute_statements(else_branch, context, scope, values)
             }
         }
-        EvalStmt::Return(Some(expr)) => Ok(EvalControl::Return(eval_owned_expr(
-            expr, context, scope, values,
-        )?)),
+        EvalStmt::Return(Some(expr)) => Ok(EvalControl::Return(
+            if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+                eval_source_return_expression(expr, context, scope, values)?
+            } else { eval_owned_expr(expr, context, scope, values)? })),
         EvalStmt::Return(None) => Ok(EvalControl::ReturnVoid),
         EvalStmt::ReferenceAssign { target, source } => {
             for replaced in set_reference_alias(context, scope, target, source, values)? {

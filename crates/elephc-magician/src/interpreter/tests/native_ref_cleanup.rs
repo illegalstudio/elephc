@@ -120,7 +120,7 @@ fn variadic_reference_writeback_releases_owned_element_reads() {
         let array = values.array_new(1).unwrap();
         let array = values.array_set(array, key, replacement).unwrap();
         let target_scope: *mut ElephcEvalScope = if reject { std::ptr::null_mut() } else { &mut caller };
-        let bound = BoundMethodArg {
+        let bound = BoundMethodArg { source_type: None,
             value: array,
             ref_target: None,
             variadic_ref_targets: vec![(key, EvalReferenceTarget::Variable {
@@ -394,7 +394,10 @@ fn native_function_binding_releases_partial_type_conversions() {
         ],
         &mut context, &mut values,
     );
-    assert!(matches!(outcome, Err(EvalStatus::RuntimeFatal)));
+    assert_eq!(outcome.err(), Some(EvalStatus::UncaughtThrowable));
+    let thrown = context.take_pending_throw().expect("a refused binding owns its TypeError");
+    assert_eq!(values.object_classes.get(&(thrown.as_ptr() as usize)).map(String::as_str), Some("TypeError"));
+    values.release(thrown).unwrap();
     assert_eq!(values.cell_owners[&(caller.as_ptr() as usize)], 1);
     assert_eq!(values.cell_owners[&(invalid.as_ptr() as usize)], 1);
     assert_eq!(values.cell_owners.values().sum::<usize>(), 2);

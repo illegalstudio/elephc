@@ -103,7 +103,7 @@ use constants::*;
 pub(crate) use bytecode::with_executable_cache_key;
 pub use control::EvalOutcome;
 use control::{
-    BoundMethodArg, BoundNativeFunctionArgs, BoundNativeFunctionRefSlot, EvalArraySpliceDirectArgs,
+    ArgumentSource, BoundMethodArg, BoundNativeFunctionArgs, BoundNativeFunctionRefSlot, EvalArraySpliceDirectArgs,
     EvalByRefBindingMode, EvalControl, EvalPredefinedConstant, EvalSprintfSpec,
     EvaluatedCallArg, EvaluatedCallable,
 };
@@ -202,6 +202,14 @@ pub fn execute_program_outcome_with_context(
     program: &EvalProgram,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    with_source_return_contract(None, None, None, context, |context|
+        execute_program_in_return_scope(context, program, scope, values))
+}
+
+/// Runs one program after its return declaration has been separated from its caller's scope.
+fn execute_program_in_return_scope(context: &mut ElephcEvalContext, program: &EvalProgram,
+    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
     validate_program_semantics(context, program, values)?;
     let executed = match bytecode::try_execute(context, program, scope, values) {

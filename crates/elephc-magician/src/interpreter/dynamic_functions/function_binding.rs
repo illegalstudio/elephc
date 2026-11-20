@@ -145,7 +145,7 @@ fn bind_evaluated_native_function_args_with_mode(
             )?;
         } else {
             // Surplus positional arguments are by-value in PHP and bind to no parameter.
-            surplus_args.push(BoundMethodArg {
+            surplus_args.push(BoundMethodArg { source_type: None,
                 value: arg.value,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
@@ -297,7 +297,7 @@ fn bind_evaluated_native_variadic_function_args(
                     )?;
                     named_variadic_args.push((
                         name,
-                        BoundMethodArg {
+                        BoundMethodArg { source_type: None,
                             value: arg.value,
                             ref_target,
                             variadic_ref_targets: Vec::new(),
@@ -337,7 +337,7 @@ fn bind_evaluated_native_variadic_function_args(
                     by_ref_mode,
                     values,
                 )?;
-                variadic_args.push(BoundMethodArg {
+                variadic_args.push(BoundMethodArg { source_type: None,
                     value: arg.value,
                     ref_target,
                     variadic_ref_targets: Vec::new(),
@@ -454,7 +454,7 @@ fn fill_native_function_defaults(
             if bound.is_some() { continue; }
             if position < function.required_param_count() { return Err(EvalStatus::RuntimeFatal); }
             let default = function.param_default(position).ok_or(EvalStatus::RuntimeFatal)?;
-            *bound = Some(BoundMethodArg {
+            *bound = Some(BoundMethodArg { source_type: None,
                 value: materialize_native_callable_default(default, context, values)?,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
@@ -560,7 +560,7 @@ fn bind_native_function_named_arg(
     }
     let ref_target =
         native_function_parameter_ref_target(function, Some(param_index), ref_target, by_ref_mode, values)?;
-    bound_args[param_index] = Some(BoundMethodArg {
+    bound_args[param_index] = Some(BoundMethodArg { source_type: None,
         value,
         ref_target,
         variadic_ref_targets: Vec::new(),
@@ -588,7 +588,7 @@ fn bind_native_function_positional_arg(
     }
     let ref_target =
         native_function_parameter_ref_target(function, Some(param_index), ref_target, by_ref_mode, values)?;
-    bound_args[param_index] = Some(BoundMethodArg {
+    bound_args[param_index] = Some(BoundMethodArg { source_type: None,
         value,
         ref_target,
         variadic_ref_targets: Vec::new(),

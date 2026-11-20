@@ -146,3 +146,67 @@ fn string_context_source(ty: &Type, context: &ElephcEvalContext) -> bool {
         || context.class_method(name, "__toString").is_some()
         || context.native_method_signature(name, "__toString").is_some()
 }
+
+/// Checks one normalized argument before coercion, retiring shared facts changed by later operands.
+pub(super) fn require_argument(expected: &EvalParameterType, source: Option<&ArgumentSource>,
+    value: RuntimeCellHandle, shared: bool, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !context.semantic_profile().contains(StrictFeature::Mixed) { return Ok(()); }
+    let target = crate::eval_ir::generic_type(expected);
+    if target == Type::atom("mixed") { return Ok(()); }
+    let source = source.filter(|source| !shared || context.source_view_is_current(value, source.write_epoch));
+    let actual = value_source(source.map(|source| crate::eval_ir::generic_type(&source.ty))
+        .unwrap_or_else(|| Type::atom("mixed")));
+    if !dynamic_source(&actual) || source_assignable(&actual, &target, context, values)? { return Ok(()); }
+    eval_throw_type_error(&format!("--strict-mixed: narrow {actual} before binding {target}; every alternative must support the operation"),
+        context, values)
+}
+
+/// Shares finite alternative traversal with exact generic/nominal membership and weak scalar domains.
+fn source_assignable(actual: &Type, target: &Type, context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    match actual {
+        Type::Atom(name) if name == "mixed" => return Ok(false),
+        Type::Atom(name) if name == "never" => return Ok(true),
+        Type::Union(members) => {
+            for member in members { if !source_assignable(member, target, context, values)? { return Ok(false); } }
+            return Ok(true);
+        }
+        Type::Nullable(inner) => return Ok(source_assignable(inner, target, context, values)?
+            && source_assignable(&Type::atom("null"), target, context, values)?),
+        _ => {}
+    }
+    if let Some(kind) = scalar_source_kind(actual) {
+        if elephc_semantics::weak_scalar_binding::supports_source_kind(scalar_target_kinds(target), kind) {
+            return Ok(true);
+        }
+    }
+    if scalar_target_kinds(target).allows(elephc_semantics::conversions::ValueKind::String)
+        && scalar_source_kind(actual).is_none()
+        && *actual != Type::atom(elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC)
+        && string_context_source(actual, context) { return Ok(true); }
+    generic_type_is_a(actual, target, context, values)
+}
+
+/// Projects scalar logical atoms without inspecting the candidate's current value.
+fn scalar_source_kind(ty: &Type) -> Option<elephc_semantics::conversions::ValueKind> {
+    use elephc_semantics::conversions::ValueKind as K;
+    Some(match ty { Type::Atom(name) => match name.as_str() {
+        "int" => K::Integer, "float" => K::Float, "string" => K::String,
+        "bool" | "true" | "false" => K::Boolean, "null" | "void" => K::Null,
+        _ => return None,
+    }, _ => return None })
+}
+
+/// Keeps literal true/false constraints exact while collecting ordinary weak scalar alternatives.
+fn scalar_target_kinds(ty: &Type) -> elephc_semantics::conversions::AllowedKinds {
+    use elephc_semantics::conversions::{AllowedKinds as A, ValueKind as K};
+    match ty {
+        Type::Union(members) => members.iter().fold(A::EMPTY, |kinds, ty| kinds.union(scalar_target_kinds(ty))),
+        Type::Nullable(inner) => scalar_target_kinds(inner).union(A::one(K::Null)),
+        Type::Atom(name) if matches!(name.as_str(), "true" | "false") => A::EMPTY,
+        _ => scalar_source_kind(ty).map_or(A::EMPTY, A::one),
+    }
+}

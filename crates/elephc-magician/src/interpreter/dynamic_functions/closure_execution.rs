@@ -119,14 +119,15 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     frame.bind_scope(&function_scope);
     frame.set_sensitive_parameters(function.parameter_attributes(), function.parameter_is_variadic());
     context.push_function_args(frame);
-    let result = binding_result.and_then(|()| {
+    let result = binding_result.and_then(|()| with_source_return_contract(
+        function.return_type(), None, None, context, |context| {
         if let Some(body) = function.bytecode().filter(|_|
             !super::super::bytecode::source_proofs_require_walker(context)).cloned() {
             super::super::bytecode::execute_bound_body(body, context, &mut function_scope, values)
         } else {
             execute_statements(function.body(), context, &mut function_scope, values)
         }
-    });
+    }));
     let persist_result = persist_static_locals(
         context,
         function.name(),
@@ -482,14 +483,16 @@ fn eval_closure_with_optional_binding(
         backtrace_object,
         backtrace_object.is_none(),
     );
-    let result = binding_result.and_then(|()| {
+    let result = binding_result.and_then(|()| with_source_return_contract(
+        function.return_type(), binding.as_ref().map(|binding| binding.class_scope.as_str()),
+        binding.as_ref().map(|binding| binding.called_class.as_str()), context, |context| {
         if let Some(body) = function.bytecode().filter(|_|
             !super::super::bytecode::source_proofs_require_walker(context)).cloned() {
             super::super::bytecode::execute_bound_body(body, context, &mut function_scope, values)
         } else {
             execute_statements(function.body(), context, &mut function_scope, values)
         }
-    });
+    }));
     let persist_result = persist_static_locals(
         context,
         function.name(),

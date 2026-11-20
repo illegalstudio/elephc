@@ -195,7 +195,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
             } else {
                 values.array_new(evaluated_args.len())?
             };
-            bound_args[index] = Some(BoundMethodArg {
+            bound_args[index] = Some(BoundMethodArg { source_type: None,
                 value: array,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
@@ -214,6 +214,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                     &name,
                     arg.value,
                     arg.ref_target,
+                    arg.source_type,
                     by_ref_mode,
                     &mut variadic_named_args,
                     values,
@@ -229,6 +230,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                     &mut next_variadic_index,
                     arg.value,
                     arg.ref_target,
+                    arg.source_type,
                     by_ref_mode,
                     values,
                 )?;
@@ -254,6 +256,8 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                     return Err(EvalStatus::RuntimeFatal);
                 };
                 *value = Some(BoundMethodArg {
+                    source_type: parameter_types.get(position).and_then(Option::as_ref)
+                        .map(|ty| ArgumentSource::capture(ty.clone(), context)),
                     value: eval_method_parameter_default(default, context, values)?,
                     ref_target: None,
                     variadic_ref_targets: Vec::new(),
@@ -262,6 +266,9 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
             if let Some(param_type) = parameter_types.get(position).and_then(Option::as_ref) {
                 let bound = value.as_mut().ok_or(EvalStatus::RuntimeFatal)?;
                 let previous = bound.value;
+                mixed_source_proofs::require_argument(param_type, bound.source_type.as_ref(), previous,
+                    parameter_is_by_ref.get(position).copied().unwrap_or(false) && bound.ref_target.is_some(),
+                    context, values)?;
                 eval_reject_null_object_argument(callee, position + 1, Some(&params[position]),
                     param_type, previous, context, values)?;
                 bound.value = eval_method_parameter_value(param_type, previous, context, values)?;
@@ -344,6 +351,7 @@ fn bind_dynamic_positional_method_arg(
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    source_type: Option<ArgumentSource>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -369,7 +377,7 @@ fn bind_dynamic_positional_method_arg(
             values,
         )?;
         *next_variadic_index = following_index;
-        staged.push((argument_number, EvaluatedCallArg { source_type: None, evaluation_owner: None, name: None, value, ref_target }));
+        staged.push((argument_number, EvaluatedCallArg { source_type, evaluation_owner: None, name: None, value, ref_target }));
         return Ok(());
     }
     let param_index = *next_positional;
@@ -391,7 +399,7 @@ fn bind_dynamic_positional_method_arg(
         by_ref_mode,
         values,
     )?;
-    bound_args[param_index] = Some(BoundMethodArg {
+    bound_args[param_index] = Some(BoundMethodArg { source_type,
         value,
         ref_target,
         variadic_ref_targets: Vec::new(),
@@ -411,6 +419,7 @@ fn bind_dynamic_named_method_arg(
     name: &str,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    source_type: Option<ArgumentSource>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     variadic_named_args: &mut std::collections::HashSet<String>,
     values: &mut impl RuntimeValueOps,
@@ -428,7 +437,7 @@ fn bind_dynamic_named_method_arg(
             by_ref_mode,
             values,
         )?;
-        bound_args[param_index] = Some(BoundMethodArg {
+        bound_args[param_index] = Some(BoundMethodArg { source_type,
             value,
             ref_target,
             variadic_ref_targets: Vec::new(),
@@ -450,7 +459,7 @@ fn bind_dynamic_named_method_arg(
         by_ref_mode,
         values,
     )?;
-    staged.push((argument_number, EvaluatedCallArg { source_type: None, evaluation_owner: None, name: Some(name.to_string()), value, ref_target }));
+    staged.push((argument_number, EvaluatedCallArg { source_type, evaluation_owner: None, name: Some(name.to_string()), value, ref_target }));
     Ok(())
 }
 
@@ -528,6 +537,8 @@ fn bind_dynamic_variadic_args(
         let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
         let original = arg.value;
         let value = if let Some(param_type) = parameter_types.get(index).and_then(Option::as_ref) {
+            mixed_source_proofs::require_argument(param_type, arg.source_type.as_ref(), original,
+                arg.ref_target.is_some(), context, values)?;
             eval_reject_null_object_argument(
                 callee, number, None, param_type, original, context, values,
             )?;

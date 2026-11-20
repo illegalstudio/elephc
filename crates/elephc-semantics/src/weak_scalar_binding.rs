@@ -30,6 +30,15 @@ pub enum WeakScalarBinding {
     String,
 }
 
+/// Checks a scalar source kind's conversion domain while leaving contents and ranges to plan().
+pub fn supports_source_kind(allowed: AllowedKinds, source: ValueKind) -> bool {
+    if matches!(source, ValueKind::Dynamic | ValueKind::NonScalar) { return false; }
+    if allowed.allows(source) { return true; }
+    if source == ValueKind::Null { return false; }
+    [ValueKind::Integer, ValueKind::Float, ValueKind::Boolean, ValueKind::String]
+        .iter().any(|kind| allowed.allows(*kind))
+}
+
 /// Selects exact membership or PHP's weak scalar preference, returning None for a type failure.
 pub fn plan(allowed: AllowedKinds, input: ScalarBindingInput<'_>) -> Option<WeakScalarBinding> {
     use ScalarBindingInput as Input;
@@ -40,7 +49,7 @@ pub fn plan(allowed: AllowedKinds, input: ScalarBindingInput<'_>) -> Option<Weak
         Input::Null => ValueKind::Null,
     };
     if allowed.allows(kind) { return Some(Plan::Identity); }
-    if matches!(input, Input::Null) { return None; }
+    if !supports_source_kind(allowed, kind) { return None; }
     let number = match input {
         Input::Integer(value) => Some(NumericValue::Int(value)),
         Input::Float(value) => Some(NumericValue::Float(value)),
@@ -91,6 +100,22 @@ fn numeric_string(bytes: &[u8]) -> Option<NumericValue> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Source domains keep unknown/null distinct from scalar values whose contents can still fail.
+    #[test]
+    fn weak_scalar_source_domains_preserve_unknown_null_and_value_checks() {
+        let int = AllowedKinds::one(ValueKind::Integer);
+        for kind in [ValueKind::Integer, ValueKind::Float, ValueKind::Boolean, ValueKind::String] {
+            assert!(supports_source_kind(int, kind));
+        }
+        for kind in [ValueKind::Dynamic, ValueKind::NonScalar, ValueKind::Null] {
+            assert!(!supports_source_kind(int, kind));
+        }
+        assert!(supports_source_kind(int.union(AllowedKinds::one(ValueKind::Null)), ValueKind::Null));
+        assert!(!supports_source_kind(AllowedKinds::one(ValueKind::NonScalar), ValueKind::Integer));
+        assert_eq!(plan(int, ScalarBindingInput::Bytes(b"not numeric")), None);
+        assert_eq!(plan(int, ScalarBindingInput::Float(f64::NAN)), None);
+    }
 
     /// Union preference follows numeric string kind while exact string/bool members win first.
     #[test]

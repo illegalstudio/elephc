@@ -217,3 +217,53 @@ fn eval_declared_return_type_is_void(return_type: &EvalParameterType) -> bool {
         && !return_type.is_intersection()
         && matches!(return_type.variants(), [EvalParameterTypeVariant::Void])
 }
+
+/// Gives each interpreted body its own return declaration without inheriting a caller's contract.
+pub(in crate::interpreter) fn with_source_return_contract<T>(return_type: Option<&EvalParameterType>,
+    declaring_class: Option<&str>, called_class: Option<&str>, context: &mut ElephcEvalContext,
+    body: impl FnOnce(&mut ElephcEvalContext) -> T,
+) -> T {
+    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { return body(context); }
+    let contract = return_type.map(|ty| crate::context::ReturnSourceContract {
+        ty: ty.clone(), declaring_class: declaring_class.map(str::to_string),
+        called_class: called_class.map(str::to_string),
+    });
+    context.with_return_source_contract(contract, body)
+}
+
+/// Checks a logical return source where the function's own catch/finally regions can observe failure.
+pub(in crate::interpreter) fn eval_source_return_expression(expr: &EvalExpr,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (value, source) = mixed_eval::evaluate(expr, context, scope, values)?;
+    let result = (|| {
+        if let Some(contract) = context.return_source_contract().cloned() {
+            let target = resolve_return_source_type(&crate::eval_ir::generic_type(&contract.ty),
+                &contract, context)?;
+            let expected = crate::eval_ir::parameter_type(&target);
+            let source = ArgumentSource::capture(crate::eval_ir::parameter_type(&source), context);
+            mixed_source_proofs::require_argument(&expected, Some(&source), value, false, context, values)?;
+        }
+        Ok(value)
+    })();
+    finish_declared_return_value(value, result, context, values)
+}
+
+/// Resolves class keywords recursively using the return declaration's original owner.
+fn resolve_return_source_type(ty: &elephc_generics::Type,
+    contract: &crate::context::ReturnSourceContract, context: &ElephcEvalContext,
+) -> Result<elephc_generics::Type, EvalStatus> {
+    use elephc_generics::Type;
+    let resolve = |ty: &Type| resolve_return_source_type(ty, contract, context);
+    Ok(match ty {
+        Type::Atom(name) if matches!(name.to_ascii_lowercase().as_str(), "self" | "static" | "parent") =>
+            Type::atom(eval_declared_type_runtime_class_name(name, contract.declaring_class.as_deref(),
+                contract.called_class.as_deref(), context)?),
+        Type::Apply(name, arguments) => Type::Apply(name.clone(), arguments.iter().map(resolve).collect::<Result<_, _>>()?),
+        Type::Union(members) => Type::Union(members.iter().map(resolve).collect::<Result<_, _>>()?),
+        Type::Intersection(members) => Type::Intersection(members.iter().map(resolve).collect::<Result<_, _>>()?),
+        Type::Nullable(inner) => Type::Nullable(Box::new(resolve(inner)?)),
+        Type::Callable(params, result) => Type::Callable(params.iter().map(resolve).collect::<Result<_, _>>()?, Box::new(resolve(result)?)),
+        ty => ty.clone(),
+    })
+}

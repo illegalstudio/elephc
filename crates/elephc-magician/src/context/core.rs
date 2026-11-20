@@ -41,6 +41,7 @@ pub struct ElephcEvalContext {
     /// Installed once by generated code; standalone embedders default to permissive.
     pub(super) semantic_profile: Option<elephc_semantics::SemanticProfile>,
     pub(super) source_view_epoch: u64,
+    pub(super) return_source_contracts: Vec<Option<ReturnSourceContract>>,
     pub(super) source_view_writes: HashMap<usize, source_views::SourceWriteEpoch>,
     pub(super) source_view_retirements: crate::ffi::array_references::ArrayReferenceRetirements,
     pub(super) abi_version: u32,
@@ -155,6 +156,7 @@ impl ElephcEvalContext {
             abi_version: ABI_VERSION,
             semantic_profile: None,
             source_view_epoch: 0,
+            return_source_contracts: Vec::new(),
             source_view_writes: HashMap::new(),
             source_view_retirements: Default::default(),
             abi_owner_count: 1,
@@ -263,6 +265,7 @@ impl ElephcEvalContext {
             abi_version,
             semantic_profile: None,
             source_view_epoch: 0,
+            return_source_contracts: Vec::new(),
             source_view_writes: HashMap::new(),
             source_view_retirements: Default::default(),
             abi_owner_count: 1,

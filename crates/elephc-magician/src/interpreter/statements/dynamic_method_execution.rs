@@ -144,7 +144,9 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     );
     let result = with_runtime_owners(&evaluated_args, || {
         with_runtime_scope_owners(&mut method_scope, |scope| {
-            binding_result.and_then(|()| execute_statements(method.body(), context, scope, values))
+            binding_result.and_then(|()| with_source_return_contract(method.return_type(),
+                Some(class_name), Some(called_class_name), context, |context|
+                    execute_statements(method.body(), context, scope, values)))
         })
     });
     let persist_result = persist_static_locals(
@@ -301,7 +303,9 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     );
     let result = with_runtime_owners(&evaluated_args, || {
         with_runtime_scope_owners(&mut method_scope, |scope| {
-            binding_result.and_then(|()| execute_statements(method.body(), context, scope, values))
+            binding_result.and_then(|()| with_source_return_contract(method.return_type(),
+                Some(class_name), Some(called_class_name), context, |context|
+                    execute_statements(method.body(), context, scope, values)))
         })
     });
     let persist_result = persist_static_locals(

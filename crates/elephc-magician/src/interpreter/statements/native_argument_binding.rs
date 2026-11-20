@@ -97,7 +97,7 @@ pub(super) fn positional_evaluated_bound_args(
                 )?,
                 None => None,
             };
-            Ok(BoundMethodArg {
+            Ok(BoundMethodArg { source_type: None,
                 value: arg.value,
                 ref_target,
                 variadic_ref_targets: Vec::new(),
@@ -266,7 +266,7 @@ pub(super) fn bind_native_signature_args(
     let filled = (|| {
         if let Some(index) = variadic_index {
             let array = values.array_new(args.len())?;
-            bound_args[index] = Some(BoundMethodArg {
+            bound_args[index] = Some(BoundMethodArg { source_type: None,
                 value: array,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
@@ -279,7 +279,7 @@ pub(super) fn bind_native_signature_args(
             }
         }
         if let Some(index) = hidden_argc_index {
-            bound_args[index] = Some(BoundMethodArg {
+            bound_args[index] = Some(BoundMethodArg { source_type: None,
                 value: values.int(actual_count as i64)?,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
@@ -339,7 +339,7 @@ pub(super) fn bind_native_signature_args(
                         .ok_or(EvalStatus::RuntimeFatal)?,
                 )?,
             };
-            *value = Some(BoundMethodArg {
+            *value = Some(BoundMethodArg { source_type: None,
                 value: default_value,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
@@ -583,7 +583,7 @@ pub(super) fn bind_native_positional_signature_arg(
     }
     let ref_target =
         native_parameter_ref_target(signature, Some(param_index), ref_target, by_ref_mode, values)?;
-    bound_args[param_index] = Some(BoundMethodArg {
+    bound_args[param_index] = Some(BoundMethodArg { source_type: None,
         value,
         ref_target,
         variadic_ref_targets: Vec::new(),
@@ -619,7 +619,7 @@ pub(super) fn bind_native_named_signature_arg(
             by_ref_mode,
             values,
         )?;
-        bound_args[param_index] = Some(BoundMethodArg {
+        bound_args[param_index] = Some(BoundMethodArg { source_type: None,
             value,
             ref_target,
             variadic_ref_targets: Vec::new(),

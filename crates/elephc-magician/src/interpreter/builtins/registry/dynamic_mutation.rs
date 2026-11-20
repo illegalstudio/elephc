@@ -210,7 +210,7 @@ fn eval_dynamic_array_push_unshift_call(
     let inserted_values = inserted.iter().map(|arg| arg.value).collect::<Vec<_>>();
     let mut element = None;
     for argument in &inserted {
-        let ty = local_binding_origins::element_value_source_type(argument.source_type.as_ref(),
+        let ty = local_binding_origins::element_value_source_type(argument.source_type.as_ref().map(|source| &source.ty),
             argument.value, context, values)?;
         element = Some(match element { None => ty,
             Some(previous) => crate::eval_ir::merge_array_element_sources(previous, ty) });
@@ -254,7 +254,7 @@ fn eval_dynamic_array_splice_call(
         values,
     )?;
     let element = local_binding_origins::replacement_element_source(
-        optional_evaluated_ref_arg(&bound, 3).and_then(|arg| arg.source_type.as_ref()));
+        optional_evaluated_ref_arg(&bound, 3).and_then(|arg| arg.source_type.as_ref().map(|source| &source.ty)));
     local_binding_origins::finish_array_mutation(target, array.value, replacement, removed, element, context, values).map(Some)
 }
 

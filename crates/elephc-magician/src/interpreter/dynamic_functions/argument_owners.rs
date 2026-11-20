@@ -57,7 +57,7 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
                             let released = release_expr_result(key, context, values);
                             let key = normalized.and_then(|key| released.map(|()| key))?;
                             key.and_then(|key| sources.iter().find(|(source, _)| source == &key).map(|(_, ty)| ty.clone()))
-                        } else { element_source.clone() };
+                        } else { element_source.clone() }.map(|ty| ArgumentSource::capture(ty, context));
                     }
                     Ok(())
                 })();
@@ -230,15 +230,21 @@ fn own_temporary_reference(
 fn eval_source_argument_with_type(argument: &EvalCallArg, position: usize,
     modes: &CallArgumentModes, context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
-) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>, Option<EvalParameterType>), EvalStatus> {
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>, Option<ArgumentSource>), EvalStatus> {
     let source = local_binding_origins::source_view(argument.value(), context, scope);
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+        && !modes.by_reference(argument.name(), position)
+        && !matches!(argument.value(), EvalExpr::Array(_)) {
+        let (value, source) = mixed_eval::evaluate(argument.value(), context, scope, values)?;
+        return Ok((value, None, Some(ArgumentSource::capture(crate::eval_ir::parameter_type(&source), context))));
+    }
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
         && !modes.by_reference(argument.name(), position) {
         if let EvalExpr::Array(elements) = argument.value() {
             let (value, source) = array_literals::evaluate_literal(elements, context, scope, values)?;
-            return Ok((value, None, Some(source)));
+            return Ok((value, None, Some(ArgumentSource::capture(source, context))));
         }
     }
     let (value, target) = eval_source_call_argument(argument, position, modes, context, scope, values)?;
-    Ok((value, target, source))
+    Ok((value, target, source.map(|ty| ArgumentSource::capture(ty, context))))
 }
