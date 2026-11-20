@@ -2154,3 +2154,27 @@ echo $n, "\n";
     assert_eq!(output.stdout, "10017\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A private method is not overridden by a subclass's method of the same name: `$this->m()`
+/// in `A` runs `A::m()` for a `B` or `C` too, so its own parameter is checked and named, and a
+/// nullable private `B::m()` does not exempt it (review of the override dispatch).
+#[test]
+fn test_private_method_call_checks_the_method_its_scope_names() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private function m(string $s) { echo "A::m(", $s, ")\n"; }
+    public function run(mixed $v) { $this->m($v); }
+}
+class B extends A { private function m(?string $renamed) { echo "B::m\n"; } public function runB(mixed $v) { $this->m($v); } }
+class C extends A { private function m(string $renamed) { echo "C::m\n"; } }
+function t(callable $f) { try { $f(); } catch (TypeError $e) { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; } }
+t(fn() => (new A)->run(null));
+t(fn() => (new B)->run(null));
+t(fn() => (new C)->run(null));
+t(fn() => (new B)->run("x"));
+t(fn() => (new B)->runB(null));
+"#,
+    );
+    assert_eq!(out, "A::m(): Argument #1 ($s) must be of type string, null given, called in F on line 4\nA::m(): Argument #1 ($s) must be of type string, null given, called in F on line 4\nA::m(): Argument #1 ($s) must be of type string, null given, called in F on line 4\nA::m(x)\nB::m\n");
+}
