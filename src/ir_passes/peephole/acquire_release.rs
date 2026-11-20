@@ -117,6 +117,13 @@ pub(super) fn collect_transfers(function: &Function, rewrites: &mut Rewrites) {
             {
                 continue;
             }
+            if !positions
+                .iter()
+                .filter(|&&at| at < position)
+                .all(|&at| earlier_use_only_fills(function, block.instructions[at], source))
+            {
+                continue;
+            }
             let (Some(source_value), Some(acquired_value)) =
                 (function.value(source), function.value(acquired))
             else {
@@ -137,6 +144,22 @@ pub(super) fn collect_transfers(function: &Function, rewrites: &mut Rewrites) {
             taken.insert(release_id);
         }
     }
+}
+
+/// Whether an instruction before the acquire only FILLS `source` (it is the receiver of an
+/// element store) and cannot take a reference to it.
+///
+/// Codegen lets a retaining consumer (a `store_local`, the value operand of an array or hash
+/// write, a `runtime_call`) steal the owned reference of a value no explicit `Release` drops,
+/// and retain its own when one does. Cancelling the pair removes that release, so any earlier
+/// consumer of the source flips from retaining to stealing and the transferred value is then
+/// owned by two holders: `$r = ($box->items[0][0] += 1)` stored the new cell in the array
+/// (`runtime_call`) and then in `$r`, and freed it twice (heap-debug "bad refcount").
+fn earlier_use_only_fills(function: &Function, inst_id: InstId, source: ValueId) -> bool {
+    let Some(inst) = function.instruction(inst_id) else { return false };
+    matches!(inst.op, Op::ArrayPush | Op::ArraySet | Op::HashSet)
+        && inst.operands.first() == Some(&source)
+        && inst.operands.iter().skip(1).all(|&operand| operand != source)
 }
 
 /// Whether the codegen of an `Acquire` of this type is a plain reference increment.

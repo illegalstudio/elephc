@@ -320,6 +320,38 @@ fn source_written_between_acquire_and_release_is_not_a_transfer() {
     assert_eq!(function.instructions[1].op, Op::Acquire, "the acquire is preserved");
 }
 
+/// An earlier consumer of the source (a `store_local` here) retains it only while an explicit
+/// release exists: codegen steals the reference once the release is gone. Cancelling the pair
+/// would leave the stored slot and the acquired value sharing one reference, so it stays.
+#[test]
+fn source_consumed_before_the_acquire_is_not_a_transfer() {
+    let array_ty = PhpType::Array(Box::new(PhpType::Int));
+    let mut function =
+        Function::new("consumed_transfer".to_string(), IrType::Heap(IrHeapKind::Array), array_ty.clone());
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let slot = builder.add_local(
+            Some("kept".to_string()),
+            IrType::Heap(IrHeapKind::Array),
+            array_ty.clone(),
+            LocalKind::PhpLocal,
+        );
+        let fresh = builder
+            .emit(Op::ArrayNew, Vec::new(), Some(Immediate::Capacity(0)), IrType::Heap(IrHeapKind::Array), array_ty.clone(), Ownership::Owned)
+            .expect("fresh array");
+        builder.emit(Op::StoreLocal, vec![fresh], Some(Immediate::LocalSlot(slot)), IrType::Void, PhpType::Void, Ownership::NonHeap);
+        let acquired = builder
+            .emit(Op::Acquire, vec![fresh], None, IrType::Heap(IrHeapKind::Array), array_ty, Ownership::Owned)
+            .expect("acquire result");
+        builder.emit(Op::Release, vec![fresh], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+        builder.terminate(Terminator::Return { value: Some(acquired) });
+    }
+    assert!(!OwnerTransfer.run(&mut function, &mut DataPool::default()), "a consumed source is not transferred");
+}
+
 /// A string's acquire may copy a scratch buffer into the heap, so the acquired string is not
 /// the source and the pair stays.
 #[test]

@@ -419,3 +419,25 @@ echo json_encode($ao->getArrayCopy()), "\n";
     assert_eq!(out.stdout, "5|7|8|3|2|5|7\n2\n{\"k\":{\"0\":2,\"1\":3,\"z\":3}}\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A used nested compound result on a typed array property leaves a clean heap, shared copy or not.
+///
+/// The owner-transfer peephole cancelled the `acquire`/`release` pair around the new cell after
+/// the array write had already consumed it, so the write stole the reference the `$r` store then
+/// also owned and the cell was freed twice ("heap debug detected bad refcount"). Expected output
+/// is `php -n`'s.
+#[test]
+fn test_property_nested_compound_result_keeps_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NestedResultHolder { public array $items = [[2]]; }
+$box = new NestedResultHolder();
+$r = ($box->items[0][0] += 1);
+echo $r, ':', json_encode($box->items), "\n";
+$copy = $box->items;
+$s = ($box->items[0][0] *= 4);
+echo $s, ':', json_encode($box->items), ':', json_encode($copy), "\n";
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "3:[[3]]\n12:[[12]]:[[3]]\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
