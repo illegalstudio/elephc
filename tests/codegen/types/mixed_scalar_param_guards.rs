@@ -1517,3 +1517,43 @@ try { call_user_func([P::class, "SM"], $n); } catch (TypeError $e) { show($e); }
         "P::withPath(): Argument #1 ($p) must be of type string, null given\nP::withPath(): Argument #1 ($p) must be of type string, null given\nP::withPath(): Argument #1 ($p) must be of type string, null given\nP::sM(): Argument #1 ($p) must be of type string, null given\n"
     );
 }
+
+/// Calls the compiler resolves through a bound method callable check runtime-typed arguments
+/// like the method call they stand for: `call_user_func_array([$o, "m"], [...])` (also on a
+/// subclass and with a receiver that makes its own call) and `$f = $o->m(...); $f(...)` in
+/// either spelling. The internal URI methods keep coercing `null` through the same forms.
+#[test]
+fn test_bound_method_callables_check_runtime_scalar_arguments() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
+function box(mixed $v): mixed { return $v; }
+class P { public function withPath(string $p): string { return "[" . $p . "]"; } }
+class Q extends P {}
+class Mk { public static function p(string $s): P { echo "mk ", $s, "\n"; return new P; } }
+function show(TypeError $e): void { echo explode(', called', $e->getMessage())[0], "\n"; }
+$n = box(null);
+try { echo call_user_func_array([new P, "withPath"], [$n]), "\n"; } catch (TypeError $e) { show($e); }
+try { echo call_user_func_array([new Q, "withPath"], [$n]), "\n"; } catch (TypeError $e) { show($e); }
+try { $f = (new P)->withPath(...); echo $f($n), "\n"; } catch (TypeError $e) { show($e); }
+try { $f = (new P)->WithPath(...); echo $f($n), "\n"; } catch (TypeError $e) { show($e); }
+try { echo call_user_func_array([Mk::p(box("x")), "withPath"], [$n]), "\n"; } catch (TypeError $e) { show($e); }
+try { $f = (new Q)->withPath(...); echo $f(box([1])), "\n"; } catch (TypeError $e) { show($e); }
+echo call_user_func_array([new P, "withPath"], [box("ok")]), "\n";
+$u = new Uri\Rfc3986\Uri("https://example.com/x");
+echo call_user_func_array([$u, "withPath"], [$n])->toString(), "\n";
+$g = $u->withPath(...);
+echo $g($n)->toString(), "\n";
+$h = $u->WithPath(...);
+echo $h($n)->toString(), "\n";
+$w = new Uri\WhatWg\Url("https://example.com/");
+echo call_user_func_array([$w, "withQuery"], [$n])->toAsciiString(), "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(
+        output.stdout,
+        "P::withPath(): Argument #1 ($p) must be of type string, null given\nP::withPath(): Argument #1 ($p) must be of type string, null given\nP::withPath(): Argument #1 ($p) must be of type string, null given\nP::withPath(): Argument #1 ($p) must be of type string, null given\nmk x\nP::withPath(): Argument #1 ($p) must be of type string, null given\nP::withPath(): Argument #1 ($p) must be of type string, array given\n[ok]\nhttps://example.com\nhttps://example.com\nhttps://example.com\nhttps://example.com/\n"
+    );
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}

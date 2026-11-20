@@ -266,7 +266,13 @@ pub(super) fn lower_static_callable_call(
             method,
             direct_call: true,
             ..
-        } => Some(lower_method_call(ctx, &object, &method, callback_args, Op::MethodCall, expr)),
+        } => {
+            // `$f = $o->m(...); $f($v)`: no recorded argument sites, as for a static method.
+            ctx.scalar_guards_unrecorded = true;
+            let call = lower_method_call(ctx, &object, &method, callback_args, Op::MethodCall, expr);
+            ctx.scalar_guards_unrecorded = false;
+            Some(call)
+        }
         StaticCallableBinding::InstanceMethod { .. } => None,
     }
 }

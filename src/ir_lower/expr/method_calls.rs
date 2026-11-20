@@ -49,6 +49,9 @@ pub(super) fn lower_method_call(
     // scope raises a catchable `Error` in PHP rather than a compile-time error,
     // but the receiver expression must still be evaluated first.
     let throw_access_message = recorded_method_access_message(ctx, expr, op);
+    // A call through a resolved callable value asks for unrecorded scalar checks; the
+    // receiver's own calls (`[new P($x), "m"]`) must not consume that request.
+    let unrecorded_scalar_guards = std::mem::take(&mut ctx.scalar_guards_unrecorded);
     let object_expr = object;
     let mut object = lower_member_receiver(ctx, object_expr, expr);
     // PHP checks method visibility before it decides whether the call is instance or
@@ -63,7 +66,10 @@ pub(super) fn lower_method_call(
     // the receiver is evaluated for its side effects, then the call is emitted through the
     // static-method path so codegen never passes the object as `$this`.
     if op == Op::MethodCall {
-        if let Some(result) = try_static_only_method_through_receiver(ctx, object, method, args, expr) {
+        ctx.scalar_guards_unrecorded = unrecorded_scalar_guards;
+        let rerouted = try_static_only_method_through_receiver(ctx, object, method, args, expr);
+        ctx.scalar_guards_unrecorded = false;
+        if let Some(result) = rerouted {
             return result;
         }
     }
@@ -244,7 +250,9 @@ pub(super) fn lower_method_call(
     let call_args = ref_place_rewrite
         .as_ref()
         .map_or(args, |rewrite| rewrite.args.as_slice());
+    ctx.scalar_guards_unrecorded = unrecorded_scalar_guards;
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    ctx.scalar_guards_unrecorded = false;
     ctx.call_description = previous_description;
     ctx.call_site_span = previous_call_site;
     // php-src initializes the reflected class once the arguments are evaluated, whether the
