@@ -38,8 +38,12 @@ pub(in crate::interpreter) fn finish_array_mutation(target: &EvalReferenceTarget
     let replacement = RuntimeOwnerSlot::new(replacement); let result = RuntimeOwnerSlot::new(result);
     with_runtime_owners(&(&replacement, &result), || {
         let outcome = (|| {
-            let pending = generic_reference_contracts(target, context).iter()
+            let local_pending = generic_reference_contracts(target, context).iter()
                 .any(|ty| pending_array_contents(&generic_type(ty)));
+            let property_pending = if let EvalReferenceTarget::Cell { cell } = target {
+                context.property_reference_types(*cell).iter().any(|source| pending_array_contents(&generic_type(&source.declared)))
+            } else { false };
+            let pending = local_pending || property_pending;
             let origin = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
                 && pending && values.array_len(original)? == 0 && values.array_len(replacement.borrowed())? != 0 {
                 let ty = array_contents_type(Type::Apply("array".to_string(), vec![Type::atom("int"), element]))
@@ -48,6 +52,14 @@ pub(in crate::interpreter) fn finish_array_mutation(target: &EvalReferenceTarget
                 validate_generic_local(&origin, "reference", replacement.borrowed(), context, values)?;
                 Some(origin)
             } else { None };
+            if let Some(origin) = &origin {
+                if write_member_reference_origin(target, replacement.borrowed(), Some(origin), context, values,
+                    |context, _, origin, cell| {
+                        if local_pending { context.bind_local_reference_types(cell, std::slice::from_ref(origin)); }
+                        context.refine_property_array_reference_types(cell, origin);
+                        Ok(())
+                    })? { return Ok(result.take()); }
+            }
             let returned = finish_owned_direct_ref_replacement(target, replacement.take(), result.take(), context, values)?;
             if let Some(origin) = origin {
                 match target {

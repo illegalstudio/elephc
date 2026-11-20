@@ -185,6 +185,10 @@ fn native_callable_type_from_spec(
     if type_spec.is_empty() {
         return None;
     }
+    if type_spec == elephc_semantics::native_local_contract::PENDING_ARRAY_CONTENTS_TYPE_NAME {
+        return matches!(position, NativeCallableTypePosition::LocalBinding)
+            .then(|| crate::eval_ir::parameter_type(&crate::eval_ir::pending_array_contents_type()));
+    }
     if let Some(schema) = type_spec.strip_prefix(
         elephc_semantics::native_local_contract::ARRAY_CONTENTS_TYPE_SPEC_PREFIX) {
         if !matches!(position, NativeCallableTypePosition::LocalBinding) { return None; }
@@ -312,6 +316,21 @@ mod tests {
         for schema in ["int", "array<>", "array<int,int,int>", "array<int>|int"] {
             assert!(native_callable_type_from_spec(&format!("{prefix}{schema}"),
                 NativeCallableTypePosition::LocalBinding).is_none(), "{schema}");
+        }
+    }
+
+    /// A pending origin has an explicit reserved role and cannot be inferred from a closed bottom shape.
+    #[test]
+    fn native_array_contents_metadata_distinguishes_pending_and_closed_bottom() {
+        use elephc_generics::Type;
+        let bottom=Type::Apply("array".into(),vec![Type::atom("never"),Type::atom("never")]);
+        let closed=crate::eval_ir::array_contents_type(bottom).unwrap();
+        assert!(!crate::eval_ir::pending_array_contents(&closed));
+        let spelling=elephc_semantics::native_local_contract::PENDING_ARRAY_CONTENTS_TYPE_NAME;
+        let pending=native_callable_type_from_spec(spelling,NativeCallableTypePosition::LocalBinding).unwrap();
+        assert!(crate::eval_ir::pending_array_contents(&crate::eval_ir::generic_type(&pending)));
+        for position in [NativeCallableTypePosition::Parameter,NativeCallableTypePosition::Return] {
+            assert!(native_callable_type_from_spec(spelling,position).is_none());
         }
     }
 

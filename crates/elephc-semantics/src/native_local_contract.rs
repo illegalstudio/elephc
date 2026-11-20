@@ -57,3 +57,6 @@ pub const ARRAY_CONTENTS_TYPE_SPEC_PREFIX: &str = "@array-contents:";
 
 /// Internal generic term used after decoding an array-content source constraint.
 pub const ARRAY_CONTENTS_TYPE_NAME: &str = "@array-contents";
+
+/// Reserved generated marker for unestablished contents, distinct from every closed array schema.
+pub const PENDING_ARRAY_CONTENTS_TYPE_NAME: &str = "@array-contents-pending";

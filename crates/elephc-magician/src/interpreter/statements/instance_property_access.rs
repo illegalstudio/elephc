@@ -256,6 +256,13 @@ pub(in crate::interpreter) fn eval_sourced_property_set_result(object: RuntimeCe
     set_property_with_source(object, property, value, MemberWriteSource::Evaluated(source), context, values)
 }
 
+/// Publishes an array mutation's data schema without manufacturing an argument proof.
+pub(in crate::interpreter) fn eval_array_property_set_result(object: RuntimeCellHandle, property: &str, value: RuntimeCellHandle,
+    schema: Option<&elephc_generics::Type>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    set_property_with_source(object, property, value, MemberWriteSource::ArrayContents(schema), context, values)
+}
+
 /// Shares authorization, hook dispatch and physical publication for internal and source-aware writes.
 fn set_property_with_source(object: RuntimeCellHandle, property_name: &str, value: RuntimeCellHandle,
     source: MemberWriteSource<'_>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,

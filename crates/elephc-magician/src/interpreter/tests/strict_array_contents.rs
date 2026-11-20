@@ -19,13 +19,20 @@ fn run_contents(source: &str, schema: &str, features: &[StrictFeature]) -> (Stri
 
 /// Runs either explicit metadata or automatic producer inference with complete owner cleanup.
 pub(super) fn run_source(source: &str, schema: Option<&str>, features: &[StrictFeature], dispatch: bool) -> (String, FakeValue) {
+    let schema = schema.map(|schema| crate::parser::generics::parse_type_string(schema).unwrap());
+    run_source_with_type(source, schema, features, dispatch)
+}
+
+/// Installs trusted generated type terms independently from PHP's narrower source type grammar.
+pub(super) fn run_source_with_type(source: &str, schema: Option<elephc_generics::Type>,
+    features: &[StrictFeature], dispatch: bool,
+) -> (String, FakeValue) {
     let mut context = ElephcEvalContext::new();
     let profile = features.iter().fold(SemanticProfile::PERMISSIVE,
         |profile, feature| profile.with(*feature, true));
     context.install_semantic_profile(profile).unwrap();
     let mut scope = ElephcEvalScope::new();
     if let Some(schema) = schema {
-        let schema = crate::parser::generics::parse_type_string(schema).unwrap();
         let contract = crate::eval_ir::array_contents_type(schema).unwrap();
         scope.infer_local_type("items".to_string(), crate::eval_ir::parameter_type(&contract));
     }

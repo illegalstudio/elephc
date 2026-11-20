@@ -15,6 +15,7 @@ use crate::eval_ir::{generic_type, parameter_type};
 #[derive(Clone, Copy)]
 pub(in crate::interpreter) enum MemberWriteSource<'a> {
     Internal,
+    ArrayContents(Option<&'a elephc_generics::Type>),
     Evaluated(Option<&'a ArgumentSource>),
 }
 
@@ -32,7 +33,7 @@ impl MemberWriteSource<'_> {
 
     /// Copies a proof for a reached setter hook without replacing missing evidence with value tags.
     pub(in crate::interpreter) fn argument(self) -> Option<ArgumentSource> {
-        match self { Self::Internal => None, Self::Evaluated(source) => source.cloned() }
+        match self { Self::Internal | Self::ArrayContents(_) => None, Self::Evaluated(source) => source.cloned() }
     }
 
     /// Prepares only absent or pending inferred contents, preserving established binding obligations.
@@ -40,9 +41,20 @@ impl MemberWriteSource<'_> {
         declared: Option<&EvalParameterType>, name: &str, value: RuntimeCellHandle,
         context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
     ) -> Result<Option<EvalParameterType>, EvalStatus> {
-        let Self::Evaluated(source) = self else { return Ok(None); };
-        if existing.is_some_and(|ty| !crate::eval_ir::pending_array_contents(&generic_type(ty))) { return Ok(None); }
-        local_binding_origins::prepare_array_value_origin(declared, source.map(|source| &source.ty), value, name, context, values)
+        let producer = match self {
+            Self::Internal => return Ok(None),
+            Self::Evaluated(source) => source.map(|source| source.ty.clone()),
+            Self::ArrayContents(source) => source.map(parameter_type),
+        };
+        if let Some(existing) = existing {
+            let ty = generic_type(existing);
+            if !crate::eval_ir::contains_pending_array_contents(&ty) { return Ok(None); }
+            if !crate::eval_ir::pending_array_contents(&ty) {
+                let source = producer.as_ref().map(generic_type);
+                return local_binding_origins::refine_pending_array_origin(existing, name, value, source.as_ref(), context, values);
+            }
+        }
+        local_binding_origins::prepare_array_value_origin(declared, producer.as_ref(), value, name, context, values)
     }
 }
 
@@ -77,4 +89,19 @@ pub(in crate::interpreter) fn write_member_reference_origin<V: RuntimeValueOps>(
     let published = publish(context, values, origin, *cell);
     let retired = eval_release_value(context, values, previous);
     published.and(retired).map(|()| true)
+}
+
+/// Describes an array mutation's written layer while keeping argument evidence in its original role.
+pub(in crate::interpreter) fn array_mutation_source(index: Option<RuntimeCellHandle>, op: Option<EvalBinOp>,
+    assigned: RuntimeCellHandle, producer: Option<&ArgumentSource>, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<elephc_generics::Type>, EvalStatus> {
+    if op.is_some() || !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+        return Ok(None);
+    }
+    let element = local_binding_origins::element_value_source_type(producer.map(|source| &source.ty), assigned, context, values)?;
+    if !generic_value_accepts(&element, assigned, context, values)? {
+        return eval_throw_type_error("--strict-array-types: array value violates its source contract", context, values);
+    }
+    local_binding_origins::wrap_nested_array_source(index, element, context, values).map(Some)
 }

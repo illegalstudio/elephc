@@ -226,7 +226,7 @@ impl ElephcEvalScope {
         match self.array_local_types.entry(name) {
             std::collections::hash_map::Entry::Vacant(entry) => { entry.insert(ty); }
             std::collections::hash_map::Entry::Occupied(mut entry) => {
-                if crate::eval_ir::pending_array_contents(&crate::eval_ir::generic_type(entry.get())) {
+                if crate::eval_ir::contains_pending_array_contents(&crate::eval_ir::generic_type(entry.get())) {
                     entry.insert(ty);
                 }
             }

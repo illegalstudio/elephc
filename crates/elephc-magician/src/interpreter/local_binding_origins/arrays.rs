@@ -16,9 +16,16 @@ pub(super) fn prepare(scope: &ElephcEvalScope, name: &str, producer: Option<&Eva
     value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalParameterType>, EvalStatus> {
     if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
-        || scope.array_local_type(name).is_some_and(|ty| !pending_array_contents(&generic_type(ty)))
         || !matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
         return Ok(None);
+    }
+    if let Some(existing) = scope.array_local_type(name) {
+        let ty = generic_type(existing);
+        if !crate::eval_ir::contains_pending_array_contents(&ty) { return Ok(None); }
+        if !pending_array_contents(&ty) {
+            let source = producer.map(generic_type);
+            return pending_arrays::refine_origin(existing, name, value, source.as_ref(), context, values);
+        }
     }
     let declared = scope.local_type(name).or_else(|| scope.inferred_local_type(name)
         .filter(|ty| contains_contents(&generic_type(ty))));
@@ -76,7 +83,7 @@ pub(in crate::interpreter) fn source_schema(ty: &Type) -> Option<Type> {
 }
 
 /// Infers one recursive homogeneous element schema and retains actual semantic key kinds.
-fn infer_schema(value: RuntimeCellHandle, context: &mut ElephcEvalContext,
+pub(super) fn infer_schema(value: RuntimeCellHandle, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps, depth: usize,
 ) -> Result<Type, EvalStatus> {
     if depth > elephc_generics::MAX_TYPE_ARGUMENT_DEPTH {
@@ -84,6 +91,9 @@ fn infer_schema(value: RuntimeCellHandle, context: &mut ElephcEvalContext,
     }
     if !matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
         return runtime_generic_type(value, context, values, depth);
+    }
+    if values.array_len(value)? == 0 {
+        return Ok(Type::Intersection(vec![Type::atom("array"), pending_array_contents_type()]));
     }
     let mut keys = Vec::new();
     let mut element = None;
@@ -110,7 +120,12 @@ fn infer_schema(value: RuntimeCellHandle, context: &mut ElephcEvalContext,
 
 /// Projects internal content metadata only for an actual array, retaining explicit mixed alternatives.
 pub(in crate::interpreter) fn element_source_type(ty: Type, array: bool) -> Type {
-    if array && contains_contents(&ty) { source_schema(&ty).unwrap_or(ty) } else { ty }
+    if array && contains_contents(&ty) {
+        let schema = source_schema(&ty).unwrap_or(ty);
+        if pending_array_contents(&schema) {
+            Type::Intersection(vec![Type::atom("array"), schema])
+        } else { schema }
+    } else { ty }
 }
 
 /// Resolves a source for an evaluated element without letting conditional array facts reopen scalars.
@@ -124,7 +139,9 @@ pub(in crate::interpreter) fn element_value_source_type(source: Option<&EvalPara
         }
         if let Some(source) = non_array_source(source) { return Ok(source); }
     }
-    infer_schema(value, context, values, 0)
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+        infer_schema(value, context, values, 0)
+    } else { runtime_generic_type(value, context, values, 0) }
 }
 
 /// Drops conditional array obligations from scalar producers while retaining declared alternatives.

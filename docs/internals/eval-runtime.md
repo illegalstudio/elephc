@@ -1061,3 +1061,12 @@ contracts. Array expressions and `ArrayGet` currently cause the bytecode
 selector to fall back to the tree walker; these checks do not claim a new array
 bytecode opcode. The public checker, CLI, interpreter API, includes and REPL
 share the same independently selected profile.
+
+Inferred empty array origins use the reserved `@array-contents-pending` term,
+separate from declared `array<never>` schemas. The pending planner refines nested
+leaves after informative writes and validates each candidate before publishing
+its schema. Instance/static dimension writes carry a data-content source role
+separate from original argument proof packets. First builtin mutations update
+only the live property binding, before displaced-value callbacks, without copying
+its obligation into permanent local metadata. Mixed-only literal capture uses
+ordinary runtime type projection and does not enable homogeneous array inference.

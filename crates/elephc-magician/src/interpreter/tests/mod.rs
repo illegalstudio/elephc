@@ -178,3 +178,6 @@ mod strict_array_member_origins;
 mod strict_declared_member_roots;
 
 mod strict_member_source_promises;
+
+mod strict_nested_array_origins;
+mod strict_pending_member_consumers;

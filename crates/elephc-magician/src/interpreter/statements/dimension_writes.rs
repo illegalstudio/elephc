@@ -10,7 +10,7 @@
 //! - Every intermediate is released in reverse order on success and failure.
 
 use super::*;
-use super::property_dimension_writes::{stage_operands, write_attached_value, write_value};
+use super::property_dimension_writes::{stage_operands_with_source, write_attached_value, write_value};
 use super::array_parent_publication::{ArrayParentPlace, PreparedArrayParent, prepare_empty_array_parent};
 use super::property_dimension_guards::{DimensionFetchMode, selected_property};
 use super::property_write_receivers::{PreparedWriteReceiver, finish_index, finish_name};
@@ -38,7 +38,7 @@ pub(super) fn eval_dimension_write(
     let mut owners = Vec::new();
     let mut result = (|| {
         let plan = prepare_property_write_receiver(array, &mut owners, context, scope, values)?;
-        let (key, assigned) = stage_operands(index, value, &mut owners, context, scope, values)?;
+        let (key, assigned, producer) = stage_operands_with_source(index, value, &mut owners, context, scope, values)?;
         let mut parents = Vec::new();
         let mode = if op.is_some() { DimensionFetchMode::ReadWrite } else { DimensionFetchMode::Write };
         let mut current = resolve(plan, &mut parents, &mut owners, mode, true, context, scope, values)?;
@@ -54,6 +54,7 @@ pub(super) fn eval_dimension_write(
             && !parents.iter().any(|parent| !matches!(parent, Parent::Index { .. })) {
             return eval_throw_error("Unsupported dimension write: temporary arrays have no attached storage", context, values);
         }
+        let mut data_source = array_mutation_source(key, op, assigned, producer.as_ref(), context, values)?;
         let mut replacement = if current.published {
             write_attached_value(current.value, key, op, assigned, &mut owners, context, values)?
         } else {
@@ -64,24 +65,27 @@ pub(super) fn eval_dimension_write(
             replacement = match parent {
                 Parent::Discard => None,
                 Parent::Variable(name) => {
+                    let origin = local_binding_origins::prepare_array_nested_write(scope, &name, value, data_source.as_ref(), context, values)?;
                     validate_generic_local_contracts(scope, &name, value, context, values)?;
                     write_back_owned_variable_ref_target(scope, &name, value, context, values)?;
+                    local_binding_origins::publish_array_local_write(scope, &name, origin, context, values)?;
                     None
                 }
                 Parent::Static { class, property } => {
-                    eval_static_property_set_result(&class, &property, value, context, values)?;
+                    eval_array_static_property_set_result(&class, &property, value, data_source.as_ref(), context, values)?;
                     None
                 }
                 Parent::Property { object, property } => {
-                    eval_property_set_result(object, &property, value, context, values)?;
+                    eval_array_property_set_result(object, &property, value, data_source.as_ref(), context, values)?;
                     None
                 }
-                Parent::Index { array, index, published } => if published {
-                    write_attached_value(array, Some(index), None, value,
-                        &mut owners, context, values)?
-                } else {
-                    write_value(array, Some(index), None, value,
-                        &mut owners, context, values)?
+                Parent::Index { array, index, published } => {
+                    if let Some(source) = data_source.take() {
+                        data_source = Some(local_binding_origins::wrap_nested_array_source(Some(index), source, context, values)?);
+                    }
+                    if published {
+                        write_attached_value(array, Some(index), None, value, &mut owners, context, values)?
+                    } else { write_value(array, Some(index), None, value, &mut owners, context, values)? }
                 },
             };
         }

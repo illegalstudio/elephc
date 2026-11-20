@@ -815,6 +815,13 @@ pub(in crate::interpreter) fn eval_sourced_static_property_set_result(class: &st
     set_static_property_with_source(class, property, value, MemberWriteSource::Evaluated(source), context, values)
 }
 
+/// Publishes an array mutation's data schema without manufacturing an argument proof.
+pub(in crate::interpreter) fn eval_array_static_property_set_result(class: &str, property: &str, value: RuntimeCellHandle,
+    schema: Option<&elephc_generics::Type>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    set_static_property_with_source(class, property, value, MemberWriteSource::ArrayContents(schema), context, values)
+}
+
 /// Shares static authorization and source publication while preserving old-value retirement ordering.
 fn set_static_property_with_source(class_name: &str, property_name: &str, value: RuntimeCellHandle,
     source: MemberWriteSource<'_>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,

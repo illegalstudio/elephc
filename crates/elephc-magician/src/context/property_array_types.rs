@@ -61,3 +61,24 @@ impl ElephcEvalContext {
             .collect()
     }
 }
+
+impl ElephcEvalContext {
+    /// Refines live pending property bindings after their canonical reference successfully changes.
+    pub(crate) fn refine_property_array_reference_types(&mut self, cell: RuntimeCellHandle, ty: &EvalParameterType) {
+        let pending = |origin: &EvalPropertyArrayOrigin| crate::eval_ir::pending_array_contents(&crate::eval_ir::generic_type(&origin.ty));
+        for (key, target) in &self.dynamic_property_aliases {
+            if matches!(target, EvalReferenceTarget::Cell { cell: source } if source.as_ptr() == cell.as_ptr()) {
+                if let Some(origin) = self.dynamic_property_array_types.get_mut(key).filter(|origin| pending(origin)) {
+                    origin.ty = ty.clone();
+                }
+            }
+        }
+        for (key, target) in &self.static_property_aliases {
+            if matches!(target, EvalReferenceTarget::Cell { cell: source } if source.as_ptr() == cell.as_ptr()) {
+                if let Some(origin) = self.static_property_array_types.get_mut(key).filter(|origin| pending(origin)) {
+                    origin.ty = ty.clone();
+                }
+            }
+        }
+    }
+}

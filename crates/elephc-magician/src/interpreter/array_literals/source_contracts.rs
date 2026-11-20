@@ -34,6 +34,9 @@ impl LiteralSource {
 
     /// Describes final source entries, keeping heterogeneous inference distinct from explicit openness.
     pub(in crate::interpreter) fn finish(self) -> Type {
+        if self.entries.is_empty() {
+            return Type::Intersection(vec![Type::atom("array"), crate::eval_ir::pending_array_contents_type()]);
+        }
         let mut keys = Vec::new(); let mut element = None;
         for (key, ty, _) in self.entries {
             let key = match key { EvalArrayReferenceKey::Int(_) => Type::atom("int"),

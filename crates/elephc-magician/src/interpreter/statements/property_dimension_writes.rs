@@ -38,7 +38,7 @@ pub(super) fn eval_property_dimension_write(
         };
         let late_index = index.filter(|index| matches!(index, EvalExpr::LoadVar(_)));
         let staged_index = if late_index.is_some() { None } else { index };
-        let (key, assigned) = stage_operands(staged_index, value, &mut operands, context, scope, values)?;
+        let (key, assigned, producer) = stage_operands_with_source(staged_index, value, &mut operands, context, scope, values)?;
         let early = if matches!(object, EvalExpr::LoadVar(_)) { None } else {
             let object = finish_dimension_receiver(receiver.take().ok_or(EvalStatus::RuntimeFatal)?,
                 &mut operands, &mut receiver_roots, context, scope, values)?;
@@ -53,7 +53,7 @@ pub(super) fn eval_property_dimension_write(
                 &mut operands, &mut receiver_roots, context, scope, values)?;
             object
         };
-        write_selected(object, &property, key, late_index, op, assigned, &mut operands,
+        write_selected(object, &property, key, late_index, op, assigned, producer.as_ref(), &mut operands,
             &receiver_roots, context, scope, values)
     })();
     for operand in operands.into_iter().rev() {
@@ -76,30 +76,30 @@ fn finish_dimension_receiver(
     Ok(object)
 }
 
-/// Evaluates a computed key before the RHS and a variable key after it, each exactly once.
-pub(super) fn stage_operands(
+/// Preserves the original RHS producer alongside the shared early/late index and owner protocol.
+pub(super) fn stage_operands_with_source(
     index: Option<&EvalExpr>, value: &EvalExpr, operands: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-) -> Result<(Option<RuntimeCellHandle>, RuntimeCellHandle), EvalStatus> {
+) -> Result<(Option<RuntimeCellHandle>, RuntimeCellHandle, Option<ArgumentSource>), EvalStatus> {
     let late_key = matches!(index, Some(EvalExpr::LoadVar(_)));
     let early = if late_key { None } else {
         index.map(|key| eval_owned_expr(key, context, scope, values)).transpose()?
     };
     if let Some(key) = early { operands.push(key); }
-    let assigned = eval_owned_expr(value, context, scope, values)?;
+    let (assigned, source) = evaluate_member_value(value, context, scope, values)?;
     operands.push(assigned);
     let key = if late_key {
         let key = eval_owned_expr(index.ok_or(EvalStatus::RuntimeFatal)?, context, scope, values)?;
         operands.push(key);
         Some(key)
     } else { early };
-    Ok((key, assigned))
+    Ok((key, assigned, source))
 }
 
 /// Selects a native writable child or ordinary property only after key and RHS evaluation.
 fn write_selected(
     object: RuntimeCellHandle, property: &str, index: Option<RuntimeCellHandle>, late_index: Option<&EvalExpr>,
-    op: Option<EvalBinOp>, assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
+    op: Option<EvalBinOp>, assigned: RuntimeCellHandle, producer: Option<&ArgumentSource>, operands: &mut Vec<RuntimeCellHandle>,
     receiver_roots: &[usize], context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -159,6 +159,7 @@ fn write_selected(
         return Ok(());
     }
     let index = finish_dimension_index(index, late_index, operands, context, scope, values)?;
+    let data_source = array_mutation_source(index, op, assigned, producer, context, values)?;
     let prepared = if !dynamic
         && property_dimension_guards::has_ordinary_backing_slot(object, property, context, values)?
     {
@@ -176,7 +177,7 @@ fn write_selected(
             if dynamic {
                 super::property_append_fetch::write(object, property, array, context, values)?;
             } else {
-                eval_property_set_result(object, property, array, context, values)?;
+                eval_array_property_set_result(object, property, array, data_source.as_ref(), context, values)?;
             }
         }
         Ok(())
@@ -395,7 +396,8 @@ fn static_write(
 ) -> Result<(), EvalStatus> {
     let mut operands = Vec::new();
     let mut result = (|| {
-        let (key, assigned) = stage_operands(index, value, &mut operands, context, scope, values)?;
+        let (key, assigned, producer) = stage_operands_with_source(index, value, &mut operands, context, scope, values)?;
+        let data_source = array_mutation_source(key, op, assigned, producer.as_ref(), context, values)?;
         let current = eval_static_property_get_result(class_name, property, context, values)?;
         let current = if current.is_borrowed() { values.retain(current)? } else { current };
         operands.push(current);
@@ -420,7 +422,7 @@ fn static_write(
                 current, key, op, assigned, storage, &contracts, &mut operands, context, values,
             )? {
                 if !matches!(prepared, PreparedArrayParent::Detached(_)) {
-                    eval_static_property_set_result(class_name, property, array, context, values)?;
+                    eval_array_static_property_set_result(class_name, property, array, data_source.as_ref(), context, values)?;
                 }
             }
             Ok(())

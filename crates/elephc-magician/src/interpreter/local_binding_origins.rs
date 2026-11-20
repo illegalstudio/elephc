@@ -13,6 +13,9 @@ use crate::eval_ir::{generic_type, parameter_type};
 use elephc_generics::Type;
 
 mod arrays;
+mod pending_arrays;
+pub(super) use pending_arrays::{prepare as prepare_array_nested_write, refine_origin as refine_pending_array_origin,
+    wrap_source as wrap_nested_array_source};
 mod array_mutations;
 pub(super) use array_mutations::{finish_array_mutation, replacement_element_source};
 mod source_views;
@@ -209,7 +212,10 @@ fn store_local_with_roles(context: &mut ElephcEvalContext,
     let fresh = infer_kind && context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals)
         && visible_scope_cell(context, scope, &name).is_none()
         && scope.local_type(&name).is_none();
-    let array_origin = match arrays::prepare(scope, &name, producer.as_ref(), value, context, values) {
+    let array_producer = arguments.as_ref().map(|packet| &packet.ty).or(producer.as_ref()).or_else(|| {
+        context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed).then_some(source.as_ref()).flatten()
+    });
+    let array_origin = match arrays::prepare(scope, &name, array_producer, value, context, values) {
         Ok(origin) => origin,
         Err(status) => { let _ = eval_release_value(context, values, value); return Err(status); }
     };

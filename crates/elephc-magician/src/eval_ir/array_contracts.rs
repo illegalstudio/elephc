@@ -9,17 +9,19 @@
 //! - Integer-key hash layouts satisfy the same contract as packed arrays.
 
 use elephc_generics::Type;
-use elephc_semantics::native_local_contract::ARRAY_CONTENTS_TYPE_NAME;
+use elephc_semantics::native_local_contract::{ARRAY_CONTENTS_TYPE_NAME, PENDING_ARRAY_CONTENTS_TYPE_NAME};
 
 /// Builds a conditional content contract from an array schema without adding a kind restriction.
 pub(crate) fn array_contents_type(schema: Type) -> Option<Type> {
     let schema = normalize_schema(schema)?;
+    if pending_array_contents(&schema) { return Some(schema); }
     Some(Type::Apply(ARRAY_CONTENTS_TYPE_NAME.to_string(), vec![schema]))
 }
 
-/// Borrows the array schema of a generated conditional content contract.
+/// Borrows a generated content schema or its distinct unestablished marker.
 pub(crate) fn array_contents_schema(ty: &Type) -> Option<&Type> {
     match ty {
+        Type::Atom(name) if name == PENDING_ARRAY_CONTENTS_TYPE_NAME => Some(ty),
         Type::Apply(name, arguments) if name == ARRAY_CONTENTS_TYPE_NAME && arguments.len() == 1 =>
             arguments.first(),
         _ => None,
@@ -28,19 +30,30 @@ pub(crate) fn array_contents_schema(ty: &Type) -> Option<&Type> {
 
 /// Marks an inferred empty array whose first successful informative write supplies its schema.
 pub(crate) fn pending_array_contents_type() -> Type {
-    Type::Apply(ARRAY_CONTENTS_TYPE_NAME.to_string(), vec![Type::Apply("array".to_string(),
-        vec![Type::atom("never"), Type::atom("never")])])
+    Type::atom(PENDING_ARRAY_CONTENTS_TYPE_NAME)
 }
 
 /// Distinguishes pending inferred contents from ordinary declared array<never> contracts.
 pub(crate) fn pending_array_contents(ty: &Type) -> bool {
-    array_contents_schema(ty).is_some_and(|schema| matches!(schema, Type::Apply(name, args)
-        if name == "array" && args.as_slice() == [Type::atom("never"), Type::atom("never")]))
+    matches!(ty, Type::Atom(name) if name == PENDING_ARRAY_CONTENTS_TYPE_NAME)
+}
+
+/// Finds inferred pending leaves without treating any ordinary bottom element type as unestablished.
+pub(crate) fn contains_pending_array_contents(ty: &Type) -> bool {
+    pending_array_contents(ty) || match ty {
+        Type::Apply(_, arguments) | Type::Union(arguments) | Type::Intersection(arguments) =>
+            arguments.iter().any(contains_pending_array_contents),
+        Type::Nullable(inner) => contains_pending_array_contents(inner),
+        Type::Callable(parameters, result) => parameters.iter().any(contains_pending_array_contents)
+            || contains_pending_array_contents(result),
+        _ => false,
+    }
 }
 
 /// Accepts only array alternatives, preserving explicitly open schemas and closed unions.
 fn normalize_schema(schema: Type) -> Option<Type> {
     match schema {
+        Type::Atom(name) if name == PENDING_ARRAY_CONTENTS_TYPE_NAME => Some(Type::atom(name)),
         Type::Atom(name) if name == "array" || name == "mixed" => Some(Type::atom("array")),
         Type::Apply(name, arguments) if name == "array" && matches!(arguments.len(), 1 | 2) =>
             Some(normalize_arrays(Type::Apply(name, arguments))),
@@ -84,8 +97,8 @@ pub(crate) fn merge_array_element_sources(previous: Type, next: Type) -> Type {
 
 /// Empty nested literals contribute no element evidence until a sibling supplies one.
 fn empty_array_schema(ty: &Type) -> bool {
-    matches!(ty, Type::Apply(name, args) if name == "array"
-        && args.as_slice() == [Type::atom("never"), Type::atom("never")])
+    pending_array_contents(ty) || matches!(ty, Type::Intersection(members)
+        if members.iter().any(pending_array_contents))
 }
 
 #[cfg(test)]

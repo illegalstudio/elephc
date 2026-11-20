@@ -82,6 +82,8 @@ pub(crate) fn parameter_type(ty: &Type) -> EvalParameterType {
                 "object" => EvalParameterTypeVariant::Object, "string" => EvalParameterTypeVariant::String,
                 "void" => EvalParameterTypeVariant::Void,
                 elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC => EvalParameterTypeVariant::Resource,
+                elephc_semantics::native_local_contract::PENDING_ARRAY_CONTENTS_TYPE_NAME =>
+                    EvalParameterTypeVariant::Generic(ty.clone()),
                 "null" => return EvalParameterType::new(Vec::new(), true),
                 _ => EvalParameterTypeVariant::Class(name.clone()),
             };
