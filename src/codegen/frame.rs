@@ -1686,7 +1686,13 @@ fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     // entries own the flushed locals. A web worker ends each request with the bridge's request
     // reset; a CLI program is one request, so it ends here the same way, while destructors can
     // still run as ordinary PHP callbacks.
-    if !ctx.module.web && !eval_context_locals(ctx).is_empty() {
+    // The context that retained a function or closure may belong to ANY frame: an `eval()` in a
+    // helper function leaves it behind just as one in main does, and main then has no eval local
+    // of its own. Whenever the bridge is linked, the program-global scope such a context took
+    // over still owns the flushed `$argv`/`$argc` cells and must be finalized here.
+    if !ctx.module.web
+        && (!eval_context_locals(ctx).is_empty() || ctx.module.required_runtime_features.eval_bridge)
+    {
         ctx.emitter.comment("end the CLI request: finalize request-retained eval contexts");
         let symbol = ctx
             .emitter
