@@ -153,7 +153,12 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                     }
                     if let Some(target) = typed_builtin_target(inst) {
                         features.regex |= target.uses_regex_runtime();
-                        features.mbstring |= target.uses_mbstring_runtime();
+                        // A UTF-8 validation over a typed string never reaches the bridge, so it
+                        // must not pull in the bridge's request lifecycle and codec catalog.
+                        features.mbstring |= target.uses_mbstring_runtime()
+                            && !crate::ir::native_mbstring::check_encoding_is_native_utf8(
+                                module, function, inst,
+                            );
                         features.mbregex |= target.uses_mbregex_runtime();
                         features.mbstring_mime |= target.uses_mbstring_mime_runtime();
                         features.phar_archive |= target.publishes_phar_symbols()

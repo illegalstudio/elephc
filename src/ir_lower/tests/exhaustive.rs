@@ -150,6 +150,7 @@ fn dummy_check_result() -> CheckResult {
         extern_classes,
         extern_globals: HashMap::new(),
         required_libraries: Vec::new(),
+        runtime_bridge_libraries: Vec::new(),
         warnings: Vec::new(),
         throw_access_sites: HashMap::new(),
         builtin_call_types: HashMap::new(),

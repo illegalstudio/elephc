@@ -436,4 +436,6 @@ fn recompute_required_libraries(
             && !remaining_builtin_libraries.contains(library);
         !removed_builtin_requirement && !removed_extern_requirement
     });
+    let required = &check.required_libraries;
+    check.runtime_bridge_libraries.retain(|library| required.contains(library));
 }

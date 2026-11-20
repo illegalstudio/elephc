@@ -307,7 +307,7 @@ pub use sha1::emit_sha1;
 pub use crc32::{emit_crc32, CRC32_TABLE, CRC32_TABLE8};
 /// Emits the optional shared mbstring bridge result adapters.
 pub use iconv::emit_iconv;
-pub use mbstring::emit_mbstring;
+pub use mbstring::{emit_mb_strlen_utf8, emit_mbstring};
 /// Emit SHA1 hash helper.
 pub use hash::emit_hash;
 /// Emit generic hash helper.
