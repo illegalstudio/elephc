@@ -1360,3 +1360,66 @@ fn test_docblock_erasure_takes_dependents_in_one_rerun() {
     assert_eq!(stdout, "BoxSBoxBox\n", "{compile_stderr}");
     assert!(compile_stderr.contains("Holder.php"), "{compile_stderr}");
 }
+
+/// The last `[elephc-generics]` totals line of a compile's stderr (`ELEPHC_GENERICS_STATS`).
+fn generics_stats_line(stderr: &str) -> String {
+    stderr
+        .lines()
+        .filter(|line| line.starts_with("[elephc-generics] templates="))
+        .last()
+        .unwrap_or_else(|| panic!("no generics stats line in:\n{stderr}"))
+        .to_string()
+}
+
+/// `ELEPHC_GENERICS_STATS` tells a native `<T>` template from a PHPDoc one, and counts what a
+/// build spends on each: the numbers a design change (erasing PHPDoc templates, or anything that
+/// moves the compile cost of the Symfony Demo) is measured against.
+#[test]
+fn test_generics_stats_tell_native_templates_from_doc_templates() {
+    let main = "<?php\nclass NativeBox<T> { public function __construct(public T $v) {} }\n/** @template T */\nclass DocBox { /** @param T $v */ public function __construct(public $v) {} }\n$n = new NativeBox<int>(1);\n$d = new DocBox(2);\necho $n->v, $d->v, \"\\n\";\n";
+    let files = [("main.php", main)];
+    let (stderr, stdout, _) = compile_cli_files_with_env_and_run(
+        &files,
+        "main.php",
+        &[("ELEPHC_GENERICS_STATS", "1")],
+    );
+    assert_eq!(stdout, "12\n", "{stderr}");
+    let line = generics_stats_line(&stderr);
+    assert!(line.contains("templates=2 doc_templates=1 instances=2 doc_instances=1 "), "{line}");
+    assert!(line.contains(" erasure_reruns=0 "), "{line}");
+}
+
+/// The three-file autoload shape of the Demo's refusals (`Box` is a PHPDoc template, `SBox`
+/// extends it with arguments, `Holder` annotates `Box<T>`). The refusal erases all three in ONE
+/// re-run; the final process's stats line records that single re-run and no PHPDoc instance.
+#[test]
+fn test_generics_stats_count_the_erasure_rerun_of_an_autoload_fixture() {
+    let autoloader = "<?php\nspl_autoload_register(function (string $class): void {\n    $file = __DIR__ . \"/src/\" . $class . \".php\";\n    if (is_file($file)) { require $file; }\n});\n";
+    let main = format!(
+        "{autoloader}function take(Box $x): string {{ return get_class($x); }}\n$h = new Holder();\n$h->box = new Box(1);\necho take(new Box(2)), take(new SBox('x')), get_class($h->box), \"\\n\";\n"
+    );
+    let files = [
+        ("main.php", main.as_str()),
+        (
+            "src/Box.php",
+            "<?php\n/** @template T */\nclass Box {\n    /** @param T $v */\n    public function __construct(public $v) {}\n}\n",
+        ),
+        (
+            "src/SBox.php",
+            "<?php\n/** @extends Box<string> */\nclass SBox extends Box {}\n",
+        ),
+        (
+            "src/Holder.php",
+            "<?php\n/**\n * @template T\n */\nclass Holder {\n    /** @var Box<T> */\n    public $box;\n}\n",
+        ),
+    ];
+    let (stderr, stdout, _) = compile_cli_files_with_env_and_run(
+        &files,
+        "main.php",
+        &[("ELEPHC_GENERICS_STATS", "1")],
+    );
+    assert_eq!(stdout, "BoxSBoxBox\n", "{stderr}");
+    let line = generics_stats_line(&stderr);
+    assert!(line.contains(" erasure_reruns=1 "), "{line}");
+    assert!(line.contains("doc_instances=0 "), "{line}");
+}

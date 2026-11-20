@@ -32,6 +32,7 @@ mod value_types;
 pub(crate) use value_types::{substitute_value_type, value_carrier_type};
 mod site_scope;
 mod splice;
+pub(crate) mod stats;
 pub mod variance;
 pub(crate) mod dispatch;
 
@@ -126,7 +127,9 @@ where
         &GenericContext,
     ) -> Result<crate::types::CheckResult, crate::errors::CompileError>,
 {
-    monomorphize_body(program, &mut check)
+    let result = monomorphize_body(program, &mut check);
+    stats::report();
+    result
 }
 
 fn monomorphize_body<F>(
@@ -153,6 +156,10 @@ where
     // are called statically), so it is erased before any template is collected or copied.
     let program = erasure::erase_dispatched(program);
     let mut class_templates = classes::collect(&program);
+    if stats::enabled() {
+        let (total, doc) = class_templates.counts();
+        stats::record_templates(total, doc);
+    }
     // A variance marker is a promise about the DECLARATION, so it is checked once, here, before
     // anything is spliced. Checking it per instantiation would name a class the programmer never
     // wrote, and checking it after splicing would be too late to name the member at fault.
@@ -189,7 +196,10 @@ where
     // produce.
     let mut collected_warnings: Vec<crate::errors::CompileWarning> = Vec::new();
     let mut check_result = loop {
-        let result = match check(&program, &context) {
+        let check_phase = stats::Phase::start();
+        let checked = check(&program, &context);
+        let check_us = check_phase.finish_check();
+        let result = match checked {
             Ok(result) => result,
             Err(error) if rounds == 0 => return Err((Some(program), error)),
             Err(error) => return Err((None, error)),
@@ -229,6 +239,7 @@ where
         {
             break result;
         }
+        let instantiate_phase = stats::Phase::start();
         let (spliced, added) = splice_instantiations(program, &result.requested_instantiations);
         program = spliced;
         let (with_methods, method_added) =
@@ -259,6 +270,7 @@ where
         // template's generic methods, and a call on one of them can only find them from here.
         context.method_templates = methods::collect(&program);
         context.class_templates = class_templates.signatures();
+        stats::round(check_us, instantiate_phase.finish_instantiate());
         rounds += 1;
         if rounds >= MAX_INSTANTIATION_ROUNDS {
             return Err(lost(crate::errors::CompileError::new(

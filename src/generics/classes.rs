@@ -69,6 +69,13 @@ pub(super) struct Template {
     pub(super) declared_name: String,
 }
 
+impl Template {
+    /// Whether every type parameter of this template came from PHPDoc, so php never reads it.
+    pub(super) fn is_doc_only(&self) -> bool {
+        !self.type_params.is_empty() && self.type_params.iter().all(|p| p.from_docblock)
+    }
+}
+
 /// Every generic class, interface and trait a program declares, lifted out of it.
 ///
 /// Held SEPARATELY from the program, and collected once, because the templates are stripped
@@ -170,6 +177,12 @@ impl Templates {
                 is_class: matches!(template.declaration.kind, StmtKind::ClassDecl { .. }),
             })
             .collect()
+    }
+
+    /// The number of class templates, and how many of them exist only through PHPDoc.
+    pub(crate) fn counts(&self) -> (u64, u64) {
+        let doc = self.by_name.values().filter(|template| template.is_doc_only()).count();
+        (self.by_name.len() as u64, doc as u64)
     }
 
     /// Returns whether the program declared no generic class or interface at all.
@@ -1181,6 +1194,9 @@ fn splice(
             continue;
         }
         declared.push(target.clone());
+        if super::stats::enabled() {
+            super::stats::record_instance(template.is_doc_only());
+        }
         instances.push(instantiate_declaration(
             &template.declaration,
             &target,
