@@ -156,7 +156,6 @@ fn hash_usage_reports_hash_extension_loaded() {
     );
 }
 
-/// Verifies a bridge-free program does not report BCMath merely because its names are known.
 /// Verifies a native UTF-8 `mb_check_encoding()` keeps mbstring loaded and rejects bad input
 /// even though the program no longer enables the mbstring bridge runtime.
 #[test]
@@ -169,6 +168,7 @@ fn native_utf8_check_encoding_reports_mbstring_loaded() {
     assert_eq!(run_binary(&bin), "bool(true)\nbool(false)\nbool(true)\nbool(true)\n");
 }
 
+/// Verifies a bridge-free program does not report BCMath merely because its names are known.
 #[test]
 fn unused_bcmath_reports_extension_not_loaded() {
     let dir = make_test_dir("ext_no_bcmath");
