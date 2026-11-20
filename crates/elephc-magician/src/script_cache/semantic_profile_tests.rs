@@ -11,6 +11,7 @@
 use super::{config, file_cache, file_store, segments, store};
 use elephc_semantics::{SemanticProfile, StrictFeature};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Owns source and disk-cache files for one isolated test.
@@ -68,6 +69,30 @@ fn strict_cache_script_profiles_reject_warm_permissive_parses() {
         let again = store::load_script_with_semantics(&fixture.source, SemanticProfile::PERMISSIVE).unwrap();
         assert!(matches!(again.as_ref(), [segments::ScriptSegment::Code(_)]));
     }
+}
+
+/// A failed parse in one profile cannot discard another profile's timestamp-free script.
+#[test]
+fn strict_cache_failed_cross_profile_fill_keeps_the_warm_variant() {
+    let _guard = store::lock_for_test();
+    let fixture = Fixture::new();
+    fixture.configure(true);
+    std::fs::write(&fixture.source, b"<?php return 1;").unwrap();
+    let permissive = store::load_script_with_semantics(
+        &fixture.source, SemanticProfile::PERMISSIVE,
+    ).unwrap();
+    assert!(matches!(permissive.as_ref(), [segments::ScriptSegment::Code(_)]));
+
+    std::fs::write(&fixture.source, b"<?php return 9223372036854775808;").unwrap();
+    let strict = store::load_script_with_semantics(&fixture.source, checked_literals()).unwrap();
+    assert!(matches!(strict.as_ref(), [segments::ScriptSegment::ParseError(
+        crate::errors::EvalParseError::IntegerLiteralOverflow,
+    )]));
+
+    let again = store::load_script_with_semantics(
+        &fixture.source, SemanticProfile::PERMISSIVE,
+    ).unwrap();
+    assert!(Arc::ptr_eq(&permissive, &again), "the permissive context must keep its warm script");
 }
 
 /// Rejects disk entries from another profile, including ABI mismatches before replay.

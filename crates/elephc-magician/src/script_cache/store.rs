@@ -35,8 +35,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// One cached script: its replayable segments plus the freshness and accounting state.
 #[derive(Debug)]
 struct Entry {
-    /// Profile which produced the cached segments, independent of freshness settings.
-    semantic_profile: SemanticProfile,
     segments: Arc<[ScriptSegment]>,
     /// php-src's `persistent_script->timestamp`: the source's mtime when the entry was
     /// admitted, or `0` when it was admitted under `validate_timestamps=0` — which records
@@ -47,6 +45,24 @@ struct Entry {
     last_used: i64,
     revalidate_at: i64,
     discarded: bool,
+}
+
+/// Identifies one independently reusable parser result in the process cache.
+///
+/// The path alone is the PHP-visible script identity, while the semantic profile is part of
+/// the compiled artifact identity. Keeping both here prevents one eval context from retiring
+/// another context's timestamp-free entry merely because it parses with different guarantees.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct EntryKey {
+    path: PathBuf,
+    semantic_profile: SemanticProfile,
+}
+
+impl EntryKey {
+    /// Pairs an already canonicalized path with the profile which parses its source.
+    fn new(path: &Path, semantic_profile: SemanticProfile) -> Self {
+        Self { path: path.to_path_buf(), semantic_profile }
+    }
 }
 
 /// A read-only view of one cached script, for the `opcache_get_status()` surface.
@@ -81,7 +97,7 @@ pub struct ScriptCacheStats {
 /// The process-wide cache state.
 #[derive(Debug, Default)]
 struct ScriptCache {
-    entries: HashMap<PathBuf, Entry>,
+    entries: HashMap<EntryKey, Entry>,
     hits: u64,
     misses: u64,
     used_memory: usize,
@@ -251,15 +267,10 @@ fn serve_warm_entry(
 ) -> io::Result<Option<Arc<[ScriptSegment]>>> {
     let now = request_now();
     let mut cache = lock_script_cache();
-    let Some(entry) = cache.entries.get(key) else {
+    let entry_key = EntryKey::new(key, profile);
+    let Some(entry) = cache.entries.get(&entry_key) else {
         return Ok(None);
     };
-    if entry.semantic_profile != profile {
-        let entry = cache.entries.get_mut(key).expect("entry was just observed");
-        entry.discarded = true;
-        cache.generation = cache.generation.wrapping_add(1);
-        return Ok(None);
-    }
     if entry.discarded {
         return Ok(None);
     }
@@ -277,16 +288,16 @@ fn serve_warm_entry(
             // script is not left live behind it. Leaving it made the next include serve the
             // OLD version once `validate_timestamps` was turned off. MEASURED: reference
             // printed `B B`, elephc `B A`.
-            let entry = cache.entries.get_mut(key).expect("entry was just observed");
+            let entry = cache.entries.get_mut(&entry_key).expect("entry was just observed");
             entry.discarded = true;
             cache.generation = cache.generation.wrapping_add(1);
             return Ok(None);
         }
         let freq = config.revalidate_freq as i64;
-        let entry = cache.entries.get_mut(key).expect("entry was just observed");
+        let entry = cache.entries.get_mut(&entry_key).expect("entry was just observed");
         entry.revalidate_at = now.saturating_add(freq);
     }
-    let entry = cache.entries.get_mut(key).expect("entry was just observed");
+    let entry = cache.entries.get_mut(&entry_key).expect("entry was just observed");
     entry.hits += 1;
     entry.last_used = now;
     let segments = Arc::clone(&entry.segments);
@@ -491,16 +502,16 @@ fn fill_entry(
         .iter()
         .map(ScriptSegment::memory_footprint)
         .sum::<usize>();
-    let replacing = cache.entries.get(key).map_or(0, |entry| entry.footprint);
-    if !cache.admits_entry(key, footprint, replacing, config) {
+    let entry_key = EntryKey::new(key, profile);
+    let replacing = cache.entries.get(&entry_key).map_or(0, |entry| entry.footprint);
+    if !cache.admits_entry(&entry_key, footprint, replacing, config) {
         return Ok(segments);
     }
     cache.used_memory = cache.used_memory - replacing + footprint;
     cache.generation = cache.generation.wrapping_add(1);
     cache.entries.insert(
-        key.to_path_buf(),
+        entry_key,
         Entry {
-            semantic_profile: profile,
             segments: Arc::clone(&segments),
             // Recorded only under validation, as php-src's `cache_script_in_shared_memory`
             // does — see `is_unrecorded` — except that a DISK HIT keeps the timestamp it was
@@ -555,7 +566,7 @@ impl ScriptCache {
     /// Replacing an existing entry is always allowed: it frees its own footprint.
     fn admits_entry(
         &mut self,
-        key: &Path,
+        key: &EntryKey,
         footprint: usize,
         replacing: usize,
         config: &ScriptCacheConfig,
@@ -645,15 +656,13 @@ pub fn apply_pending_restart() -> bool {
 pub fn discard(path: &Path) -> bool {
     let key = cache_key(path);
     let mut cache = lock_script_cache();
-    // The mutable borrow of `entries` has to end before `generation` can be touched, so the
-    // flag is read back rather than bumped inside the match arm.
-    let discarded = match cache.entries.get_mut(&key) {
-        Some(entry) => {
+    let mut discarded = false;
+    for (entry_key, entry) in &mut cache.entries {
+        if entry_key.path == key {
             entry.discarded = true;
-            true
+            discarded = true;
         }
-        None => false,
-    };
+    }
     if discarded {
         cache.generation = cache.generation.wrapping_add(1);
     }
@@ -750,12 +759,15 @@ pub fn invalidate(path: &Path, force: bool) -> bool {
 /// a timestamp compares `0` against the real mtime and is stale.
 fn entry_is_stale(key: &Path) -> bool {
     let cache = lock_script_cache();
-    let Some(entry) = cache.entries.get(key) else {
+    let timestamps: Vec<i64> = cache.entries.iter()
+        .filter_map(|(entry_key, entry)| (entry_key.path == key).then_some(entry.timestamp))
+        .collect();
+    if timestamps.is_empty() {
         return false;
-    };
-    let timestamp = entry.timestamp;
+    }
     drop(cache);
-    file_timestamp(key) != timestamp
+    let timestamp = file_timestamp(key);
+    timestamps.into_iter().any(|recorded| recorded != timestamp)
 }
 
 /// Returns whether a path has a live cache entry — present, not discarded, and not known to
@@ -796,10 +808,11 @@ pub fn is_cached(path: &Path) -> bool {
 /// Reports a usable memory entry only for the requesting semantic profile.
 pub fn is_cached_with_semantics(path: &Path, profile: SemanticProfile) -> bool {
     let key = cache_key(path);
+    let entry_key = EntryKey::new(&key, profile);
     let (timestamp, revalidate_at) = {
         let cache = lock_script_cache();
-        match cache.entries.get(&key) {
-            Some(entry) if !entry.discarded && entry.semantic_profile == profile => (entry.timestamp, entry.revalidate_at),
+        match cache.entries.get(&entry_key) {
+            Some(entry) if !entry.discarded => (entry.timestamp, entry.revalidate_at),
             _ => return false,
         }
     };
@@ -811,7 +824,7 @@ pub fn is_cached_with_semantics(path: &Path, profile: SemanticProfile) -> bool {
     let fresh = file_timestamp(&key) == timestamp;
     if fresh {
         let mut cache = lock_script_cache();
-        if let Some(entry) = cache.entries.get_mut(&key) {
+        if let Some(entry) = cache.entries.get_mut(&entry_key) {
             entry.revalidate_at = now.saturating_add(config.revalidate_freq as i64);
             // The renewed deadline is what `opcache_get_status()['scripts']` reports as
             // `revalidate`, so a snapshot taken before it is stale. MEASURED: status, then
@@ -827,8 +840,8 @@ pub fn is_cached_with_semantics(path: &Path, profile: SemanticProfile) -> bool {
 fn is_present(key: &Path) -> bool {
     lock_script_cache()
         .entries
-        .get(key)
-        .is_some_and(|entry| !entry.discarded)
+        .iter()
+        .any(|(entry_key, entry)| entry_key.path == key && !entry.discarded)
 }
 
 /// Reads and caches a script without executing it, as `opcache_compile_file()` does.
@@ -943,8 +956,8 @@ pub fn cached_scripts() -> Vec<CachedScriptInfo> {
     let mut scripts: Vec<CachedScriptInfo> = cache
         .entries
         .iter()
-        .map(|(path, entry)| CachedScriptInfo {
-            full_path: path.clone(),
+        .map(|(key, entry)| CachedScriptInfo {
+            full_path: key.path.clone(),
             hits: entry.hits,
             memory_consumption: entry.footprint,
             last_used_timestamp: entry.last_used,

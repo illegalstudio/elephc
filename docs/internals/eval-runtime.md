@@ -983,10 +983,12 @@ same configuration. The blacklist is loaded once per process.
   verifies the decoded program's own parser profile, and treats every failure as
   a miss.
 - Identity is unconditional (path bytes, semantic ABI and profile must match).
-  Memory entries follow the same profile rule. Each path has one slot; a request
-  with a different profile reparses and replaces it. Fragment and uncached-file
-  parse memos also separate successful results and errors by profile, sharing
-  their existing total capacity across profiles. Freshness is checked
+  Memory entries follow the same profile rule. Each path-and-profile pair has an
+  independent slot, so a failed fill in one eval context cannot discard the warm,
+  timestamp-free script owned by another context. Path invalidation still retires
+  every profile variant. Fragment and uncached-file parse memos also separate
+  successful results and errors by profile, sharing their existing total capacity
+  across profiles. Freshness is checked
   only under `validate_timestamps`, and a stale entry is removed by the read
   that rejects it.
 - A write goes to an `O_EXCL` temporary under a random name, then a rename.
