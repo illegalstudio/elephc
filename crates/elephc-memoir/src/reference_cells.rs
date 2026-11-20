@@ -302,3 +302,5 @@ pub fn emit_allocate_argument_pair(emitter: &mut impl crate::Emitter, destinatio
 }
 
 pub mod canonical;
+
+pub mod magic_set_guard;

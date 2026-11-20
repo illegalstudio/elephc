@@ -85,15 +85,7 @@ pub(super) fn lower_gzinflate_aarch64(
     ctx.emitter.instruction(&format!("cbnz x10, {}", finish));                  // stop if another doubling cannot be represented
     ctx.emitter.instruction("lsl x0, x9, #1");                                  // double the output capacity
     ctx.emitter.instruction("str x0, [sp, #144]");                              // save the expanded output capacity
-    emit_allocate_owned_string(ctx.emitter);
-    ctx.emitter.instruction("str x0, [sp, #160]");                              // keep the replacement pointer across the copy
-    ctx.emitter.instruction("ldr x1, [sp, #128]");                              // copy from the old output buffer
-    ctx.emitter.instruction("ldr x2, [sp, #152]");                              // preserve every byte zlib already produced
-    ctx.emitter.bl_c("memcpy");                                               // copy the decompressed prefix into replacement storage
-    ctx.emitter.instruction("ldr x0, [sp, #128]");                              // release the superseded output buffer
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-    ctx.emitter.instruction("ldr x9, [sp, #160]");                              // reload the replacement output pointer
-    ctx.emitter.instruction("str x9, [sp, #128]");                              // make replacement storage the sole output owner
+    elephc_memoir::strings::str_new_owned::emit_replace_work_buffer(ctx.emitter, 128, 152, 160);
     ctx.emitter.instruction("ldr x10, [sp, #152]");                             // reload the number of produced bytes
     ctx.emitter.instruction("add x9, x9, x10");                                 // resume output after the copied prefix
     ctx.emitter.instruction("str x9, [sp, #24]");                               // update z_stream.next_out after relocation
@@ -200,16 +192,7 @@ pub(super) fn lower_gzinflate_x86_64(
     ctx.emitter.instruction(&format!("jnz {}", finish));                        // stop if another doubling cannot be represented
     ctx.emitter.instruction("shl rax, 1");                                      // double the output capacity
     ctx.emitter.instruction("mov QWORD PTR [rsp + 144], rax");                  // save the expanded output capacity
-    emit_allocate_owned_string(ctx.emitter);
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 160], rax");                  // keep the replacement pointer across the copy
-    ctx.emitter.instruction("mov rdi, rax");                                    // destination is the replacement output buffer
-    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 128]");                  // copy from the old output buffer
-    ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 152]");                  // preserve every byte zlib already produced
-    ctx.emitter.instruction("call memcpy");                                     // copy the decompressed prefix into replacement storage
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 128]");                  // release the superseded output buffer
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-    ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 160]");                   // reload the replacement output pointer
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 128], r9");                   // make replacement storage the sole output owner
+    elephc_memoir::strings::str_new_owned::emit_replace_work_buffer(ctx.emitter, 128, 152, 160);
     ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 152]");                  // reload the number of produced bytes
     ctx.emitter.instruction("add r9, r10");                                     // resume output after the copied prefix
     ctx.emitter.instruction("mov QWORD PTR [rsp + 24], r9");                    // update z_stream.next_out after relocation

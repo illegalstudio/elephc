@@ -59,7 +59,7 @@ const EXCEPTION_ACTIVATION_BYTES: usize = elephc_memoir::activation_records::EXT
 ///
 /// Fourteen 8-byte words hold the source, cursor, current key/value, source snapshot, and two
 /// owned successor-key anchors used to recover from associative-table relocation.
-const ITERATOR_STATE_BYTES: usize = 112;
+const ITERATOR_STATE_BYTES: usize = elephc_memoir::values::iterator_storage::STATE_BYTES;
 
 /// Symbol name for the C-callable `--web` top-level handler.
 ///

@@ -135,3 +135,24 @@ pub fn emit_branch_if_shared_reference(emitter: &mut impl Emitter, absent: &str,
         }
     }
 }
+
+/// Publishes an empty bucket payload before retiring the previously stored reference owner.
+pub fn emit_detach_reference_owner(emitter: &mut impl Emitter) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [x4, #24]");                           // load the managed reference cell this entry owns
+            emitter.instruction("str xzr, [x4, #24]");                          // retire the detached payload before releasing it
+            emitter.instruction("str xzr, [x4, #32]");                          // reference entries carry no high payload word
+            emitter.instruction("mov x9, #8");                                  // runtime value tag 8 = null
+            emitter.instruction("str x9, [x4, #40]");                           // the slot reads as null until the replacement lands
+            emitter.instruction("bl __rt_decref_any");                          // drop this table's ownership of the reference cell
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, QWORD PTR [r8 + 24]");                // load the managed reference cell this entry owns
+            emitter.instruction("mov QWORD PTR [r8 + 24], 0");                  // retire the detached payload before releasing it
+            emitter.instruction("mov QWORD PTR [r8 + 32], 0");                  // reference entries carry no high payload word
+            emitter.instruction("mov QWORD PTR [r8 + 40], 8");                  // the slot reads as null until the replacement lands
+            emitter.instruction("call __rt_decref_any");                        // drop this table's ownership of the reference cell
+        }
+    }
+}

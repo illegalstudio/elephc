@@ -188,12 +188,7 @@ fn label_suffix(name: &str) -> String {
 /// Pushes the cdylib exception handler record and snapshots it with `setjmp` on AArch64.
 fn emit_boundary_push_aarch64(emitter: &mut Emitter, escaped: &str, handler_base: usize) {
     abi::emit_frame_slot_address(emitter, "x11", handler_base);
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_handler_top", 0);
-    emitter.instruction("str x9, [x11]");                                       // snapshot the previous native exception-handler record
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_call_frame_top", 0);
-    emitter.instruction("str x9, [x11, #8]");                                   // snapshot the current PHP cleanup-frame chain
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!("str x9, [x11, #{TRY_HANDLER_DIAG_DEPTH_OFFSET}]")); // snapshot diagnostic-suppression depth
+    elephc_memoir::activation_records::emit_save_addressed_try_prefix(emitter, "x9", "x11");
     abi::emit_store_reg_to_symbol(emitter, "x11", "_exc_handler_top", 0);
     emitter.instruction(&format!("add x0, x11, #{TRY_HANDLER_JMP_BUF_OFFSET}")); // materialize the jump buffer embedded in the handler record
     emitter.save_exception_handler();
@@ -211,15 +206,7 @@ fn emit_boundary_pop_aarch64(emitter: &mut Emitter, handler_base: usize) {
 
 /// Pushes the cdylib exception handler record and snapshots it with `setjmp` on x86_64.
 fn emit_boundary_push_x86_64(emitter: &mut Emitter, escaped: &str, handler_base: usize) {
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {handler_base}], r10")); // snapshot the previous native exception-handler record
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)); // snapshot the current PHP cleanup-frame chain
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(                                               // snapshot diagnostic suppression in the boundary record
-        "mov QWORD PTR [rbp - {}], r10",
-        handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", handler_base);
     emitter.instruction(&format!("lea r10, [rbp - {handler_base}]"));           // materialize the current exception-handler record
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!(                                               // pass the embedded jump buffer to setjmp

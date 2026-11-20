@@ -13,6 +13,8 @@
 //!   spent, EOF is reached, or the trailing bytes match the ending delimiter
 //!   (which is consumed and stripped). EOF/read failure sets `_eof_flags`.
 
+use elephc_memoir::buffers::io_scratch;
+
 use crate::codegen_support::abi::emit_symbol_address;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
@@ -135,7 +137,7 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("ldrb w13, [x1]");                                      // load the read byte
     emitter.instruction("ldr x10, [sp, #56]");                                  // current running total
     emitter.instruction("ldr x12, [sp, #48]");                                  // drain-buf base
-    emitter.instruction("strb w13, [x12, x10]");                                // append the byte to the line buffer
+    io_scratch::emit_store_wrapper_byte(emitter, "x12", "x10", "w13");
     emitter.instruction("add x10, x10, #1");                                    // advance the running total
     emitter.instruction("str x10, [sp, #56]");                                  // store the updated total
     elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, None);
@@ -265,7 +267,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     //    (a SEPARATE buffer from _concat_buf, which each __rt_fread result may
     //    occupy). [rbp-40] = drain-buf base, [rbp-48] = running length. --
     emitter.label("__rt_sgl_wrapper_entry_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_drain_buf");        // drain-buf base
+    io_scratch::WRAPPER_DRAIN.emit_address(emitter, "r10");        // drain-buf base
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // result start = drain-buf base
     emitter.label("__rt_sgl_wrapper_loop_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // running total
@@ -283,7 +285,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx ecx, BYTE PTR [rax]");                           // load the read byte
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // current running total
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // drain-buf base
-    emitter.instruction("mov BYTE PTR [r11 + r10], cl");                        // append the byte to the line buffer
+    io_scratch::emit_store_wrapper_byte(emitter, "r11", "r10", "cl");
     emitter.instruction("inc r10");                                             // advance the running total
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // store the updated total
     elephc_memoir::strings::concat_window::emit_discard_chunk(emitter, None);

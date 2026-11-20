@@ -9,6 +9,8 @@
 //!   are coerced with PHP string rules before the bridge copies them.
 //! - The third argument's presence selects `execve`; omission preserves the host environment.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen::context::FunctionContext;
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, CodegenIrError, Result};
@@ -227,7 +229,7 @@ fn emit_indexed_string_array(
             };
             ctx.emitter.instruction(&format!("lsl x11, x10, #{shift}"));        // scale by the selected packed element width
             ctx.emitter.instruction("add x11, x9, x11");                        // advance to the selected string slot
-            ctx.emitter.instruction("add x11, x11, #24");                       // skip the packed-array header
+            packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x11", "x11");
             if element.codegen_repr() == PhpType::Str {
                 ctx.emitter.instruction("ldp x3, x4, [x11]");                   // load the borrowed string pointer and length
             } else {
@@ -268,7 +270,7 @@ fn emit_indexed_string_array(
             };
             ctx.emitter.instruction(&format!("shl r11, {shift}"));              // scale by the selected packed element width
             ctx.emitter.instruction("add r11, r9");                             // advance to the selected string slot
-            ctx.emitter.instruction("add r11, 24");                             // skip the packed-array header
+            ctx.emitter.instruction(&format!("add r11, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                             // skip the packed-array header
             ctx.emitter.instruction("mov rcx, QWORD PTR [r11]");                // load the borrowed string pointer or scalar payload
             if element.codegen_repr() == PhpType::Str {
                 ctx.emitter.instruction("mov r8, QWORD PTR [r11 + 8]");         // load the borrowed string length

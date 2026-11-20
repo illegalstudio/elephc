@@ -21,6 +21,8 @@
 //! - The free slot is located BEFORE persisting, so a full table allocates
 //!   nothing.
 
+use elephc_memoir::buffers::stream_tables;
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Warning PHP emits when the protocol contains a byte outside `[A-Za-z0-9+.-]`.
@@ -90,9 +92,9 @@ pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
     emitter.instruction("mov x5, #0");                                          // wrapper slot index
     emitter.instruction("mov x7, #-1");                                         // first free slot, -1 until one is seen
     emitter.label("__rt_swr_scan");
-    emitter.instruction("cmp x5, #64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp x5, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("b.ge __rt_swr_scanned");                               // the table has been walked end to end
-    emitter.instruction("add x6, x4, x5, lsl #5");                              // slot base = table + index * 32
+    emitter.instruction(&format!("add x6, x4, x5, lsl #{}", stream_tables::REGISTRATION_SHIFT));                              // slot base = table + index * 32
     emitter.instruction("ldr x12, [x6]");                                       // stored protocol pointer
     emitter.instruction("cbz x12, __rt_swr_free");                              // a null pointer marks an empty slot
     emitter.instruction("ldr x13, [x6, #8]");                                   // stored protocol length
@@ -118,7 +120,7 @@ pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
     emitter.label("__rt_swr_scanned");
     emitter.instruction("cmn x7, #1");                                          // did the walk find a free slot?
     emitter.instruction("b.eq __rt_swr_full");                                  // table full
-    emitter.instruction("add x6, x4, x7, lsl #5");                              // slot base of the first free slot
+    emitter.instruction(&format!("add x6, x4, x7, lsl #{}", stream_tables::REGISTRATION_SHIFT));                              // slot base of the first free slot
 
     // -- take ownership of both strings, then store the registration --
     emitter.label("__rt_swr_store");
@@ -205,10 +207,10 @@ fn emit_stream_wrapper_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r9, r9");                                          // wrapper slot index
     emitter.instruction("mov rax, -1");                                         // first free slot, -1 until one is seen
     emitter.label("__rt_swr_scan_x86");
-    emitter.instruction("cmp r9, 64");                                          // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp r9, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                          // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("jge __rt_swr_scanned_x86");                            // the table has been walked end to end
     emitter.instruction("mov r10, r9");                                         // copy the slot index for scaling
-    emitter.instruction("shl r10, 5");                                          // slot offset = index * 32
+    emitter.instruction(&format!("shl r10, {}", stream_tables::REGISTRATION_SHIFT));                                          // slot offset = index * 32
     emitter.instruction("add r10, r8");                                         // slot base = table + offset
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // stored protocol pointer
     emitter.instruction("test r11, r11");                                       // a null pointer marks an empty slot
@@ -235,7 +237,7 @@ fn emit_stream_wrapper_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, -1");                                         // did the walk find a free slot?
     emitter.instruction("je __rt_swr_full_x86");                                // table full
     emitter.instruction("mov r10, rax");                                        // first free slot index
-    emitter.instruction("shl r10, 5");                                          // slot offset = index * 32
+    emitter.instruction(&format!("shl r10, {}", stream_tables::REGISTRATION_SHIFT));                                          // slot offset = index * 32
     emitter.instruction("add r10, r8");                                         // slot base = table + offset
 
     // -- take ownership of both strings, then store the registration --

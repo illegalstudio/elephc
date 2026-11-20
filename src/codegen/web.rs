@@ -303,49 +303,7 @@ fn emit_transient_pointer_reset(emitter: &mut Emitter) {
 /// not consume are cleared here rather than left dangling.
 fn emit_extension_request_state_reset(emitter: &mut Emitter) {
     emitter.comment("clear request-scoped stream tables before the heap arena is reclaimed");
-    for (symbol, byte_len) in [
-        ("_user_wrappers", 2_048),
-        ("_user_wrapper_handles", 2_048),
-        ("_user_filter_registry", 4_096),
-        ("_user_filter_instances", 4_096),
-        ("_dir_handles", 2_048),
-        ("_glob_handles", 2_048),
-        ("_popen_files", 2_048),
-        ("_iconv_handles", 2_048),
-        ("_bzstream_handles", 2_048),
-        ("_zstream_handles", 2_048),
-        ("_stream_read_filters", 256),
-        ("_stream_write_filters", 256),
-        ("_eof_flags", 256),
-        ("_stream_chunk_size", 2_048),
-        ("_stream_connect_host", 4_096),
-    ] {
-        emit_zero_symbol_bytes(emitter, symbol, byte_len);
-    }
-}
-
-/// Zero-fills one request-state symbol through libc `memset`.
-///
-/// The tables above are up to 4 KiB each and run on every web request. A byte-at-a-time loop
-/// would add thousands of generated instructions and stores per request; one optimized libc call
-/// keeps the reset proportional to its actual size. `__rt_web_reset` already owns a 16-byte frame,
-/// so the call site keeps the C ABI's stack alignment on every supported target.
-fn emit_zero_symbol_bytes(emitter: &mut Emitter, symbol: &str, byte_len: usize) {
-    debug_assert!(byte_len > 0);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, "x0", symbol);
-            abi::emit_load_int_immediate(emitter, "x1", 0);
-            abi::emit_load_int_immediate(emitter, "x2", byte_len as i64);
-            emitter.bl_c("memset");
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(emitter, "rdi", symbol);
-            emitter.instruction("xor esi, esi");                                // zero-fill byte for the memset call
-            abi::emit_load_int_immediate(emitter, "rdx", byte_len as i64);
-            emitter.bl_c("memset");
-        }
-    }
+    elephc_memoir::buffers::stream_tables::emit_request_clear(emitter);
 }
 
 /// Restores the growable C-string buffers to their inline storage before the

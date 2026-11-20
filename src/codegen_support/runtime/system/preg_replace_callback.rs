@@ -815,32 +815,10 @@ fn emit_preg_replace_callback_install_boundary(
     handler_off: usize,
     threw_label: &str,
 ) {
-    let diag_off =
-        handler_off + crate::codegen_support::try_handlers::TRY_HANDLER_DIAG_DEPTH_OFFSET;
     let jmp_off = handler_off + crate::codegen_support::try_handlers::TRY_HANDLER_JMP_BUF_OFFSET;
     match emitter.target.arch {
         Arch::AArch64 => {
-            crate::codegen_support::abi::emit_load_symbol_to_reg(
-                emitter,
-                "x10",
-                "_exc_handler_top",
-                0,
-            );
-            emitter.instruction(&format!("str x10, [sp, #{}]", handler_off));   // previous handler-stack top
-            crate::codegen_support::abi::emit_load_symbol_to_reg(
-                emitter,
-                "x10",
-                "_exc_call_frame_top",
-                0,
-            );
-            emitter.instruction(&format!("str x10, [sp, #{}]", handler_off + 8)); // frame cleanup stops at this survivor
-            crate::codegen_support::abi::emit_load_symbol_to_reg(
-                emitter,
-                "x10",
-                "_rt_diag_suppression",
-                0,
-            );
-            emitter.instruction(&format!("str x10, [sp, #{}]", diag_off));      // saved diagnostic depth
+            elephc_memoir::activation_records::emit_save_sp_try_prefix(emitter, "x10", handler_off);
             emitter.instruction(&format!("add x10, sp, #{}", handler_off));     // address of this handler record
             crate::codegen_support::abi::emit_store_reg_to_symbol(
                 emitter,
@@ -853,27 +831,7 @@ fn emit_preg_replace_callback_install_boundary(
             emitter.instruction(&format!("cbnz x0, {}", threw_label));          // nonzero means a callback throw resumed here
         }
         Arch::X86_64 => {
-            crate::codegen_support::abi::emit_load_symbol_to_reg(
-                emitter,
-                "r10",
-                "_exc_handler_top",
-                0,
-            );
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", handler_off)); // previous handler-stack top
-            crate::codegen_support::abi::emit_load_symbol_to_reg(
-                emitter,
-                "r10",
-                "_exc_call_frame_top",
-                0,
-            );
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", handler_off + 8)); // frame cleanup stops at this survivor
-            crate::codegen_support::abi::emit_load_symbol_to_reg(
-                emitter,
-                "r10",
-                "_rt_diag_suppression",
-                0,
-            );
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", diag_off)); // saved diagnostic depth
+            elephc_memoir::activation_records::emit_save_sp_try_prefix(emitter, "r10", handler_off);
             emitter.instruction(&format!("lea r10, [rsp + {}]", handler_off));  // address of this handler record
             crate::codegen_support::abi::emit_store_reg_to_symbol(
                 emitter,

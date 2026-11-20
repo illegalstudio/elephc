@@ -9,6 +9,8 @@
 //! - Runtime append helpers may grow arrays and return a new heap pointer, so
 //!   the backend writes that pointer back to the source SSA slot and local slot.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
@@ -549,7 +551,7 @@ pub(super) fn lower_array_get_unchecked(
         Arch::AArch64 => {
             ctx.load_value_to_reg(index, "x0")?;
             ctx.load_value_to_reg(array, "x9")?;
-            ctx.emitter.instruction("add x10, x9, #24");                        // skip the indexed-array header to the payload base
+            packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x9");
             ctx.emitter.instruction("ldr x0, [x10, x0, lsl #3]");               // load the proven in-bounds int slot
         }
         Arch::X86_64 => {

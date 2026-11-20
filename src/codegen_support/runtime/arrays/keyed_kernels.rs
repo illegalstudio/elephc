@@ -14,6 +14,8 @@
 //! - Both walk the packed payload at `array + 24` and read the element count at
 //!   `array + 0`, matching every other indexed-array runtime helper.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits both fused scalar kernels for the active target.
@@ -57,7 +59,7 @@ fn emit_map_sum_add_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_map_sum_add_body");                       // share the kernel body with the raw entry
     emitter.label_global("__rt_array_map_sum_add_body");
     emitter.instruction("ldr x9, [x0]");                                        // load the packed element count
-    emitter.instruction("add x10, x0, #24");                                    // skip the indexed-array header to the payload base
+    packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("mov x11, xzr");                                        // start the integer accumulator at zero
     emitter.instruction("mov x12, xzr");                                        // integer mode: promote to double on the first overflow
 
@@ -218,7 +220,7 @@ fn emit_map_sum_add_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pxor xmm7, xmm7");                                     // boxed result mode
     emitter.label_global("__rt_array_map_sum_add_body");
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the packed element count
-    emitter.instruction("lea r9, [rdi + 24]");                                  // skip the indexed-array header to the payload base
+    packed_slots::emit_packed_payload_x86_64(emitter, "r9", "rdi");
     emitter.instruction("xor r8d, r8d");                                        // start the integer accumulator at zero
     emitter.instruction("xor r11d, r11d");                                      // integer mode: promote to double on the first overflow
 
@@ -388,7 +390,7 @@ fn emit_map_sum_add_safe_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_map_sum_add_safe (declared-int preflight) ---");
     emitter.label_global("__rt_array_map_sum_add_safe");
     emitter.instruction("ldr x9, [x0]");                                        // load the packed element count
-    emitter.instruction("add x10, x0, #24");                                    // skip the indexed-array header to the payload base
+    packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
 
     emitter.label(loop_label);
     emitter.instruction(&format!("cbz x9, {safe}"));                            // an exhausted range never overflowed
@@ -424,7 +426,7 @@ fn emit_filter_count_mod_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_filter_count_mod (fused int kernel) ---");
     emitter.label_global("__rt_array_filter_count_mod");
     emitter.instruction("ldr x9, [x0]");                                        // load the packed element count
-    emitter.instruction("add x10, x0, #24");                                    // skip the indexed-array header to the payload base
+    packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("mov x11, xzr");                                        // count elements divisible by the literal divisor
     emitter.instruction(&format!("cbz x9, {done}"));                            // an empty array counts zero matches
     emitter.instruction("mov x12, x1");                                         // copy the divisor before normalizing its sign
@@ -511,7 +513,7 @@ fn emit_map_sum_add_safe_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_map_sum_add_safe (declared-int preflight) ---");
     emitter.label_global("__rt_array_map_sum_add_safe");
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the packed element count
-    emitter.instruction("lea r9, [rdi + 24]");                                  // skip the indexed-array header to the payload base
+    packed_slots::emit_packed_payload_x86_64(emitter, "r9", "rdi");
 
     emitter.label(loop_label);
     emitter.instruction("test r10, r10");                                       // an exhausted range never overflowed
@@ -548,7 +550,7 @@ fn emit_filter_count_mod_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_filter_count_mod (fused int kernel) ---");
     emitter.label_global("__rt_array_filter_count_mod");
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the packed element count
-    emitter.instruction("lea r9, [rdi + 24]");                                  // skip the indexed-array header to the payload base
+    packed_slots::emit_packed_payload_x86_64(emitter, "r9", "rdi");
     emitter.instruction("xor r8d, r8d");                                        // count elements divisible by the literal divisor
     emitter.instruction("mov r11, rsi");                                        // copy the divisor before normalizing its sign
     emitter.instruction("test r11, r11");                                       // is the divisor negative?

@@ -19,6 +19,8 @@ pub(crate) fn emit_phpext_exports(
 ) {
     elephc_memoir::heap_refcount::emit_c_owner_count(emitter, "elephc_phpext_native_owner_count", true);
     elephc_memoir::values::throwable_storage::emit_c_projection(emitter);
+    elephc_memoir::values::object_storage::emit_c_class_id(emitter);
+    REPLACEMENT_OWNER_STORAGE.emit_c_pin_count(emitter, emit_replacement_owners_address);
     reserve_boundary_data(data);
     data.add_comm("_elephc_phpext_pack_depth".into(), 8);
     data.add_comm("_elephc_phpext_root_scan".into(), 8);

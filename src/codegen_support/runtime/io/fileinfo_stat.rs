@@ -9,6 +9,8 @@
 //! - Reads immutable class-name spans without assuming a trailing NUL byte.
 //! - Invokes no PHP callbacks and changes no stream or resource-ID state.
 
+use elephc_memoir::buffers::stream_tables;
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS;
 
@@ -124,8 +126,7 @@ fn emit_aarch64_probe(emitter: &mut Emitter, missing_stat: bool) {
     emitter.instruction("sub x12, x12, x13");                                   // convert a wrapper descriptor into its handle-table index
     emitter.instruction("cmp x12, #256");                                       // reject non-wrapper payloads and out-of-range slots
     emitter.instruction(&format!("b.hs __rt_finfo_{suffix}_empty"));            // unsigned comparison also rejects descriptors below the base
-    abi::emit_symbol_address(emitter, "x13", "_user_wrapper_handles");
-    emitter.instruction("ldr x12, [x13, x12, lsl #3]");                         // borrow the live wrapper object
+    stream_tables::emit_load_wrapper_owner(emitter, "x13", "x12", "x12");
     emitter.instruction(&format!("cbz x12, __rt_finfo_{suffix}_empty"));        // closed wrapper handles expose no metadata
     emitter.instruction("ldr x12, [x12]");                                      // read the object's dense class ID
     abi::emit_load_symbol_to_reg(emitter, "x13", "_class_name_count", 0);
@@ -167,8 +168,7 @@ fn emit_x86_probe(emitter: &mut Emitter, missing_stat: bool) {
     emitter.instruction("sub rax, 0x40000000");                                 // convert a wrapper descriptor into its handle-table index
     emitter.instruction("cmp rax, 256");                                        // reject non-wrapper payloads and out-of-range slots
     emitter.instruction(&format!("jae __rt_finfo_{suffix}_empty"));             // unsigned comparison also rejects descriptors below the base
-    abi::emit_symbol_address(emitter, "r8", "_user_wrapper_handles");
-    emitter.instruction("mov rax, QWORD PTR [r8 + rax * 8]");                   // borrow the live wrapper object
+    stream_tables::emit_load_wrapper_owner(emitter, "r8", "rax", "rax");
     emitter.instruction("test rax, rax");                                       // detect a cleared wrapper handle
     emitter.instruction(&format!("jz __rt_finfo_{suffix}_empty"));              // closed handles expose no metadata
     emitter.instruction("mov rax, QWORD PTR [rax]");                            // read the object's dense class ID

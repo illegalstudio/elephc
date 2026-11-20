@@ -22,152 +22,12 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 pub(crate) use elephc_memoir::stacks::STACK_LIMIT_SYMBOL;
 
-/// Bytes kept in reserve below the published limit.
-///
-/// The prologue check runs *after* the frame has been reserved, so this margin only has to
-/// cover what a single guarded frame can still consume before the next guarded call:
-/// outgoing stack-argument areas, `__rt_*` helper frames, and the libc calls those make.
-/// 32 KiB is far above any of those, costs 0.4% of a default 8 MiB OS stack, and stays at
-/// one eighth of the 256 KiB coroutine stack a Fiber or Generator body runs on — the one
-/// place where an over-generous reserve would visibly cut the usable recursion depth.
-pub(crate) const STACK_GUARD_RESERVE_BYTES: i64 = 32 * 1024;
+pub(crate) use elephc_memoir::stacks::STACK_GUARD_RESERVE_BYTES;
 
-/// `RLIMIT_STACK` resource number. Identical (3) on Linux and macOS.
-const RLIMIT_STACK: i64 = 3;
-
-/// Upper clamp on the measured stack budget.
-///
-/// `getrlimit` reports `RLIM_INFINITY` for an unlimited stack (`0xFFFF_FFFF_FFFF_FFFF` on
-/// Linux, `0x7FFF_FFFF_FFFF_FFFF` on macOS). Clamping keeps the computed floor a real
-/// address instead of wrapping below zero; the cost is that a genuinely unlimited stack
-/// reports the fatal after 64 MiB instead of running until the OS refuses to grow it.
-const STACK_BUDGET_CAP_BYTES: i64 = 64 * 1024 * 1024;
-
-/// Budget used when `getrlimit` fails outright (8 MiB — the default on both platforms).
-const STACK_BUDGET_FALLBACK_BYTES: i64 = 8 * 1024 * 1024;
-
-/// Smallest budget worth guarding. Below this the reserve would swallow the whole stack,
-/// so the guard is disabled instead of publishing a floor that is effectively at the
-/// current stack pointer.
-const STACK_BUDGET_MIN_BYTES: i64 = 256 * 1024;
-
-/// Emits `__rt_stack_limit_init`, which measures the running OS stack once at process
-/// start and publishes the resulting floor into `_stack_limit` and `_stack_limit_main`.
-///
-/// Takes no arguments and returns nothing. Clobbers the caller-saved registers a plain
-/// `getrlimit(RLIMIT_STACK, &rlimit)` call clobbers, so callers must invoke it before any
-/// live argument register matters (the `main` prologue calls it after argc/argv have been
-/// stored to globals).
-///
-/// The published floor is `entry_sp - min(rlim_cur, 64 MiB) + 64 KiB`. When `getrlimit`
-/// fails, the reported limit is implausibly small, or the subtraction would wrap, zero is
-/// published instead and the guard stays inert for the whole process.
+/// Measures the process stack using the target operating system's resource selector.
 pub fn emit_stack_limit_init(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: stack_limit_init (publish the call-stack floor) ---");
-    emitter.label_global("__rt_stack_limit_init");
-    match emitter.target.arch {
-        Arch::AArch64 => emit_stack_limit_init_aarch64(emitter),
-        Arch::X86_64 => emit_stack_limit_init_x86_64(emitter),
-    }
-}
-
-/// AArch64 implementation of `__rt_stack_limit_init` (macOS and Linux share it).
-///
-/// Reserves a 32-byte frame: the low 16 bytes are the `struct rlimit` output buffer and
-/// the high 16 bytes hold the saved x29/x30 pair. x29 doubles as the "stack top" reference
-/// because it is callee-saved and therefore survives the `getrlimit` call unchanged.
-fn emit_stack_limit_init_aarch64(emitter: &mut Emitter) {
-    emitter.instruction("sub sp, sp, #32");                                     // reserve the rlimit output buffer plus this helper's frame footer
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save the caller frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // anchor the frame pointer and remember it as the stack-top reference
-
-    // -- getrlimit(RLIMIT_STACK, &rlimit) --
-    emitter.instruction(&format!("mov x0, #{}", RLIMIT_STACK));                 // resource = RLIMIT_STACK
-    emitter.instruction("mov x1, sp");                                          // destination = the 16-byte rlimit buffer at the bottom of this frame
-    emitter.bl_c("getrlimit");                                                  // x0 = 0 on success, -1 on failure
-
-    // -- pick the budget: rlim_cur on success, the platform default otherwise --
-    abi::emit_load_int_immediate(emitter, "x1", STACK_BUDGET_FALLBACK_BYTES);
-    emitter.instruction("cbnz x0, __rt_stack_limit_init_clamp");                // keep the fallback budget when getrlimit reported a failure
-    emitter.instruction("ldr x1, [sp]");                                        // x1 = rlim_cur, the soft stack limit in bytes
-
-    // -- clamp the budget into a range that yields a real address --
-    emitter.label("__rt_stack_limit_init_clamp");
-    abi::emit_load_int_immediate(emitter, "x2", STACK_BUDGET_CAP_BYTES);
-    emitter.instruction("cmp x1, x2");                                          // is the reported budget above the cap (or RLIM_INFINITY)?
-    emitter.instruction("csel x1, x1, x2, lo");                                 // x1 = min(budget, cap) using an unsigned comparison
-    abi::emit_load_int_immediate(emitter, "x2", STACK_BUDGET_MIN_BYTES);
-    emitter.instruction("cmp x1, x2");                                          // is the budget too small to be worth guarding?
-    emitter.instruction("b.lo __rt_stack_limit_init_disable");                  // yes — leave the guard disabled rather than publish a bogus floor
-
-    // -- floor = entry stack pointer - (budget - reserve) --
-    abi::emit_load_int_immediate(emitter, "x2", STACK_GUARD_RESERVE_BYTES);
-    emitter.instruction("sub x1, x1, x2");                                      // subtract the reserve kept for helper frames and the fatal path
-    emitter.instruction("sub x0, x29, x1");                                     // x0 = the lowest stack address compiled prologues may reach
-    emitter.instruction("cmp x0, x29");                                         // did the subtraction wrap below address zero?
-    emitter.instruction("b.hs __rt_stack_limit_init_disable");                  // yes — an unusable floor, so disable the guard instead
-    emitter.instruction("b __rt_stack_limit_init_store");                       // publish the computed floor
-
-    // -- disabled: publish zero so every prologue compare passes --
-    emitter.label("__rt_stack_limit_init_disable");
-    emitter.instruction("mov x0, #0");                                          // zero disables the guard for the rest of the process
-
-    emitter.label("__rt_stack_limit_init_store");
-    elephc_memoir::stacks::emit_publish_main_floor(emitter, "x0");
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the rlimit buffer and frame footer
-    emitter.instruction("ret");                                                 // return to the process entry prologue
-}
-
-/// x86_64 (Linux) implementation of `__rt_stack_limit_init`.
-///
-/// Mirrors the AArch64 path with SysV registers. `rbp` is the stack-top reference because
-/// it is callee-saved and therefore preserved across the `getrlimit` call; the 16 bytes
-/// below it are the `struct rlimit` output buffer, which also keeps `rsp` 16-byte aligned
-/// at the call site.
-fn emit_stack_limit_init_x86_64(emitter: &mut Emitter) {
-    emitter.instruction("push rbp");                                            // save the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // anchor the frame pointer and remember it as the stack-top reference
-    emitter.instruction("sub rsp, 16");                                         // reserve the 16-byte rlimit output buffer, keeping rsp 16-byte aligned
-
-    // -- getrlimit(RLIMIT_STACK, &rlimit) --
-    emitter.instruction(&format!("mov edi, {}", RLIMIT_STACK));                 // resource = RLIMIT_STACK
-    emitter.instruction("mov rsi, rsp");                                        // destination = the 16-byte rlimit buffer below the frame pointer
-    emitter.bl_c("getrlimit");                                                  // eax = 0 on success, -1 on failure
-
-    // -- pick the budget: rlim_cur on success, the platform default otherwise --
-    emitter.instruction(&format!("mov rcx, {}", STACK_BUDGET_FALLBACK_BYTES));  // preload the fallback budget without disturbing the result flags
-    emitter.instruction("test eax, eax");                                       // did getrlimit succeed?
-    emitter.instruction("jnz __rt_stack_limit_init_clamp");                     // keep the fallback budget when getrlimit reported a failure
-    emitter.instruction("mov rcx, QWORD PTR [rsp]");                            // rcx = rlim_cur, the soft stack limit in bytes
-
-    // -- clamp the budget into a range that yields a real address --
-    emitter.label("__rt_stack_limit_init_clamp");
-    emitter.instruction(&format!("mov rdx, {}", STACK_BUDGET_CAP_BYTES));       // materialize the budget cap for the clamp comparison
-    emitter.instruction("cmp rcx, rdx");                                        // is the reported budget above the cap (or RLIM_INFINITY)?
-    emitter.instruction("cmova rcx, rdx");                                      // rcx = min(budget, cap) using an unsigned comparison
-    emitter.instruction(&format!("mov rdx, {}", STACK_BUDGET_MIN_BYTES));       // materialize the smallest budget worth guarding
-    emitter.instruction("cmp rcx, rdx");                                        // is the budget too small to be worth guarding?
-    emitter.instruction("jb __rt_stack_limit_init_disable");                    // yes — leave the guard disabled rather than publish a bogus floor
-
-    // -- floor = entry stack pointer - (budget - reserve) --
-    emitter.instruction(&format!("sub rcx, {}", STACK_GUARD_RESERVE_BYTES));    // subtract the reserve kept for helper frames and the fatal path
-    emitter.instruction("mov rax, rbp");                                        // start from the remembered stack-top reference
-    emitter.instruction("sub rax, rcx");                                        // rax = the lowest stack address compiled prologues may reach
-    emitter.instruction("cmp rax, rbp");                                        // did the subtraction wrap below address zero?
-    emitter.instruction("jae __rt_stack_limit_init_disable");                   // yes — an unusable floor, so disable the guard instead
-    emitter.instruction("jmp __rt_stack_limit_init_store");                     // publish the computed floor
-
-    // -- disabled: publish zero so every prologue compare passes --
-    emitter.label("__rt_stack_limit_init_disable");
-    emitter.instruction("xor eax, eax");                                        // zero disables the guard for the rest of the process
-
-    emitter.label("__rt_stack_limit_init_store");
-    elephc_memoir::stacks::emit_publish_main_floor(emitter, "rax");
-    emitter.instruction("mov rsp, rbp");                                        // release the rlimit output buffer
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return to the process entry prologue
+    const RLIMIT_STACK: i64 = 3;
+    elephc_memoir::stacks::emit_stack_limit_init(emitter, RLIMIT_STACK);
 }
 
 /// Emits `__rt_stack_overflow`, the controlled fatal for call-stack exhaustion.
@@ -297,7 +157,5 @@ mod tests {
             STACK_GUARD_RESERVE_BYTES * 8 <= fiber_usable,
             "reserve {STACK_GUARD_RESERVE_BYTES} is too large for a {fiber_usable}-byte fiber stack"
         );
-        assert!(STACK_BUDGET_MIN_BYTES > STACK_GUARD_RESERVE_BYTES);
-        assert!(STACK_BUDGET_FALLBACK_BYTES <= STACK_BUDGET_CAP_BYTES);
     }
 }

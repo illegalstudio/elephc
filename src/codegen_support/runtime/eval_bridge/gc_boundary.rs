@@ -40,12 +40,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_value", 0);
     emitter.instruction(&format!("str x10, [sp, #{previous}]"));                // park an enclosing native exception owner without releasing it
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction("str x10, [sp]");                                       // link the internal boundary to the caller's handler
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-    emitter.instruction("str x10, [sp, #8]");                                   // preserve every activation outside this native call
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!("str x10, [sp, #{TRY_HANDLER_DIAG_DEPTH_OFFSET}]")); // save suppression depth for the exceptional return
+    elephc_memoir::activation_records::emit_save_sp_try_prefix(emitter, "x10", 0);
     emitter.instruction("mov x10, sp");                                         // address the complete native handler record
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!("add x0, sp, #{TRY_HANDLER_JMP_BUF_OFFSET}")); // pass this boundary's opaque jump buffer to libc
@@ -97,12 +92,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_value", 0);
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // park an enclosing native exception owner
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {frame}], r10"));        // link the boundary to the previous native handler
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame - 8));  // preserve activations outside this native invocation
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", frame - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", frame);
     emitter.instruction(&format!("lea r10, [rbp - {frame}]"));                  // address this invocation's handler record
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("lea rdi, [rbp - {}]", frame - TRY_HANDLER_JMP_BUF_OFFSET)); // pass the boundary's opaque jump buffer

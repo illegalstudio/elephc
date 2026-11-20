@@ -27,6 +27,8 @@
 //! - Current limits: stored ZIP writes only, no explicit compression-control
 //!   APIs, and no private-key signing variants.
 
+use elephc_memoir::buffers::io_scratch;
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the phar-write runtime routines (open/append/finalize) for the active
@@ -62,7 +64,7 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #16");                                     // release the bridge call frame
     emitter.instruction("ret");                                                 // return the synthetic descriptor or failure sentinel
     emitter.label("__rt_phar_write_open_asm");
-    abi::emit_symbol_address(emitter, "x9", "_phar_write_out");
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "x9");
     emitter.instruction("mov x10, #0");                                         // copy index = 0
     emitter.label("__rt_phar_write_open_loop");
     emitter.instruction("cmp x10, x1");                                         // copied every template byte?
@@ -132,7 +134,7 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     emitter.label("__rt_phar_write_append_asm");
     abi::emit_symbol_address(emitter, "x9", "_phar_write_len");
     emitter.instruction("ldr x10, [x9]");                                       // current buffer length (template + prior writes)
-    abi::emit_symbol_address(emitter, "x11", "_phar_write_out");
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "x11");
     emitter.instruction("add x11, x11, x10");                                   // append destination = buffer base + current length
     emitter.instruction("mov x12, #0");                                         // copy index = 0
     emitter.label("__rt_phar_write_append_loop");
@@ -168,7 +170,7 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x10", "_phar_write_tpl_len");
     emitter.instruction("ldr x10, [x10]");                                      // template prefix length
     emitter.instruction("sub x11, x9, x10");                                    // content length = total - template
-    abi::emit_symbol_address(emitter, "x12", "_phar_write_out");
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "x12");
     emitter.instruction("add x13, x12, x10");                                   // entry anchor = buffer base + template length
     // -- runtime-built fopen("phar://...","w") stores the full URL for the bridge --
     abi::emit_symbol_address(emitter, "x14", "_phar_write_url_len");
@@ -222,7 +224,7 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     // -- append the SHA1 signature trailer: raw-sha1(20) ++ LE32(0x0002) ++ "GBMB".
     //    PHP hashes the whole archive (stub+manifest+data) up to the trailer, which
     //    is exactly _phar_write_out[0.._phar_write_len] at this point. --
-    abi::emit_symbol_address(emitter, "x10", "_phar_write_out");
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "x10");
     abi::emit_symbol_address(emitter, "x9", "_phar_write_len");
     emitter.instruction("ldr x11, [x9]");                                       // length so far (everything before the signature)
     abi::emit_symbol_address(emitter, "x0", "_sha1_algo_name");
@@ -233,7 +235,7 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_elephc_crypto_hash_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the elephc-crypto hash entry pointer
     emitter.instruction("blr x9");                                              // compute the raw 20-byte SHA1 digest in place
-    abi::emit_symbol_address(emitter, "x10", "_phar_write_out");
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "x10");
     abi::emit_symbol_address(emitter, "x9", "_phar_write_len");
     emitter.instruction("ldr x11, [x9]");                                       // reload length (the hash call clobbered caller-saved regs)
     emitter.instruction("add x12, x10, x11");                                   // trailer base = buffer + length (raw digest occupies +0..+20)
@@ -254,7 +256,7 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x1]");                                        // archive path pointer (file_put_contents fname ptr)
     abi::emit_symbol_address(emitter, "x2", "_phar_write_path_len");
     emitter.instruction("ldr x2, [x2]");                                        // archive path length (file_put_contents fname len)
-    abi::emit_symbol_address(emitter, "x3", "_phar_write_out");
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "x3");
     emitter.instruction("mov x3, x3");                                          // archive data pointer (file_put_contents data ptr)
     abi::emit_symbol_address(emitter, "x4", "_phar_write_len");
     emitter.instruction("ldr x4, [x4]");                                        // archive byte count (file_put_contents data len)
@@ -353,7 +355,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the synthetic descriptor or failure sentinel
     emitter.label("__rt_phar_write_open_asm_x86");
-    abi::emit_symbol_address(emitter, "r8", "_phar_write_out");                 // phar-write buffer base
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "r8");                 // phar-write buffer base
     emitter.instruction("xor r9, r9");                                          // copy index = 0
     emitter.label("__rt_phar_write_open_loop_x86");
     emitter.instruction("cmp r9, rsi");                                         // copied every template byte?
@@ -410,7 +412,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_phar_write_append_asm_x86");
     abi::emit_symbol_address(emitter, "r8", "_phar_write_len");                 // buffer length slot
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // current buffer length
-    abi::emit_symbol_address(emitter, "r10", "_phar_write_out");                // buffer base
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "r10");                // buffer base
     emitter.instruction("add r10, r9");                                         // append destination = base + current length
     emitter.instruction("xor r11, r11");                                        // copy index = 0
     emitter.label("__rt_phar_write_append_loop_x86");
@@ -444,7 +446,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r8]");                             // template prefix length
     emitter.instruction("mov r11, r9");                                         // content length = total ...
     emitter.instruction("sub r11, r10");                                        // ... minus the template length
-    abi::emit_symbol_address(emitter, "rcx", "_phar_write_out");                // buffer base
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "rcx");                // buffer base
     emitter.instruction("add rcx, r10");                                        // entry anchor = base + template length
     // -- runtime-built fopen("phar://...","w") stores the full URL for the bridge --
     abi::emit_load_symbol_to_reg(emitter, "rax", "_phar_write_url_len", 0);     // load full phar:// URL length for dynamic write streams
@@ -492,7 +494,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edx, r11d");                                       // crc32 input length = content length
     emitter.instruction("call __rt_crc32");                                     // rax = CRC-32 of the entry content
     emitter.instruction("mov DWORD PTR [rbp - 8], eax");                        // stash the crc across the address reloads
-    abi::emit_symbol_address(emitter, "rcx", "_phar_write_out");                // buffer base
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "rcx");                // buffer base
     abi::emit_symbol_address(emitter, "r8", "_phar_write_tpl_len");             // template length slot
     emitter.instruction("add rcx, QWORD PTR [r8]");                             // recompute the entry anchor
     emitter.instruction("mov eax, DWORD PTR [rbp - 8]");                        // reload the crc
@@ -503,14 +505,14 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [r8]");                             // elephc_crypto_hash data length = current archive length
     abi::emit_symbol_address(emitter, "rdi", "_sha1_algo_name");                // elephc_crypto_hash name = "sha1"
     emitter.instruction("mov esi, 4");                                          // elephc_crypto_hash name length = strlen("sha1")
-    abi::emit_symbol_address(emitter, "rdx", "_phar_write_out");                // elephc_crypto_hash data = archive buffer base
-    abi::emit_symbol_address(emitter, "r8", "_phar_write_out");                 // elephc_crypto_hash out base = archive buffer base ...
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "rdx");                // elephc_crypto_hash data = archive buffer base
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "r8");                 // elephc_crypto_hash out base = archive buffer base ...
     emitter.instruction("add r8, rcx");                                         // ... + length (raw 20 bytes past the data)
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_crypto_hash_fn", 0);   // load the elephc-crypto hash entry pointer
     emitter.instruction("call r9");                                             // compute the raw 20-byte SHA1 digest in place
     abi::emit_symbol_address(emitter, "r8", "_phar_write_len");                 // buffer length slot
     emitter.instruction("mov rcx, QWORD PTR [r8]");                             // reload length (the hash call clobbered caller-saved regs)
-    abi::emit_symbol_address(emitter, "r9", "_phar_write_out");                 // buffer base
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "r9");                 // buffer base
     emitter.instruction("add r9, rcx");                                         // trailer base = buffer + length (raw digest occupies +0..+20)
     emitter.instruction("mov DWORD PTR [r9 + 20], 2");                          // little-endian signature type 0x0002 = Phar::SHA1
     emitter.instruction("mov BYTE PTR [r9 + 24], 0x47");                        // 'G' of the "GBMB" phar magic
@@ -524,7 +526,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r8]");                             // archive path pointer (file_put_contents fname ptr)
     abi::emit_symbol_address(emitter, "r8", "_phar_write_path_len");            // archive path length slot
     emitter.instruction("mov rdx, QWORD PTR [r8]");                             // archive path length (file_put_contents fname len)
-    abi::emit_symbol_address(emitter, "rdi", "_phar_write_out");                // archive data pointer (file_put_contents data ptr)
+    io_scratch::PHAR_OUTPUT.emit_address(emitter, "rdi");                // archive data pointer (file_put_contents data ptr)
     abi::emit_symbol_address(emitter, "r8", "_phar_write_len");                 // buffer length slot
     emitter.instruction("mov rsi, QWORD PTR [r8]");                             // archive byte count (file_put_contents data len)
     emitter.instruction("call __rt_file_put_contents");                         // write the assembled phar archive to disk

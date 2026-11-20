@@ -28,6 +28,7 @@
 //!   slot's high word holds `UNINITIALIZED_TYPED_PROPERTY_SENTINEL`) and counts only the rest,
 //!   as PHP does; an unset `Closure` property therefore serializes instead of throwing.
 
+use elephc_memoir::values::serialize_registry;
 use elephc_memoir::values::incomplete_object::{CLASS_ID, NAME_LEN, NAME_PTR, PROPERTY_HASH};
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -933,8 +934,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_serialize_begin");
     emit_symbol_address(emitter, "x9", "_ser_value_counter");
     emitter.instruction("str xzr, [x9]");                                       // value counter = 0
-    emit_symbol_address(emitter, "x9", "_ser_obj_count");
-    emitter.instruction("str xzr, [x9]");                                       // seen-objects count = 0
+    serialize_registry::emit_reset(emitter);
     emitter.instruction("ret");                                                 // reference tracking is reset
 
     // -- __rt_serialize_obj_ref(x0=obj): dedup objects by identity. If the object
@@ -948,22 +948,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish the new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer
-    emit_symbol_address(emitter, "x9", "_ser_obj_count");
-    emitter.instruction("ldr x9, [x9]");                                        // number of registered objects
-    emitter.instruction("mov x10, #0");                                         // scan index = 0
-    emitter.label("__rt_serialize_obj_ref_scan");
-    emitter.instruction("cmp x10, x9");                                         // scanned every registered object?
-    emitter.instruction("b.ge __rt_serialize_obj_ref_new");                     // not seen → register a new index
-    emit_symbol_address(emitter, "x11", "_ser_obj_ptrs");
-    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // registered object pointer
-    emitter.instruction("ldr x13, [sp, #0]");                                   // this object pointer
-    emitter.instruction("cmp x12, x13");                                        // same identity?
-    emitter.instruction("b.eq __rt_serialize_obj_ref_found");                   // already serialized → emit a back-reference
-    emitter.instruction("add x10, x10, #1");                                    // next registered object
-    emitter.instruction("b __rt_serialize_obj_ref_scan");                       // continue scanning
-    emitter.label("__rt_serialize_obj_ref_found");
-    emit_symbol_address(emitter, "x11", "_ser_obj_idxs");
-    emitter.instruction("ldr x0, [x11, x10, lsl #3]");                          // the recorded reference index
+    serialize_registry::emit_lookup_aarch64(emitter);
     emitter.instruction("str x0, [sp, #8]");                                    // save it across the literal appends
     emit_append_literal_aarch64(emitter, &[b'r', b':'], "the back-reference prefix");
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the reference index
@@ -976,19 +961,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // load the running value counter
     emitter.instruction("add x10, x10, #1");                                    // this object takes the next index
     emitter.instruction("str x10, [x9]");                                       // publish the advanced counter
-    emit_symbol_address(emitter, "x11", "_ser_obj_count");
-    emitter.instruction("ldr x12, [x11]");                                      // current registered-object count
-    emitter.instruction("mov x13, #65536");                                     // object-map capacity
-    emitter.instruction("cmp x12, x13");                                        // is the map full?
-    emitter.instruction("b.ge __rt_serialize_obj_ref_done");                    // full → keep counting but stop deduping
-    emit_symbol_address(emitter, "x13", "_ser_obj_ptrs");
-    emitter.instruction("ldr x14, [sp, #0]");                                   // object pointer
-    emitter.instruction("str x14, [x13, x12, lsl #3]");                         // record the object pointer
-    emit_symbol_address(emitter, "x13", "_ser_obj_idxs");
-    emitter.instruction("str x10, [x13, x12, lsl #3]");                         // record its reference index
-    emitter.instruction("add x12, x12, #1");                                    // grow the map
-    emitter.instruction("str x12, [x11]");                                      // publish the new count
-    emitter.label("__rt_serialize_obj_ref_done");
+    serialize_registry::emit_publish_aarch64(emitter);
     emitter.instruction("mov x0, #0");                                          // signal: registered, serialize the object
     emitter.label("__rt_serialize_obj_ref_ret");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
@@ -1916,8 +1889,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_serialize_begin");
     emit_symbol_address(emitter, "r9", "_ser_value_counter");
     emitter.instruction("mov QWORD PTR [r9], 0");                               // value counter = 0
-    emit_symbol_address(emitter, "r9", "_ser_obj_count");
-    emitter.instruction("mov QWORD PTR [r9], 0");                               // seen-objects count = 0
+    serialize_registry::emit_reset(emitter);
     emitter.instruction("ret");                                                 // reference tracking is reset
 
     // -- __rt_serialize_obj_ref(rdi=obj): dedup objects by identity. If the object
@@ -1931,21 +1903,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the dedup frame
     emitter.instruction("sub rsp, 32");                                         // reserve frame slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer
-    emit_symbol_address(emitter, "r9", "_ser_obj_count");
-    emitter.instruction("mov r9, QWORD PTR [r9]");                              // number of registered objects
-    emitter.instruction("xor r10, r10");                                        // scan index = 0
-    emitter.label("__rt_serialize_obj_ref_scan");
-    emitter.instruction("cmp r10, r9");                                         // scanned every registered object?
-    emitter.instruction("jge __rt_serialize_obj_ref_new");                      // not seen → register a new index
-    emit_symbol_address(emitter, "r11", "_ser_obj_ptrs");
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // registered object pointer
-    emitter.instruction("cmp rax, QWORD PTR [rbp - 8]");                        // same identity?
-    emitter.instruction("je __rt_serialize_obj_ref_found");                     // already serialized → emit a back-reference
-    emitter.instruction("add r10, 1");                                          // next registered object
-    emitter.instruction("jmp __rt_serialize_obj_ref_scan");                     // continue scanning
-    emitter.label("__rt_serialize_obj_ref_found");
-    emit_symbol_address(emitter, "r11", "_ser_obj_idxs");
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // the recorded reference index
+    serialize_registry::emit_lookup_x86_64(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save it across the literal appends
     emit_append_literal_x86_64(emitter, &[b'r', b':'], "the back-reference prefix");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the reference index
@@ -1959,20 +1917,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, 1");                                          // this object takes the next index
     emitter.instruction("mov QWORD PTR [r9], rax");                             // publish the advanced counter
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the assigned index
-    emit_symbol_address(emitter, "r9", "_ser_obj_count");
-    emitter.instruction("mov rcx, QWORD PTR [r9]");                             // current registered-object count
-    emitter.instruction("cmp rcx, 65536");                                      // is the object map full?
-    emitter.instruction("jge __rt_serialize_obj_ref_done");                     // full → keep counting but stop deduping
-    emit_symbol_address(emitter, "r11", "_ser_obj_ptrs");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // object pointer
-    emitter.instruction("mov QWORD PTR [r11 + rcx*8], rax");                    // record the object pointer
-    emit_symbol_address(emitter, "r11", "_ser_obj_idxs");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // assigned index
-    emitter.instruction("mov QWORD PTR [r11 + rcx*8], rax");                    // record its reference index
-    emit_symbol_address(emitter, "r9", "_ser_obj_count");
-    emitter.instruction("add rcx, 1");                                          // grow the map
-    emitter.instruction("mov QWORD PTR [r9], rcx");                             // publish the new count
-    emitter.label("__rt_serialize_obj_ref_done");
+    serialize_registry::emit_publish_x86_64(emitter);
     emitter.instruction("mov rax, 0");                                          // signal: registered, serialize the object
     emitter.label("__rt_serialize_obj_ref_ret");
     emitter.instruction("add rsp, 32");                                         // deallocate the dedup frame

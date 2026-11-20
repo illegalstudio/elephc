@@ -648,6 +648,20 @@ echo (gzinflate($packed) === $data ? "roundtrip-ok" : "roundtrip-fail");
     assert_eq!(out, "smaller|roundtrip-ok");
 }
 
+/// Forces repeated storage replacement while retaining the prefix already decoded by zlib.
+#[test]
+fn test_gzinflate_growth_preserves_the_decoded_prefix() {
+    let out = compile_and_run(
+        r#"<?php
+$data = str_repeat("inflate keeps earlier bytes|", 8192);
+$packed = gzdeflate($data);
+$decoded = gzinflate($packed);
+echo strlen($decoded), "|", (int) ($decoded === $data);
+"#,
+    );
+    assert_eq!(out, "229376|1");
+}
+
 /// Verifies compiled PHP output for gzinflate invalid is false.
 #[test]
 fn test_gzinflate_invalid_is_false() {

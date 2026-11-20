@@ -815,15 +815,7 @@ fn emit_aarch64_method_exception_boundary_push(
     escape_label: &str,
 ) {
     emitter.comment("push eval method exception boundary");
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset));       // save the previous native exception-handler head
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-    emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + 8));   // preserve the caller activation frame across method unwinding
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(                                               // save diagnostic suppression depth for restoration
-        "str x10, [x29, #{}]",
-        handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));
+    elephc_memoir::activation_records::emit_save_arm_fp_try_prefix(emitter, "x10", handler_offset);
     emitter.instruction(&format!("add x10, x29, #{}", handler_offset));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp
@@ -853,19 +845,7 @@ fn emit_x86_64_method_exception_boundary_push(
     escape_label: &str,
 ) {
     emitter.comment("push eval method exception boundary");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(                                                        // save the previous native exception-handler head
-        &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
-    );
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction(                                                        // preserve the caller activation frame across method unwinding
-        &format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)
-    );
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(                                               // save diagnostic suppression depth for restoration
-        "mov QWORD PTR [rbp - {}], r10",
-        handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", handler_base);
     emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp

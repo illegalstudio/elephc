@@ -20,6 +20,8 @@
 //! - Key strings (`_ob_k_*`) and the handler name (`_ob_handler_name`) live in
 //!   the fixed runtime data section.
 
+use elephc_memoir::buffers::output;
+
 use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -123,8 +125,7 @@ pub fn emit_ob_status_entry(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #8]");                                    // save the (possibly reallocated) hash pointer
     // -- "buffer_size" → the slot capacity --
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the buffer slot index
-    abi::emit_symbol_address(emitter, "x10", "_ob_caps");                       // materialize the capacity slot array
-    emitter.instruction("ldr x3, [x10, x9, lsl #3]");                           // value_lo = the buffer capacity
+    output::emit_load_buffer_field(emitter, output::BufferField::Capacity, "x10", "x9", "x3");
     emitter.instruction("mov x4, #0");                                          // value_hi = 0
     emitter.instruction("mov x5, #0");                                          // value tag = int
     abi::emit_symbol_address(emitter, "x1", "_ob_k_buffer_size");               // key = "buffer_size"
@@ -134,8 +135,7 @@ pub fn emit_ob_status_entry(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #8]");                                    // save the (possibly reallocated) hash pointer
     // -- "buffer_used" → the slot used byte count --
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the buffer slot index
-    abi::emit_symbol_address(emitter, "x10", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("ldr x3, [x10, x9, lsl #3]");                           // value_lo = the buffer used byte count
+    output::emit_load_buffer_field(emitter, output::BufferField::Length, "x10", "x9", "x3");
     emitter.instruction("mov x4, #0");                                          // value_hi = 0
     emitter.instruction("mov x5, #0");                                          // value tag = int
     abi::emit_symbol_address(emitter, "x1", "_ob_k_buffer_used");               // key = "buffer_used"
@@ -231,8 +231,7 @@ fn emit_ob_status_entry_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the (possibly reallocated) hash pointer
     // -- "buffer_size" → the slot capacity --
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the buffer slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_caps");                       // materialize the capacity slot array
-    emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // value_lo = the buffer capacity
+    output::emit_load_buffer_field(emitter, output::BufferField::Capacity, "r11", "r10", "rcx");
     emitter.instruction("mov r8, 0");                                           // value_hi = 0
     emitter.instruction("mov r9, 0");                                           // value tag = int
     abi::emit_symbol_address(emitter, "rsi", "_ob_k_buffer_size");              // key = "buffer_size"
@@ -242,8 +241,7 @@ fn emit_ob_status_entry_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the (possibly reallocated) hash pointer
     // -- "buffer_used" → the slot used byte count --
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the buffer slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // value_lo = the buffer used byte count
+    output::emit_load_buffer_field(emitter, output::BufferField::Length, "r11", "r10", "rcx");
     emitter.instruction("mov r8, 0");                                           // value_hi = 0
     emitter.instruction("mov r9, 0");                                           // value tag = int
     abi::emit_symbol_address(emitter, "rsi", "_ob_k_buffer_used");              // key = "buffer_used"

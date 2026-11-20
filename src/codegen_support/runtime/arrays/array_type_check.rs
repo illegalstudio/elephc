@@ -13,6 +13,8 @@
 //!   `__rt_array_get_mixed_key` + `__rt_mixed_unbox` + `__rt_decref_mixed`, so the
 //!   warning and ownership behavior stays exactly the generic read's.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
 use crate::codegen_support::sentinels::NULL_SENTINEL;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -59,7 +61,7 @@ fn emit_array_type_check_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("b.lt {fallback}"));                           // a negative key follows the generic missing-key path
     emitter.instruction("cmp x1, x12");                                         // is the integer index past the packed payload?
     emitter.instruction(&format!("b.ge {fallback}"));                           // an out-of-bounds key follows the generic warning path
-    emitter.instruction("add x10, x0, #24");                                    // skip the indexed-array header to the payload base
+    packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x0");
     emitter.instruction("ldr x13, [x10, x1, lsl #3]");                          // load the stored boxed Mixed cell pointer
     emitter.instruction(&format!("cbz x13, {miss_null}"));                      // an empty slot reads as PHP null
     emitter.instruction("ldr x14, [x13]");                                      // load the stored runtime tag
@@ -136,7 +138,7 @@ fn emit_array_type_check_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("jl {fallback}"));                             // a negative key follows the generic missing-key path
     emitter.instruction("cmp rsi, r10");                                        // is the integer index past the packed payload?
     emitter.instruction(&format!("jge {fallback}"));                            // an out-of-bounds key follows the generic warning path
-    emitter.instruction("lea r10, [rdi + 24]");                                 // skip the indexed-array header to the payload base
+    packed_slots::emit_packed_payload_x86_64(emitter, "r10", "rdi");
     emitter.instruction("mov r11, QWORD PTR [r10 + rsi * 8]");                  // load the stored boxed Mixed cell pointer
     emitter.instruction(&format!("test r11, r11"));                             // an empty slot reads as PHP null
     emitter.instruction(&format!("jz {miss_null}"));                            // answer from the null mask bit

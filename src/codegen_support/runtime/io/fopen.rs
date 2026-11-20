@@ -8,6 +8,10 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
+use elephc_memoir::buffers::io_scratch;
+
+use elephc_memoir::buffers::stream_tables;
+
 use super::MIN_WRAPPER_SCHEME_LEN;
 use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -61,9 +65,9 @@ pub fn emit_fopen(emitter: &mut Emitter, user_stream_wrapper: bool) {
     abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_fopen_uw_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp x11, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("b.ge __rt_fopen_uw_done");                             // no registered wrapper matched
-    emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
+    emitter.instruction(&format!("add x12, x10, x11, lsl #{}", stream_tables::REGISTRATION_SHIFT));                           // slot base = table + index * 32
     emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
     emitter.instruction("cbz x13, __rt_fopen_uw_slot_next");                    // empty slot — skip it
     emitter.instruction("ldr x14, [x12, #8]");                                  // stored protocol length
@@ -192,16 +196,7 @@ pub fn emit_fopen(emitter: &mut Emitter, user_stream_wrapper: bool) {
     emitter.instruction("str x11, [sp, #48]");                                  // save stream_open ptr across the upcoming blr
 
     // -- allocate the first free slot in _user_wrapper_handles --
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("mov x12, #0");                                         // start scanning from handle slot 0
-    emitter.label("__rt_fopen_uw_handle_scan");
-    emitter.instruction("cmp x12, #256");                                       // does any free handle slot remain (USER_WRAPPER_HANDLES_CAP)?
-    emitter.instruction("b.ge __rt_fopen_uw_fail");                             // table full → silent fail (obj is freed on the shared fail path)
-    emitter.instruction("ldr x13, [x10, x12, lsl #3]");                         // load slot — null means free
-    emitter.instruction("cbz x13, __rt_fopen_uw_handle_alloc");                 // free slot found
-    emitter.instruction("add x12, x12, #1");                                    // advance to the next handle slot
-    emitter.instruction("b __rt_fopen_uw_handle_scan");                         // keep scanning
-    emitter.label("__rt_fopen_uw_handle_alloc");
+    stream_tables::emit_find_wrapper_slot(emitter, "__rt_fopen_uw_handle_scan", "__rt_fopen_uw_handle_alloc", "__rt_fopen_uw_fail");
     emitter.instruction("str x12, [sp, #40]");                                  // save the allocated handle slot index
 
     // -- call stream_open(obj, path, mode, options=0) --
@@ -213,7 +208,7 @@ pub fn emit_fopen(emitter: &mut Emitter, user_stream_wrapper: bool) {
     //    scratch slot, zero'd just before the call. The wrapper may write to
     //    this slot via the PHP-faithful by-reference signature; elephc does
     //    not read the value back. --
-    abi::emit_symbol_address(emitter, "x6", "_stream_open_opened_path_scratch");
+    io_scratch::OPENED_PATH.emit_address(emitter, "x6");
     emitter.instruction("stp xzr, xzr, [x6]");                                  // zero the opened_path scratch slot before the call
     emitter.instruction("ldr x11, [sp, #48]");                                  // reload stream_open method pointer
     emitter.instruction("ldr x13, [sp, #56]");                                  // reload the boxed-result flag
@@ -230,7 +225,7 @@ pub fn emit_fopen(emitter: &mut Emitter, user_stream_wrapper: bool) {
     emitter.instruction("ldr x12, [sp, #40]");                                  // reload the handle slot index
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload the wrapper object pointer
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("str x13, [x10, x12, lsl #3]");                         // _user_wrapper_handles[slot] = obj
+    stream_tables::emit_publish_wrapper_owner(emitter);
     emitter.instruction("ldr x0, [sp, #40]");                                   // handle slot → metadata helper arg0
     emitter.instruction("ldp x1, x2, [sp, #0]");                                // path ptr/len → metadata helper args
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // fopen mode ptr/len → metadata helper args
@@ -316,10 +311,10 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter, user_stream_wrapper: bool) {
     abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_fopen_uw_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp r11, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("jge __rt_fopen_uw_done_x86");                          // no registered wrapper matched
     emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
-    emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
+    emitter.instruction(&format!("shl r12, {}", stream_tables::REGISTRATION_SHIFT));                                          // slot offset = index * 32
     emitter.instruction("add r12, r10");                                        // slot base = table + offset
     emitter.instruction("mov r13, QWORD PTR [r12]");                            // stored protocol pointer
     emitter.instruction("test r13, r13");                                       // is this slot empty?
@@ -438,17 +433,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter, user_stream_wrapper: bool) {
     emitter.instruction("mov QWORD PTR [rsp + 48], r11");                       // save stream_open ptr across the upcoming call
 
     // -- allocate the first free slot in _user_wrapper_handles --
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("xor r12, r12");                                        // start scanning from handle slot 0
-    emitter.label("__rt_fopen_uw_handle_scan_x86");
-    emitter.instruction("cmp r12, 256");                                        // does any free handle slot remain (USER_WRAPPER_HANDLES_CAP)?
-    emitter.instruction("jge __rt_fopen_uw_fail_x86");                          // table full → silent fail (obj is freed on the shared fail path)
-    emitter.instruction("mov r13, QWORD PTR [r10 + r12 * 8]");                  // load slot — null means free
-    emitter.instruction("test r13, r13");                                       // is this slot free?
-    emitter.instruction("jz __rt_fopen_uw_handle_alloc_x86");                   // free slot found
-    emitter.instruction("inc r12");                                             // advance to the next handle slot
-    emitter.instruction("jmp __rt_fopen_uw_handle_scan_x86");                   // keep scanning
-    emitter.label("__rt_fopen_uw_handle_alloc_x86");
+    stream_tables::emit_find_wrapper_slot(emitter, "__rt_fopen_uw_handle_scan_x86", "__rt_fopen_uw_handle_alloc_x86", "__rt_fopen_uw_fail_x86");
     emitter.instruction("mov QWORD PTR [rsp + 40], r12");                       // save the allocated handle slot index
 
     // -- call stream_open(obj, path, mode, options=0, opened_path_addr) --
@@ -465,7 +450,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter, user_stream_wrapper: bool) {
     emitter.instruction("mov r8,  QWORD PTR [rsp + 24]");                       // mode len
     emitter.instruction("xor r9d, r9d");                                        // options = 0 (PHP STREAM_USE_PATH/REPORT_ERRORS unused in v1)
     emitter.instruction("mov r11, QWORD PTR [rsp + 48]");                       // reload stream_open method pointer before the stack shift
-    abi::emit_symbol_address(emitter, "r10", "_stream_open_opened_path_scratch"); // address of the 16-byte opened_path scratch slot
+    io_scratch::OPENED_PATH.emit_address(emitter, "r10"); // address of the 16-byte opened_path scratch slot
     emitter.instruction("mov QWORD PTR [r10], 0");                              // zero the opened_path low half before the call
     emitter.instruction("mov QWORD PTR [r10 + 8], 0");                          // zero the opened_path high half before the call
     emitter.instruction("sub rsp, 16");                                         // reserve a 16-byte stack-arg slot for the 7th int arg (rsp stays 16-aligned)
@@ -484,7 +469,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter, user_stream_wrapper: bool) {
     emitter.instruction("mov r12, QWORD PTR [rsp + 40]");                       // reload the handle slot index
     emitter.instruction("mov r13, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer
     abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("mov QWORD PTR [r10 + r12 * 8], r13");                  // _user_wrapper_handles[slot] = obj
+    stream_tables::emit_publish_wrapper_owner(emitter);
     emitter.instruction("mov rdi, QWORD PTR [rsp + 40]");                       // handle slot → metadata helper arg0
     emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");                        // path ptr → metadata helper
     emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // path len → metadata helper

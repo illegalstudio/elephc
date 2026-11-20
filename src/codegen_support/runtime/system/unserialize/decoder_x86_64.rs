@@ -19,7 +19,6 @@ use crate::codegen_support::try_handlers::{
 pub(super) fn emit_entry(emitter: &mut Emitter) {
     let boundary_bytes = TRY_HANDLER_SLOT_SIZE + 32;
     let previous_handler_offset = boundary_bytes;
-    let survivor_offset = previous_handler_offset - 8;
 
     // -- entry wrapper: protect begin/end cleanup across hydration-hook throws --
     emitter.blank();
@@ -32,12 +31,7 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve source length across setjmp
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_unser_legacy_active", 0);
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // checkpoint legacy sharing before a hydration hook can throw
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", previous_handler_offset)); // handler.next = previous exception-handler head
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", survivor_offset)); // preserve the activation frame that survives this boundary
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", boundary_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression across longjmp
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", previous_handler_offset);
     emitter.instruction(&format!("lea r10, [rbp - {}]", previous_handler_offset)); // compute this wrapper's exception-handler record address
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("lea rdi, [rbp - {}]", boundary_bytes - TRY_HANDLER_JMP_BUF_OFFSET)); // pass this boundary's opaque jmp_buf to setjmp

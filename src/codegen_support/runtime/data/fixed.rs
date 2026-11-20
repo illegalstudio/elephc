@@ -8,6 +8,8 @@
 //! Key details:
 //! - Fixed symbols are cached across compilations, with target and PHP-profile inputs covered by the cache key.
 
+use elephc_memoir::buffers::io_scratch;
+
 use super::{
     RANGE_SIZE_MSG,
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
@@ -372,9 +374,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // frame of the innermost `__rt_serialize_call_value`, which saves and restores it around itself and
     // every hook call that can re-enter serialize().
     out.push_str(&comm_directive("_ser_stream", 8, target));
-    out.push_str(&comm_directive("_ser_obj_count", 8, target));
-    out.push_str(&comm_directive("_ser_obj_ptrs", 524288, target));
-    out.push_str(&comm_directive("_ser_obj_idxs", 524288, target));
+    elephc_memoir::values::serialize_registry::append_data(&mut out, &target);
     elephc_memoir::values::reference_registry::append_unserialize_storage(&mut out, &target);
     out.push_str(&comm_directive("_strtotime_clock", 8, target));
     // Scratch copy a one-digit-month/day ISO date (`2020-1-5`) is zero-padded into before the
@@ -1033,7 +1033,6 @@ pub(crate) fn emit_runtime_data_fixed(
     elephc_memoir::data::append_memory_counters(&mut out, &target);
 
     elephc_memoir::interop::cstr_scratch::append_data(&mut out, &target);
-    out.push_str(&comm_directive("_eof_flags", 256, target));
     out.push_str(&comm_directive("_runtime_wrapper_class_buf", 1024, target));
     // Synthetic user-wrapper stream metadata: 256 handles, one kind byte, a
     // 256-byte URI buffer, and the exact fopen mode each. Kind 1 is a native
@@ -1046,18 +1045,19 @@ pub(crate) fn emit_runtime_data_fixed(
         out.push_str(&comm_directive("_zip_stream_mode_len", 2048, target));
         out.push_str(&comm_directive("_zip_stream_mode", 4096, target));
     }
-    out.push_str(&comm_directive("_popen_files", 2048, target));
-    out.push_str(&comm_directive("_dir_handles", 2048, target));
+    elephc_memoir::buffers::stream_tables::EOF_FLAGS.append(&mut out, &target);
+    elephc_memoir::buffers::stream_tables::POPEN_FILES.append(&mut out, &target);
+    elephc_memoir::buffers::stream_tables::DIR_HANDLES.append(&mut out, &target);
     // Per-fd glob:// state pointers (256 fds × 8B). Each slot is a pointer to
     // a heap-allocated glob_state struct (pathv ptr + pathc + index + the
     // libc glob_t whose lifetime globfree() needs at closedir time). The
     // readdir/closedir/rewinddir helpers probe this table first; a non-zero
     // entry routes them through the glob iterator instead of the libc DIR*.
-    out.push_str(&comm_directive("_glob_handles", 2048, target));
-    out.push_str(&comm_directive("_stream_read_filters", 256, target));
-    out.push_str(&comm_directive("_stream_write_filters", 256, target));
+    elephc_memoir::buffers::stream_tables::GLOB_HANDLES.append(&mut out, &target);
+    elephc_memoir::buffers::stream_tables::READ_FILTERS.append(&mut out, &target);
+    elephc_memoir::buffers::stream_tables::WRITE_FILTERS.append(&mut out, &target);
     elephc_memoir::buffers::stream_scratch::append_data(&mut out, &target);
-    out.push_str(&comm_directive("_zstream_handles", 2048, target));
+    elephc_memoir::buffers::stream_tables::ZLIB_HANDLES.append(&mut out, &target);
     out.push_str(&comm_directive("_zlib_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_zlib_close_fn", 8, target));
     out.push_str(&comm_directive("_phar_zlib_inflate_init2_fn", 8, target));
@@ -1067,14 +1067,14 @@ pub(crate) fn emit_runtime_data_fixed(
     // bzip2.compress write-filter state: per-fd bz_stream pointer table
     // (_bzstream_handles, indexed by fd) plus the indirect fn-pointer slots the
     // shared runtime calls through so non-bzip2 programs never link -lbz2.
-    out.push_str(&comm_directive("_bzstream_handles", 2048, target));
+    elephc_memoir::buffers::stream_tables::BZIP2_HANDLES.append(&mut out, &target);
     out.push_str(&comm_directive("_bz2_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_bz2_close_fn", 8, target));
     out.push_str(&comm_directive("_phar_bz2_decompress_fn", 8, target));
     // convert.iconv.* WRITE-filter state: per-fd iconv_t descriptor table
     // (_iconv_handles) plus the indirect fn-pointer slots the shared runtime
     // calls through so it never names libc iconv (which needs -liconv on macOS).
-    out.push_str(&comm_directive("_iconv_handles", 2048, target));
+    elephc_memoir::buffers::stream_tables::ICONV_HANDLES.append(&mut out, &target);
     out.push_str(&comm_directive("_iconv_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_iconv_close_fn", 8, target));
     // Apple iconv shares //TRANSLIT and //IGNORE per charset pair, so Apple targets record
@@ -1083,7 +1083,7 @@ pub(crate) fn emit_runtime_data_fixed(
     if target.platform == Platform::MacOS {
         out.push_str(&comm_directive("_iconv_write_options", 256, target));
     }
-    out.push_str(&comm_directive("_ftp_resp_buf", 4096, target));
+    io_scratch::FTP_RESPONSE.append(&mut out, &target);
     out.push_str(&comm_directive("_ftp_data_addr", 64, target));
     // _ftp_use_tls: set to 1 by fopen("ftps://...") before __rt_ftp_open is
     // invoked. The handshake helper interprets it as "perform AUTH TLS on the
@@ -1091,7 +1091,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // attach the PASV data connection". Reset to 0 at the end of __rt_ftp_open
     // so subsequent plain ftp:// opens are not contaminated.
     out.push_str(&comm_directive("_ftp_use_tls", 8, target));
-    out.push_str(&comm_directive("_http_resp_buf", 1048576, target));
+    io_scratch::HTTP_RESPONSE.append(&mut out, &target);
     // https:// goes through indirect function pointers so only programs that
     // actually open https URLs reference elephc-tls (and pull in -lelephc_tls
     // at link time); other programs keep the runtime libc-only.
@@ -1302,12 +1302,12 @@ pub(crate) fn emit_runtime_data_fixed(
     // entry means "unset" and reports PHP's default of 8192. stream_set_chunk_size
     // returns the previous value (the PHP-observable contract); the size does not
     // currently change read granularity (reads return identical data).
-    out.push_str(&comm_directive("_stream_chunk_size", 2048, target));
+    elephc_memoir::buffers::stream_tables::CHUNK_SIZES.append(&mut out, &target);
     // _stream_connect_host: per-fd transport host string (ptr, len) captured by
     // stream_socket_client so stream_socket_enable_crypto can default the TLS
     // SNI / peer-name to the connection host when no ssl.peer_name context
     // option is set. 256 fds * 16 bytes (ptr + len). A zero len means "unset".
-    out.push_str(&comm_directive("_stream_connect_host", 4096, target));
+    elephc_memoir::buffers::stream_tables::CONNECT_HOSTS.append(&mut out, &target);
     // _stream_notification_callback: the callable descriptor pointer for the
     // stream context's `notification` option, captured at codegen time by
     // stream_context_create / stream_context_set_params. __rt_http_open fires
@@ -1450,7 +1450,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_http_active_host_len", 8, target));
     // 2 KiB scratch for the Location header's path component on
     // relative redirects (covers the vast majority of API redirects).
-    out.push_str(&comm_directive("_http_redirect_path_buf", 2048, target));
+    io_scratch::HTTP_REDIRECT.append(&mut out, &target);
     out.push_str(&comm_directive("_http_redirect_path_len", 8, target));
     out.push_str(
         ".globl _http_request_fulluri_key_str\n_http_request_fulluri_key_str:\n    .ascii \"request_fulluri\"\n",
@@ -1485,7 +1485,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // PHP int (19 ascii digits) + "REST " (5) + "\r\n" (2) = 26 bytes, so
     // 64 leaves generous headroom for future extensions (auth, custom
     // commands).
-    out.push_str(&comm_directive("_ftp_cmd_scratch", 64, target));
+    io_scratch::FTP_COMMAND.append(&mut out, &target);
 
     // Bucket-brigade property keys used by __rt_user_filter_brigade_invoke
     // to build and walk brigade-shaped argument data when the user's
@@ -1513,27 +1513,27 @@ pub(crate) fn emit_runtime_data_fixed(
     // `__rt_http_build_request` and consumed by `__rt_http_open` via
     // the http_stream lowering when context options can override the
     // default method.
-    out.push_str(&comm_directive("_http_req_scratch", 8192, target));
+    io_scratch::HTTP_REQUEST.append(&mut out, &target);
     out.push_str(&comm_directive("_fgc_url_addr", 512, target));
     out.push_str(&comm_directive("_fgc_url_retr", 2048, target));
     out.push_str(".globl _fgc_url_slash\n_fgc_url_slash:\n    .ascii \"/\"\n");
-    out.push_str(&comm_directive("_https_resp_buf", 1048576, target));
+    io_scratch::HTTPS_RESPONSE.append(&mut out, &target);
     out.push_str(&comm_directive("_fsockopen_addr", 512, target));
     // _user_wrappers: USER_WRAPPER_REGISTRATIONS_CAP = 64 scheme→class
     // registrations, each entry 32 bytes (protocol_ptr/len + class_ptr/len).
     // Slot is free when protocol_ptr is null. 64 × 32 = 2048 bytes.
-    out.push_str(&comm_directive("_user_wrappers", 2048, target));
+    elephc_memoir::buffers::stream_tables::USER_WRAPPERS.append(&mut out, &target);
     out.push_str(&comm_directive("_simplexml_unwind_stream", 8, target));
     // _user_wrapper_handles: USER_WRAPPER_HANDLES_CAP = 256 active stream-handle
     // slots, each storing the wrapper object pointer keyed by synthetic fd
     // `USER_WRAPPER_FD_BASE + slot_index`. Slot is free when the stored pointer
     // is null. 256 slots × 8 bytes = 2048 bytes.
-    out.push_str(&comm_directive("_user_wrapper_handles", 2048, target));
+    elephc_memoir::buffers::stream_tables::USER_WRAPPER_HANDLES.append(&mut out, &target);
     // _user_wrapper_drain_buf: 1 MiB accumulation buffer for the codegen-level
     // feof-gated read loop emitted by stream_get_contents on a wrapper fd.
     // Each fread chunk is copied here, building one contiguous result. Drains
     // larger than 1 MiB are truncated (v1).
-    out.push_str(&comm_directive("_user_wrapper_drain_buf", 1048576, target));
+    io_scratch::WRAPPER_DRAIN.append(&mut out, &target);
     // phar:// write stream state. _phar_write_out is the 1 MiB in-memory
     // payload buffer (template prefix + entry content); _phar_write_len is the
     // bytes used; _phar_write_tpl_len locates the entry payload. The path and
@@ -1541,7 +1541,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // read-modify-write bridge. The url ptr/len pair keeps a runtime-built
     // phar:// URL alive until fclose() can route it through the URL bridge.
     // Fallback only: one stream at a time; synthetic fd 0x50000000.
-    out.push_str(&comm_directive("_phar_write_out", 1048576, target));
+    io_scratch::PHAR_OUTPUT.append(&mut out, &target);
     out.push_str(&comm_directive("_phar_write_len", 8, target));
     out.push_str(&comm_directive("_phar_write_tpl_len", 8, target));
     out.push_str(&comm_directive("_phar_write_path_ptr", 8, target));
@@ -1555,18 +1555,18 @@ pub(crate) fn emit_runtime_data_fixed(
     // its address so wrappers that follow the PHP-faithful signature can
     // safely write to it; elephc v1 zeroes the slot before each call and
     // does not read the value back.
-    out.push_str(&comm_directive("_stream_open_opened_path_scratch", 16, target));
+    io_scratch::OPENED_PATH.append(&mut out, &target);
     // _user_filter_registry: 128 (filter_name, class_name) registrations,
     // each entry 32 bytes (filter_name_ptr/len + class_name_ptr/len). Slot
     // is free when filter_name_ptr is null. User filter IDs are slot_index
     // + USER_FILTER_ID_BASE (128) so they don't collide with the existing
     // u8 built-in filter IDs (1..=4). 128 × 32 = 4096 bytes.
-    out.push_str(&comm_directive("_user_filter_registry", 4096, target));
+    elephc_memoir::buffers::stream_tables::USER_FILTER_REGISTRY.append(&mut out, &target);
     // _user_filter_instances: one wrapper-class instance per attached
     // filter, keyed by (fd, direction). Slot = _user_filter_instances[fd*2
     // + dir] where dir=0 is read, dir=1 is write. Slot is null when no
     // user filter is attached. 256 fds × 2 dirs × 8 B = 4096 bytes.
-    out.push_str(&comm_directive("_user_filter_instances", 4096, target));
+    elephc_memoir::buffers::stream_tables::USER_FILTER_INSTANCES.append(&mut out, &target);
     // _stream_context_options: pointer to the current stream-context
     // options hash (nested array of `wrapper => option => value`).
     // stream_context_create() stores its options arg here; consumers
@@ -1628,8 +1628,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // object body by `__rt_var_dump_value`'s tag-6 branch. 256 entries × 8 B.
     // The capacity MUST match `VD_SEEN_CAPACITY` in `runtime::io::var_dump_object`:
     // a lookup that reaches the cap reports recursion, which is what bounds the walk.
-    out.push_str(&comm_directive("_vd_seen", 2048, target));
-    out.push_str(&comm_directive("_vd_seen_n", 8, target));
+    elephc_memoir::values::diagnostic_stack::append_data(&mut out, &target);
     // _debuginfo_guard: `_exc_handler_top | 1` while a run-time `__debugInfo()` call is in
     // flight (0 otherwise); a throw that finds no newer handler is reported as PHP's fatal.
     out.push_str(&comm_directive("_debuginfo_guard", 8, target));
@@ -1690,11 +1689,11 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_recvfrom_addr_len", 8, target));
     out.push_str(&comm_directive("_accept_peer_ptr", 8, target));
     out.push_str(&comm_directive("_accept_peer_len", 8, target));
-    out.push_str(&comm_directive("_protoent_buf", 32768, target));
+    io_scratch::PROTOCOLS.append(&mut out, &target);
     out.push_str(".globl _etc_protocols_path\n_etc_protocols_path:\n    .asciz \"/etc/protocols\"\n");
-    out.push_str(&comm_directive("_servent_buf", 1048576, target));
+    io_scratch::SERVICES.append(&mut out, &target);
     out.push_str(".globl _etc_services_path\n_etc_services_path:\n    .asciz \"/etc/services\"\n");
-    out.push_str(&comm_directive("_principal_lookup_buf", 4096, target));
+    io_scratch::PRINCIPAL.append(&mut out, &target);
     out.push_str(".globl _etc_passwd_path\n_etc_passwd_path:\n    .asciz \"/etc/passwd\"\n");
     out.push_str(".globl _etc_group_path\n_etc_group_path:\n    .asciz \"/etc/group\"\n");
     out.push_str(".globl _principal_lookup_read_mode\n_principal_lookup_read_mode:\n    .asciz \"r\"\n");

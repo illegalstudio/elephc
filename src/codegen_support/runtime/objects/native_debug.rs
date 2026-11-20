@@ -48,7 +48,7 @@ pub(crate) fn emit_native_debug(emitter: &mut Emitter) {
     load_argument(emitter, 0, RECEIVER);
     abi::emit_call_label(emitter, "__rt_vd_seen_find");
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_native_debug_miss");
-    for (offset, symbol) in [(INDENT, "_vd_indent"), (SEEN, "_vd_seen_n")] {
+    for (offset, symbol) in [(INDENT, "_vd_indent"), (SEEN, elephc_memoir::values::diagnostic_stack::DEPTH)] {
         abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
         abi::store_at_offset(emitter, result, offset);
     }
@@ -208,7 +208,7 @@ fn load_argument(emitter: &mut Emitter, index: usize, offset: usize) {
 /// Restores the containing renderer after PHP callbacks or nested debug walks.
 fn restore_walk_state(emitter: &mut Emitter) {
     let scratch = abi::secondary_scratch_reg(emitter);
-    for (offset, symbol) in [(INDENT, "_vd_indent"), (SEEN, "_vd_seen_n")] {
+    for (offset, symbol) in [(INDENT, "_vd_indent"), (SEEN, elephc_memoir::values::diagnostic_stack::DEPTH)] {
         abi::load_at_offset(emitter, scratch, offset);
         abi::emit_store_reg_to_symbol(emitter, scratch, symbol, 0);
     }
@@ -265,7 +265,7 @@ fn discard_capture(emitter: &mut Emitter) {
 fn restore_callback_walk(emitter: &mut Emitter) {
     let state = abi::tertiary_scratch_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
-    for (offset, symbol) in [(8, "_vd_indent"), (16, "_vd_seen_n")] {
+    for (offset, symbol) in [(8, "_vd_indent"), (16, elephc_memoir::values::diagnostic_stack::DEPTH)] {
         abi::load_at_offset(emitter, state, 8);
         abi::emit_load_from_address(emitter, scratch, state, offset);
         abi::emit_store_reg_to_symbol(emitter, scratch, symbol, 0);

@@ -26,6 +26,8 @@
 //!   whole URL to `StreamWrapper` path methods), plus the caller's extra int
 //!   arguments (`$mode`/`$options` for `mkdir`, `$options` for `rmdir`).
 
+use elephc_memoir::buffers::stream_tables;
+
 use super::MIN_WRAPPER_SCHEME_LEN;
 use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -92,9 +94,9 @@ fn emit_user_wrapper_path_op_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_uwpo_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp x11, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("b.ge __rt_uwpo_false");                                // no registered wrapper matched the scheme → false
-    emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
+    emitter.instruction(&format!("add x12, x10, x11, lsl #{}", stream_tables::REGISTRATION_SHIFT));                           // slot base = table + index * 32
     emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
     emitter.instruction("cbz x13, __rt_uwpo_slot_next");                        // empty slot — skip it
     emitter.instruction("ldr x14, [x12, #8]");                                  // stored protocol length
@@ -212,10 +214,10 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uwpo_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp r11, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("jge __rt_uwpo_false_x86");                             // no registered wrapper matched the scheme → false
     emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
-    emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
+    emitter.instruction(&format!("shl r12, {}", stream_tables::REGISTRATION_SHIFT));                                          // slot offset = index * 32
     emitter.instruction("add r12, r10");                                        // slot base = table + offset
     emitter.instruction("mov r13, QWORD PTR [r12]");                            // stored protocol pointer
     emitter.instruction("test r13, r13");                                       // is this slot empty?
@@ -363,9 +365,9 @@ fn emit_user_wrapper_rename_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_uwrn_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp x11, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("b.ge __rt_uwrn_false");                                // no registered wrapper matched the scheme → false
-    emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
+    emitter.instruction(&format!("add x12, x10, x11, lsl #{}", stream_tables::REGISTRATION_SHIFT));                           // slot base = table + index * 32
     emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
     emitter.instruction("cbz x13, __rt_uwrn_slot_next");                        // empty slot — skip it
     emitter.instruction("ldr x14, [x12, #8]");                                  // stored protocol length
@@ -479,10 +481,10 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uwrn_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp r11, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("jge __rt_uwrn_false_x86");                             // no registered wrapper matched the scheme → false
     emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
-    emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
+    emitter.instruction(&format!("shl r12, {}", stream_tables::REGISTRATION_SHIFT));                                          // slot offset = index * 32
     emitter.instruction("add r12, r10");                                        // slot base = table + offset
     emitter.instruction("mov r13, QWORD PTR [r12]");                            // stored protocol pointer
     emitter.instruction("test r13, r13");                                       // is this slot empty?

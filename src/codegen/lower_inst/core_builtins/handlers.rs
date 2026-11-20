@@ -20,8 +20,7 @@ use super::super::expect_operand;
 use super::{emit_bool_result, emit_null_mixed_result};
 use crate::codegen::Result;
 
-const ERROR_HANDLER_NODE_BYTES: i64 = 48;
-const EXCEPTION_HANDLER_NODE_BYTES: i64 = 40;
+use elephc_memoir::handler_owners::{self, ERROR_FIELDS, EXCEPTION_FIELDS};
 const E_USER_ERROR: i64 = 256;
 const E_USER_WARNING: i64 = 512;
 const E_USER_NOTICE: i64 = 1_024;
@@ -74,18 +73,7 @@ pub(super) fn lower_set_error_handler(
     let callback = expect_operand(inst, 0)?;
     let descriptor = expect_operand(inst, 1)?;
     let mask = expect_operand(inst, 2)?;
-    allocate_previous_handler_node(
-        ctx,
-        ERROR_HANDLER_NODE_BYTES,
-        "_php_error_handler_stack",
-        "_php_error_handler_value",
-        "_php_error_handler_callable",
-        Some("_php_error_handler_mask"),
-        &[
-            "_php_error_handler_context",
-            "_php_error_handler_context_release",
-        ],
-    );
+    allocate_previous_handler_node(ctx, &ERROR_FIELDS);
     preserve_previous_callback_result(ctx, "_php_error_handler_value");
     retain_and_store_mixed(ctx, callback, "_php_error_handler_value")?;
     retain_and_store_descriptor(ctx, descriptor, "_php_error_handler_callable")?;
@@ -117,18 +105,7 @@ pub(super) fn lower_set_exception_handler(
 ) -> Result<()> {
     let callback = expect_operand(inst, 0)?;
     let descriptor = expect_operand(inst, 1)?;
-    allocate_previous_handler_node(
-        ctx,
-        EXCEPTION_HANDLER_NODE_BYTES,
-        "_php_exception_handler_stack",
-        "_php_exception_handler_value",
-        "_php_exception_handler_callable",
-        None,
-        &[
-            "_php_exception_handler_context",
-            "_php_exception_handler_context_release",
-        ],
-    );
+    allocate_previous_handler_node(ctx, &EXCEPTION_FIELDS);
     preserve_previous_callback_result(ctx, "_php_exception_handler_value");
     retain_and_store_mixed(ctx, callback, "_php_exception_handler_value")?;
     retain_and_store_descriptor(ctx, descriptor, "_php_exception_handler_callable")?;
@@ -396,23 +373,12 @@ fn emit_validate_trigger_error_level(
 }
 
 /// Allocates a linked node and transfers the current handler state into it.
-fn allocate_previous_handler_node(
-    ctx: &mut FunctionContext<'_>,
-    node_bytes: i64,
-    stack_symbol: &str,
-    value_symbol: &str,
-    callable_symbol: &str,
-    mask_symbol: Option<&str>,
-    extra_symbols: &[&str],
-) {
-    elephc_memoir::handler_owners::emit_allocate_node(ctx.emitter, node_bytes);
+fn allocate_previous_handler_node(ctx: &mut FunctionContext<'_>, fields: &[&str]) {
+    handler_owners::emit_allocate_node(ctx.emitter, fields);
     let node_reg = abi::nested_call_reg(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, node_reg, abi::int_result_reg(ctx.emitter));
-    let mut fields = vec![stack_symbol, value_symbol, callable_symbol];
-    fields.extend(mask_symbol);
-    fields.extend_from_slice(extra_symbols);
     let scratch = abi::secondary_scratch_reg(ctx.emitter);
-    elephc_memoir::handler_owners::emit_save_node(ctx.emitter, node_reg, scratch, &fields, false);
+    handler_owners::emit_save_node(ctx.emitter, node_reg, scratch, fields, false);
 }
 
 /// Retains the old callback for the return value while its original owner moves to the stack.

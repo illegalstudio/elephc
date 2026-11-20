@@ -333,3 +333,14 @@ pub fn emit_clone_bound_descriptor(emitter: &mut impl Emitter) {
         }
     }
 }
+
+/// The method tag in an aligned two-value callable selector.
+pub const MIXED_METHOD_TAG_OFFSET: usize = 0;
+/// The method's two payload words within the callable selector.
+pub const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
+/// The receiver tag begins at the second aligned value.
+pub const MIXED_RECEIVER_TAG_OFFSET: usize = 32;
+/// The receiver's two payload words within the callable selector.
+pub const MIXED_RECEIVER_PAYLOAD_OFFSET: usize = MIXED_RECEIVER_TAG_OFFSET + MIXED_METHOD_PAYLOAD_OFFSET;
+/// Total bytes of callable selector storage.
+pub const MIXED_SELECTOR_BYTES: usize = 2 * MIXED_RECEIVER_TAG_OFFSET;

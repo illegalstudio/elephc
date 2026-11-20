@@ -8,6 +8,8 @@
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -86,7 +88,7 @@ pub fn emit_array_union(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the right indexed-array pointer
     emitter.instruction("lsl x13, x9, #4");                                     // compute the byte offset for a 16-byte string slot
     emitter.instruction("add x11, x11, x13");                                   // advance to the right string slot
-    emitter.instruction("add x11, x11, #24");                                   // skip the indexed-array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x11");
     emitter.instruction("ldp x1, x2, [x11]");                                   // load the right string pointer and length
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the current result indexed-array pointer
     emitter.instruction("bl __rt_array_push_str");                              // persist and append the right string payload

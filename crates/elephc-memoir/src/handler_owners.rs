@@ -9,12 +9,31 @@
 
 use crate::{Arch, Emitter};
 
+/// Active error-handler fields in native saved-node order.
+pub const ERROR_FIELDS: [&str; 6] = [
+    "_php_error_handler_stack",
+    "_php_error_handler_value",
+    "_php_error_handler_callable",
+    "_php_error_handler_mask",
+    "_php_error_handler_context",
+    "_php_error_handler_context_release",
+];
+
+/// Active exception-handler fields in native saved-node order.
+pub const EXCEPTION_FIELDS: [&str; 5] = [
+    "_php_exception_handler_stack",
+    "_php_exception_handler_value",
+    "_php_exception_handler_callable",
+    "_php_exception_handler_context",
+    "_php_exception_handler_context_release",
+];
+
 /// Frame offset of the pending exception owner shared with the host completion routine.
 pub const PENDING: usize = 8;
 
 /// Allocates a record for the previous handler state, leaving the pointer in the result register.
-pub fn emit_allocate_node(emitter: &mut impl Emitter, bytes: i64) {
-    emitter.emit_load_int_immediate(emitter.int_result_reg(), bytes);
+pub fn emit_allocate_node(emitter: &mut impl Emitter, fields: &[&str]) {
+    emitter.emit_load_int_immediate(emitter.int_result_reg(), (fields.len() * 8) as i64);
     emitter.emit_call_label("__rt_heap_alloc");
 }
 

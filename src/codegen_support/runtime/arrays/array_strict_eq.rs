@@ -21,6 +21,8 @@
 //!   (0), so their elements compare by raw payload bits; heterogeneous arrays box each element
 //!   (value_type 7) and keep full per-element type precision.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -148,7 +150,7 @@ fn emit_array_iter_next_aarch64(emitter: &mut Emitter) {
     elephc_memoir::heap_kind::emit_load_metadata(emitter, "x11", "x0");
     emitter.instruction("lsr x11, x11, #8");                                    // shift the array-wide value_type into the low bits
     emitter.instruction("and x11, x11, #0x7f");                                 // isolate the value_type, dropping the copy-on-write bit
-    emitter.instruction("add x12, x0, #24");                                    // x12 = base of the packed data region (skip 24-byte header)
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x0");
     emitter.instruction("add x13, x1, #1");                                     // x13 = next cursor = index + 1
     emitter.instruction("cmp x11, #1");                                         // is the array a string array (16-byte {ptr,len} slots)?
     emitter.instruction("b.eq __rt_array_iter_next_packed_str");                // strings load a pointer/length pair

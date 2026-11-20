@@ -151,8 +151,7 @@ pub(super) fn lower_stream_socket_enable_crypto_attach_aarch64(
     abi::emit_call_label(ctx.emitter, "__rt_get_ssl_peer_name");
     ctx.emitter.instruction(&format!("cbnz x0, {}", peer_ok));                  // use ssl.peer_name when the context provides it
     ctx.emitter.instruction("ldr x10, [sp, #64]");                              // reload fd for the connect-host table lookup
-    abi::emit_symbol_address(ctx.emitter, "x9", "_stream_connect_host");
-    ctx.emitter.instruction("add x9, x9, x10, lsl #4");                         // address this fd's saved host pointer/length pair
+    elephc_memoir::buffers::stream_tables::emit_connect_host_slot(ctx.emitter, "x9", "x10");
     ctx.emitter.instruction("ldr x11, [x9, #8]");                               // load the saved connection-host byte length
     ctx.emitter.instruction(&format!("cbz x11, {}", host_default));             // fall back to localhost when no connection host is known
     ctx.emitter.instruction("ldr x12, [x9, #0]");                               // load the saved connection-host pointer
@@ -233,9 +232,7 @@ pub(super) fn lower_stream_socket_enable_crypto_attach_x86_64(
     ctx.emitter.instruction("test rax, rax");                                   // did the context provide ssl.peer_name?
     ctx.emitter.instruction(&format!("jnz {}", peer_ok));                       // use ssl.peer_name when present
     ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 64]");                   // reload fd for the connect-host table lookup
-    abi::emit_symbol_address(ctx.emitter, "r9", "_stream_connect_host");
-    ctx.emitter.instruction("shl r10, 4");                                      // fd * 16, the host table stride
-    ctx.emitter.instruction("add r9, r10");                                     // address this fd's saved host pointer/length pair
+    elephc_memoir::buffers::stream_tables::emit_connect_host_slot(ctx.emitter, "r9", "r10");
     ctx.emitter.instruction("mov r11, QWORD PTR [r9 + 8]");                     // load the saved connection-host byte length
     ctx.emitter.instruction("test r11, r11");                                   // is a connection host known for this fd?
     ctx.emitter.instruction(&format!("jz {}", host_default));                   // fall back to localhost when no host is known

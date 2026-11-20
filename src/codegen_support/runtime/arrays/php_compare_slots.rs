@@ -22,6 +22,8 @@
 //!   NAN comparisons are not antisymmetric, so swapping operands would give a
 //!   different result from reversing the PHP comparison result.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::data::MIXED_SORT_NON_SCALAR_MSG;
 
@@ -50,7 +52,7 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             // -- scan every boxed Mixed slot before the sorter can mutate the array --
             emitter.instruction("ldr x9, [x0]");                                // load the indexed-array element count
             emitter.instruction("mov x10, #0");                                 // start at the first Mixed slot
-            emitter.instruction("add x11, x0, #24");                            // point past the indexed-array header to its slots
+            packed_slots::emit_packed_payload_aarch64(emitter, "x11", "x0");
             emitter.label("__rt_mixed_sort_scalar_scan");
             emitter.instruction("cmp x10, x9");                                 // have all live Mixed slots been validated?
             emitter.instruction("b.hs __rt_mixed_sort_scalar_done");            // return once every runtime tag is supported
@@ -93,7 +95,7 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             emitter.instruction("mov rax, rdi");                                // preserve the array pointer as the helper result
             emitter.instruction("mov rcx, QWORD PTR [rax]");                    // load the indexed-array element count
             emitter.instruction("xor edx, edx");                                // start at the first Mixed slot
-            emitter.instruction("lea r8, [rax + 24]");                          // point past the indexed-array header to its slots
+            packed_slots::emit_packed_payload_x86_64(emitter, "r8", "rax");
             emitter.label("__rt_mixed_sort_scalar_scan_x86");
             emitter.instruction("cmp rdx, rcx");                                // have all live Mixed slots been validated?
             emitter.instruction("jae __rt_mixed_sort_scalar_done_x86");         // return once every runtime tag is supported

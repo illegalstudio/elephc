@@ -164,14 +164,7 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
 
     // -- push a setjmp firewall handler around the invoke --
     // record.next = _exc_handler_top
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction("str x10, [sp, #0]");                                   // handler record: previous handler-stack top
-    // record.survivor = live _exc_call_frame_top → cleanup stops at this C boundary
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-    emitter.instruction("str x10, [sp, #8]");                                   // handler record: activation frame to survive a throw
-    // record.diag = _rt_diag_suppression
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction("str x10, [sp, #16]");                                  // handler record: saved diagnostic-suppression depth
+    elephc_memoir::activation_records::emit_save_arm_runtime_try_prefix(emitter, "x10");
     // _exc_handler_top = &record (record base = sp + 0)
     emitter.instruction("mov x10, sp");                                         // x10 = address of this handler record
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // link the record as the active handler
@@ -377,12 +370,7 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed Mixed argument cell
 
     // -- push a setjmp firewall handler around the invoke --
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0); // previous handler-stack top
-    emitter.instruction("mov QWORD PTR [rbp - 304], r10");                      // handler record: record.next
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0); // live activation-frame top
-    emitter.instruction("mov QWORD PTR [rbp - 296], r10");                      // handler record: survivor frame (cleanup stops here)
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0); // current diagnostic-suppression depth
-    emitter.instruction("mov QWORD PTR [rbp - 288], r10");                      // handler record: saved diagnostic depth
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", 304);
     emitter.instruction("lea r10, [rbp - 304]");                                // r10 = address of this handler record
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // link the record as the active handler
     emitter.instruction("lea rdi, [rbp - 280]");                                // rdi = &jmp_buf inside the handler record (record + 24)

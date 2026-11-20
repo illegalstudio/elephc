@@ -10,6 +10,8 @@
 //! - Returns the buffer base pointer and the byte count read; a zero count
 //!   means the file was missing, which the scanners treat as "no entries".
 
+use elephc_memoir::buffers::io_scratch;
+
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
 
@@ -50,10 +52,10 @@ pub fn emit_protoent_load(emitter: &mut Emitter) {
 
     // -- read the whole file into _protoent_buf --
     emitter.label("__rt_protoent_load_read");
-    emitter.instruction("mov x2, #32768");                                      // total capacity of the protocols buffer
+    emitter.instruction(&format!("mov x2, #{}", io_scratch::PROTOCOLS.bytes));  // total capacity of the protocols buffer
     emitter.instruction("sub x2, x2, x20");                                     // remaining capacity = capacity - total
     emitter.instruction("cbz x2, __rt_protoent_load_close");                    // stop reading once the buffer is full
-    abi::emit_symbol_address(emitter, "x1", "_protoent_buf");
+    io_scratch::PROTOCOLS.emit_address(emitter, "x1");
     emitter.instruction("add x1, x1, x20");                                     // write position = buffer base + total
     emitter.instruction("mov x0, x19");                                         // file descriptor for the read
     emitter.syscall(3);
@@ -66,7 +68,7 @@ pub fn emit_protoent_load(emitter: &mut Emitter) {
     emitter.label("__rt_protoent_load_close");
     emitter.instruction("mov x0, x19");                                         // file descriptor to close
     emitter.syscall(6);
-    abi::emit_symbol_address(emitter, "x0", "_protoent_buf");
+    io_scratch::PROTOCOLS.emit_address(emitter, "x0");
     emitter.instruction("mov x1, x20");                                         // return the total byte count
     emitter.instruction("ldp x19, x20, [sp, #16]");                             // restore callee-saved registers
     emitter.instruction("ldp x29, x30, [sp], #32");                             // restore frame pointer and return address
@@ -74,7 +76,7 @@ pub fn emit_protoent_load(emitter: &mut Emitter) {
 
     // -- failure path: return an empty buffer --
     emitter.label("__rt_protoent_load_fail");
-    abi::emit_symbol_address(emitter, "x0", "_protoent_buf");
+    io_scratch::PROTOCOLS.emit_address(emitter, "x0");
     emitter.instruction("mov x1, #0");                                          // a zero length signals an unreadable file
     emitter.instruction("ldp x19, x20, [sp, #16]");                             // restore callee-saved registers
     emitter.instruction("ldp x29, x30, [sp], #32");                             // restore frame pointer and return address
@@ -104,11 +106,11 @@ fn emit_protoent_load_linux_x86_64(emitter: &mut Emitter) {
 
     // -- read the whole file into _protoent_buf --
     emitter.label("__rt_protoent_load_read");
-    emitter.instruction("mov rdx, 32768");                                      // total capacity of the protocols buffer
+    emitter.instruction(&format!("mov rdx, {}", io_scratch::PROTOCOLS.bytes));  // total capacity of the protocols buffer
     emitter.instruction("sub rdx, r12");                                        // remaining capacity = capacity - total
     emitter.instruction("jz __rt_protoent_load_close");                         // stop reading once the buffer is full
     emitter.instruction("mov rdi, rbx");                                        // file descriptor for the read
-    abi::emit_symbol_address(emitter, "rsi", "_protoent_buf");                  // base of the protocols buffer
+    io_scratch::PROTOCOLS.emit_address(emitter, "rsi");                  // base of the protocols buffer
     emitter.instruction("add rsi, r12");                                        // write position = buffer base + total
     emitter.instruction("call read");                                           // read the next chunk from the file
     emitter.instruction("cmp rax, 0");                                          // did read reach end-of-file or fail?
@@ -120,13 +122,13 @@ fn emit_protoent_load_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_protoent_load_close");
     emitter.instruction("mov rdi, rbx");                                        // file descriptor to close
     emitter.instruction("call close");                                          // close the protocols file
-    abi::emit_symbol_address(emitter, "rax", "_protoent_buf");                  // return the buffer base pointer
+    io_scratch::PROTOCOLS.emit_address(emitter, "rax");                  // return the buffer base pointer
     emitter.instruction("mov rdx, r12");                                        // return the total byte count
     emitter.instruction("jmp __rt_protoent_load_done");                         // share the common epilogue
 
     // -- failure path: return an empty buffer --
     emitter.label("__rt_protoent_load_fail");
-    abi::emit_symbol_address(emitter, "rax", "_protoent_buf");                  // return the buffer base pointer
+    io_scratch::PROTOCOLS.emit_address(emitter, "rax");                  // return the buffer base pointer
     emitter.instruction("xor edx, edx");                                        // a zero length signals an unreadable file
 
     emitter.label("__rt_protoent_load_done");

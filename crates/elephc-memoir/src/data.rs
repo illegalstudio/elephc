@@ -15,6 +15,45 @@ pub trait DataTarget {
     fn aligned_common(&self, name: &str, bytes: usize, alignment: usize) -> String;
 }
 
+/// Fixed native storage whose address, declaration and byte count share one definition.
+#[derive(Clone, Copy)]
+pub struct StaticStorage {
+    /// Assembly symbol of the storage.
+    pub symbol: &'static str,
+    /// Number of reserved bytes.
+    pub bytes: usize,
+}
+
+impl StaticStorage {
+    /// Declares a zero-filled native storage area.
+    pub fn append(self, out: &mut String, target: &impl DataTarget) {
+        out.push_str(&target.common(self.symbol, self.bytes));
+    }
+
+    /// Materializes the address of the storage in a caller-selected register.
+    pub fn emit_address(self, emitter: &mut impl crate::TargetAbi, destination: &str) {
+        emitter.emit_symbol_address(destination, self.symbol);
+    }
+
+    /// Clears the full storage with libc, using the caller's aligned frame.
+    pub fn emit_clear(self, emitter: &mut impl crate::Emitter) {
+        use crate::Arch;
+        match emitter.arch() {
+            Arch::AArch64 => {
+                self.emit_address(emitter, "x0");
+                emitter.emit_load_int_immediate("x1", 0);
+                emitter.emit_load_int_immediate("x2", self.bytes as i64);
+            }
+            Arch::X86_64 => {
+                self.emit_address(emitter, "rdi");
+                emitter.instruction("xor esi, esi");                            // zero-fill byte for the memset call
+                emitter.emit_load_int_immediate("rdx", self.bytes as i64);
+            }
+        }
+        emitter.bl_c("memset");
+    }
+}
+
 /// Appends labels used when reporting individual live heap blocks.
 pub fn append_heap_debug_block_labels(out: &mut String) {
     out.push_str(".globl _heap_dbg_block_offset\n_heap_dbg_block_offset:\n    .ascii \"HEAP DEBUG: live offset=\"\n");

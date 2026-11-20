@@ -188,7 +188,7 @@ pub(super) use runtime_wrappers::{
     runtime_builtin_wrapper_sig,
 };
 
-const BORROWED_MIXED_ARG_CELL_BYTES: usize = 32;
+use elephc_memoir::values::stack_cell::BORROWED_MIXED_ARG_CELL_BYTES;
 
 /// Emits a fused integer compare's flags for its block's `cond_br` and returns the predicate
 /// that holds when the branch's then-edge must be taken.

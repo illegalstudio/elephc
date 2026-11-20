@@ -24,6 +24,8 @@
 //!   compiler-internal fatal and exited 70; that helper now only serves the SPL and
 //!   `IteratorIterator` sites, where the shape really is unsupported.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen::platform::Arch;
 use crate::codegen::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
 use crate::codegen::{
@@ -46,35 +48,8 @@ mod hash_objects;
 mod key_reuse;
 mod native_origins;
 
-const ITER_SOURCE_OFFSET_DELTA: usize = 0;
-const ITER_CURSOR_OFFSET_DELTA: usize = 8;
-const ITER_KEY_LO_OFFSET_DELTA: usize = 16;
-const ITER_KEY_HI_OFFSET_DELTA: usize = 24;
-const ITER_VALUE_LO_OFFSET_DELTA: usize = 32;
-const ITER_VALUE_HI_OFFSET_DELTA: usize = 40;
-const ITER_VALUE_TAG_OFFSET_DELTA: usize = 48;
-const ITER_VALUE_ADDR_OFFSET_DELTA: usize = 56;
-const ITER_SNAPSHOT_LEN_OFFSET_DELTA: usize = 64;
-/// Table pointer the current associative cursor was computed against.
-///
-/// `IterNext` compares the live container published by the loop body against this word. A
-/// mismatch means growth or a copy-on-write split replaced the table, so the source word is
-/// republished before key-identity validation rebuilds the cursor from the successor anchors.
-const ITER_TABLE_SNAPSHOT_OFFSET_DELTA: usize = 72;
-/// Owned keys of the next two entries the cursor can yield, used after table relocation.
-///
-/// String keys carry one retain per occupied anchor word pair. The primary anchor is the immediate
-/// successor. The fallback anchor is its successor, so deleting the immediate successor before a
-/// grow still resumes at the first surviving entry. Integer anchors carry no heap ownership.
-const ITER_NEXT_KEY_LO_OFFSET_DELTA: usize = 80;
-const ITER_NEXT_KEY_HI_OFFSET_DELTA: usize = 88;
-const ITER_FALLBACK_KEY_LO_OFFSET_DELTA: usize = 96;
-const ITER_FALLBACK_KEY_HI_OFFSET_DELTA: usize = 104;
-/// Key high word meaning "no successor entry to resume from".
-///
-/// A live key uses -1 for an integer key and a non-negative length for a string key, so this can
-/// never collide with one. Must match `NO_SUCCESSOR_KEY_MARKER` in the runtime emitter.
-const NO_SUCCESSOR_KEY_MARKER: i64 = -2;
+use elephc_memoir::values::iterator_storage::{self, ITER_SOURCE_OFFSET_DELTA, ITER_CURSOR_OFFSET_DELTA, ITER_KEY_LO_OFFSET_DELTA, ITER_KEY_HI_OFFSET_DELTA, ITER_VALUE_LO_OFFSET_DELTA, ITER_VALUE_HI_OFFSET_DELTA, ITER_VALUE_TAG_OFFSET_DELTA, ITER_VALUE_ADDR_OFFSET_DELTA, ITER_SNAPSHOT_LEN_OFFSET_DELTA, ITER_TABLE_SNAPSHOT_OFFSET_DELTA, ITER_NEXT_KEY_LO_OFFSET_DELTA, ITER_NEXT_KEY_HI_OFFSET_DELTA, ITER_FALLBACK_KEY_LO_OFFSET_DELTA, ITER_FALLBACK_KEY_HI_OFFSET_DELTA};
+
 const MIXED_CELL_PAYLOAD_LOW_OFFSET: usize = 8;
 
 /// The runtime value tag `__rt_warn_foreach_non_iterable` reads as "null".
@@ -1668,95 +1643,22 @@ fn store_iterator_cursor(ctx: &mut FunctionContext<'_>, offset: usize, cursor: i
     emit_clear_successor_keys(ctx, offset);
 }
 
-/// Parks both successor-key anchors in their "nothing to resume from" state.
-///
-/// Every walk starts without a successor recorded, and an exhausted walk ends the same way, so
-/// a resync can never probe for a key this iterator never yielded a position for.
+/// Clears both successor-key anchors in the iterator's frame.
 fn emit_clear_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
-    let value_reg = abi::secondary_scratch_reg(ctx.emitter);
-    let scratch_reg = abi::tertiary_scratch_reg(ctx.emitter);
-    for (low_delta, high_delta) in [
-        (ITER_NEXT_KEY_LO_OFFSET_DELTA, ITER_NEXT_KEY_HI_OFFSET_DELTA),
-        (
-            ITER_FALLBACK_KEY_LO_OFFSET_DELTA,
-            ITER_FALLBACK_KEY_HI_OFFSET_DELTA,
-        ),
-    ] {
-        abi::emit_load_int_immediate(ctx.emitter, value_reg, 0);
-        abi::store_at_offset_scratch(ctx.emitter, value_reg, offset - low_delta, scratch_reg);
-        abi::emit_load_int_immediate(ctx.emitter, value_reg, NO_SUCCESSOR_KEY_MARKER);
-        abi::store_at_offset_scratch(ctx.emitter, value_reg, offset - high_delta, scratch_reg);
-    }
+    iterator_storage::emit_clear_successor_keys(ctx.emitter, offset, abi::store_at_offset_scratch);
 }
 
-/// Releases every owned string key stored in the relocation anchors, then clears both pairs.
-///
-/// Integer keys use the `-1` high-word sentinel and own nothing. String keys use a non-negative
-/// length and carry exactly one retain acquired by [`emit_capture_successor_keys`].
+/// Releases both existing anchor owners before clearing the published pairs.
 fn emit_release_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
-    for (low_delta, high_delta) in [
-        (ITER_NEXT_KEY_LO_OFFSET_DELTA, ITER_NEXT_KEY_HI_OFFSET_DELTA),
-        (
-            ITER_FALLBACK_KEY_LO_OFFSET_DELTA,
-            ITER_FALLBACK_KEY_HI_OFFSET_DELTA,
-        ),
-    ] {
-        let done = ctx.next_label("iter_anchor_release_done");
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                abi::load_at_offset(ctx.emitter, "x9", offset - high_delta);
-                ctx.emitter.instruction("cmp x9, #0");                          // only non-negative high words describe owned string keys
-                ctx.emitter.instruction(&format!("b.lt {done}"));               // integer and absent sentinels carry no ownership
-                abi::load_at_offset(ctx.emitter, "x0", offset - low_delta);
-                ctx.emitter.instruction(&format!("cbz x0, {done}"));            // tolerate a cleared defensive state
-                abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-            }
-            Arch::X86_64 => {
-                abi::load_at_offset(ctx.emitter, "r10", offset - high_delta);
-                ctx.emitter.instruction("cmp r10, 0");                          // only non-negative high words describe owned string keys
-                ctx.emitter.instruction(&format!("jl {done}"));                 // integer and absent sentinels carry no ownership
-                abi::load_at_offset(ctx.emitter, "rax", offset - low_delta);
-                ctx.emitter.instruction("test rax, rax");                       // tolerate a cleared defensive state
-                ctx.emitter.instruction(&format!("jz {done}"));                 // skip release when the defensive pointer is already clear
-                abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-            }
-        }
-        ctx.emitter.label(&done);
-    }
+    let done = std::array::from_fn(|_| ctx.next_label("iter_anchor_release_done"));
+    iterator_storage::emit_change_key_owners(ctx.emitter, offset, &done, "__rt_decref_any");
     emit_clear_successor_keys(ctx, offset);
 }
 
-/// Acquires the ownership represented by both populated string-key anchor pairs.
+/// Acquires both upcoming string-key owners while integer keys remain inline.
 fn emit_retain_successor_keys(ctx: &mut FunctionContext<'_>, offset: usize) {
-    for (low_delta, high_delta) in [
-        (ITER_NEXT_KEY_LO_OFFSET_DELTA, ITER_NEXT_KEY_HI_OFFSET_DELTA),
-        (
-            ITER_FALLBACK_KEY_LO_OFFSET_DELTA,
-            ITER_FALLBACK_KEY_HI_OFFSET_DELTA,
-        ),
-    ] {
-        let done = ctx.next_label("iter_anchor_retain_done");
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                abi::load_at_offset(ctx.emitter, "x9", offset - high_delta);
-                ctx.emitter.instruction("cmp x9, #0");                          // non-negative high words identify string keys
-                ctx.emitter.instruction(&format!("b.lt {done}"));               // integer and absent sentinels are inline
-                abi::load_at_offset(ctx.emitter, "x0", offset - low_delta);
-                ctx.emitter.instruction(&format!("cbz x0, {done}"));            // an empty defensive pointer owns nothing
-                abi::emit_call_label(ctx.emitter, "__rt_incref");
-            }
-            Arch::X86_64 => {
-                abi::load_at_offset(ctx.emitter, "r10", offset - high_delta);
-                ctx.emitter.instruction("cmp r10, 0");                          // non-negative high words identify string keys
-                ctx.emitter.instruction(&format!("jl {done}"));                 // integer and absent sentinels are inline
-                abi::load_at_offset(ctx.emitter, "rax", offset - low_delta);
-                ctx.emitter.instruction("test rax, rax");                       // an empty defensive pointer owns nothing
-                ctx.emitter.instruction(&format!("jz {done}"));                 // skip retain when the defensive pointer is already clear
-                abi::emit_call_label(ctx.emitter, "__rt_incref");
-            }
-        }
-        ctx.emitter.label(&done);
-    }
+    let done = std::array::from_fn(|_| ctx.next_label("iter_anchor_retain_done"));
+    iterator_storage::emit_change_key_owners(ctx.emitter, offset, &done, "__rt_incref");
 }
 
 /// Snapshots the indexed-array length into the iterator state so `IterNext` compares
@@ -2581,7 +2483,7 @@ fn load_current_dynamic_indexed_value_as_mixed_aarch64(
     ctx.emitter.instruction("and x5, x5, #0x7f");                               // isolate the indexed-array value_type tag
     ctx.emitter.instruction("cmp x5, #1");                                      // does this indexed array store string slots?
     ctx.emitter.instruction(&format!("b.eq {}", string_case));                  // branch to the 16-byte string-slot loader
-    ctx.emitter.instruction("add x11, x11, #24");                               // skip the indexed-array header to the 8-byte payload slots
+    packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x11", "x11");
     ctx.emitter.instruction("ldr x3, [x11, x0, lsl #3]");                       // load the scalar or pointer payload from the selected indexed slot
     ctx.emitter.instruction("mov x4, xzr");                                     // non-string indexed payloads have no high payload word
     ctx.emitter.instruction(&format!("b {}", loaded));                          // continue with a normalized runtime payload triple
@@ -2589,7 +2491,7 @@ fn load_current_dynamic_indexed_value_as_mixed_aarch64(
     ctx.emitter.label(&string_case);
     ctx.emitter.instruction("lsl x10, x0, #4");                                 // scale the index by the 16-byte string slot size
     ctx.emitter.instruction("add x11, x11, x10");                               // move to the selected string slot
-    ctx.emitter.instruction("add x11, x11, #24");                               // skip the indexed-array header before loading the slot
+    packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x11", "x11");
     ctx.emitter.instruction("ldr x3, [x11]");                                   // load the string pointer payload
     ctx.emitter.instruction("ldr x4, [x11, #8]");                               // load the string length payload
 
@@ -2627,7 +2529,7 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
     elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "r9", "r9");
     ctx.emitter.instruction("cmp r9, 1");                                       // does this indexed array store string slots?
     ctx.emitter.instruction(&format!("je {}", string_case));                    // branch to the 16-byte string-slot loader
-    ctx.emitter.instruction("add r11, 24");                                     // skip the indexed-array header to the 8-byte payload slots
+    ctx.emitter.instruction(&format!("add r11, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                                     // skip the indexed-array header to the 8-byte payload slots
     ctx.emitter.instruction("mov rcx, QWORD PTR [r11 + r10 * 8]");              // load the scalar or pointer payload from the selected indexed slot
     ctx.emitter.instruction("xor r8, r8");                                      // non-string indexed payloads have no high payload word
     ctx.emitter.instruction(&format!("jmp {}", loaded));                        // continue with a normalized runtime payload triple
@@ -2635,7 +2537,7 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
     ctx.emitter.label(&string_case);
     ctx.emitter.instruction("shl r10, 4");                                      // scale the index by the 16-byte string slot size
     ctx.emitter.instruction("add r11, r10");                                    // move to the selected string slot
-    ctx.emitter.instruction("add r11, 24");                                     // skip the indexed-array header before loading the slot
+    ctx.emitter.instruction(&format!("add r11, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                                     // skip the indexed-array header before loading the slot
     ctx.emitter.instruction("mov rcx, QWORD PTR [r11]");                        // load the string pointer payload
     ctx.emitter.instruction("mov r8, QWORD PTR [r11 + 8]");                     // load the string length payload
 

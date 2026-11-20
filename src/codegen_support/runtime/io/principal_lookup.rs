@@ -8,6 +8,8 @@
 //! Key details:
 //! - Helpers scan `/etc/passwd` or `/etc/group` with libc file I/O and return `-1` when absent.
 
+use elephc_memoir::buffers::io_scratch;
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits runtime helpers that resolve local user/group names to numeric ids.
@@ -49,19 +51,19 @@ fn emit_lookup_x86_64(emitter: &mut Emitter, label: &str, path_symbol: &str) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve FILE pointer across loop calls
 
     emitter.label(&loop_label);
-    abi::emit_symbol_address(emitter, "rdi", "_principal_lookup_buf");
-    emitter.instruction("mov esi, 4096");                                       // maximum line bytes to read into the shared scratch buffer
+    io_scratch::PRINCIPAL.emit_address(emitter, "rdi");
+    emitter.instruction(&format!("mov esi, {}", io_scratch::PRINCIPAL.bytes));  // maximum line bytes to read into the shared scratch buffer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // pass FILE pointer to fgets
     emitter.instruction("call fgets");                                          // read one principal database line
     emitter.instruction("test rax, rax");                                       // did fgets return a line?
     emitter.instruction(&format!("je {close_fail_label}"));                     // EOF without a match returns not found
-    abi::emit_symbol_address(emitter, "rdi", "_principal_lookup_buf");
+    io_scratch::PRINCIPAL.emit_address(emitter, "rdi");
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // compare against the requested principal name
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // compare exactly the requested name length
     emitter.instruction("call strncmp");                                        // compare database entry prefix with requested name
     emitter.instruction("test eax, eax");                                       // did the prefix match?
     emitter.instruction(&format!("jne {loop_label}"));                          // keep scanning until the name matches
-    abi::emit_symbol_address(emitter, "r8", "_principal_lookup_buf");
+    io_scratch::PRINCIPAL.emit_address(emitter, "r8");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // load matched-name length for delimiter validation
     emitter.instruction("cmp BYTE PTR [r8 + rcx], 58");                         // entry name must be followed by ':' to avoid prefix matches
     emitter.instruction(&format!("jne {loop_label}"));                          // reject partial-prefix matches
@@ -115,17 +117,17 @@ fn emit_lookup_aarch64(emitter: &mut Emitter, label: &str, path_symbol: &str) {
     emitter.instruction("str x0, [sp, #0]");                                    // preserve FILE pointer across loop calls
 
     emitter.label(&loop_label);
-    abi::emit_symbol_address(emitter, "x0", "_principal_lookup_buf");
-    emitter.instruction("mov x1, #4096");                                       // maximum line bytes to read into the shared scratch buffer
+    io_scratch::PRINCIPAL.emit_address(emitter, "x0");
+    emitter.instruction(&format!("mov x1, #{}", io_scratch::PRINCIPAL.bytes));  // maximum line bytes to read into the shared scratch buffer
     emitter.instruction("ldr x2, [sp, #0]");                                    // pass FILE pointer to fgets
     emitter.bl_c("fgets");                                                      // read one principal database line
     emitter.instruction(&format!("cbz x0, {close_fail_label}"));                // EOF without a match returns not found
-    abi::emit_symbol_address(emitter, "x0", "_principal_lookup_buf");
+    io_scratch::PRINCIPAL.emit_address(emitter, "x0");
     emitter.instruction("ldr x1, [sp, #8]");                                    // compare against the requested principal name
     emitter.instruction("ldr x2, [sp, #16]");                                   // compare exactly the requested name length
     emitter.bl_c("strncmp");                                                    // compare database entry prefix with requested name
     emitter.instruction(&format!("cbnz x0, {loop_label}"));                     // keep scanning until the name matches
-    abi::emit_symbol_address(emitter, "x9", "_principal_lookup_buf");
+    io_scratch::PRINCIPAL.emit_address(emitter, "x9");
     emitter.instruction("ldr x10, [sp, #16]");                                  // load matched-name length for delimiter validation
     emitter.instruction("ldrb w11, [x9, x10]");                                 // read the byte after the matched prefix
     emitter.instruction("cmp w11, #58");                                        // entry name must be followed by ':' to avoid prefix matches

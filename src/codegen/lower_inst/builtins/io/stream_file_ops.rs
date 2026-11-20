@@ -133,29 +133,7 @@ fn emit_close_loaded_stream_fd(ctx: &mut FunctionContext<'_>) {
 
 /// Detaches descriptor metadata before a user filter close hook can throw.
 fn retire_fd_metadata(ctx: &mut FunctionContext<'_>) {
-    // -- retire the independently persisted connection host while preserving the descriptor --
-    let fd = abi::int_result_reg(ctx.emitter);
-    let base = if ctx.emitter.target.arch == Arch::AArch64 { "x9" } else { "r9" };
-    abi::emit_push_reg(ctx.emitter, fd);
-    abi::emit_symbol_address(ctx.emitter, base, "_stream_connect_host");
-    ctx.emitter.instruction(if ctx.emitter.target.arch == Arch::AArch64 { "add x9, x9, x0, lsl #4" } else { "shl rax, 4" }); // derive the connection-host pair index
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("add r9, rax");                                 // select this descriptor's persisted host pair
-    }
-    abi::emit_load_from_address(ctx.emitter, fd, base, 0);
-    abi::emit_store_zero_to_address(ctx.emitter, base, 0);
-    abi::emit_store_zero_to_address(ctx.emitter, base, 8);
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-    abi::emit_pop_reg(ctx.emitter, fd);
-    // -- clear scalar state before the operating system can reuse the descriptor number --
-    for symbol in ["_stream_read_filters", "_stream_write_filters", "_eof_flags", "_stream_chunk_size"] {
-        abi::emit_symbol_address(ctx.emitter, base, symbol);
-        if symbol == "_stream_chunk_size" {
-            ctx.emitter.instruction(if ctx.emitter.target.arch == Arch::AArch64 { "str xzr, [x9, x0, lsl #3]" } else { "mov QWORD PTR [r9 + rax * 8], 0" }); // retire the stream's configured chunk size
-        } else {
-            ctx.emitter.instruction(if ctx.emitter.target.arch == Arch::AArch64 { "strb wzr, [x9, x0]" } else { "mov BYTE PTR [r9 + rax], 0" }); // retire filter IDs and EOF state with this descriptor
-        }
-    }
+    elephc_memoir::buffers::stream_tables::emit_retire_fd_metadata(ctx.emitter);
 }
 
 /// Publishes an assembly-only callback so implicit close never enters PHP through a Rust frame.

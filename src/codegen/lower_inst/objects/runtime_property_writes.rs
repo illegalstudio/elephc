@@ -17,7 +17,7 @@ use crate::codegen_support::try_handlers::{
 
 const MAGIC_SET_GUARD_FRAME_BYTES: usize = TRY_HANDLER_SLOT_SIZE + 64;
 const MAGIC_SET_GUARD_NODE_OFFSET: usize = 0;
-const MAGIC_SET_GUARD_HANDLER_OFFSET: usize = 48;
+const MAGIC_SET_GUARD_HANDLER_OFFSET: usize = elephc_memoir::reference_cells::magic_set_guard::NODE_BYTES + 16;
 
 /// Raises PHP's call-site `TypeError` for a property argument whose storage cannot satisfy a
 /// typed by-reference parameter. The runtime unwinder transfers control, so the callee call
@@ -1367,17 +1367,7 @@ fn emit_magic_set_guard_pop(ctx: &mut FunctionContext<'_>, node_offset: usize) {
 /// Installs a local handler so an escaping `__set` cannot strand a stack guard node.
 fn emit_magic_set_exception_handler(ctx: &mut FunctionContext<'_>, caught_label: &str) {
     let scratch = abi::temp_int_reg(ctx.emitter.target);
-    for (symbol, offset) in [
-        ("_exc_handler_top", MAGIC_SET_GUARD_HANDLER_OFFSET),
-        ("_exc_call_frame_top", MAGIC_SET_GUARD_HANDLER_OFFSET + 8),
-        (
-            "_rt_diag_suppression",
-            MAGIC_SET_GUARD_HANDLER_OFFSET + TRY_HANDLER_DIAG_DEPTH_OFFSET,
-        ),
-    ] {
-        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, symbol, 0);
-        abi::emit_store_to_sp(ctx.emitter, scratch, offset);
-    }
+    elephc_memoir::activation_records::emit_save_sp_try_prefix(ctx.emitter, scratch, MAGIC_SET_GUARD_HANDLER_OFFSET);
     abi::emit_temporary_stack_address(ctx.emitter, scratch, MAGIC_SET_GUARD_HANDLER_OFFSET);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
     abi::emit_temporary_stack_address(

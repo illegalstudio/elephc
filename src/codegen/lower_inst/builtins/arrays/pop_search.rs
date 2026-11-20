@@ -8,6 +8,8 @@
 //! - Preserves callback ABI, target parity, array storage, and ownership contracts.
 //! - A removed live slot transfers its owner into the result after COW separation.
 
+use elephc_memoir::values::packed_slots;
+
 use super::*;
 
 /// Returns the runtime value_type tag used by the array-to-Mixed widening helper.
@@ -153,7 +155,7 @@ pub(super) fn emit_array_pop_value_aarch64(ctx: &mut FunctionContext<'_>, elem_t
         PhpType::Str => {
             ctx.emitter.instruction("lsl x10, x9, #4");                         // scale the removed index by the 16-byte string slot size
             ctx.emitter.instruction("add x10, x0, x10");                        // advance from the array base to the removed string slot
-            ctx.emitter.instruction("add x10, x10, #24");                       // skip the indexed-array header before loading string payloads
+            packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x10");
             ctx.emitter.instruction("ldr x1, [x10]");                           // load the removed string pointer into the mixed payload register
             ctx.emitter.instruction("ldr x2, [x10, #8]");                       // load the removed string length into the mixed payload high word
         }

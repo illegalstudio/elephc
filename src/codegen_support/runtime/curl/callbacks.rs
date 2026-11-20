@@ -160,12 +160,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     argument_storage::emit_box_arguments(emitter, 248, 256);
 
     // -- push a setjmp firewall so a PHP throw cannot unwind through libcurl --
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction("str x10, [sp, #0]");                                   // handler record: previous handler-stack top
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-    emitter.instruction("str x10, [sp, #8]");                                   // handler record: frame cleanup stops here
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction("str x10, [sp, #16]");                                  // handler record: saved diagnostic depth
+    elephc_memoir::activation_records::emit_save_arm_runtime_try_prefix(emitter, "x10");
     emitter.instruction("mov x10, sp");                                         // x10 = address of this handler record
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // link it as active
     emitter.instruction("add x0, sp, #24");                                     // x0 = &jmp_buf inside the handler record
@@ -212,7 +207,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("b.le __rt_curl_invoke_cb_release_return");             // no → leave out_len at 0
     emitter.instruction("str x2, [x11, #40]");                                  // spec.out_len = the copied byte count
     emitter.instruction("mov x0, x12");                                         // memcpy dst = spec.out_buf
-    emitter.bl_c("memcpy"); // src (x1) and length (x2) are already in place
+    elephc_memoir::strings::strcopy::emit_copy_bytes(emitter);
     emitter.instruction("b __rt_curl_invoke_cb_release_return");                // release the owned string-return cell after copying bytes
 
     // -- release the invoker's owned boxed return --
@@ -333,12 +328,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     argument_storage::emit_box_arguments(emitter, 32, 40);
 
     // -- push a setjmp firewall so a PHP throw cannot unwind through libcurl --
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction("mov QWORD PTR [rbp - 288], r10");                      // handler record: record.next
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction("mov QWORD PTR [rbp - 280], r10");                      // handler record: survivor frame
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction("mov QWORD PTR [rbp - 272], r10");                      // handler record: saved diag depth
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", 288);
     emitter.instruction("lea r10, [rbp - 288]");                                // r10 = address of this handler record
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // link it as active
     emitter.instruction("lea rdi, [rbp - 264]");                                // rdi = &jmp_buf inside the handler record
@@ -389,7 +379,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11 + 40], rdx");                       // spec.out_len = the copied byte count
     emitter.instruction("mov rsi, rdi");                                        // memcpy src = the string bytes
     emitter.instruction("mov rdi, r8");                                         // memcpy dst = spec.out_buf
-    emitter.bl_c("memcpy"); // length is already in rdx
+    elephc_memoir::strings::strcopy::emit_copy_bytes(emitter);
     emitter.instruction("jmp __rt_curl_invoke_cb_release_return_x86");          // release the owned string-return cell after copying bytes
 
     // -- release the invoker's owned boxed return --

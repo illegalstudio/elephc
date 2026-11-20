@@ -34,6 +34,7 @@
 //! - `__rt_ob_flush_all` drains top-down with FINAL handler phases behind the
 //!   `_ob_flushing` re-entry guard and retires each drained buffer's owners.
 
+
 use crate::codegen_support::abi;
 use crate::codegen_support::runtime::data::{
     OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL, OB_NTC_G_CLEAN,
@@ -329,8 +330,7 @@ pub fn emit_ob_queries(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
     emitter.instruction("cbz x10, __rt_ob_length_none");                        // no active buffer — return the -1 sentinel
     emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("ldr x0, [x11, x10, lsl #3]");                          // return the top buffer's used byte count
+    output::emit_load_buffer_field(emitter, output::BufferField::Length, "x11", "x10", "x0");
     emitter.instruction("ret");                                                 // return the length
     emitter.label("__rt_ob_length_none");
     emitter.instruction("mov x0, #-1");                                         // -1 signals "no active buffer"
@@ -353,8 +353,7 @@ fn emit_ob_queries_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // is any buffer active?
     emitter.instruction("jz __rt_ob_length_none_x86");                          // no active buffer — return the -1 sentinel
     emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // return the top buffer's used byte count
+    output::emit_load_buffer_field(emitter, output::BufferField::Length, "r11", "r10", "rax");
     emitter.instruction("ret");                                                 // return the length
     emitter.label("__rt_ob_length_none_x86");
     emitter.instruction("mov rax, -1");                                         // -1 signals "no active buffer"
@@ -571,10 +570,8 @@ fn emit_get_pop_op(
     emitter.instruction(&format!("tst x12, #{}", OB_FLAG_REMOVABLE));           // may this buffer be removed?
     emitter.instruction(&format!("b.eq {gated}"));                              // not removable ; refuse with the gated notice
     // -- persist the raw contents before the handler runs --
-    abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("ldr x1, [x11, x10, lsl #3]");                          // persist source pointer = the raw buffer base
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("ldr x2, [x11, x10, lsl #3]");                          // persist source length = the raw byte count
+    output::emit_load_buffer_field(emitter, output::BufferField::Pointer, "x11", "x10", "x1");
+    output::emit_load_buffer_field(emitter, output::BufferField::Length, "x11", "x10", "x2");
     emitter.instruction("bl __rt_str_persist");                                 // copy the raw contents into an owned heap string
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save the raw contents pair
     emitter.instruction("str x1, [sp, #48]");                                   // transfer exceptional ownership of the copied string into its guard
@@ -648,10 +645,8 @@ fn emit_get_pop_op_x86_64(
     emitter.instruction(&format!("test rcx, {}", OB_FLAG_REMOVABLE));           // may this buffer be removed?
     emitter.instruction(&format!("jz {gated}"));                                // not removable ; refuse with the gated notice
     // -- persist the raw contents before the handler runs --
-    abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // persist source pointer = the raw buffer base
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov rdx, QWORD PTR [r11 + r10*8]");                    // persist source length = the raw byte count
+    output::emit_load_buffer_field(emitter, output::BufferField::Pointer, "r11", "r10", "rax");
+    output::emit_load_buffer_field(emitter, output::BufferField::Length, "r11", "r10", "rdx");
     emitter.instruction("call __rt_str_persist");                               // copy the raw contents into an owned heap string
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the raw contents pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the raw contents length

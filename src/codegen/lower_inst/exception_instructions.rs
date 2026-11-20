@@ -53,19 +53,9 @@ pub(super) fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instr
     let scratch = abi::temp_int_reg(ctx.emitter.target);
 
     ctx.emitter.comment("push EIR exception handler");
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_handler_top", 0);
-    abi::store_at_offset(ctx.emitter, scratch, handler_offset);
-    // The catch resumes in this activation; only younger frames may be abandoned.
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_call_frame_top", 0);
-    abi::store_at_offset(ctx.emitter, scratch, handler_offset - 8);
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_rt_diag_suppression", 0);
-    abi::store_at_offset(
-        ctx.emitter,
-        scratch,
-        handler_offset - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-    );
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(ctx.emitter, scratch, handler_offset);
     abi::emit_frame_slot_address(ctx.emitter, scratch, handler_offset);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
+    elephc_memoir::activation_records::emit_publish_try_handler(ctx.emitter, scratch);
     abi::emit_frame_slot_address(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 0),
@@ -163,7 +153,6 @@ pub(super) fn lower_update_array_guard(ctx: &mut FunctionContext<'_>, inst: &Ins
     let register = match ctx.emitter.target.arch { Arch::AArch64 => "x10", Arch::X86_64 => "r10" };
     ctx.load_value_to_reg(token, register)?;
     ctx.load_value_to_result(array)?;
-    abi::emit_store_to_address(ctx.emitter, abi::int_result_reg(ctx.emitter), register,
-        crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET);
+    elephc_memoir::activation_records::emit_update_guard_owner(ctx.emitter, register, abi::int_result_reg(ctx.emitter));
     Ok(())
 }

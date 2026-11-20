@@ -10,6 +10,34 @@
 
 use crate::{Arch, AssemblyEmitter, TargetAbi};
 
+/// Copies a caller-bounded span using the native C argument registers.
+pub fn emit_copy_bytes(emitter: &mut impl TargetAbi) {
+    emitter.bl_c("memcpy");
+}
+
+/// Copies staged bytes to a staged destination after its existing prefix.
+///
+/// The offsets use sp on AArch64 and positive rbp displacements on x86_64.
+pub fn emit_copy_after_prefix(
+    emitter: &mut impl crate::Emitter, destination: usize, source: usize, length: usize, prefix: usize,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x0, [sp, #{destination}]"));      // recover the result's base pointer
+            emitter.instruction(&format!("add x0, x0, #{prefix}"));             // address the bytes after its already written prefix
+            emitter.instruction(&format!("ldr x1, [sp, #{source}]"));           // pass the borrowed source pointer
+            emitter.instruction(&format!("ldr x2, [sp, #{length}]"));           // pass the initialized byte count
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {destination}]")); // recover the result's base pointer
+            emitter.instruction(&format!("add rdi, {prefix}"));                 // address the bytes after its already written prefix
+            emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {source}]")); // pass the borrowed source pointer
+            emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {length}]")); // pass the initialized byte count
+        }
+    }
+    emit_copy_bytes(emitter);
+}
+
 /// Emits the `__rt_strcopy` runtime helper.
 ///
 /// Copies a PHP byte-string into fresh mutable storage so it can be safely modified in place:

@@ -19,6 +19,8 @@
 //! - Returns the total byte count written; the caller fetches the
 //!   buffer base via `_http_req_scratch`.
 
+use elephc_memoir::buffers::io_scratch;
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// `__rt_http_build_request`:
@@ -248,7 +250,7 @@ pub fn emit_http_build_request(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #48]");                                  // store runtime value
 
     // -- copy method bytes into _http_req_scratch[0..method_len] --
-    abi::emit_symbol_address(emitter, "x9", "_http_req_scratch");
+    io_scratch::HTTP_REQUEST.emit_address(emitter, "x9");
     emitter.instruction("ldr x10, [sp, #32]");                                  // method_ptr
     emitter.instruction("ldr x11, [sp, #40]");                                  // method_len
     emitter.instruction("bl __rt_http_build_copy_aarch64");                     // x9 += x11; uses x10/x11; preserves them
@@ -392,7 +394,7 @@ pub fn emit_http_build_request(emitter: &mut Emitter) {
     emitter.label("__rt_hbr_no_body_aarch64");
 
     // -- compute total length: write_ptr - scratch_base --
-    abi::emit_symbol_address(emitter, "x10", "_http_req_scratch");
+    io_scratch::HTTP_REQUEST.emit_address(emitter, "x10");
     emitter.instruction("ldr x11, [sp, #48]");                                  // load runtime value
     emitter.instruction("sub x0, x11, x10");                                    // return length
 
@@ -606,7 +608,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_http_active_proxy_len", 0); // store runtime value
 
     // running write ptr = _http_req_scratch
-    abi::emit_symbol_address(emitter, "r9", "_http_req_scratch");               // load runtime data address
+    io_scratch::HTTP_REQUEST.emit_address(emitter, "r9");               // load runtime data address
     emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // store runtime value
 
     // copy method
@@ -770,7 +772,7 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
 
     // total length = write_ptr - scratch_base
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // prepare runtime result value
-    abi::emit_symbol_address(emitter, "r9", "_http_req_scratch");               // load runtime data address
+    io_scratch::HTTP_REQUEST.emit_address(emitter, "r9");               // load runtime data address
     emitter.instruction("sub rax, r9");                                         // reduce runtime pointer or counter
 
     emitter.instruction("add rsp, 240");                                        // must match the prologue's sub rsp, 240

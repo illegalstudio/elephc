@@ -16,6 +16,8 @@
 //! - Successful URL reads are persisted with `__rt_str_persist` before
 //!   returning so the boxed PHP string owns its payload.
 
+use elephc_memoir::buffers::io_scratch;
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits `__rt_file_get_contents_maybe_url`.
@@ -162,7 +164,7 @@ pub fn emit_file_get_contents_url(emitter: &mut Emitter, user_stream_wrapper: bo
     emitter.instruction("mov x3, x0");                                          // request length for __rt_http_open
     abi::emit_symbol_address(emitter, "x0", "_fgc_url_addr");
     emitter.instruction("ldr x1, [sp, #48]");                                   // TCP address length
-    abi::emit_symbol_address(emitter, "x2", "_http_req_scratch");
+    io_scratch::HTTP_REQUEST.emit_address(emitter, "x2");
     emitter.instruction("bl __rt_http_open");                                   // open HTTP response-body fd
     emitter.instruction("cmp x0, #0");                                          // did the URL open fail?
     emitter.instruction("b.lt __rt_fgc_url_http_fail");                         // failed open returns PHP false
@@ -314,7 +316,7 @@ pub fn emit_file_get_contents_url(emitter: &mut Emitter, user_stream_wrapper: bo
     emitter.instruction("ldr x0, [sp, #48]");                                   // connect host pointer
     emitter.instruction("ldr x1, [sp, #56]");                                   // connect host length
     emitter.instruction("ldr x2, [sp, #64]");                                   // TCP port
-    abi::emit_symbol_address(emitter, "x3", "_http_req_scratch");
+    io_scratch::HTTP_REQUEST.emit_address(emitter, "x3");
     emitter.instruction("bl __rt_https_open");                                  // open HTTPS response-body fd
     emitter.instruction("cmp x0, #0");                                          // did the URL open fail?
     emitter.instruction("b.lt __rt_fgc_url_https_fail");                        // failed open returns PHP false
@@ -687,7 +689,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter, user_stream_wr
     emitter.instruction("call __rt_http_build_request");                        // build request into _http_req_scratch, returning length
     abi::emit_symbol_address(emitter, "rdi", "_fgc_url_addr");                  // TCP address pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // TCP address length
-    abi::emit_symbol_address(emitter, "rdx", "_http_req_scratch");              // HTTP request pointer
+    io_scratch::HTTP_REQUEST.emit_address(emitter, "rdx");              // HTTP request pointer
     emitter.instruction("mov rcx, rax");                                        // HTTP request length
     emitter.instruction("call __rt_http_open");                                 // open HTTP response-body fd
     emitter.instruction("cmp rax, 0");                                          // did the URL open fail?
@@ -832,7 +834,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter, user_stream_wr
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // connect host pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // connect host length
     emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // TCP port
-    abi::emit_symbol_address(emitter, "rcx", "_http_req_scratch");              // HTTP request pointer
+    io_scratch::HTTP_REQUEST.emit_address(emitter, "rcx");              // HTTP request pointer
     emitter.instruction("call __rt_https_open");                                // open HTTPS response-body fd
     emitter.instruction("cmp rax, 0");                                          // did the URL open fail?
     emitter.instruction("jl __rt_fgc_url_https_fail_x86");                      // failed open returns PHP false

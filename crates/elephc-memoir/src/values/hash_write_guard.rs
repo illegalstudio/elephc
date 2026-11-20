@@ -148,3 +148,27 @@ fn claim(emitter: &mut impl Emitter) {
     emitter.instruction(if arm { "mov x0, #1" } else { "mov eax, 1" });         // report ordinary ownership when no scope is active
     emitter.instruction("ret");                                                 // avoid key comparisons on the ordinary mutation path
 }
+
+/// Spills the old payload and its release operation before linking a borrowing scope.
+pub fn emit_stage_borrowed_release(emitter: &mut impl Emitter, symbol: &str) {
+    let arm = emitter.arch() == Arch::AArch64;
+    emitter.instruction(if arm { "str x1, [sp, #96]" } else { "mov QWORD PTR [rsp + 96], rdi" }); // transfer the previous entry owner to this protected release
+    abi::emit_symbol_address(emitter, if arm { "x9" } else { "r10" }, symbol);
+    emitter.instruction(if arm { "str x9, [sp, #104]" } else { "mov QWORD PTR [rsp + 104], r10" }); // retain the type-specific release operation
+}
+
+/// Keeps an observable old entry borrowed while its owner is released behind the exception boundary.
+pub fn emit_borrowed_release(emitter: &mut impl Emitter) {
+    let arm = emitter.arch() == Arch::AArch64;
+    emitter.instruction(if arm { "add x0, sp, #56" } else { "lea rdi, [rsp + 56]" }); // supply the caller-owned five-word scope record
+    emitter.instruction(if arm { "ldr x1, [sp]" } else { "mov rsi, QWORD PTR [rsp]" }); // retain the selected stable array identity
+    emitter.instruction(if arm { "ldr x2, [sp, #8]" } else { "mov rdx, QWORD PTR [rsp + 8]" }); // borrow the current normalized key payload
+    emitter.instruction(if arm { "ldr x3, [sp, #16]" } else { "mov rcx, QWORD PTR [rsp + 16]" }); // retain integer identity or exact string length
+    abi::emit_call_label(emitter, "__rt_hash_write_guard_push");
+    emitter.instruction(if arm { "ldr x0, [sp, #104]" } else { "mov rdi, QWORD PTR [rsp + 104]" }); // recover the protected release operation
+    emitter.instruction(if arm { "ldr x1, [sp, #96]" } else { "mov rsi, QWORD PTR [rsp + 96]" }); // release the previous owner exactly once
+    emitter.instruction(if arm { "add x2, sp, #48" } else { "lea rdx, [rsp + 48]" }); // preserve pending state across recursive PHP callbacks
+    abi::emit_call_label(emitter, "__rt_cleanup_call");
+    emitter.instruction(if arm { "add x0, sp, #56" } else { "lea rdi, [rsp + 56]" }); // end this scope only after the protected release returned
+    abi::emit_call_label(emitter, "__rt_hash_write_guard_pop");
+}

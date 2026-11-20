@@ -33,7 +33,7 @@ use super::{stack_cell, store_if_result};
 /// Bytes of the helper's pointer-array entry for one operand.
 const POINTER_BYTES: usize = 8;
 /// Bytes of the temporary Mixed-shaped cell reserved for one raw scalar operand.
-const CELL_BYTES: usize = 24;
+const CELL_BYTES: usize = elephc_memoir::layout::MIXED_CELL_SIZE;
 
 /// Lowers one `min()`/`max()` selection into a frame cell or an owned heap cell.
 pub(in crate::codegen::lower_inst) fn lower_mixed_min_max(

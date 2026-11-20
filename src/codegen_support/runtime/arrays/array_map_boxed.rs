@@ -343,15 +343,9 @@ fn insert_mapped_value(emitter: &mut Emitter) {
 /// Saves the caller's state and installs a local handler while all map-owned slots remain reachable.
 fn install_boundary(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_value", PREVIOUS),
-        ("_exc_handler_top", HANDLER),
-        ("_exc_call_frame_top", HANDLER - 8),
-        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
-        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
-        abi::store_at_offset(emitter, result, offset);
-    }
+    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
+    abi::store_at_offset(emitter, result, PREVIOUS);
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);

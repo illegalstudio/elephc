@@ -8,6 +8,8 @@
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -73,7 +75,7 @@ pub fn emit_array_combine_refcounted(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_array_combine_ref_done");                    // finish once every key/value pair has been inserted
     emitter.instruction("lsl x5, x4, #4");                                      // compute byte offset for string key element
     emitter.instruction("add x5, x0, x5");                                      // move to keyed string element
-    emitter.instruction("add x5, x5, #24");                                     // skip array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x5", "x5");
     emitter.instruction("ldr x1, [x5]");                                        // load key pointer
     emitter.instruction("ldr x2, [x5, #8]");                                    // load key length
     emitter.instruction("bl __rt_hash_normalize_key");                          // normalize numeric-string keys to PHP integer array keys
@@ -154,7 +156,7 @@ fn emit_array_combine_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, rcx");                                        // copy the loop index before scaling it to the 16-byte string slot size
     emitter.instruction("shl r11, 4");                                          // scale the loop index by the 16-byte string slot size used by the key array
     emitter.instruction("add r10, r11");                                        // advance from the key-array base pointer to the selected string key slot
-    emitter.instruction("add r10, 24");                                         // skip the indexed-array header to reach the selected string key payload
+    emitter.instruction(&format!("add r10, {}", packed_slots::PACKED_PAYLOAD_OFFSET));                                         // skip the indexed-array header to reach the selected string key payload
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the selected key pointer from the string-key indexed array
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the selected key length from the string-key indexed array
     emitter.instruction("call __rt_hash_normalize_key");                        // normalize numeric-string keys to PHP integer array keys

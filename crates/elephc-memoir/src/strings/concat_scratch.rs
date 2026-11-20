@@ -701,3 +701,8 @@ fn emit_preg_cb_ensure_x86_64(emitter: &mut impl Emitter) {
 pub fn emit_allocate_transient_string(emitter: &mut impl Emitter) {
     crate::heap_alloc::emit_fresh_with_kind(emitter, crate::HeapKind::new(CONCAT_TEMP_HEAP_KIND));
 }
+
+/// Retires an uncommitted reservation from the native result register.
+pub fn emit_abandon_reservation(emitter: &mut impl Emitter) {
+    emitter.emit_call_label("__rt_heap_free_safe");
+}

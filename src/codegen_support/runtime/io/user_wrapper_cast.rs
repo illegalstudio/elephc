@@ -22,6 +22,8 @@
 //!   verbatim: stream_select only sets bits for fds in `0..63`, so a boxed/large
 //!   or out-of-range return is harmlessly skipped there rather than dereferenced.
 
+use elephc_memoir::buffers::stream_tables;
+
 use elephc_memoir::heap_kind::{HeapStart, emit_branch_outside_heap};
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -98,8 +100,7 @@ fn emit_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
     emitter.instruction("mov w9, #0x4000");                                     // high half of the synthetic fd base (0x4000 << 16 = 0x40000000)
     emitter.instruction("lsl x9, x9, #16");                                     // form 0x40000000 in x9
     emitter.instruction("sub x9, x0, x9");                                      // x9 = fd - 0x40000000 = handle slot index
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // obj = _user_wrapper_handles[slot]
+    stream_tables::emit_load_wrapper_owner(emitter, "x10", "x9", "x0");
     emitter.instruction(&format!("cbz x0, {}", missing_label));                 // slot empty (fclose'd or never registered): not selectable
 }
 
@@ -128,8 +129,7 @@ fn emit_user_wrapper_stream_cast_linux_x86_64(emitter: &mut Emitter) {
 
     // $cast_as stays in rsi across both lookups (neither touches it).
     emitter.instruction(&format!("sub rdi, {:#x}", FD_WRAPPER_BIT));            // rdi = fd - 0x40000000 = handle slot index
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("mov rdi, QWORD PTR [r10 + rdi * 8]");                  // obj = _user_wrapper_handles[slot]
+    stream_tables::emit_load_wrapper_owner(emitter, "r10", "rdi", "rdi");
     emitter.instruction("test rdi, rdi");                                       // is the slot empty?
     emitter.instruction("jz __rt_uwcast_neg1_x86");                             // fclose'd or never registered: not selectable
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // class_id stored at the head of every wrapper object

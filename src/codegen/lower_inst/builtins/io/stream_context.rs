@@ -345,10 +345,7 @@ pub(super) fn store_current_result_as_stream_notification_callback(ctx: &mut Fun
         abi::emit_call_label(ctx.emitter, "__rt_web_context_notification_store");
         return;
     }
-    let addr_reg = abi::symbol_scratch_reg(ctx.emitter);
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, addr_reg, "_stream_notification_callback");
-    abi::emit_store_to_address(ctx.emitter, result_reg, addr_reg, 0);
+    elephc_memoir::buffers::stream_context_owners::emit_legacy_notification_store(ctx.emitter, false);
 }
 
 /// Clears `_stream_notification_callback` so later transfers do not fire stale callbacks.
@@ -358,11 +355,7 @@ pub(super) fn clear_stream_notification_callback(ctx: &mut FunctionContext<'_>) 
         abi::emit_call_label(ctx.emitter, "__rt_web_context_notification_store");
         return;
     }
-    let addr_reg = abi::symbol_scratch_reg(ctx.emitter);
-    let zero_reg = abi::secondary_scratch_reg(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, addr_reg, "_stream_notification_callback");
-    abi::emit_load_int_immediate(ctx.emitter, zero_reg, 0);
-    abi::emit_store_to_address(ctx.emitter, zero_reg, addr_reg, 0);
+    elephc_memoir::buffers::stream_context_owners::emit_legacy_notification_store(ctx.emitter, true);
 }
 
 /// Lowers `stream_context_get_options(context)`.

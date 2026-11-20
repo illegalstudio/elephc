@@ -176,7 +176,7 @@ pub fn emit_inet_pton(emitter: &mut Emitter) {
     // `__rt_heap_free_safe` ignores a scratch pointer, which is the ordinary case.
     emitter.label("__rt_inet_pton_unparsed");
     emitter.instruction("ldr x0, [sp, #256]");                                  // the reservation this call never published
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");                       // a no-op for scratch, a free for the heap fallback
+    elephc_memoir::strings::concat_scratch::emit_abandon_reservation(emitter);
     emitter.instruction("b __rt_inet_pton_false");                              // report the invalid address
 
     emitter.label("__rt_inet_pton_false");
@@ -334,7 +334,7 @@ fn emit_inet_pton_linux_x86_64(emitter: &mut Emitter) {
     // See the AArch64 twin: an unpublished reservation may be an owned heap block.
     emitter.label("__rt_inet_pton_unparsed_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the reservation this call never published
-    abi::emit_call_label(emitter, "__rt_heap_free_safe");                       // a no-op for scratch, a free for the heap fallback
+    elephc_memoir::strings::concat_scratch::emit_abandon_reservation(emitter);
     emitter.instruction("jmp __rt_inet_pton_false_x86");                        // report the invalid address
 
     emitter.label("__rt_inet_pton_false_x86");
