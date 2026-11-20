@@ -111,6 +111,26 @@ COMPILER_INTERNAL_RUNTIME_FNS = {
     "ArrayMapSumAddSafe",
     "ArraySumInt",
     "ArraySumIntCached",
+    # Optimizer-fused stored-map kernels: EIR passes retarget `array_map()`/`array_reduce()`
+    # calls to these internal runtime functions, so no PHP-visible builtin owns them.
+    "ArrayMapAffine",
+    "ArrayMapFloatAffine",
+    "ArrayMapFloatDiv",
+    "ArrayMapFloatScale",
+    "ArrayMapIntDiv",
+    "ArrayMapNumeric",
+    "ArrayMapSquare",
+    "ArrayMapSquareAffine",
+    "ArrayMapSumIntDiv",
+    "ArrayReduceProductFloatSeed",
+    "ArrayReduceProductSeed",
+    "ArrayReduceSumFloatSeed",
+    "ArrayReduceSumSeed",
+    # Optimizer-only observation kernels for JSON row lengths and mb_chr observations.
+    "JsonEncodeLenCached",
+    "JsonRowsScalarGuard",
+    "MbChrFirst",
+    "MbChrPacked",
 }
 
 

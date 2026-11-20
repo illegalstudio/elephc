@@ -295,6 +295,65 @@ fn test_array_slice_preserve_keys_positional() {
     assert_eq!(out, "1=>20 2=>30 3=>40 ");
 }
 
+/// A zero offset with `preserve_keys: true` keeps the dense list layout: the preserved keys
+/// are exactly `0..n-1`, so the result remains an indexed array rather than a hash.
+#[test]
+fn test_array_slice_preserve_keys_zero_offset_stays_list() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [10, 20, 30, 40, 50];
+$x = array_slice($a, 0, 3, true);
+foreach ($x as $k => $v) { echo $k, "=>", $v, " "; }
+echo "|", implode(",", array_slice($a, 0, null, true));
+echo "|", implode(",", array_slice($a, 0, -1, true));
+echo "|", array_is_list(array_slice($a, 0, 2, true)) ? "list" : "hash";
+$named = array_slice($a, offset: 0, length: 2, preserve_keys: true);
+echo "|", implode(",", $named), "|", array_is_list($named) ? "list" : "hash";
+"#,
+    );
+    assert_eq!(
+        out,
+        "0=>10 1=>20 2=>30 |10,20,30,40,50|10,20,30,40|list|10,20|list"
+    );
+}
+
+/// A call-site-specialized untyped parameter keeps the hash result shape for a
+/// key-preserving slice, so a list argument is not mistaken for a packed result.
+#[test]
+fn test_array_slice_preserve_keys_boxed_parameter_keeps_hash_type() {
+    let out = compile_and_run(
+        r#"<?php
+function listSlice($scores) { return array_slice($scores, 0, 2, true); }
+function hashSlice($scores) { return array_slice($scores, 0, 2, true); }
+echo json_encode(listSlice([1, 2, 3])), "|",
+    json_encode(hashSlice(["x" => 1, 3 => 2, "y" => 3])), "\n";
+"#,
+    );
+    assert_eq!(out, "[1,2]|{\"x\":1,\"3\":2}\n");
+}
+
+/// A zero offset with `preserve_keys: true` also keeps string and heterogeneous indexed
+/// payloads on the packed slice path.
+#[test]
+fn test_array_slice_preserve_keys_zero_offset_payloads() {
+    let out = compile_and_run(
+        r#"<?php
+$s = ["a", "b", "c"];
+echo implode(",", array_slice($s, 0, 2, true)), "|";
+$m = [1, "two", 3.5];
+foreach (array_slice($m, 0, 3, true) as $k => $v) { echo $k, "=>", $v, " "; }
+echo "|", array_is_list(array_slice($m, 0, 2, true)) ? "list" : "hash";
+$nested = [[1], [2], [3]];
+$n = array_slice($nested, 0, 2, true);
+echo "|", json_encode($n), "|", json_encode($nested), "|", array_is_list($n) ? "list" : "hash";
+"#,
+    );
+    assert_eq!(
+        out,
+        "a,b|0=>1 1=>two 2=>3.5 |list|[[1],[2]]|[[1],[2],[3]]|list"
+    );
+}
+
 /// Verifies the fully named `array_slice()` call form, including `preserve_keys:`.
 #[test]
 fn test_array_slice_preserve_keys_named() {

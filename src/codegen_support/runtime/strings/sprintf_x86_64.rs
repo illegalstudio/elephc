@@ -657,6 +657,7 @@ fn emit_float_conversion(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_sprintf_flt_nz_x64");                         // no → leave the value alone
     emitter.instruction("xor r10d, r10d");                                      // PHP prints -0.0 as 0.000000 under %f/%e
     emitter.label("__rt_sprintf_flt_nz_x64");
+    emit_float_fixed_fast_path_x64(emitter);
     emitter.instruction("lea r9, [rbp - 160]");                                 // mini C format cursor
     emitter.instruction("mov BYTE PTR [r9], 37");                               // write the '%' introducer
     emitter.instruction("add r9, 1");                                           // advance the mini format cursor
@@ -935,4 +936,131 @@ fn emit_fatal(emitter: &mut Emitter, label: &str, symbol: &str, len: usize) {
     emitter.instruction("mov edi, 255");                                        // PHP exits with 255 on a fatal error
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // terminate the process
+}
+
+/// Emits the bounded exact fixed-point `%f`/`%F` fast path.
+///
+/// Mirrors the AArch64 path: only a scaled value that is exactly an integer below `2^52`
+/// is formatted here, which proves libc's correct rounding is the integer itself. Any flag,
+/// precision above nine, fractional/oversized value, NaN, or infinity falls through to the
+/// general `snprintf` path. Width is left to the shared padding stage.
+fn emit_float_fixed_fast_path_x64(emitter: &mut Emitter) {
+    let slow = "__rt_sprintf_flt_slow_format_x64";
+    emitter.label("__rt_sprintf_flt_try_fixed_x64");
+    emitter.instruction("cmp r8b, 102");                                        // is this the lowercase fixed conversion?
+    emitter.instruction("je __rt_sprintf_flt_fixed_kind_x64");                  // yes → try the bounded path
+    emitter.instruction("cmp r8b, 70");                                         // is this the uppercase fixed conversion?
+    emitter.instruction(&format!("jne {slow}"));                                // e/g and every other conversion keep libc
+    emitter.label("__rt_sprintf_flt_fixed_kind_x64");
+    emitter.instruction("cmp QWORD PTR [rbp - 88], 0");                         // any parsed flags?
+    emitter.instruction(&format!("jne {slow}"));                                // flags keep libc semantics
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // parsed precision
+    emitter.instruction("cmp rax, -1");                                         // absent precision means six digits
+    emitter.instruction("jne __rt_sprintf_flt_fixed_prec_x64");                 // an explicit precision is already loaded
+    emitter.instruction("mov eax, 6");                                          // PHP's default float precision
+    emitter.label("__rt_sprintf_flt_fixed_prec_x64");
+    emitter.instruction("cmp rax, 9");                                          // bound the exact integer range
+    emitter.instruction(&format!("ja {slow}"));                                 // wider precisions keep libc
+    emitter.instruction("mov QWORD PTR [rbp - 128], rax");                      // stash precision in the unused mini-format slot
+    abi::emit_load_int_immediate(emitter, "rax", 0x3ff0000000000000);           // IEEE 1.0
+    emitter.instruction("movq xmm1, rax");                                      // scale accumulator
+    abi::emit_load_int_immediate(emitter, "rax", 0x4024000000000000);           // IEEE 10.0
+    emitter.instruction("movq xmm2, rax");                                      // decimal radix
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 128]");                      // precision copies for the scale loop
+    emitter.instruction("test rcx, rcx");                                       // precision zero uses scale 1.0
+    emitter.instruction("jz __rt_sprintf_flt_fixed_scale_done_x64");            // no multiplication needed
+    emitter.label("__rt_sprintf_flt_fixed_scale_loop_x64");
+    emitter.instruction("mulsd xmm1, xmm2");                                    // multiply the scale by ten
+    emitter.instruction("sub rcx, 1");                                          // one precision digit fewer
+    emitter.instruction("jnz __rt_sprintf_flt_fixed_scale_loop_x64");           // build the complete power of ten
+    emitter.label("__rt_sprintf_flt_fixed_scale_done_x64");
+    emitter.instruction("movq xmm0, r10");                                      // the operand's raw double bits
+    emitter.instruction("movapd xmm3, xmm0");                                   // copy the operand into the scaled register
+    emitter.instruction("mulsd xmm3, xmm1");                                    // scaled = value * 10^precision
+    abi::emit_load_int_immediate(emitter, "rax", 0x7fffffffffffffff);           // clear the sign bit
+    emitter.instruction("movq xmm4, rax");                                      // magnitude mask
+    emitter.instruction("andpd xmm4, xmm3");                                    // magnitude of the scaled value
+    abi::emit_load_int_immediate(emitter, "rax", 0x4330000000000000);           // IEEE 2^52
+    emitter.instruction("movq xmm5, rax");                                      // exact-integer upper bound
+    emitter.instruction("ucomisd xmm4, xmm5");                                  // is the scaled magnitude representable exactly?
+    emitter.instruction(&format!("jp {slow}"));                                 // NaN keeps libc
+    emitter.instruction(&format!("jae {slow}"));                                // oversized and infinity keep libc
+    emitter.instruction("cvttsd2si rax, xmm3");                                 // truncate the scaled value toward zero
+    emitter.instruction("cvtsi2sd xmm6, rax");                                  // convert the integer back to a double
+    emitter.instruction("ucomisd xmm3, xmm6");                                  // was the scaled value already an integer?
+    emitter.instruction(&format!("jp {slow}"));                                 // unordered values keep libc
+    emitter.instruction(&format!("jne {slow}"));                                // fractional values need correct rounding by libc
+    emitter.instruction("mov rdi, rax");                                        // pass the exact scaled integer to the decimal formatter
+    emitter.instruction("lea rsi, [rbp - 620]");                                // scratch window away from the output body
+    emitter.instruction("call __rt_itoa_into");                                 // rax = digits, rdx = signed digit count
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 128]");                      // reload the precision
+    emitter.instruction("test rcx, rcx");                                       // precision zero already has its body
+    emitter.instruction("jz __rt_sprintf_flt_fixed_zero_prec_x64");             // use the integer digits directly
+    emitter.instruction("mov r8, rax");                                         // source digit cursor
+    emitter.instruction("mov r9, rdx");                                         // source digit count
+    emitter.instruction("lea r10, [rbp - 672]");                                // output body cursor
+    emitter.instruction("xor r11d, r11d");                                      // output body length
+    emitter.instruction("movzx eax, BYTE PTR [r8]");                            // inspect the leading digit
+    emitter.instruction("cmp al, 45");                                          // is the value negative?
+    emitter.instruction("jne __rt_sprintf_flt_fixed_int_x64");                  // positive bodies omit the sign
+    emitter.instruction("mov BYTE PTR [r10 + r11], al");                        // copy the minus sign
+    emitter.instruction("add r11, 1");                                          // one body byte written
+    emitter.instruction("add r8, 1");                                           // skip the sign in the source
+    emitter.instruction("sub r9, 1");                                           // one digit fewer to place
+    emitter.label("__rt_sprintf_flt_fixed_int_x64");
+    emitter.instruction("cmp r9, rcx");                                         // does the integer part have any digits?
+    emitter.instruction("jbe __rt_sprintf_flt_fixed_leading_x64");              // no → emit the leading zero and decimal point
+    emitter.instruction("mov rdx, r9");                                         // integer digits before the decimal point
+    emitter.instruction("sub rdx, rcx");                                        // digit count minus fractional precision
+    emitter.label("__rt_sprintf_flt_fixed_int_copy_x64");
+    emitter.instruction("test rdx, rdx");                                       // integer digits copied?
+    emitter.instruction("jz __rt_sprintf_flt_fixed_point_x64");                 // yes → write the decimal point
+    emitter.instruction("movzx eax, BYTE PTR [r8]");                            // load the next integer digit
+    emitter.instruction("mov BYTE PTR [r10 + r11], al");                        // place it in the body
+    emitter.instruction("add r8, 1");                                           // advance the source cursor
+    emitter.instruction("add r11, 1");                                          // advance the body cursor
+    emitter.instruction("sub rdx, 1");                                          // one integer digit fewer
+    emitter.instruction("jmp __rt_sprintf_flt_fixed_int_copy_x64");             // continue the integer part
+    emitter.label("__rt_sprintf_flt_fixed_point_x64");
+    emitter.instruction("mov BYTE PTR [r10 + r11], 46");                        // ASCII decimal point
+    emitter.instruction("add r11, 1");                                          // one body byte written
+    emitter.label("__rt_sprintf_flt_fixed_frac_copy_x64");
+    emitter.instruction("test rcx, rcx");                                       // every fractional digit placed?
+    emitter.instruction("jz __rt_sprintf_flt_fixed_body_done_x64");             // yes → publish the body
+    emitter.instruction("movzx eax, BYTE PTR [r8]");                            // load the next fractional digit
+    emitter.instruction("mov BYTE PTR [r10 + r11], al");                        // place it in the body
+    emitter.instruction("add r8, 1");                                           // advance the source cursor
+    emitter.instruction("add r11, 1");                                          // advance the body cursor
+    emitter.instruction("sub rcx, 1");                                          // one fractional digit fewer
+    emitter.instruction("jmp __rt_sprintf_flt_fixed_frac_copy_x64");            // continue the fractional part
+    emitter.label("__rt_sprintf_flt_fixed_leading_x64");
+    emitter.instruction("mov BYTE PTR [r10 + r11], 48");                        // the integer part is a single zero
+    emitter.instruction("add r11, 1");                                          // one body byte written
+    emitter.instruction("mov BYTE PTR [r10 + r11], 46");                        // ASCII decimal point
+    emitter.instruction("add r11, 1");                                          // one body byte written
+    emitter.instruction("mov rdx, rcx");                                        // leading fractional zeros needed
+    emitter.instruction("sub rdx, r9");                                         // precision minus significant digits
+    emitter.label("__rt_sprintf_flt_fixed_zero_copy_x64");
+    emitter.instruction("test rdx, rdx");                                       // no padding zeros left?
+    emitter.instruction("jz __rt_sprintf_flt_fixed_digits_copy_x64");           // yes → copy the significant digits
+    emitter.instruction("mov BYTE PTR [r10 + r11], 48");                        // place one padding zero
+    emitter.instruction("add r11, 1");                                          // one body byte written
+    emitter.instruction("sub rdx, 1");                                          // one padding zero fewer
+    emitter.instruction("jmp __rt_sprintf_flt_fixed_zero_copy_x64");            // pad every missing fractional position
+    emitter.label("__rt_sprintf_flt_fixed_digits_copy_x64");
+    emitter.instruction("test r9, r9");                                         // every significant digit placed?
+    emitter.instruction("jz __rt_sprintf_flt_fixed_body_done_x64");             // yes → publish the body
+    emitter.instruction("movzx eax, BYTE PTR [r8]");                            // load the next significant digit
+    emitter.instruction("mov BYTE PTR [r10 + r11], al");                        // place it after the padding zeros
+    emitter.instruction("add r8, 1");                                           // advance the source cursor
+    emitter.instruction("add r11, 1");                                          // advance the body cursor
+    emitter.instruction("sub r9, 1");                                           // one significant digit fewer
+    emitter.instruction("jmp __rt_sprintf_flt_fixed_digits_copy_x64");          // continue the significant digits
+    emitter.label("__rt_sprintf_flt_fixed_body_done_x64");
+    emitter.instruction("jmp __rt_sprintf_emit_x64");                           // pad and copy the fixed-point body
+    emitter.label("__rt_sprintf_flt_fixed_zero_prec_x64");
+    emitter.instruction("mov r10, rax");                                        // precision zero uses the integer digits directly
+    emitter.instruction("mov r11, rdx");                                        // signed digit count is the body length
+    emitter.instruction("jmp __rt_sprintf_emit_x64");                           // pad and copy the integer body
+    emitter.label(slow);
 }

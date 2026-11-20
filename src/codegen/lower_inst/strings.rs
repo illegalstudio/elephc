@@ -33,9 +33,45 @@ pub(super) fn lower_const_str(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
     if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
-        abi::emit_call_label(ctx.emitter, "__rt_mbstring_ini_literal");
+        emit_literal_registration_once(ctx, &label);
     }
     store_if_result(ctx, inst)
+}
+
+/// Registers one string literal with the mbstring identity map on its first use only.
+///
+/// `__rt_mbstring_ini_literal` preserves every register and calls the bridge, so repeating it
+/// on every loop iteration is pure overhead once the literal's address is known. A one-byte
+/// counter symbol per deduplicated literal keeps the first-use registration and skips the full
+/// save/callback afterwards. Registration is idempotent, so a concurrent first use is harmless.
+fn emit_literal_registration_once(ctx: &mut FunctionContext<'_>, literal_label: &str) {
+    let flag = ctx
+        .data
+        .add_comm(format!("_mb_lit_reg_{literal_label}"), 8);
+    let skip = ctx.next_label("mb_lit_registered");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", &flag);
+            ctx.emitter.instruction("ldr x10, [x9]");                           // generation stamp of this literal's last registration
+            abi::emit_symbol_address(ctx.emitter, "x11", "_mbstring_request_generation");
+            ctx.emitter.instruction("ldr x11, [x11]");                          // current per-request generation
+            ctx.emitter.instruction(&format!("cmp x10, x11"));                  // is the stamp from this request?
+            ctx.emitter.instruction(&format!("b.eq {skip}"));                   // skip the bridge call on later uses
+            abi::emit_call_label(ctx.emitter, "__rt_mbstring_ini_literal");
+            ctx.emitter.instruction("str x11, [x9]");                           // publish the current generation stamp
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r10", &flag);
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // generation stamp of this literal's last registration
+            abi::emit_symbol_address(ctx.emitter, "r8", "_mbstring_request_generation");
+            ctx.emitter.instruction("mov r8, QWORD PTR [r8]");                  // current per-request generation
+            ctx.emitter.instruction("cmp r11, r8");                             // is the stamp from this request?
+            ctx.emitter.instruction(&format!("je {skip}"));                     // skip the bridge call on later uses
+            abi::emit_call_label(ctx.emitter, "__rt_mbstring_ini_literal");
+            ctx.emitter.instruction("mov QWORD PTR [r10], r8");                 // publish the current generation stamp
+        }
+    }
+    ctx.emitter.label(&skip);
 }
 
 /// Lowers a `::class` constant by materializing the interned class-name string.

@@ -99,12 +99,13 @@ fn truncate_float_to_i64(value: f64) -> Option<i64> {
 }
 
 /// Parses a string value for `(int)` cast folding, reproducing PHP's `zval_get_long()`.
- ///
- /// The string's leading numeric run decides the result: an integer run that fits `i64` is
- /// used directly, anything else goes through `zend_dval_to_lval_cap` (NAN/INF become `0`,
- /// out-of-range floats saturate). A string with no numeric prefix at all is `0`, so
- /// `"abc"`, `"0x1A"` and `"INF"` all fold to `0` rather than being parsed as Rust numbers.
-fn parse_string_cast_int(value: &str) -> Option<i64> {
+///
+/// The string's leading numeric run decides the result: an integer run that fits `i64` is
+/// used directly, anything else goes through `zend_dval_to_lval_cap` (NAN/INF become `0`,
+/// out-of-range floats saturate). A string with no numeric prefix at all is `0`, so
+/// `"abc"`, `"0x1A"` and `"INF"` all fold to `0` rather than being parsed as Rust numbers.
+/// Shared with the EIR literal-array integer fold so direct casts and `intval()` agree.
+pub(crate) fn parse_string_cast_int(value: &str) -> Option<i64> {
     Some(match php_numeric_prefix(value) {
         Some(PhpNumeric::Int(parsed)) => parsed,
         Some(PhpNumeric::Float { value, .. }) => cap_float_to_i64(value),

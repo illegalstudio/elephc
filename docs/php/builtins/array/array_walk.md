@@ -1,6 +1,6 @@
 ---
 title: "array_walk()"
-description: "Applies a user function to every member of an array. AOT boxed arrays pass a writable value reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported."
+description: "Applies a user function to every member of an array. A walk over a local array whose callback declares a writable value or reads the key promotes that array to boxed storage, then passes a writable value reference and key to visible native closures, named functions, first-class callables, and callable arrays. Escaping element references through a closure capture or property remains unsupported."
 ---
 
 ## array_walk()
@@ -9,7 +9,7 @@ description: "Applies a user function to every member of an array. AOT boxed arr
 function array_walk(array $array, callable $callback): bool
 ```
 
-Applies a user function to every member of an array. AOT boxed arrays pass a writable value reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported.
+Applies a user function to every member of an array. A walk over a local array whose callback declares a writable value or reads the key promotes that array to boxed storage, then passes a writable value reference and key to visible native closures, named functions, first-class callables, and callable arrays. Escaping element references through a closure capture or property remains unsupported.
 
 **Parameters**:
 - `$array` (`array`), passed by reference

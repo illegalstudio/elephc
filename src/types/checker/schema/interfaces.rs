@@ -519,6 +519,7 @@ pub(crate) fn build_interface_info_recursive(
         InterfaceInfo {
             interface_id: *next_interface_id,
             declaration_span: interface.span,
+            reflection_hidden: checker.names_generic_class_template(&interface.name),
             parents: interface.extends.clone(),
             properties,
             property_order,
@@ -537,7 +538,6 @@ pub(crate) fn build_interface_info_recursive(
             constant_types,
             constant_declaring_interfaces,
             final_constants,
-            reflection_hidden: checker.names_generic_class_template(&interface.name),
         },
     );
     *next_interface_id += 1;

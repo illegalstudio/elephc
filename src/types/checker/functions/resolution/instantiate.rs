@@ -115,14 +115,13 @@ impl Checker {
         &mut self,
         name: &str,
         decl: &crate::types::checker::FnDecl,
-        mut bindings: generics::Bindings,
+        bindings: generics::Bindings,
         span: crate::span::Span,
         record_site: bool,
     ) -> Result<String, CompileError> {
         if let Some(error) = self.failed_variant_contracts.get(name) {
             return Err(error.clone());
         }
-        self.settle_native_hints(&decl.type_params, &mut bindings, span)?;
         // Bounds are checked HERE rather than inside inference, because satisfying a bound is a
         // subtyping question and only the checker holds the class table: `type_accepts` already
         // answers it for subclasses, implemented interfaces and interface inheritance. Inference
@@ -140,20 +139,16 @@ impl Checker {
             // its own included: `<T : Cmp<T>>` asks for `Cmp<Word>` once `T` is `Word`.
             // Resolving it unsubstituted asked whether `Word` implements `Cmp<T>`, a class that
             // does not exist, and rejected every F-bounded call.
-            if Self::skips_docblock_bound(param, argument) {
-                continue;
-            }
             let bound_ty = self.resolve_type_expr(&generics::substitute_value_type(bound, &bindings), span)?;
             let argument_ty = self.resolve_generic_bound_argument(argument, span)?;
             if !self.type_accepts(&bound_ty, &argument_ty) {
-                self.report_bound_violation(
-                    param.from_docblock,
+                return Err(CompileError::new(
                     span,
-                    format!(
+                    &format!(
                         "Call to generic function '{}' binds type parameter <{}> to {}, which does not satisfy its bound {}",
                         name, param.name, argument_ty, bound_ty
                     ),
-                )?;
+                ));
             }
         }
         let instantiated = generics::instantiated_name(name, &bindings);
@@ -229,7 +224,6 @@ impl Checker {
         // a typed local, a `buffer<T>`, or a nested closure's signature is substituted too —
         // and the signature this resolves describes exactly the function the backend emits.
         let mut instantiated_decl = decl.clone();
-        let erased = generics::docblock_params_read_as_mixed(&decl.type_params, &bindings);
         instantiated_decl.body = generics::substitute_in_body(decl.body.clone(), &bindings);
         instantiated_decl.type_params = Vec::new();
         instantiated_decl.param_types = decl
@@ -238,17 +232,17 @@ impl Checker {
             .map(|declared| {
                 declared
                     .as_ref()
-                    .map(|ty| generics::substitute_signature_type(ty, &bindings, &erased))
+                    .map(|ty| generics::substitute_value_type(ty, &bindings))
             })
             .collect();
         instantiated_decl.return_type = decl
             .return_type
             .as_ref()
-            .map(|ty| generics::substitute_signature_type(ty, &bindings, &erased));
+            .map(|ty| generics::substitute_value_type(ty, &bindings));
         instantiated_decl.variadic_type = decl
             .variadic_type
             .as_ref()
-            .map(|ty| generics::substitute_signature_type(ty, &bindings, &erased));
+            .map(|ty| generics::substitute_value_type(ty, &bindings));
         self.publish_function_declaration(instantiated.clone(), instantiated_decl);
         Ok(instantiated)
     }

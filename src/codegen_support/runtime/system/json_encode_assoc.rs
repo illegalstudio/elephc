@@ -164,46 +164,32 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
 
     // -- short plain-ASCII key fast path --
     // With no active flags, a short key made only of printable ASCII (excluding quote,
-    // backslash and slash) can be written directly at the cursor with its two quotes. This
-    // skips the string encoder and the append copy for the common `{"name":...}` shape.
+    // backslash and slash) can be written directly at the cursor with its two quotes. A
+    // 256-byte classification table replaces the per-byte compare chain, and the scan
+    // copies each accepted byte in place, so the common `{"name":...}` shape pays one pass.
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x9", "_json_active_flags", 0);
     emitter.instruction("cbnz x9, __rt_json_assoc_key_slow");                   // any active flag needs the escaping encoder
-    emitter.instruction("cmp x2, #8");                                          // only short keys use the direct copy
+    emitter.instruction("cmp x2, #16");                                         // only short keys use the direct copy
     emitter.instruction("b.hi __rt_json_assoc_key_slow");                       // longer keys keep the general encoder
-    emitter.instruction("mov x12, #0");                                         // initialize the plain-ASCII key scan
-    emitter.label("__rt_json_assoc_key_fast_scan");
-    emitter.instruction("cmp x12, x2");                                         // has every key byte been classified?
-    emitter.instruction("b.ge __rt_json_assoc_key_fast_write");                 // yes: the key is plain ASCII
-    emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next key byte
-    emitter.instruction("sub w14, w13, #32");                                   // rebase printable ASCII 0x20..0x7E onto 0..94
-    emitter.instruction("cmp w14, #95");                                        // control bytes, DEL and UTF-8 bytes need the general encoder
-    emitter.instruction("b.hs __rt_json_assoc_key_slow");                       // fall back for non-printable bytes
-    emitter.instruction("cmp w13, #34");                                        // double quotes need escaping
-    emitter.instruction("b.eq __rt_json_assoc_key_slow");                       // fall back for the quote byte
-    emitter.instruction("cmp w13, #92");                                        // backslashes need escaping
-    emitter.instruction("b.eq __rt_json_assoc_key_slow");                       // fall back for the backslash byte
-    emitter.instruction("cmp w13, #47");                                        // PHP escapes slashes by default
-    emitter.instruction("b.eq __rt_json_assoc_key_slow");                       // fall back for the slash byte
-    emitter.instruction("add x12, x12, #1");                                    // advance the plain-ASCII key scan
-    emitter.instruction("b __rt_json_assoc_key_fast_scan");                     // inspect the next key byte
-
-    emitter.label("__rt_json_assoc_key_fast_write");
     emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
     emitter.instruction("add x1, x2, #2");                                      // reserve the two quotes and the copied key bytes
     emitter.instruction("bl __rt_json_buf_ensure");                             // x11 = cursor with the key window available
+    emitter.instruction("str x11, [sp, #136]");                                 // publish the cursor even if the scan later falls back
     emitter.instruction("mov w12, #34");                                        // ASCII double quote
-    emitter.instruction("strb w12, [x11]");                                     // write the opening key quote
-    emitter.instruction("add x11, x11, #1");                                    // advance past the opening quote
+    emitter.instruction("strb w12, [x11], #1");                                 // write the opening key quote and advance
     emitter.instruction("ldr x1, [sp, #48]");                                   // reload the key pointer after the reservation
     emitter.instruction("ldr x2, [sp, #56]");                                   // reload the key length after the reservation
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_json_plain_ascii");
     emitter.instruction("mov x12, #0");                                         // initialize the key copy index
-    emitter.label("__rt_json_assoc_key_fast_copy");
-    emitter.instruction("cmp x12, x2");                                         // have we copied every key byte?
-    emitter.instruction("b.ge __rt_json_assoc_key_fast_close");                 // finish with the closing quote
+    emitter.label("__rt_json_assoc_key_fast_loop");
+    emitter.instruction("cmp x12, x2");                                         // has every key byte been copied?
+    emitter.instruction("b.ge __rt_json_assoc_key_fast_close");                 // yes: finish with the closing quote
     emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next key byte
-    emitter.instruction("strb w13, [x11, x12]");                                // copy it directly to the cursor
+    emitter.instruction("ldrb w14, [x15, x13]");                                // classify it as verbatim or escapable
+    emitter.instruction("cbz w14, __rt_json_assoc_key_slow");                   // escaping or validation needs the general encoder
+    emitter.instruction("strb w13, [x11, x12]");                                // copy the plain byte to the cursor
     emitter.instruction("add x12, x12, #1");                                    // advance the key copy index
-    emitter.instruction("b __rt_json_assoc_key_fast_copy");                     // copy the remaining key bytes
+    emitter.instruction("b __rt_json_assoc_key_fast_loop");                     // copy the remaining key bytes
     emitter.label("__rt_json_assoc_key_fast_close");
     emitter.instruction("add x11, x11, x2");                                    // address the byte after the copied key
     emitter.instruction("mov w12, #34");                                        // ASCII double quote
@@ -302,48 +288,31 @@ pub(crate) fn emit_json_encode_assoc(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_assoc_value_str");
     // -- short plain-ASCII value fast path --
-    // The same direct quoted copy as the key path, applied to the value position. Plain
-    // short strings skip both the escaping encoder and the append copy.
+    // The same single-pass classified copy as the key path, applied to the value position.
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x9", "_json_active_flags", 0);
     emitter.instruction("cbnz x9, __rt_json_assoc_value_str_slow");             // any active flag needs the escaping encoder
     emitter.instruction("ldr x2, [sp, #72]");                                   // load string length from value_hi
     emitter.instruction("cmp x2, #16");                                         // only short values use the direct copy
     emitter.instruction("b.hi __rt_json_assoc_value_str_slow");                 // longer values keep the general encoder
-    emitter.instruction("ldr x1, [sp, #64]");                                   // load string pointer from value_lo
-    emitter.instruction("mov x12, #0");                                         // initialize the plain-ASCII value scan
-    emitter.label("__rt_json_assoc_value_str_fast_scan");
-    emitter.instruction("cmp x12, x2");                                         // has every value byte been classified?
-    emitter.instruction("b.ge __rt_json_assoc_value_str_fast_write");           // yes: the value is plain ASCII
-    emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next value byte
-    emitter.instruction("sub w14, w13, #32");                                   // rebase printable ASCII 0x20..0x7E onto 0..94
-    emitter.instruction("cmp w14, #95");                                        // control bytes, DEL and UTF-8 bytes need the general encoder
-    emitter.instruction("b.hs __rt_json_assoc_value_str_slow");                 // fall back for non-printable bytes
-    emitter.instruction("cmp w13, #34");                                        // double quotes need escaping
-    emitter.instruction("b.eq __rt_json_assoc_value_str_slow");                 // fall back for the quote byte
-    emitter.instruction("cmp w13, #92");                                        // backslashes need escaping
-    emitter.instruction("b.eq __rt_json_assoc_value_str_slow");                 // fall back for the backslash byte
-    emitter.instruction("cmp w13, #47");                                        // PHP escapes slashes by default
-    emitter.instruction("b.eq __rt_json_assoc_value_str_slow");                 // fall back for the slash byte
-    emitter.instruction("add x12, x12, #1");                                    // advance the plain-ASCII value scan
-    emitter.instruction("b __rt_json_assoc_value_str_fast_scan");               // inspect the next value byte
-
-    emitter.label("__rt_json_assoc_value_str_fast_write");
     emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
     emitter.instruction("add x1, x2, #2");                                      // reserve the two quotes and the copied value bytes
     emitter.instruction("bl __rt_json_buf_ensure");                             // x11 = cursor with the value window available
+    emitter.instruction("str x11, [sp, #136]");                                 // publish the cursor even if the scan later falls back
     emitter.instruction("mov w12, #34");                                        // ASCII double quote
-    emitter.instruction("strb w12, [x11]");                                     // write the opening value quote
-    emitter.instruction("add x11, x11, #1");                                    // advance past the opening quote
+    emitter.instruction("strb w12, [x11], #1");                                 // write the opening value quote and advance
     emitter.instruction("ldr x1, [sp, #64]");                                   // reload the value pointer after the reservation
     emitter.instruction("ldr x2, [sp, #72]");                                   // reload the value length after the reservation
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_json_plain_ascii");
     emitter.instruction("mov x12, #0");                                         // initialize the value copy index
-    emitter.label("__rt_json_assoc_value_str_fast_copy");
-    emitter.instruction("cmp x12, x2");                                         // have we copied every value byte?
-    emitter.instruction("b.ge __rt_json_assoc_value_str_fast_close");           // finish with the closing quote
+    emitter.label("__rt_json_assoc_value_str_fast_loop");
+    emitter.instruction("cmp x12, x2");                                         // has every value byte been copied?
+    emitter.instruction("b.ge __rt_json_assoc_value_str_fast_close");           // yes: finish with the closing quote
     emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next value byte
-    emitter.instruction("strb w13, [x11, x12]");                                // copy it directly to the cursor
+    emitter.instruction("ldrb w14, [x15, x13]");                                // classify it as verbatim or escapable
+    emitter.instruction("cbz w14, __rt_json_assoc_value_str_slow");             // escaping or validation needs the general encoder
+    emitter.instruction("strb w13, [x11, x12]");                                // copy the plain byte to the cursor
     emitter.instruction("add x12, x12, #1");                                    // advance the value copy index
-    emitter.instruction("b __rt_json_assoc_value_str_fast_copy");               // copy the remaining value bytes
+    emitter.instruction("b __rt_json_assoc_value_str_fast_loop");               // copy the remaining value bytes
     emitter.label("__rt_json_assoc_value_str_fast_close");
     emitter.instruction("add x11, x11, x2");                                    // address the byte after the copied value
     emitter.instruction("mov w12, #34");                                        // ASCII double quote
@@ -646,45 +615,34 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
 
     // -- short plain-ASCII key fast path --
     // With no active flags, a short key made only of printable ASCII (excluding quote,
-    // backslash and slash) can be written directly at the cursor with its two quotes.
+    // backslash and slash) can be written directly at the cursor with its two quotes. A
+    // 256-byte classification table replaces the per-byte compare chain, and the scan
+    // copies each accepted byte in place, so the common `{"name":...}` shape pays one pass.
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);
     emitter.instruction("test r10, r10");                                       // any active flag needs the escaping encoder
     emitter.instruction("jnz __rt_json_assoc_key_slow_x");                      // fall back when a flag is active
-    emitter.instruction("cmp rdx, 8");                                          // only short keys use the direct copy
+    emitter.instruction("cmp rdx, 16");                                         // only short keys use the direct copy
     emitter.instruction("ja __rt_json_assoc_key_slow_x");                       // longer keys keep the general encoder
-    emitter.instruction("xor ecx, ecx");                                        // initialize the plain-ASCII key scan
-    emitter.label("__rt_json_assoc_key_fast_scan_x");
-    emitter.instruction("cmp rcx, rdx");                                        // has every key byte been classified?
-    emitter.instruction("jge __rt_json_assoc_key_fast_write_x");                // yes: the key is plain ASCII
-    emitter.instruction("movzx r8d, BYTE PTR [rax + rcx]");                     // load the next key byte
-    emitter.instruction("lea r9d, [r8 - 32]");                                  // rebase printable ASCII 0x20..0x7E onto 0..94
-    emitter.instruction("cmp r9d, 95");                                         // control bytes, DEL and UTF-8 bytes need the general encoder
-    emitter.instruction("jae __rt_json_assoc_key_slow_x");                      // fall back for non-printable bytes
-    emitter.instruction("cmp r8d, 34");                                         // double quotes need escaping
-    emitter.instruction("je __rt_json_assoc_key_slow_x");                       // fall back for the quote byte
-    emitter.instruction("cmp r8d, 92");                                         // backslashes need escaping
-    emitter.instruction("je __rt_json_assoc_key_slow_x");                       // fall back for the backslash byte
-    emitter.instruction("cmp r8d, 47");                                         // PHP escapes slashes by default
-    emitter.instruction("je __rt_json_assoc_key_slow_x");                       // fall back for the slash byte
-    emitter.instruction("add rcx, 1");                                          // advance the plain-ASCII key scan
-    emitter.instruction("jmp __rt_json_assoc_key_fast_scan_x");                 // inspect the next key byte
-
-    emitter.label("__rt_json_assoc_key_fast_write_x");
     emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
     emitter.instruction("lea rsi, [rdx + 2]");                                  // reserve the two quotes and the copied key bytes
     emitter.instruction("call __rt_json_buf_ensure");                           // r11 = cursor with the key window available
+    emitter.instruction("mov QWORD PTR [rbp - 136], r11");                      // publish the cursor even if the scan later falls back
     emitter.instruction("mov BYTE PTR [r11], 34");                              // write the opening key quote
     emitter.instruction("add r11, 1");                                          // advance past the opening quote
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the key pointer after the reservation
     emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // reload the key length after the reservation
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_json_plain_ascii");
     emitter.instruction("xor ecx, ecx");                                        // initialize the key copy index
-    emitter.label("__rt_json_assoc_key_fast_copy_x");
-    emitter.instruction("cmp rcx, rdx");                                        // have we copied every key byte?
-    emitter.instruction("jge __rt_json_assoc_key_fast_close_x");                // finish with the closing quote
-    emitter.instruction("mov r9b, BYTE PTR [rax + rcx]");                       // load the next key byte
-    emitter.instruction("mov BYTE PTR [r11 + rcx], r9b");                       // copy it directly to the cursor
+    emitter.label("__rt_json_assoc_key_fast_loop_x");
+    emitter.instruction("cmp rcx, rdx");                                        // has every key byte been copied?
+    emitter.instruction("jge __rt_json_assoc_key_fast_close_x");                // yes: finish with the closing quote
+    emitter.instruction("movzx r8d, BYTE PTR [rax + rcx]");                     // load the next key byte
+    emitter.instruction("movzx r9d, BYTE PTR [r10 + r8]");                      // classify it as verbatim or escapable
+    emitter.instruction("test r9d, r9d");                                       // does this byte need the general encoder?
+    emitter.instruction("jz __rt_json_assoc_key_slow_x");                       // escaping or validation needs the general encoder
+    emitter.instruction("mov BYTE PTR [r11 + rcx], r8b");                       // copy the plain byte to the cursor
     emitter.instruction("add rcx, 1");                                          // advance the key copy index
-    emitter.instruction("jmp __rt_json_assoc_key_fast_copy_x");                 // copy the remaining key bytes
+    emitter.instruction("jmp __rt_json_assoc_key_fast_loop_x");                 // copy the remaining key bytes
     emitter.label("__rt_json_assoc_key_fast_close_x");
     emitter.instruction("add r11, rdx");                                        // address the byte after the copied key
     emitter.instruction("mov BYTE PTR [r11], 34");                              // write the closing key quote
@@ -781,47 +739,33 @@ fn emit_json_encode_assoc_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_json_assoc_value_str");
     // -- short plain-ASCII value fast path --
-    // The same direct quoted copy as the key path, applied to the value position.
+    // The same single-pass classified copy as the key path, applied to the value position.
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_json_active_flags", 0);
     emitter.instruction("test r10, r10");                                       // any active flag needs the escaping encoder
     emitter.instruction("jnz __rt_json_assoc_value_str_slow_x");                // fall back when a flag is active
     emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // load the string length from the saved hash-entry high payload word
     emitter.instruction("cmp rdx, 16");                                         // only short values use the direct copy
     emitter.instruction("ja __rt_json_assoc_value_str_slow_x");                 // longer values keep the general encoder
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the string pointer from the saved hash-entry low payload word
-    emitter.instruction("xor ecx, ecx");                                        // initialize the plain-ASCII value scan
-    emitter.label("__rt_json_assoc_value_str_fast_scan_x");
-    emitter.instruction("cmp rcx, rdx");                                        // has every value byte been classified?
-    emitter.instruction("jge __rt_json_assoc_value_str_fast_write_x");          // yes: the value is plain ASCII
-    emitter.instruction("movzx r8d, BYTE PTR [rax + rcx]");                     // load the next value byte
-    emitter.instruction("lea r9d, [r8 - 32]");                                  // rebase printable ASCII 0x20..0x7E onto 0..94
-    emitter.instruction("cmp r9d, 95");                                         // control bytes, DEL and UTF-8 bytes need the general encoder
-    emitter.instruction("jae __rt_json_assoc_value_str_slow_x");                // fall back for non-printable bytes
-    emitter.instruction("cmp r8d, 34");                                         // double quotes need escaping
-    emitter.instruction("je __rt_json_assoc_value_str_slow_x");                 // fall back for the quote byte
-    emitter.instruction("cmp r8d, 92");                                         // backslashes need escaping
-    emitter.instruction("je __rt_json_assoc_value_str_slow_x");                 // fall back for the backslash byte
-    emitter.instruction("cmp r8d, 47");                                         // PHP escapes slashes by default
-    emitter.instruction("je __rt_json_assoc_value_str_slow_x");                 // fall back for the slash byte
-    emitter.instruction("add rcx, 1");                                          // advance the plain-ASCII value scan
-    emitter.instruction("jmp __rt_json_assoc_value_str_fast_scan_x");           // inspect the next value byte
-
-    emitter.label("__rt_json_assoc_value_str_fast_write_x");
     emitter.instruction("lea rdi, [rbp - 144]");                                // address of the output-buffer descriptor
     emitter.instruction("lea rsi, [rdx + 2]");                                  // reserve the two quotes and the copied value bytes
     emitter.instruction("call __rt_json_buf_ensure");                           // r11 = cursor with the value window available
+    emitter.instruction("mov QWORD PTR [rbp - 136], r11");                      // publish the cursor even if the scan later falls back
     emitter.instruction("mov BYTE PTR [r11], 34");                              // write the opening value quote
     emitter.instruction("add r11, 1");                                          // advance past the opening quote
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the value pointer after the reservation
     emitter.instruction("mov rdx, QWORD PTR [rbp - 72]");                       // reload the value length after the reservation
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_json_plain_ascii");
     emitter.instruction("xor ecx, ecx");                                        // initialize the value copy index
-    emitter.label("__rt_json_assoc_value_str_fast_copy_x");
-    emitter.instruction("cmp rcx, rdx");                                        // have we copied every value byte?
-    emitter.instruction("jge __rt_json_assoc_value_str_fast_close_x");          // finish with the closing quote
-    emitter.instruction("mov r9b, BYTE PTR [rax + rcx]");                       // load the next value byte
-    emitter.instruction("mov BYTE PTR [r11 + rcx], r9b");                       // copy it directly to the cursor
+    emitter.label("__rt_json_assoc_value_str_fast_loop_x");
+    emitter.instruction("cmp rcx, rdx");                                        // has every value byte been copied?
+    emitter.instruction("jge __rt_json_assoc_value_str_fast_close_x");          // yes: finish with the closing quote
+    emitter.instruction("movzx r8d, BYTE PTR [rax + rcx]");                     // load the next value byte
+    emitter.instruction("movzx r9d, BYTE PTR [r10 + r8]");                      // classify it as verbatim or escapable
+    emitter.instruction("test r9d, r9d");                                       // does this byte need the general encoder?
+    emitter.instruction("jz __rt_json_assoc_value_str_slow_x");                 // escaping or validation needs the general encoder
+    emitter.instruction("mov BYTE PTR [r11 + rcx], r8b");                       // copy the plain byte to the cursor
     emitter.instruction("add rcx, 1");                                          // advance the value copy index
-    emitter.instruction("jmp __rt_json_assoc_value_str_fast_copy_x");           // copy the remaining value bytes
+    emitter.instruction("jmp __rt_json_assoc_value_str_fast_loop_x");           // copy the remaining value bytes
     emitter.label("__rt_json_assoc_value_str_fast_close_x");
     emitter.instruction("add r11, rdx");                                        // address the byte after the copied value
     emitter.instruction("mov BYTE PTR [r11], 34");                              // write the closing value quote

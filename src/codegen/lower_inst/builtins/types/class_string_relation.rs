@@ -26,11 +26,22 @@ pub(super) fn lower(
         return store_if_result(ctx, inst);
     }
     let target_key = php_symbol_key(target.trim_start_matches('\\'));
+    let marker_base = super::super::class_relations::reflection_hidden_interface(ctx, target)
+        .then(|| php_symbol_key(super::generic_base_name(target)));
     let mut candidates = std::collections::BTreeSet::new();
     for name in ctx.module.class_infos.keys() {
         let same = php_symbol_key(name.trim_start_matches('\\')) == target_key;
-        if (!exclude_self && same) || parent_chain_contains(ctx, name, &target_key)
-            || class_interfaces_contain(ctx, name, &target_key)
+        // An instantiation is the template's own class, not a subclass of it.
+        if exclude_self
+            && marker_base.as_deref().is_some_and(|base| {
+                php_symbol_key(super::generic_base_name(name)) == base
+            })
+        {
+            continue;
+        }
+        if (!exclude_self && same)
+            || parent_chain_contains(ctx, name, &target_key, marker_base.as_deref())
+            || class_interfaces_contain(ctx, name, &target_key, marker_base.as_deref())
         { candidates.insert(name.trim_start_matches('\\').to_string()); }
     }
     for name in ctx.module.interface_infos.keys() {

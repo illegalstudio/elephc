@@ -289,15 +289,22 @@ pub(crate) fn check_array_callback_builtin_call(
 /// Validates a walk callback, exposing boxed declared-array values as writable Mixed storage.
 pub(crate) fn check_array_walk_callback_builtin_call(
     checker: &mut Checker,
+    array: &Expr,
     callback: &Expr,
     arr_ty: &PhpType,
     span: crate::span::Span,
     env: &TypeEnv,
     label: &str,
 ) -> Result<PhpType, CompileError> {
-    let callback_arg_types = array_walk_callback_arg_types(checker, arr_ty, callback);
-    let writable_mixed_value = arr_ty.is_php_array();
-    checker.with_internal_callback_binding(|checker| {
+    let needs_boxed = walk_callback_requires_boxed_storage(checker, callback);
+    let mut callback_arg_types = array_walk_callback_arg_types(checker, arr_ty, callback);
+    if needs_boxed {
+        if let Some(first) = callback_arg_types.first_mut() {
+            *first = PhpType::Mixed;
+        }
+    }
+    let writable_mixed_value = needs_boxed || arr_ty.is_php_array();
+    let result = checker.with_internal_callback_binding(|checker| {
         check_array_callback_builtin_call_in_engine_frame(
             checker,
             callback,
@@ -307,7 +314,69 @@ pub(crate) fn check_array_walk_callback_builtin_call(
             label,
             writable_mixed_value,
         )
-    })
+    })?;
+    // `array_walk()` always binds the value as a writable reference and passes the key, but the
+    // unboxed eight-byte callback wrapper carries only the value. A callback that declares the
+    // value by reference or reads the key needs the boxed visit path, whose uniform invoker
+    // preserves both. Recording the array argument as a boxed reference output makes lowering
+    // promote an eligible local to a rebindable Mixed cell, so element writes are observable.
+    if needs_boxed
+        && !arr_ty.is_php_array()
+        && arr_ty.codegen_repr() != PhpType::Mixed
+    {
+        checker.record_boxed_reference_output(
+            array,
+            &PhpType::Mixed,
+            arr_ty,
+            span,
+            env,
+            false,
+        )?;
+    }
+    Ok(result)
+}
+
+/// Reports whether an `array_walk()` callback needs the boxed `(value-ref, key)` visit path.
+///
+/// A literal or resolved one-parameter by-value callback can consume the unboxed eight-byte
+/// element wrapper. Everything that declares a reference, a second key parameter, a variadic
+/// tail, or a runtime-resolved callable shape uses the uniform boxed invoker so PHP's writable
+/// value and key are preserved.
+fn walk_callback_requires_boxed_storage(checker: &Checker, callback: &Expr) -> bool {
+    match &callback.kind {
+        ExprKind::Closure {
+            params,
+            variadic,
+            ..
+        } => {
+            params.len() >= 2
+                || variadic.is_some()
+                || params.first().is_some_and(|(_, _, _, by_ref)| *by_ref)
+        }
+        ExprKind::Variable(name) => checker
+            .callable_sigs
+            .get(name)
+            .is_none_or(callback_signature_needs_boxed_walk),
+        ExprKind::StringLiteral(name) => {
+            let canonical = checker
+                .canonical_function_name_folded(name.as_str())
+                .unwrap_or_else(|| name.trim_start_matches('\\').to_string());
+            checker
+                .functions
+                .get(canonical.as_str())
+                .map_or(true, callback_signature_needs_boxed_walk)
+        }
+        ExprKind::Assignment { value, .. } => walk_callback_requires_boxed_storage(checker, value),
+        _ => true,
+    }
+}
+
+/// Reports whether a resolved callback signature reads the key, binds the value by reference,
+/// or accepts a variadic tail that the unboxed wrapper cannot supply.
+fn callback_signature_needs_boxed_walk(sig: &FunctionSig) -> bool {
+    sig.params.len() >= 2
+        || sig.variadic.is_some()
+        || sig.ref_params.first().copied().unwrap_or(false)
 }
 
 /// Type-checks an array-callback builtin's callback after the caller's `strict_types` setting

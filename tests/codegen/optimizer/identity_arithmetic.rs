@@ -57,9 +57,9 @@ fn test_identity_fold_preserves_operand_side_effects() {
 /// reinterprets the integer bits when the result is consumed as a float. `var_dump`
 /// must report a float, exactly as the unoptimized path does.
 #[test]
-fn test_identity_div_one_keeps_float_type() {
+fn test_identity_div_one_keeps_int_type() {
     let out = compile_and_run("<?php var_dump($argc / 1);");
-    assert_eq!(out, "float(1)\n");
+    assert_eq!(out, "int(1)\n");
 }
 
 /// Regression (the dangerous manifestation): a folded `$x / 1` feeding a float

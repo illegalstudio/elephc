@@ -104,10 +104,6 @@ impl Checker {
             PhpType::Object(class_name) => {
                 if self.object_type_supports_dimensions(class_name) {
                     Ok(self.array_access_offset_get_type(class_name))
-                } else if self.awaits_generic_instantiation(class_name) {
-                    // `new Bag([...])` inferred `Bag<string, int>` this round; the class
-                    // is spliced by the next one, which checks this read properly.
-                    Ok(PhpType::Mixed)
                 } else {
                     Err(CompileError::new(expr.span, "Cannot index non-array"))
                 }

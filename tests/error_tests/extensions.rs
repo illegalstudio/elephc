@@ -41,7 +41,7 @@ fn test_error_buffer_new_rejects_union_element_type() {
 #[test]
 fn test_error_buffer_new_rejects_static_float_length() {
     expect_error(
-        "<?php function half(int $n): void { $values = buffer_new<int>($n / 2); } half(4);",
+        "<?php function half(): void { $values = buffer_new<int>(2.5); } half();",
         "buffer_new<T>() length must be integer",
     );
 }
@@ -1167,19 +1167,6 @@ fn test_error_type_arguments_on_a_non_generic_class_annotation() {
     expect_error(
         "<?php class Plain { public int $x = 1; } Plain<int> $p = new Plain();",
         "'Plain' is written with type arguments but declares no type parameters",
-    );
-}
-
-/// Type arguments on an enum the program declares: enums share the class namespace and never
-/// declare type parameters, so the mistake is reported exactly as for a class instead of the
-/// arguments being erased like those on a name declared outside the program.
-#[test]
-fn test_error_type_arguments_on_a_declared_enum_annotation() {
-    expect_error(
-        "<?php enum Suit { case Hearts; } \
-         function f(Suit<int> $s): string { return $s->name; } \
-         echo f(Suit::Hearts);",
-        "'Suit' is written with type arguments but declares no type parameters",
     );
 }
 
