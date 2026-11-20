@@ -5962,6 +5962,41 @@ echo fread($f, 64);
     assert_eq!(out, "hello world");
 }
 
+/// Keeps a large read filter's input live while another filter reenters fread().
+#[test]
+fn test_user_stream_filter_large_nested_read_preserves_input() {
+    let out = compile_and_run(
+        r#"<?php
+class NestedReadFilter {
+    public function filter(string $data): string {
+        return strtoupper($data);
+    }
+}
+class LargeReadFilter {
+    public function filter(string $data): string {
+        global $nestedFilterStream;
+        $inner = fread($nestedFilterStream, 8);
+        return substr($data, 0, 3) . ':' . $inner . ':' . strlen($data) . ':' . substr($data, -3);
+    }
+}
+stream_filter_register("nested.read", "NestedReadFilter");
+stream_filter_register("large.read", "LargeReadFilter");
+$nestedFilterStream = fopen("php://memory", "r+");
+fwrite($nestedFilterStream, "inner");
+rewind($nestedFilterStream);
+stream_filter_append($nestedFilterStream, "nested.read", STREAM_FILTER_READ);
+$large = fopen("php://memory", "r+");
+fwrite($large, "beg" . str_repeat("a", 70000) . "end");
+rewind($large);
+stream_filter_append($large, "large.read", STREAM_FILTER_READ);
+echo fread($large, 80000);
+fclose($large);
+fclose($nestedFilterStream);
+"#,
+    );
+    assert_eq!(out, "beg:INNER:70006:end");
+}
+
 /// Verifies compiled PHP output for user stream filter params exposed on `$this`.
 #[test]
 fn test_user_stream_filter_params_are_exposed_on_this() {

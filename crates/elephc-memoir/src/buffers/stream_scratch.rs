@@ -92,3 +92,58 @@ pub fn emit_growing_read_capacity(emitter: &mut impl Emitter, prefix: &str) {
     }
     emitter.label(&done);
 }
+
+/// Stack record holding the borrowed callback arguments and the stabilized input owner.
+const CALLBACK_GUARD: crate::RecordOffset = crate::RecordOffset::new(32);
+/// Stack bytes for the callback arguments, result pair and owner guard.
+const CALLBACK_STACK_BYTES: usize = 32 + crate::activation_records::GUARD_BYTES;
+
+/// Stabilizes a string passed to a reentrant filter and roots it until the result is owned.
+/// Reads can adopt the consumed transient; writes borrow their original source.
+pub fn emit_stage_callback_input(emitter: &mut impl Emitter, method: &str) {
+    let receiver = emitter.int_arg_reg_name(0);
+    let input = emitter.int_arg_reg_name(1);
+    let length = emitter.int_arg_reg_name(2);
+    let scratch = emitter.secondary_scratch_reg();
+    let (result, _) = emitter.string_result_regs();
+
+    emitter.emit_reserve_temporary_stack(CALLBACK_STACK_BYTES);
+    emitter.emit_store_to_sp(receiver, 0);
+    emitter.emit_store_to_sp(method, 8);
+    emitter.emit_store_to_sp(length, 24);
+    emitter.emit_reg_move(result, input);
+    match emitter.arch() {
+        Arch::AArch64 => emitter.instruction("cbnz x3, __rt_filter_copy_borrowed"), // writes retain their source owner
+        Arch::X86_64 => {
+            emitter.instruction("test rcx, rcx");                               // identify a borrowed write source
+            emitter.instruction("jnz __rt_filter_copy_borrowed");                // leave the caller's source intact
+        }
+    }
+    emitter.emit_call_label("__rt_str_persist");
+    emitter.emit_jump("__rt_filter_input_ready");
+    emitter.label("__rt_filter_copy_borrowed");
+    emitter.emit_call_label("__rt_str_dup_owned");
+    emitter.label("__rt_filter_input_ready");
+    emitter.emit_store_to_sp(result, 16);
+    crate::guarded_owners::emit_publish_at_stack(
+        emitter, result, "__rt_exception_release_owned", scratch, CALLBACK_GUARD,
+        crate::RecordOffset::new(crate::activation_records::GUARD_OWNER),
+    );
+    emitter.emit_load_temporary_stack_slot(receiver, 0);
+    emitter.emit_load_temporary_stack_slot(method, 8);
+    emitter.emit_load_temporary_stack_slot(input, 16);
+    emitter.emit_load_temporary_stack_slot(length, 24);
+}
+
+/// Retires the stabilized input after the caller has secured an independent result.
+pub fn emit_finish_callback_input(emitter: &mut impl Emitter) {
+    let (result, length) = emitter.string_result_regs();
+    emitter.emit_store_to_sp(result, 0);
+    emitter.emit_store_to_sp(length, 24);
+    crate::guarded_owners::emit_detach_at_stack(emitter, CALLBACK_GUARD);
+    emitter.emit_load_temporary_stack_slot(emitter.int_result_reg(), 16);
+    emitter.emit_call_label("__rt_decref_any");
+    emitter.emit_load_temporary_stack_slot(result, 0);
+    emitter.emit_load_temporary_stack_slot(length, 24);
+    emitter.emit_release_temporary_stack(CALLBACK_STACK_BYTES);
+}
