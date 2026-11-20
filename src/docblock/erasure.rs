@@ -302,6 +302,17 @@ fn class_names_in(message: &str) -> Vec<String> {
             names.push(rest[..end].to_string());
         }
     }
+    // A name a message spells bare, not quoted (`Cannot instantiate interface: Ns\Box`): the
+    // refusal of a bare `new Box(..)` of a PHPDoc template names the template's class only so.
+    // Qualified names only, so ordinary words of the message are not mistaken for classes.
+    for word in message.split(|c: char| !is_name_char(c)) {
+        if word.contains('\\') {
+            let word = word.trim_matches('\\');
+            if !word.is_empty() {
+                names.push(word.to_string());
+            }
+        }
+    }
     names
 }
 
@@ -369,6 +380,12 @@ pub fn report_original_instead() -> bool {
     }
     crate::progress::clear();
     eprintln!("{original}");
+    // `ELEPHC_DOCBLOCK_SHOW_LAST` also prints the diagnostic of the round that gave up, which the
+    // original one otherwise hides.
+    if std::env::var_os("ELEPHC_DOCBLOCK_SHOW_LAST").is_some() {
+        eprintln!("--- the round that gave up reported:");
+        return false;
+    }
     true
 }
 
@@ -384,6 +401,13 @@ mod tests {
         for expected in ["Ns\\Norm", "Ns\\Node", "Ns\\Expr"] {
             assert!(names.iter().any(|name| name == expected), "{expected} in {names:?}");
         }
+    }
+
+    /// The refusal of a bare `new` of a PHPDoc template spells the class unquoted.
+    #[test]
+    fn names_an_unquoted_qualified_class() {
+        let names = class_names_in("Cannot instantiate interface: Ns\\Type\\BuiltinType");
+        assert!(names.iter().any(|name| name == "Ns\\Type\\BuiltinType"), "{names:?}");
     }
 
     /// A missing parent is refused with the written types too, so it erases nothing.
