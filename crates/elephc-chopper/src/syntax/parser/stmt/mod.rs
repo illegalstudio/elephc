@@ -154,6 +154,20 @@ fn attach_attributes_to_stmt(
     if attributes.is_empty() {
         return Ok(stmt);
     }
+    // A grouped `const` declaration has one AST node per name. Each constant gets the
+    // attributes written before `const`.
+    if let StmtKind::Synthetic(constants) = &mut stmt.kind {
+        if !constants.is_empty()
+            && constants
+                .iter()
+                .all(|constant| matches!(constant.kind, StmtKind::ConstDecl { .. }))
+        {
+            for constant in constants {
+                constant.attributes = attributes.clone();
+            }
+            return Ok(stmt);
+        }
+    }
     if stmt_kind_supports_attributes(&stmt.kind) {
         stmt.attributes = attributes;
         Ok(stmt)

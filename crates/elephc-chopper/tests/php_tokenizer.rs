@@ -193,6 +193,8 @@ fn tokenizer_php85_accepts_grammar_beyond_compiler_subset() {
         r#"<?php if ($a) done: else other:"#,
         "<?php if (1) label:; while (true) other:; for (;;) third:; foreach ([] as $x) fourth:; declare(strict_types=1) fifth:;",
         "<?php class C { public static function __construct(public int $x) {} }",
+        "<?php function f($this) {} class C { function m($this) {} }",
+        "<?php function f(int $this) {} function g(int &...$this) {} class C { function m(int $this) {} function n(int &...$this) {} }",
         "<?php ($o->p++)[0]; ($o->p++)->q; $o->p++ + 1;",
         r#"<?php function f(\empty $x) {} function g(Foo\empty $x) {}"#,
         r#"<?php $s = `{$$a}`; $t = `{$$$a}`; $u = `{$$a[0]}`; $v = `{$a[$$b]}`; $w = `{$a[${"k"}]}`;"#,
@@ -229,6 +231,7 @@ fn tokenizer_php85_accepts_grammar_beyond_compiler_subset() {
         "<?php #[A] function() {};",
         "<?php #[A] static fn() => 1;",
         "<?php #[A] const X = 1;",
+        "<?php #[A] const X = 1, Y = 2;",
         "<?php class C { #[A] case X; }",
         "<?php function f(#[A] public $x) {}",
         "<?php $d |> fn($x) => $x;",
@@ -302,6 +305,9 @@ fn tokenizer_php85_accepts_grammar_beyond_compiler_subset() {
         "<?php $a = [&foo()];",
         "<?php [\"k\" => &$x];",
         "<?php $a = [0 => &$x[1]]; array(\"k\" => &$y[0]);",
+        "<?php $a = [&readonly()]; $b = array(&readonly());",
+        "<?php $r = &($get)()[$key]; $s = &($a)[0]; $t = &($a)->p; $u = &($a)();",
+        "<?php $a = [&($b)[0]]; $b = array(&($g)());",
         "<?php strlen(...); $f = $a(...); $g = $o->m(...); $h = C::m(...);",
         "<?php $cls::MATCH; (foo())::MATCH; $cls::LIST; $o::ENUM;",
         "<?php (foo())(...); $a[0](...); (new Foo)(...);",
@@ -363,6 +369,7 @@ fn tokenizer_php85_rejects_dialect_and_accept_invalid_inputs() {
         "<?php echo unset($a);",
         "<?php echo (1) label:;",
         "<?php $o->p++[0];",
+        "<?php $r = &($a);",
         "<?php $o->p++->q;",
         "<?php $o->p++();",
         "<?php list(...$a $b) = $row;",
@@ -1029,6 +1036,7 @@ fn fixtures() -> Vec<Vec<u8>> {
         "<?php #[A] function() {};",
         "<?php #[A] static fn() => 1;",
         "<?php #[A] const X = 1;",
+        "<?php #[A] const X = 1, Y = 2;",
         "<?php class C { #[A] case X; }",
         "<?php function f(#[A] public $x) {}",
         "<?php $d |> fn($x) => $x;",
@@ -1090,6 +1098,9 @@ fn fixtures() -> Vec<Vec<u8>> {
         "<?php $a = [&foo()];",
         "<?php [\"k\" => &$x];",
         "<?php $a = [0 => &$x[1]]; array(\"k\" => &$y[0]);",
+        "<?php $a = [&readonly()]; $b = array(&readonly());",
+        "<?php $r = &($get)()[$key]; $s = &($a)[0]; $t = &($a)->p; $u = &($a)();",
+        "<?php $a = [&($b)[0]]; $b = array(&($g)());",
         "<?php $o->$method(value: 1);",
         "<?php C::$method(value: 1);",
         "<?php $a[&$b];",
@@ -1143,6 +1154,8 @@ fn fixtures() -> Vec<Vec<u8>> {
         r#"<?php if ($a) done: else other:"#,
         "<?php if (1) label:; while (true) other:; for (;;) third:; foreach ([] as $x) fourth:; declare(strict_types=1) fifth:;",
         "<?php class C { public static function __construct(public int $x) {} }",
+        "<?php function f($this) {} class C { function m($this) {} }",
+        "<?php function f(int $this) {} function g(int &...$this) {} class C { function m(int $this) {} function n(int &...$this) {} }",
         "<?php ($o->p++)[0]; ($o->p++)->q; $o->p++ + 1;",
         r#"<?php function f(\empty $x) {} function g(Foo\empty $x) {}"#,
         r#"<?php $s = `{$$a}`; $t = `{$$$a}`; $u = `{$$a[0]}`; $v = `{$a[$$b]}`; $w = `{$a[${"k"}]}`;"#,
@@ -1269,6 +1282,7 @@ fn fixtures() -> Vec<Vec<u8>> {
         "<?php echo unset($a);",
         "<?php echo (1) label:;",
         "<?php $o->p++[0];",
+        "<?php $r = &($a);",
         "<?php $o->p++->q;",
         "<?php $o->p++();",
         "<?php list(...$a $b) = $row;",
@@ -1858,4 +1872,22 @@ fn tokenizer_validation_preserves_compiler_ast_and_anonymous_class_counter() {
     let after = parser::parse_test_source(source).expect("compiler mode remains active after validation");
     assert_eq!(format!("{before:?}"), format!("{after:?}"));
     assert_eq!(format!("{after:?}"), format!("{:?}", after.clone()));
+}
+
+/// Checks the shared AST for grouped constant attributes and preserves compiler parameter rules.
+#[test]
+fn tokenizer_validation_preserves_compiler_declaration_rules() {
+    use elephc_chopper::syntax::parser::{self, ast::StmtKind};
+
+    let program = parser::parse_test_source("<?php #[A] const X = 1, Y = 2;").unwrap();
+    assert_eq!(program.len(), 2);
+    for constant in &program {
+        assert!(matches!(constant.kind, StmtKind::ConstDecl { .. }));
+        assert_eq!(constant.attributes.len(), 1);
+    }
+
+    for source in ["<?php function f(int $this) {}", "<?php class C { function m(int &...$this) {} }"] {
+        tokenize(source.as_bytes(), TOKEN_PARSE).expect("PHP accepts the parameter grammar");
+        assert!(parser::parse_test_source(source).is_err(), "compiler accepted {source}");
+    }
 }

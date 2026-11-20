@@ -107,7 +107,7 @@ pub(crate) fn goto_is_statement<T: SourceToken>(tokens: &[T], index: usize) -> b
 /// The map follows the same generic nesting rule as the reference-target scan: any closing
 /// delimiter closes the innermost opener, regardless of its spelling. A target group can then
 /// be skipped in O(1) instead of rescanned once per enclosing reference marker.
-fn delimiter_close_indices<T: SourceToken>(tokens: &[T]) -> Vec<Option<usize>> {
+pub(super) fn delimiter_close_indices<T: SourceToken>(tokens: &[T]) -> Vec<Option<usize>> {
     let mut stack: Vec<usize> = Vec::new();
     let mut close = vec![None; tokens.len()];
     for (index, token) in tokens.iter().enumerate() {
@@ -197,7 +197,7 @@ pub(crate) fn invalid_array_reference_error<T: SourceToken>(
         let Some(target) = next_significant_index(tokens, index) else {
             return Some(end_of_file_expecting(source.len(), None));
         };
-        if !reference_target_starts_at(tokens, index) {
+        if !reference_target_starts_at(tokens, index, |open| close_of[open]) {
             return Some(token_error_at(source, tokens, tokens[target].pos()));
         }
         let mut depth = 0usize;
@@ -275,6 +275,7 @@ fn reference_chain_base_token(id: i64) -> bool {
         || id == tok::T_NAME_QUALIFIED
         || id == tok::T_NAME_RELATIVE
         || id == tok::T_STATIC
+        || id == tok::T_READONLY
         || id == i64::from(b'\\')
         || id == i64::from(b'$')
         || id == tok::T_DOUBLE_COLON

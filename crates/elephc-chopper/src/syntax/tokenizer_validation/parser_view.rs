@@ -8,6 +8,8 @@
 //! - Every view byte keeps a source offset so diagnostics and identifier feedback stay exact.
 //! - Inline HTML, tags, casts and interpolation are rewritten without changing line numbers.
 
+use std::cell::OnceCell;
+
 use super::*;
 
 /// Builds the PHP-only parser view and a view-byte to source-byte map.
@@ -27,6 +29,8 @@ pub(crate) fn parser_view<T: SourceToken>(source: &[u8], tokens: &[T]) -> (Strin
     // followed by a single-statement body, and which closing tokens proved that.
     let mut control_parens: Vec<bool> = Vec::new();
     let mut control_close = vec![false; tokens.len()];
+    // Build the delimiter map only if a grouped reference target needs it.
+    let reference_closes = OnceCell::new();
     while index < tokens.len() {
         let token = &tokens[index];
         match token.id() {
@@ -78,6 +82,7 @@ pub(crate) fn parser_view<T: SourceToken>(source: &[u8], tokens: &[T]) -> (Strin
             brackets.last().copied(),
             parens.last().copied(),
             braces.last().copied(),
+            |open| reference_closes.get_or_init(|| delimiter_close_indices(tokens))[open],
         ) {
             append_mapped(&mut view, &mut map, b" ", token.pos());
             index += 1;
@@ -391,7 +396,11 @@ pub(crate) fn sanitize_invalid_utf8(view: Vec<u8>) -> String {
 ///
 /// PHP allows `$a = &$b`, `$a = &$b[0]`, and `$a = &foo()`, but not `$a = &1` or
 /// `$a = &new C`. Keeping the ampersand in the view for the latter lets the parser reject it.
-pub(crate) fn reference_target_starts_at<T: SourceToken>(tokens: &[T], index: usize) -> bool {
+pub(crate) fn reference_target_starts_at<T: SourceToken>(
+    tokens: &[T],
+    index: usize,
+    close_of: impl FnOnce(usize) -> Option<usize>,
+) -> bool {
     let Some(next) = next_significant_index(tokens, index) else { return false; };
     match tokens[next].id() {
         id if id == tok::T_VARIABLE => true,
@@ -399,7 +408,7 @@ pub(crate) fn reference_target_starts_at<T: SourceToken>(tokens: &[T], index: us
         id if id == i64::from(b'$') => true,
         id if id == tok::T_STATIC => next_significant_index(tokens, next)
             .is_some_and(|after| tokens[after].id() == tok::T_DOUBLE_COLON),
-        id if id == tok::T_STRING || id == tok::T_IDENTIFIER => {
+        id if id == tok::T_STRING || id == tok::T_IDENTIFIER || id == tok::T_READONLY => {
             next_significant_index(tokens, next).is_some_and(|after| {
                 matches!(
                     tokens[after].id(),
@@ -424,6 +433,20 @@ pub(crate) fn reference_target_starts_at<T: SourceToken>(tokens: &[T], index: us
                 )
             })
         }
+        // PHP allows a grouped base with a call or member/index access, such as `&($a)[0]`.
+        id if id == i64::from(b'(') => close_of(next)
+            .filter(|&close| tokens[close].id() == i64::from(b')'))
+            .and_then(|close| next_significant_index(tokens, close))
+            .is_some_and(|after| {
+                matches!(
+                    tokens[after].id(),
+                    id if id == i64::from(b'(')
+                        || id == i64::from(b'[')
+                        || id == tok::T_OBJECT_OPERATOR
+                        || id == tok::T_NULLSAFE_OBJECT_OPERATOR
+                        || id == tok::T_DOUBLE_COLON
+                )
+            }),
         _ => false,
     }
 }
@@ -587,6 +610,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
     enclosing_bracket: Option<usize>,
     enclosing_paren: Option<usize>,
     enclosing_brace: Option<usize>,
+    close_of: impl FnOnce(usize) -> Option<usize>,
 ) -> bool {
     let ampersand = tokens[index].id() == tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
         || tokens[index].id() == tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG;
@@ -599,7 +623,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
         if enclosing_paren.is_some_and(|open| paren_is_declaration_parameters(tokens, open)) {
             return false;
         }
-        return reference_target_starts_at(tokens, index);
+        return reference_target_starts_at(tokens, index, close_of);
     }
     if [tok::T_FUNCTION, tok::T_AS, tok::T_YIELD].contains(&previous_significant) {
         return true;
@@ -608,7 +632,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
     // (`fn() => &$x` is a PHP ParseError), so its marker must stay for the parser to reject.
     if previous_significant == tok::T_DOUBLE_ARROW {
         let Some(arrow) = previous_significant_index(tokens, index) else { return false; };
-        return reference_target_starts_at(tokens, index)
+        return reference_target_starts_at(tokens, index, close_of)
             && arrow_pair_is_array_value(
                 tokens,
                 arrow,
@@ -627,7 +651,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
     if previous_significant == i64::from(b'[') {
         if let Some(open) = enclosing_bracket {
             if bracket_opens_array_literal(tokens, open) {
-                return reference_target_starts_at(tokens, index);
+                return reference_target_starts_at(tokens, index, close_of);
             }
         }
         return false;
@@ -638,7 +662,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
                 && delimiter_is_outside(open, enclosing_paren)
                 && delimiter_is_outside(open, enclosing_brace)
             {
-                return reference_target_starts_at(tokens, index);
+                return reference_target_starts_at(tokens, index, close_of);
             }
         }
     }
@@ -654,7 +678,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
     // and silently approve invalid PHP. Declaration and capture lists keep their marker
     // unconditionally because the parser still validates the following parameter or capture.
     if [tok::T_ARRAY, tok::T_LIST].contains(&tokens[before].id()) {
-        return reference_target_starts_at(tokens, index);
+        return reference_target_starts_at(tokens, index, close_of);
     }
     if [tok::T_FUNCTION, tok::T_FN, tok::T_USE].contains(&tokens[before].id()) {
         return true;

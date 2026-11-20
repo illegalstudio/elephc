@@ -399,7 +399,7 @@ pub fn looks_like_typed_param(tokens: &[SpannedToken], pos: usize) -> bool {
             if matches!(tokens.get(probe).map(|(t, _)| t), Some(Token::Ellipsis)) {
                 probe += 1;
             }
-            matches!(tokens.get(probe).map(|(t, _)| t), Some(Token::Variable(_)))
+            tokens.get(probe).and_then(|(token, _)| parameter_variable_name(token)).is_some()
         }
         Err(_) => false,
     }
@@ -899,6 +899,15 @@ fn ident_matches(name: &str, keywords: &[&str]) -> bool {
         .any(|keyword| name.eq_ignore_ascii_case(keyword))
 }
 
+/// Returns the parameter name, allowing `$this` only when checking PHP grammar for TOKEN_PARSE.
+pub(super) fn parameter_variable_name(token: &Token) -> Option<&str> {
+    match token {
+        Token::Variable(name) => Some(name),
+        Token::This if validation_only() => Some("this"),
+        _ => None,
+    }
+}
+
 /// Parses a parenthesized parameter list (not including the surrounding `(` and `)`).
 /// Handles typed parameters, defaults, `&` by-reference markers, `...` variadic markers,
 /// and PHP 8.0 `#[...]` attributes. Returns a vec of `(name, type, default, is_ref)` tuples
@@ -969,36 +978,29 @@ pub(super) fn parse_params(
             // A type annotation on a variadic (`int ...$xs`) constrains each passed argument; the
             // declared element type is preserved so call validation can check every collected arg.
             *pos += 1;
-            match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Variable(n)) => {
-                    variadic = Some(n.clone());
-                    variadic_by_ref = is_ref;
-                    variadic_type = type_ann;
-                    param_attributes.push(attributes);
-                    *pos += 1;
-                }
-                _ => return Err(CompileError::expected_variable(span, "Expected variable after '...'")),
-            }
+            let Some(name) = tokens.get(*pos).and_then(|(token, _)| parameter_variable_name(token)) else {
+                return Err(CompileError::expected_variable(span, "Expected variable after '...'"));
+            };
+            variadic = Some(name.to_owned());
+            variadic_by_ref = is_ref;
+            variadic_type = type_ann;
+            param_attributes.push(attributes);
+            *pos += 1;
             continue;
         }
-        match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Variable(n)) => {
-                let n = n.clone();
-                *pos += 1;
-                let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
-                    *pos += 1;
-                    Some(parse_expr(tokens, pos)?)
-                } else {
-                    None
-                };
-                param_attributes.push(attributes);
-                params.push((n, type_ann, default, is_ref));
-            }
-            _ => {
-                let error_span = parameter_error_span(tokens, *pos, span);
-                return Err(CompileError::new(error_span, "Expected parameter variable"));
-            }
-        }
+        let Some(name) = tokens.get(*pos).and_then(|(token, _)| parameter_variable_name(token)) else {
+            let error_span = parameter_error_span(tokens, *pos, span);
+            return Err(CompileError::new(error_span, "Expected parameter variable"));
+        };
+        *pos += 1;
+        let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+            *pos += 1;
+            Some(parse_expr(tokens, pos)?)
+        } else {
+            None
+        };
+        param_attributes.push(attributes);
+        params.push((name.to_owned(), type_ann, default, is_ref));
     }
     Ok((
         params,

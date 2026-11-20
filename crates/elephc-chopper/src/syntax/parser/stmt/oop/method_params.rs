@@ -19,7 +19,9 @@ use crate::syntax::parser::expr::parse_expr;
 use crate::syntax::span::Span;
 
 use super::super::expect_token;
-use super::super::params::{looks_like_typed_param, parameter_error_span, parse_type_expr};
+use super::super::params::{
+    looks_like_typed_param, parameter_error_span, parameter_variable_name, parse_type_expr,
+};
 use super::body::consume_set_marker;
 
 type MethodParam = (String, Option<TypeExpr>, Option<Expr>, bool);
@@ -134,25 +136,25 @@ pub(super) fn parse_method_params(
             // A typed variadic (`int ...$xs`) is accepted; the declared element type is preserved
             // so call validation can check each argument collected into the variadic.
             *pos += 1;
-            match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Variable(n)) => {
-                    variadic = Some(n.clone());
-                    variadic_by_ref = is_ref;
-                    variadic_type = type_ann;
-                    param_attributes.push(attributes);
-                    *pos += 1;
-                }
-                _ => return Err(CompileError::expected_variable(span, "Expected variable after '...'")),
-            }
+            let Some(name) = tokens.get(*pos).and_then(|(token, _)| parameter_variable_name(token)) else {
+                return Err(CompileError::expected_variable(span, "Expected variable after '...'"));
+            };
+            variadic = Some(name.to_owned());
+            variadic_by_ref = is_ref;
+            variadic_type = type_ann;
+            param_attributes.push(attributes);
+            *pos += 1;
             continue;
         }
 
         match tokens
             .get(*pos)
-            .map(|(token, metadata)| (token, metadata.span))
+            .and_then(|(token, metadata)| {
+                parameter_variable_name(token).map(|name| (name, metadata.span))
+            })
         {
-            Some((Token::Variable(n), param_span)) => {
-                let n = n.clone();
+            Some((n, param_span)) => {
+                let n = n.to_owned();
                 *pos += 1;
                 let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
                     *pos += 1;
