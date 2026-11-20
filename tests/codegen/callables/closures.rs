@@ -2906,6 +2906,37 @@ object,Closure,y,107|object,Closure,y,108|object,Closure,y,12|object,Closure,y,1
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Inside a class, `Closure::fromCallable()` of a runtime value naming a private method (tried
+/// before the shared public selector) makes a Closure object too, like a public one.
+/// Expected output measured with php 8.5.
+#[test]
+fn test_closure_factories_wrap_scope_private_methods_in_a_closure() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Inv { public function __invoke() { return 3; } }
+class Cls {
+    private function p() { return 1; }
+    private static function ps() { return 2; }
+    public function w(mixed $f): string {
+        $c = Closure::fromCallable($f);
+        return gettype($c) . "," . get_class($c) . "," . ($c instanceof Closure ? "y" : "n") . "," . $c() . "|";
+    }
+    public function run(array $argv): void {
+        $a = $argv[1] ?? 'p';
+        $s = $argv[2] ?? 'Cls::ps';
+        echo $this->w([$this, $a]), $this->w($s), $this->w(['Cls', 'ps']), $this->w(new Inv()), "\n";
+    }
+}
+(new Cls())->run($argv);
+"#);
+    assert_eq!(
+        out.stdout,
+        "object,Closure,y,1|object,Closure,y,2|object,Closure,y,2|object,Closure,y,3|\n",
+        "{}", out.stderr,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A missed read from an array of closures leaves null, which `Closure::fromCallable()` rejects
 /// with a TypeError and `$v(...)` with an Error, instead of reading through the null sentinel.
 /// Expected output measured with php 8.5.
