@@ -17,7 +17,6 @@
 //!    coroutine through `__rt_fiber_*` primitives.
 
 pub(crate) mod coro;
-pub(crate) mod frame;
 
 use crate::codegen_support::emit::Emitter;
 

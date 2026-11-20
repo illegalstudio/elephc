@@ -29,6 +29,7 @@ Magician `fetch_update` deprecation under this host toolchain.
 
 Cargo metadata exposes only an `rlib` target for Memoir, and no Memoir `.a` archive
 is produced. Runtime-cache identity and heap-header hygiene cover the new source
-owner. All registered memory emitter functions were accounted for; an unrelated,
-unregistered legacy `gc_cycle_destructors.rs` remains unchanged and is tracked
-separately in Code Journal task 5c6805c5.
+owner. All registered memory emitter functions were accounted for. A follow-up
+audit confirmed that the old cycle-destructor emitter and fixture were
+unregistered. They were removed along with the unused generator frame layout.
+The active collector and generator storage remain covered by their current tests.
