@@ -1327,6 +1327,20 @@ pieces must stay in agreement:
    a different parameter, since lowering only knows the receiver's static class
    and PHP binds the method selected at run time.
 
+9. **Declared return values** reuse the same instruction. A `return` from a
+   function declaring `string`, `float` or `bool` whose expression the checker
+   types as `mixed` (or a refusable union) is recorded in the same site set
+   (`stmt_check`, through `optimize::active_scalar_return_needs_guard`), and
+   `return_boundaries` makes such a return `may_throw` with `TypeError`.
+   `ir_lower::stmt::return_coercions::guard_declared_scalar_return` checks only
+   recorded returns, through the shared `scalar_param_guards::emit_scalar_guard`
+   with the message `"<callable>(): Return value must be of type T, "` +
+   type name + `" returned"`. A returned owned temporary is pinned over the
+   check, so a refusal throws first and the unwinder releases the value (a
+   throwing destructor then chains the `TypeError`); the release flag is not
+   used. A checked value bound to `bool` converts by PHP truthiness. `int`
+   keeps its own `ReturnBoundaryMixedToInt`.
+
 ### Eval and Dynamic Symbols
 
 | Op | Operands | Result | Effects |
