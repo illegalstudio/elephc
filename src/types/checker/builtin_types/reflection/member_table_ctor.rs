@@ -1056,6 +1056,17 @@ pub(super) fn apply_function_table(class: &mut FlattenedClass) {
             vec![e_this_prop("__callable_name"), e_str("{closure")],
         ))],
     );
+    // The bound `$this` lives in the closure descriptor's runtime capture slot (`Closure::bind`
+    // rewrites it); a function, a first-class callable or a closure that never reads `$this`
+    // answers null.
+    replace_body(
+        class,
+        "getClosureThis",
+        vec![s_return(e_call(
+            "__elephc_refl_closure_this",
+            vec![e_this_prop("__callable")],
+        ))],
+    );
     for method in ["getClosureScopeClass", "getClosureCalledClass"] {
         replace_body(class, method, closure_class_body());
     }

@@ -61,7 +61,7 @@ mod reflection;
 
 pub(in crate::codegen) use reflection::emit_reflection_class_table;
 pub(super) use reflection::{
-    lower_refl_at, lower_refl_callable_name, lower_refl_pool_str, lower_refl_row_lookup, lower_refl_word,
+    lower_refl_at, lower_refl_callable_name, lower_refl_closure_this, lower_refl_pool_str, lower_refl_row_lookup, lower_refl_word,
     lower_reflection_fill_members,
     lower_reflection_materialize,
 };

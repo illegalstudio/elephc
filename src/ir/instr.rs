@@ -1396,6 +1396,9 @@ pub enum Op {
     /// The PHP name a callable descriptor carries (operand 0, a boxed callable): `{closure:...}`
     /// for a closure, the function name for a named one, "" for anything else.
     ReflCallableName,
+    /// The `$this` a closure descriptor (operand 0, a boxed callable) carries in its runtime
+    /// capture slots, as a fresh Mixed; null when it carries none or the operand is no closure.
+    ReflClosureThis,
     /// Runs the compiled member filler whose address a class reflector recorded (operand 0, a
     /// raw code address) on that reflector (operand 1), filling its member-reflector slots.
     ReflectionFillMembers,
@@ -2031,6 +2034,7 @@ impl Op {
             ReflectionMaterialize => E::READS_HEAP | E::ALLOC_HEAP,
             // Pure reads of immutable module tables.
             ReflRowLookup | ReflWord | ReflPoolStr | ReflAt | ReflCallableName => E::READS_GLOBAL,
+            ReflClosureThis => E::READS_GLOBAL | E::ALLOC_HEAP,
             ReflectionFillMembers => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP,
             ObjectHandleReserve | ObjectHandlePend | ObjectHandleUnpend => {
                 E::READS_GLOBAL | E::WRITES_GLOBAL
@@ -2385,6 +2389,7 @@ impl Op {
             ReflWord => "refl_word",
             ReflPoolStr => "refl_pool_str",
             ReflCallableName => "refl_callable_name",
+            ReflClosureThis => "refl_closure_this",
             ReflAt => "refl_at",
             ReflectionFillMembers => "reflection_fill_members",
             ObjectHandleReserve => "object_handle_reserve",

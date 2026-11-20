@@ -465,6 +465,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ReflWord => objects::lower_refl_word(ctx, &inst),
         Op::ReflPoolStr => objects::lower_refl_pool_str(ctx, &inst),
         Op::ReflCallableName => objects::lower_refl_callable_name(ctx, &inst),
+        Op::ReflClosureThis => objects::lower_refl_closure_this(ctx, &inst),
         Op::ReflAt => objects::lower_refl_at(ctx, &inst),
         Op::ObjectHandleReserve | Op::ObjectHandlePend | Op::ObjectHandleUnpend => {
             objects::lower_object_handle_reservation(ctx, &inst)

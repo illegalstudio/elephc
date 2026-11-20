@@ -488,6 +488,29 @@ echo $reflection->getClosureCalledClass()->getName();
     );
 }
 
+/// `getClosureThis()` reads the receiver out of the closure itself: the one a rebind installed,
+/// and null for a named function or a closure bound to nothing. Expected output is `php -n` 8.5's.
+#[test]
+fn test_reflection_function_closure_this_follows_rebinding() {
+    let out = compile_and_run(
+        r#"<?php
+class ClosureThisFirst {
+    public function make(): Closure { return function (): object { return $this; }; }
+}
+class ClosureThisSecond {}
+function closure_this_named() {}
+$first = new ClosureThisFirst();
+$second = new ClosureThisSecond();
+$closure = $first->make();
+$rebound = Closure::bind($closure, $second, ClosureThisSecond::class);
+echo (new ReflectionFunction($closure))->getClosureThis() === $first ? 'first' : 'other', ':';
+echo (new ReflectionFunction($rebound))->getClosureThis() === $second ? 'second' : 'other', ':';
+echo var_export((new ReflectionFunction('closure_this_named'))->getClosureThis(), true);
+"#,
+    );
+    assert_eq!(out, "first:second:NULL");
+}
+
 /// Verifies runtime string targets use registered function metadata instead of requiring a
 /// compile-time literal.
 #[test]

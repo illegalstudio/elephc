@@ -57,6 +57,7 @@ pub mod __elephc_pdo_called_class_status;
 pub mod __elephc_pdo_statement_class_status;
 pub mod __elephc_refl_at;
 pub mod __elephc_refl_callable_name;
+pub mod __elephc_refl_closure_this;
 pub mod __elephc_refl_pool_str;
 pub mod __elephc_refl_row;
 pub mod __elephc_refl_word;

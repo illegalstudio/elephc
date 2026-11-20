@@ -1013,3 +1013,139 @@ pub(in crate::codegen::lower_inst) fn lower_refl_callable_name(
         .ok_or_else(|| CodegenIrError::invalid_module("refl_callable_name missing result"))?;
     ctx.store_result_value(destination)
 }
+
+/// Lowers `ReflClosureThis`: the `$this` the closure descriptor boxed in operand 0 carries.
+///
+/// A closure that reads `$this` keeps it in a runtime capture slot named `this` (boxed Mixed, so
+/// `Closure::bind` can overwrite it). The descriptor's environment record lists the captures by
+/// name; the slot of the one called `this` is read and re-boxed as a fresh Mixed. A descriptor
+/// without such a capture (a function, a closure that never reads `$this`, a static closure)
+/// answers null.
+pub(in crate::codegen::lower_inst) fn lower_refl_closure_this(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    use crate::codegen_support::callable_descriptor::{
+        CALLABLE_DESC_ENVIRONMENT_OFFSET, CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET,
+    };
+    let operand = *inst
+        .operands
+        .first()
+        .ok_or_else(|| CodegenIrError::invalid_module("refl_closure_this missing operand"))?;
+    let operand_type = ctx.value_php_type(operand)?;
+    ctx.load_value_to_result(operand)?;
+    let none = ctx.next_label("refl_this_none");
+    let next = ctx.next_label("refl_this_next");
+    let scan = ctx.next_label("refl_this_scan");
+    let found = ctx.next_label("refl_this_found");
+    let done = ctx.next_label("refl_this_done");
+    let null_tag = crate::codegen::runtime_value_tag(&PhpType::Void) as i64;
+    if !matches!(operand_type.codegen_repr(), PhpType::Callable) {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #10");                         // a callable descriptor?
+                ctx.emitter.instruction(&format!("b.ne {none}"));               // non-callable boxed values carry no receiver
+                ctx.emitter.instruction("mov x0, x1");                          // the descriptor
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("cmp rax, 10");                         // a callable descriptor?
+                ctx.emitter.instruction(&format!("jne {none}"));                // non-callable boxed values carry no receiver
+                ctx.emitter.instruction("mov rax, rdi");                        // the descriptor
+            }
+        }
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {none}"));                // no descriptor
+            ctx.emitter.instruction(&format!("ldr x9, [x0, #{CALLABLE_DESC_ENVIRONMENT_OFFSET}]")); // the environment record
+            ctx.emitter.instruction(&format!("cbz x9, {none}"));                // no captures at all
+            ctx.emitter.instruction("ldr x10, [x9]");                           // capture count
+            ctx.emitter.instruction("ldr x11, [x9, #16]");                      // capture binding table (32-byte rows)
+            ctx.emitter.instruction(&format!("cbz x11, {none}"));               // no capture table
+            ctx.emitter.instruction("mov x12, xzr");                            // capture index
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction("cmp x12, x10");                            // every capture inspected?
+            ctx.emitter.instruction(&format!("b.hs {none}"));                   // no `this` capture
+            ctx.emitter.instruction("lsl x13, x12, #5");                        // 32 bytes per binding row
+            ctx.emitter.instruction("add x13, x11, x13");                       // this capture's binding row
+            ctx.emitter.instruction("ldr x14, [x13, #8]");                      // capture name length
+            ctx.emitter.instruction("cmp x14, #4");                             // `this` is four bytes
+            ctx.emitter.instruction(&format!("b.ne {next}"));                   // another capture
+            ctx.emitter.instruction("ldr x14, [x13]");                          // capture name bytes
+            ctx.emitter.instruction("ldr w14, [x14]");                          // first four bytes of the name
+            ctx.emitter.instruction("movz w15, #0x6874");                       // low half of "this", little-endian
+            ctx.emitter.instruction("movk w15, #0x7369, lsl #16");              // high half of "this", little-endian
+            ctx.emitter.instruction("cmp w14, w15");                            // is the capture called `this`?
+            ctx.emitter.instruction(&format!("b.eq {found}"));                  // read its slot
+            ctx.emitter.label(&next);
+            ctx.emitter.instruction("add x12, x12, #1");                        // next capture
+            ctx.emitter.instruction(&format!("b {scan}"));                      // keep scanning
+            ctx.emitter.label(&found);
+            ctx.emitter.instruction("ldr x14, [x13, #16]");                     // the capture's runtime tag
+            ctx.emitter.instruction("cmp x14, #7");                             // only a boxed Mixed holds a receiver
+            ctx.emitter.instruction(&format!("b.ne {none}"));                   // anything else answers null
+            ctx.emitter.instruction("lsl x13, x12, #4");                        // 16 bytes per runtime capture slot
+            ctx.emitter.instruction(&format!("add x13, x13, #{CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET}")); // past the static descriptor
+            ctx.emitter.instruction("ldr x0, [x0, x13]");                       // the boxed receiver
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            crate::codegen_support::emit_box_runtime_payload_as_mixed(
+                ctx.emitter, "x0", "x1", "x2",
+            );
+            ctx.emitter.instruction(&format!("b {done}"));                      // a fresh box of the receiver
+            ctx.emitter.label(&none);
+            abi::emit_load_int_immediate(ctx.emitter, "x0", null_tag);
+            ctx.emitter.instruction("mov x1, xzr");                             // null has no payload
+            ctx.emitter.instruction("mov x2, xzr");                             // null has no payload
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // no descriptor
+            ctx.emitter.instruction(&format!("jz {none}"));                     // no descriptor
+            ctx.emitter.instruction(&format!("mov r9, QWORD PTR [rax + {CALLABLE_DESC_ENVIRONMENT_OFFSET}]")); // the environment record
+            ctx.emitter.instruction("test r9, r9");                             // no captures at all
+            ctx.emitter.instruction(&format!("jz {none}"));                     // no captures at all
+            ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                 // capture count
+            ctx.emitter.instruction("mov r11, QWORD PTR [r9 + 16]");            // capture binding table (32-byte rows)
+            ctx.emitter.instruction("test r11, r11");                           // no capture table
+            ctx.emitter.instruction(&format!("jz {none}"));                     // no capture table
+            ctx.emitter.instruction("xor ecx, ecx");                            // capture index
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction("cmp rcx, r10");                            // every capture inspected?
+            ctx.emitter.instruction(&format!("jae {none}"));                    // no `this` capture
+            ctx.emitter.instruction("mov r8, rcx");                             // capture index
+            ctx.emitter.instruction("shl r8, 5");                               // 32 bytes per binding row
+            ctx.emitter.instruction("add r8, r11");                             // this capture's binding row
+            ctx.emitter.instruction("cmp QWORD PTR [r8 + 8], 4");               // `this` is four bytes
+            ctx.emitter.instruction(&format!("jne {next}"));                    // another capture
+            ctx.emitter.instruction("mov rsi, QWORD PTR [r8]");                 // capture name bytes
+            ctx.emitter.instruction("cmp DWORD PTR [rsi], 0x73696874");         // is the capture called `this`?
+            ctx.emitter.instruction(&format!("je {found}"));                    // read its slot
+            ctx.emitter.label(&next);
+            ctx.emitter.instruction("inc rcx");                                 // next capture
+            ctx.emitter.instruction(&format!("jmp {scan}"));                    // keep scanning
+            ctx.emitter.label(&found);
+            ctx.emitter.instruction("cmp QWORD PTR [r8 + 16], 7");              // only a boxed Mixed holds a receiver
+            ctx.emitter.instruction(&format!("jne {none}"));                    // anything else answers null
+            ctx.emitter.instruction("shl rcx, 4");                              // 16 bytes per runtime capture slot
+            ctx.emitter.instruction(&format!("add rcx, {CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET}")); // past the static descriptor
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax + rcx]");          // the boxed receiver
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            crate::codegen_support::emit_box_runtime_payload_as_mixed(
+                ctx.emitter, "rax", "rdi", "rdx",
+            );
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // a fresh box of the receiver
+            ctx.emitter.label(&none);
+            abi::emit_load_int_immediate(ctx.emitter, "rax", null_tag);
+            ctx.emitter.instruction("xor edi, edi");                            // null has no payload
+            ctx.emitter.instruction("xor esi, esi");                            // null has no payload
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done);
+        }
+    }
+    let destination = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("refl_closure_this missing result"))?;
+    ctx.store_result_value(destination)
+}
