@@ -1968,3 +1968,17 @@ var_dump($o instanceof __PHP_Incomplete_Class, is_a($o, '__PHP_Incomplete_Class'
     );
     assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\nbool(false)\n");
 }
+
+/// Verifies the same `is_a()` check holds when the program links the eval bridge (#2433).
+#[test]
+fn test_is_a_incomplete_class_with_eval_bridge() {
+    let out = compile_and_run(
+        r#"<?php
+$o = unserialize('O:7:"Missing":0:{}');
+$code = 'echo "eval|";';
+eval($code);
+var_dump($o instanceof __PHP_Incomplete_Class, is_a($o, '__PHP_Incomplete_Class'), is_a($o, 'stdClass'));
+"#,
+    );
+    assert_eq!(out, "eval|bool(true)\nbool(true)\nbool(false)\n");
+}
