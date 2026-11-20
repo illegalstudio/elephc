@@ -199,3 +199,36 @@ fn emit_free_stack_x86_64(emitter: &mut impl Emitter) {
     emitter.label("__rt_fiber_free_stack_done");
     emitter.instruction("ret");                                                 // hand control back to the caller
 }
+
+/// Symbol holding the low-water stack address for the currently running context.
+/// Zero means "guard disabled"; every prologue check is an unsigned compare against it.
+pub const STACK_LIMIT_SYMBOL: &str = "_stack_limit";
+
+/// Symbol holding the OS-thread (non-fiber) stack floor, used to restore
+/// `_stack_limit` when a fiber switch returns to the main context.
+pub const STACK_LIMIT_MAIN_SYMBOL: &str = "_stack_limit_main";
+
+
+/// Publishes the current stack's floor as seen by native function prologues.
+pub fn emit_publish_active_floor(emitter: &mut impl crate::TargetAbi, floor: &str) {
+    emitter.emit_store_reg_to_symbol(floor, STACK_LIMIT_SYMBOL, 0);
+}
+
+/// Publishes a newly measured main stack floor to both slots.
+pub fn emit_publish_main_floor(emitter: &mut impl crate::TargetAbi, floor: &str) {
+    emit_publish_active_floor(emitter, floor);
+    emitter.emit_store_reg_to_symbol(floor, STACK_LIMIT_MAIN_SYMBOL, 0);
+}
+
+/// Restores the remembered thread stack floor after leaving a coroutine stack.
+pub fn emit_restore_main_floor(emitter: &mut impl crate::TargetAbi, scratch: &str) {
+    emitter.emit_load_symbol_to_reg(scratch, STACK_LIMIT_MAIN_SYMBOL, 0);
+    emit_publish_active_floor(emitter, scratch);
+}
+
+/// Places floors near text so AArch64 prologues can reach them even with large arenas.
+pub fn append_stack_floor_data(out: &mut String) {
+    for symbol in [STACK_LIMIT_SYMBOL, STACK_LIMIT_MAIN_SYMBOL] {
+        out.push_str(&format!(".p2align 3\n.globl {symbol}\n{symbol}:\n    .quad 0\n"));
+    }
+}

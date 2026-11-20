@@ -426,9 +426,9 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish legacy serialization frame
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver across item unboxing
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load current concat-buffer offset
-    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x11");
     emitter.instruction("str x11, [sp, #72]");                                  // save concat-buffer base for final offset update
     emitter.instruction("add x12, x11, x10");                                   // compute start pointer for this serialized string
     emitter.instruction("str x12, [sp, #32]");                                  // save string start pointer
@@ -546,7 +546,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #72]");                                   // reload concat-buffer base
     emitter.instruction("ldr x10, [sp, #40]");                                  // reload final output cursor
     emitter.instruction("sub x11, x10, x9");                                    // compute new global concat-buffer offset
-    abi::emit_symbol_address(emitter, "x12", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x12");
     emitter.instruction("str x11, [x12]");                                      // publish updated concat-buffer offset
     emitter.instruction("ldr x1, [sp, #32]");                                   // return serialized string pointer
     emitter.instruction("sub x2, x10, x1");                                     // return serialized string length
@@ -1608,8 +1608,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish legacy serialization frame
     emitter.instruction("sub rsp, 96");                                         // reserve receiver, cursor, payload, and loop spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver across item unboxing
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize concat-buffer base
+    elephc_memoir::strings::concat_cursor::emit_read(emitter, "r10");             // load current concat-buffer offset
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r11");                    // materialize concat-buffer base
     emitter.instruction("mov QWORD PTR [rbp - 64], r11");                       // save concat-buffer base for final offset update
     emitter.instruction("lea r12, [r11 + r10]");                                // compute start pointer for serialized string
     emitter.instruction("mov QWORD PTR [rbp - 32], r12");                       // save serialized string start pointer
@@ -1732,7 +1732,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload final output cursor
     emitter.instruction("mov r12, r11");                                        // copy final cursor for global offset calculation
     emitter.instruction("sub r12, r10");                                        // compute new concat-buffer offset
-    abi::emit_store_reg_to_symbol(emitter, "r12", "_concat_off", 0);            // publish updated concat-buffer offset
+    elephc_memoir::strings::concat_cursor::emit_write(emitter, "r12");            // publish updated concat-buffer offset
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return serialized string pointer
     emitter.instruction("mov rdx, r11");                                        // copy final cursor for length calculation
     emitter.instruction("sub rdx, rax");                                        // return serialized string length

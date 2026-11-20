@@ -1,129 +1,109 @@
 //! Purpose:
-//! Emits the `__rt_gethostname` runtime helper assembly for the gethostname
-//! builtin.
+//! Emits the native runtime helper for gethostname.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`.
+//! - Direct lowering and the eval runtime dispatcher.
 //!
 //! Key details:
-//! - macOS reads the host name through `sysctl({CTL_KERN, KERN_HOSTNAME})`;
-//!   Linux reads it from the `nodename` field of `uname`'s `struct utsname`.
-//!   The result is written into the shared concat buffer.
+//! - Darwin uses sysctl, Linux selects nodename from uname.
+//! - The bounded native result is staged before Memoir copies it.
 
-use crate::codegen_support::abi::emit_symbol_address;
-use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
-use crate::codegen_support::abi;
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
+use elephc_memoir::strings::staged_concat::emit_copy_staged_result;
 
-/// gethostname: return the system host name.
-/// Input:  (none)
-/// Output: x1 = string pointer (in concat_buf), x2 = length
+/// Dispatches the native hostname query to the target implementation.
 pub fn emit_gethostname(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_gethostname_linux_x86_64(emitter);
-        return;
-    }
-
     emitter.blank();
     emitter.comment("--- runtime: gethostname ---");
     emitter.label_global("__rt_gethostname");
-
-    if matches!(emitter.platform, Platform::MacOS) {
-        // macOS: sysctl({CTL_KERN, KERN_HOSTNAME}, 2, buf, &len, NULL, 0).
-        // Frame: [0..8) mib (two 32-bit ints), [8..16) length, [16..24) result.
-        emitter.instruction("sub sp, sp, #32");                                 // scratch for the mib, length, and result pointer
-        emitter.instruction("mov w9, #1");                                      // CTL_KERN
-        emitter.instruction("str w9, [sp, #0]");                                // mib[0]
-        emitter.instruction("mov w9, #10");                                     // KERN_HOSTNAME
-        emitter.instruction("str w9, [sp, #4]");                                // mib[1]
-        emitter.instruction("mov x9, #256");                                    // available buffer space
-        emitter.instruction("str x9, [sp, #8]");                                // sysctl length in/out parameter
-        emit_symbol_address(emitter, "x9", "_concat_off");
-        emitter.instruction("ldr x10, [x9]");                                   // current concat-buffer offset
-        emit_symbol_address(emitter, "x11", "_concat_buf");
-        emitter.instruction("add x12, x11, x10");                               // result write pointer
-        emitter.instruction("str x12, [sp, #16]");                              // save the result pointer
-        emitter.instruction("add x0, sp, #0");                                  // &mib
-        emitter.instruction("mov x1, #2");                                      // mib element count
-        emitter.instruction("mov x2, x12");                                     // oldp = result pointer
-        emitter.instruction("add x3, sp, #8");                                  // &length
-        emitter.instruction("mov x4, #0");                                      // newp = NULL
-        emitter.instruction("mov x5, #0");                                      // newlen = 0
-        emitter.syscall(202);
-        emitter.instruction("cmn x0, #1");                                      // did sysctl fail (-1)?
-        emitter.instruction("b.eq __rt_gethostname_fail");                      // report an empty name on failure
-        emitter.instruction("ldr x2, [sp, #8]");                                // returned length, including the NUL
-        emitter.instruction("sub x2, x2, #1");                                  // drop the trailing NUL
-        emit_symbol_address(emitter, "x9", "_concat_off");
-        emitter.instruction("ldr x10, [x9]");                                   // concat-buffer offset
-        emitter.instruction("add x10, x10, x2");                                // reserve the host-name bytes
-        emitter.instruction("str x10, [x9]");                                   // publish the updated offset
-        emitter.instruction("ldr x1, [sp, #16]");                               // result pointer
-        emitter.instruction("add sp, sp, #32");                                 // release the scratch
-        emitter.instruction("ret");                                             // return the host name
-
-        emitter.label("__rt_gethostname_fail");
-        emitter.instruction("ldr x1, [sp, #16]");                               // a valid (empty) concat-buffer pointer
-        emitter.instruction("mov x2, #0");                                      // zero-length name on failure
-        emitter.instruction("add sp, sp, #32");                                 // release the scratch
-        emitter.instruction("ret");                                             // return the empty name
-    } else {
-        // Linux: uname(&utsname); the host name is nodename at offset 65.
-        emitter.instruction("sub sp, sp, #416");                                // scratch for the 390-byte struct utsname
-        emitter.instruction("add x0, sp, #16");                                 // &utsname
-        emitter.syscall(160);
-        emit_symbol_address(emitter, "x9", "_concat_off");
-        emitter.instruction("ldr x10, [x9]");                                   // current concat-buffer offset
-        emit_symbol_address(emitter, "x11", "_concat_buf");
-        emitter.instruction("add x12, x11, x10");                               // result write pointer
-        emitter.instruction("add x13, sp, #16");                                // utsname base
-        emitter.instruction("add x13, x13, #65");                               // nodename field offset
-        emitter.instruction("mov x2, #0");                                      // copied-byte count
-        emitter.label("__rt_gethostname_copy");
-        emitter.instruction("ldrb w14, [x13, x2]");                             // a nodename byte
-        emitter.instruction("cbz w14, __rt_gethostname_copy_done");             // stop at the terminating NUL
-        emitter.instruction("strb w14, [x12, x2]");                             // append the byte to the result
-        emitter.instruction("add x2, x2, #1");                                  // advance the copy count
-        emitter.instruction("b __rt_gethostname_copy");                         // continue copying
-        emitter.label("__rt_gethostname_copy_done");
-        emitter.instruction("ldr x10, [x9]");                                   // concat-buffer offset (x9 still holds _concat_off)
-        emitter.instruction("add x10, x10, x2");                                // reserve the host-name bytes
-        emitter.instruction("str x10, [x9]");                                   // publish the updated offset
-        emitter.instruction("mov x1, x12");                                     // result pointer
-        emitter.instruction("add sp, sp, #416");                                // release the scratch
-        emitter.instruction("ret");                                             // return the host name
+    match (emitter.target.arch, emitter.platform) {
+        (Arch::X86_64, _) => emit_linux_x86_64(emitter),
+        (Arch::AArch64, Platform::MacOS) => emit_darwin(emitter),
+        (Arch::AArch64, _) => emit_linux_aarch64(emitter),
     }
 }
 
-/// Emits the Linux x86_64 stream runtime helper for gethostname.
-fn emit_gethostname_linux_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: gethostname ---");
-    emitter.label_global("__rt_gethostname");
+/// Stages the full sysctl buffer, then copies the returned bytes without the NUL.
+fn emit_darwin(emitter: &mut Emitter) {
+    emitter.instruction("sub sp, sp, #288");                                    // reserve the selectors, 256-byte output and frame footer
+    emitter.instruction("stp x29, x30, [sp, #272]");                            // preserve the caller frame and return link
+    emitter.instruction("add x29, sp, #272");                                   // anchor the frame above the host buffer
+    emitter.instruction("mov w9, #1");                                          // CTL_KERN
+    emitter.instruction("str w9, [sp]");                                        // mib first selector
+    emitter.instruction("mov w9, #10");                                         // KERN_HOSTNAME
+    emitter.instruction("str w9, [sp, #4]");                                    // mib second selector
+    emitter.instruction("mov x9, #256");                                        // capacity including the terminator
+    emitter.instruction("str x9, [sp, #8]");                                    // sysctl length in/out parameter
+    emitter.instruction("mov x0, sp");                                          // pass the mib address
+    emitter.instruction("mov x1, #2");                                          // two integer selectors
+    emitter.instruction("add x2, sp, #16");                                     // sysctl's private output buffer
+    emitter.instruction("add x3, sp, #8");                                      // pass the length address
+    emitter.instruction("mov x4, xzr");                                         // no input value
+    emitter.instruction("mov x5, xzr");                                         // no input bytes
+    emitter.syscall(202);
+    emitter.instruction("b.cs __rt_gethostname_empty");                         // a failed query produces an empty string
+    emitter.instruction("ldr x2, [sp, #8]");                                    // read the actual copied size
+    emitter.instruction("cbz x2, __rt_gethostname_ready");                      // keep an empty result at zero length
+    emitter.instruction("cmp x2, #256");                                        // the returned count must fit the supplied buffer
+    emitter.instruction("b.hi __rt_gethostname_empty");                         // reject an invalid byte count
+    emitter.instruction("sub x2, x2, #1");                                      // exclude the terminating NUL
+    emitter.instruction("b __rt_gethostname_ready");                            // make the measured bytes available for copying
+    emitter.label("__rt_gethostname_empty");
+    emitter.instruction("mov x2, xzr");                                         // return zero bytes
+    emitter.label("__rt_gethostname_ready");
+    emitter.instruction("add x1, sp, #16");                                     // expose the staged slice to Memoir
+    emit_copy_staged_result(emitter, "__rt_gethostname_copied");
+    emitter.instruction("ldp x29, x30, [sp, #272]");                            // restore the enclosing frame and return link
+    emitter.instruction("add sp, sp, #288");                                    // release staged native storage
+    emitter.instruction("ret");                                                 // return the hostname slice
+}
 
+/// Measures Linux's 65-byte nodename field on AArch64.
+fn emit_linux_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("sub sp, sp, #416");                                    // reserve the utsname structure and saved frame
+    emitter.instruction("stp x29, x30, [sp]");                                  // preserve the enclosing frame and return link
+    emitter.instruction("mov x29, sp");                                         // anchor the current frame
+    emitter.instruction("add x0, sp, #16");                                     // pass the utsname destination
+    emitter.syscall(160);
+    emitter.instruction("add x1, sp, #81");                                     // select nodename at utsname offset 65
+    emitter.instruction("mov x2, xzr");                                         // count bytes from the beginning of the field
+    emitter.instruction("cmp x0, #0");                                          // did uname fill the structure?
+    emitter.instruction("b.lt __rt_gethostname_ready");                         // no output bytes on failure
+    emitter.label("__rt_gethostname_measure");
+    emitter.instruction("cmp x2, #65");                                         // stop at the end of nodename even without a terminator
+    emitter.instruction("b.hs __rt_gethostname_ready");                         // avoid reading past the field
+    emitter.instruction("ldrb w9, [x1, x2]");                                   // inspect the next hostname byte
+    emitter.instruction("cbz w9, __rt_gethostname_ready");                      // do not include the terminator
+    emitter.instruction("add x2, x2, #1");                                      // count the accepted byte
+    emitter.instruction("b __rt_gethostname_measure");                          // keep measuring the field
+    emitter.label("__rt_gethostname_ready");
+    emit_copy_staged_result(emitter, "__rt_gethostname_copied");
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore the enclosing frame and return link
+    emitter.instruction("add sp, sp, #416");                                    // release the utsname storage
+    emitter.instruction("ret");                                                 // return the hostname slice
+}
+
+/// Measures Linux's 65-byte nodename field on x86-64.
+fn emit_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 416");                                        // scratch for the 390-byte struct utsname
-    emitter.instruction("lea rdi, [rbp - 400]");                                // &utsname
-    emitter.instruction("mov eax, 63");                                         // Linux x86_64 syscall 63 = uname
-    emitter.instruction("syscall");                                             // read the system information
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // concat-buffer base address
-    emitter.instruction("lea r11, [r10 + r9]");                                 // result write pointer
-    emitter.instruction("lea r8, [rbp - 400]");                                 // utsname base
-    emitter.instruction("add r8, 65");                                          // nodename field offset
-    emitter.instruction("xor edx, edx");                                        // copied-byte count
-    emitter.label("__rt_gethostname_copy_x86");
-    emitter.instruction("movzx ecx, BYTE PTR [r8 + rdx]");                      // a nodename byte
-    emitter.instruction("test cl, cl");                                         // is it the terminating NUL?
-    emitter.instruction("jz __rt_gethostname_copy_done_x86");                   // stop at the NUL
-    emitter.instruction("mov BYTE PTR [r11 + rdx], cl");                        // append the byte to the result
-    emitter.instruction("inc rdx");                                             // advance the copy count
-    emitter.instruction("jmp __rt_gethostname_copy_x86");                       // continue copying
-    emitter.label("__rt_gethostname_copy_done_x86");
-    emitter.instruction("add r9, rdx");                                         // reserve the host-name bytes
-    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the updated offset
-    emitter.instruction("mov rax, r11");                                        // result pointer
-    emitter.instruction("add rsp, 416");                                        // release the scratch
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the host name
+    emitter.instruction("mov rbp, rsp");                                        // anchor the staged native structure
+    emitter.instruction("sub rsp, 416");                                        // reserve aligned utsname storage
+    emitter.instruction("lea rdi, [rbp - 400]");                                // pass the utsname destination
+    emitter.instruction("mov eax, 63");                                         // select Linux uname
+    emitter.instruction("syscall");                                             // fill the utsname structure
+    emitter.instruction("xor edx, edx");                                        // start at zero bytes
+    emitter.instruction("test rax, rax");                                       // did uname fill the structure?
+    emitter.instruction("lea rax, [rbp - 335]");                                // select nodename without altering flags
+    emitter.instruction("js __rt_gethostname_ready");                           // no output bytes on failure
+    emitter.label("__rt_gethostname_measure");
+    emitter.instruction("cmp rdx, 65");                                         // stop at the field boundary
+    emitter.instruction("jae __rt_gethostname_ready");                          // avoid reading past the field
+    emitter.instruction("cmp BYTE PTR [rax + rdx], 0");                         // inspect the next hostname byte
+    emitter.instruction("je __rt_gethostname_ready");                           // do not include the terminator
+    emitter.instruction("inc rdx");                                             // count the accepted byte
+    emitter.instruction("jmp __rt_gethostname_measure");                        // keep measuring the field
+    emitter.label("__rt_gethostname_ready");
+    emit_copy_staged_result(emitter, "__rt_gethostname_copied");
+    emitter.instruction("leave");                                               // release the structure and restore the caller frame
+    emitter.instruction("ret");                                                 // return the hostname slice
 }

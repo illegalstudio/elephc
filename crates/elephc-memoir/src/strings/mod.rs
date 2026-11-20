@@ -28,3 +28,6 @@ pub mod concat_window;
 
 pub mod export_scratch;
 pub mod implode_buffer;
+pub mod format_windows;
+pub mod scratch_window;
+pub mod staged_concat;

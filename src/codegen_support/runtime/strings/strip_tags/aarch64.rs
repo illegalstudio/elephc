@@ -138,7 +138,7 @@ pub(super) fn emit_strip_tags_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x29, #-152]");                                // reload the requested result mode
     emitter.instruction("cbz x9, __rt_strip_tags_publish");                     // full string results publish and persist the reservation
     emitter.instruction("str x2, [x29, #-160]");                                // preserve the counted length across an optional heap release
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x9");
     emitter.instruction("sub x10, x1, x9");                                     // classify the reservation by its offset from concat scratch
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64);
     emitter.instruction("cmp x10, x11");                                        // did this call fall back to owned heap storage?

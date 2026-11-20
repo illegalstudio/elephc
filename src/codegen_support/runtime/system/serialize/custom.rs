@@ -65,7 +65,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, arg0, 8);
     abi::emit_load_from_address(emitter, result, arg0, 0);
     abi::store_at_offset(emitter, result, 16);
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
+    elephc_memoir::strings::concat_cursor::emit_read(emitter, scratch);
     abi::store_at_offset(emitter, scratch, 24);
     abi::emit_store_zero_to_local_slot(emitter, 48);
     // -- the legacy hook may run serialize() and uses the concat scratch: park the active stream
@@ -88,7 +88,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
         }
     }
     abi::load_at_offset(emitter, result, 24);
-    abi::emit_store_reg_to_symbol(emitter, result, "_concat_off", 0);
+    elephc_memoir::strings::concat_cursor::emit_write(emitter, result);
     OUTPUT_STREAM.emit_restore(emitter);
     load_table_entry(emitter, "_class_serializable_serialize_return_abi");
     abi::emit_reg_move(emitter, result, scratch);

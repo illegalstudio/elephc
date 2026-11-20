@@ -98,6 +98,12 @@ Memoir drains resource inventory nodes after the compiler-selected handle cleanu
 For glob directories it releases libc results with `globfree` and returns the
 envelope to the native heap, including when a directory fails to open. Fixed SPL
 backing arrays and declared object payload geometry also use Memoir storage helpers.
+Memoir also publishes native heap limits, packed Mixed element headers, scalar
+frame cells, refcount transitions, and the main and active stack floors. It
+owns the layout of the weak observer table and range checks used before a
+compiler adapter reads managed storage. The compiler supplies PHP decisions
+and the operating system's stack bounds.
+
 Memoir source changes also participate in runtime-object cache identity.
 
 The host API composes assembly output, target ABI and memory-context capabilities.
@@ -575,7 +581,15 @@ never need to be scanned.
 
 ### Outgrowing the buffer
 
-The shared arena is where results *prefer* to live, not a ceiling on how large one can be. Every runtime producer reserves its destination through `__rt_concat_reserve`, which hands back scratch while the result still fits and an owned heap block when it does not; `__rt_concat_publish` then advances `_concat_off` only for the scratch case, deciding which it was from the pointer's own address rather than a flag. A producer whose size is not known until it has run — `implode()`, `stream_get_contents()` — starts in scratch and moves the bytes it has already written into a larger owned block with `__rt_concat_grow` when the next piece no longer fits.
+Sized producers reserve a destination through `__rt_concat_reserve`. It
+returns scratch while the result fits and a heap block when it does not.
+`__rt_concat_publish` advances the cursor only for scratch-backed results.
+`chr()` reserves one byte before storing it. The IPv4 and platform formatters
+stage their output and copy the measured length through the same reservation
+path. Integer and float formatting have dedicated spill rings, so they can
+render during allocation failures. Incremental producers such as `implode()`
+and `stream_get_contents()` can move their existing bytes into a larger heap
+block through `__rt_concat_grow`.
 
 A `.` result (and the `__rt_concat_grow` producers) that outgrows the buffer is stamped `CONCAT_TEMP_HEAP_KIND` instead of heap kind 1: like a scratch slice it has no owner that frees it, and the first consumer that persists it, a store or an `Acquire`, adopts the block in place by retagging it as an owned string rather than copying it, which is what keeps `$s .= ...` from duplicating a large accumulator on every append. That takeover is only safe while nothing else will release the same block. A user function that may return its argument hands the block back as its call result, an owning temporary the caller releases, so before such a call the caller claims a fresh transient argument (a `.`, interpolation or scalar-to-string result, never a builtin view such as `substr($s, 0)` or `$s[0]`, which points into a live string) with `EnsureOwned` (`__rt_str_claim`): the block is retagged as owned without a copy, every later persist duplicates it, and the argument is released after the call unless the callee returned it (`ReleaseUnlessAliases`). Without the claim, `$x = id($big . "b")` stored a block that the release of the call result then freed.
 

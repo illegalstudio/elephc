@@ -92,3 +92,53 @@ pub fn emit_heap_kind(emitter: &mut impl Emitter) {
     emitter.instruction("mov x0, #0");                                          // report raw/non-heap kind 0
     emitter.instruction("ret");                                                 // return default kind 0
 }
+
+/// Lower bound of a managed-arena range check.
+pub enum HeapStart {
+    /// Includes the start of the arena, for preserving a legacy range-only probe.
+    Arena,
+    /// Starts after the first physical header, before code that reads one.
+    Payload,
+}
+
+/// Branches if the result register falls outside the current managed range.
+///
+/// This is a range probe only. It does not validate a live allocation or read its header.
+pub fn emit_branch_outside_heap(
+    emitter: &mut (impl crate::AssemblyEmitter + crate::TargetAbi), start: HeapStart, outside: &str,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            crate::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+            let base = if matches!(start, HeapStart::Payload) {
+                emitter.instruction("add x10, x9, #16");                        // skip the first physical header
+                "x10"
+            } else {
+                "x9"
+            };
+            emitter.instruction(&format!("cmp x0, {base}"));                    // is the result below the selected lower bound?
+            emitter.instruction(&format!("b.lo {outside}"));                    // leave the non-managed path without reading a header
+            crate::abi::emit_symbol_address(emitter, "x10", "_heap_off");
+            emitter.instruction("ldr x10, [x10]");                              // read the current bump extent
+            emitter.instruction("add x10, x9, x10");                            // derive the exclusive heap end
+            emitter.instruction("cmp x0, x10");                                 // is the candidate at or above that end?
+            emitter.instruction(&format!("b.hs {outside}"));                    // reject addresses outside initialized heap storage
+        }
+        Arch::X86_64 => {
+            crate::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+            let base = if matches!(start, HeapStart::Payload) {
+                emitter.instruction("lea r11, [r10 + 16]");                     // skip the first physical header
+                "r11"
+            } else {
+                "r10"
+            };
+            emitter.instruction(&format!("cmp rax, {base}"));                   // is the result below the selected lower bound?
+            emitter.instruction(&format!("jb {outside}"));                      // leave the non-managed path without reading a header
+            crate::abi::emit_symbol_address(emitter, "r11", "_heap_off");
+            emitter.instruction("mov r11, QWORD PTR [r11]");                    // read the current bump extent
+            emitter.instruction("add r11, r10");                                // derive the exclusive heap end
+            emitter.instruction("cmp rax, r11");                                // is the candidate at or above that end?
+            emitter.instruction(&format!("jae {outside}"));                     // reject addresses outside initialized heap storage
+        }
+    }
+}

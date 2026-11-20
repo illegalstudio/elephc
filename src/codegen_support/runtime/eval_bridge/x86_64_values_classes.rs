@@ -64,9 +64,7 @@ pub(super) fn emit_x86_64_values_classes(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_from_value");                          // box the allocated object for Rust
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the boxed Mixed while consuming the raw object owner
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the raw object owner created by the allocator
-    emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load the raw object refcount after Mixed boxing retained it
-    emitter.instruction("sub r10d, 1");                                         // consume the allocator-owned object reference locally
-    emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // leave the boxed Mixed as the sole object owner
+    elephc_memoir::heap_refcount::emit_drop_after_boxing(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // restore the boxed object Mixed as the Rust return value
     emitter.instruction("jmp __elephc_eval_value_new_object_done_x86");         // skip the null boxing path after successful allocation
     emitter.label("__elephc_eval_value_new_object_null_x86");

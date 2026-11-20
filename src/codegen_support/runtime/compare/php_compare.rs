@@ -334,7 +334,7 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_pcmp_pos");                                     // PHP spaceship returns 1 whenever either operand is NaN
 
     emitter.label("__rt_pcmp_num_str_bytes");
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // read the shared concat scratch cursor
     emitter.instruction("str x10, [sp, #96]");                                  // save it so the rendered number cannot leak scratch space
     emitter.instruction("ldr x9, [sp, #64]");                                   // reload the number's runtime tag
@@ -351,7 +351,7 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #80]");                                   // reload the string pointer for the byte comparison
     emitter.instruction("ldr x4, [sp, #88]");                                   // reload the string length for the byte comparison
     emitter.instruction("bl __rt_strcmp");                                      // compare the rendered number with the string byte-wise
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
     emitter.instruction("ldr x10, [sp, #96]");                                  // reload the saved concat scratch cursor
     emitter.instruction("str x10, [x9]");                                       // release the scratch the rendered number occupied
     emitter.instruction("cmp x0, #0");                                          // normalize the byte difference into a three-way result
@@ -688,7 +688,7 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_pcmp_pos");                                   // PHP spaceship returns 1 whenever either operand is NaN
 
     emitter.label("__rt_pcmp_num_str_bytes");
-    abi::emit_symbol_address(emitter, "r10", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "r10");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // read the shared concat scratch cursor
     emitter.instruction("mov QWORD PTR [rbp - 104], r11");                      // save it so the rendered number cannot leak scratch space
     emitter.instruction("mov r10, QWORD PTR [rbp - 72]");                       // reload the number's runtime tag
@@ -707,7 +707,7 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 88]");                       // reload the string pointer for the byte comparison
     emitter.instruction("mov rcx, QWORD PTR [rbp - 96]");                       // reload the string length for the byte comparison
     emitter.instruction("call __rt_strcmp");                                    // compare the rendered number with the string byte-wise
-    abi::emit_symbol_address(emitter, "r10", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "r10");
     emitter.instruction("mov r11, QWORD PTR [rbp - 104]");                      // reload the saved concat scratch cursor
     emitter.instruction("mov QWORD PTR [r10], r11");                            // release the scratch the rendered number occupied
     emitter.instruction("cmp rax, 0");                                          // normalize the byte difference into a three-way result

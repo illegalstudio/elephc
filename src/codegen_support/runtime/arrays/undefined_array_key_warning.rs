@@ -36,7 +36,7 @@ pub fn emit_undefined_array_key_warning(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish a stable runtime warning frame
     emitter.instruction("str x0, [sp, #0]");                                    // save the missing integer key across warning fragments
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // snapshot concat scratch state before formatting the key
     emitter.instruction("str x10, [sp, #8]");                                   // preserve the concat cursor across itoa
 
@@ -50,7 +50,7 @@ pub fn emit_undefined_array_key_warning(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_itoa");                                 // format the missing key into concat scratch
     abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the formatted missing-key value
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the pre-warning concat cursor
-    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
     emitter.instruction("str x10, [x9]");                                       // restore concat scratch state for surrounding expressions
 
     // -- emit suffix --
@@ -107,7 +107,7 @@ fn emit_undefined_array_key_warning_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable runtime warning frame
     emitter.instruction("sub rsp, 32");                                         // reserve saved key and concat cursor while keeping calls aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the missing integer key across warning fragments
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // snapshot concat scratch state before formatting the key
+    elephc_memoir::strings::concat_cursor::emit_read(emitter, "r10");             // snapshot concat scratch state before formatting the key
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // preserve the concat cursor across itoa
 
     // -- emit prefix --
@@ -122,7 +122,7 @@ fn emit_undefined_array_key_warning_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rdx");                                        // pass the formatted missing-key length to the warning helper
     abi::emit_call_label(emitter, "__rt_diag_warning_fragment");                         // emit or suppress the formatted missing-key value
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the pre-warning concat cursor
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // restore concat scratch state for surrounding expressions
+    elephc_memoir::strings::concat_cursor::emit_write(emitter, "r10");            // restore concat scratch state for surrounding expressions
 
     // -- emit suffix --
     abi::emit_symbol_address(emitter, "rdi", "_diag_undefined_array_key_suffix");

@@ -10,8 +10,9 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-/// Number of 32-byte slots in `_itoa_spill_ring`; a power of two so the cursor wraps with a mask.
-pub(crate) const ITOA_SPILL_SLOTS: usize = 8;
+use elephc_memoir::strings::format_windows::{
+    emit_itoa_finish_aarch64, emit_itoa_finish_x86_64, emit_itoa_window_aarch64, emit_itoa_window_x86_64,
+};
 
 /// Emits __rt_itoa_into, formatting a signed 64-bit integer inside a caller-provided 21-byte
 /// destination window. The result is right-aligned in that window so callers can copy the returned
@@ -117,27 +118,7 @@ pub fn emit_itoa(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
-    // -- get concat_buf write position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current offset into concat_buf
-    emitter.instruction("add x12, x8, #21");                                    // offset after reserving the 21-byte scratch window
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x13", emitter.concat_capacity as i64); // concat scratch capacity in bytes
-    emitter.instruction("cmp x12, x13");                                        // would the window cross the end of _concat_buf?
-    emitter.instruction("b.hi __rt_itoa_spill");                                // a full scratch formats into the spill ring instead
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // compute write position: buf + offset
-    emitter.instruction("b __rt_itoa_window_ready");                            // the scratch window is reserved
-    emitter.label("__rt_itoa_spill");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_itoa_spill_index");
-    emitter.instruction("ldr x12, [x7]");                                       // load the next spill slot index
-    emitter.instruction("add x13, x12, #1");                                    // advance the ring cursor
-    emitter.instruction(&format!("and x13, x13, #{}", ITOA_SPILL_SLOTS - 1));   // wrap the cursor inside the ring
-    emitter.instruction("str x13, [x7]");                                       // publish the cursor for the next spill
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_itoa_spill_ring");
-    emitter.instruction("add x9, x7, x12, lsl #5");                             // each spill slot is 32 bytes
-    emitter.instruction("sub x8, x8, #21");                                     // cancel the scratch advance below: the live scratch keeps its offset
-    emitter.label("__rt_itoa_window_ready");
-    emitter.instruction("add x9, x9, #20");                                     // advance to end of 21-byte scratch area (digits written right-to-left)
+    emit_itoa_window_aarch64(emitter);
 
     // -- initialize counters --
     emitter.instruction("mov x10, #0");                                         // digit count = 0
@@ -181,8 +162,7 @@ pub fn emit_itoa(emitter: &mut Emitter) {
 
     // -- finalize: update concat_buf offset and return ptr/len --
     emitter.label("__rt_itoa_done");
-    emitter.instruction("add x8, x8, #21");                                     // advance concat_off by scratch area size
-    emitter.instruction("str x8, [x6]");                                        // store updated offset back to _concat_off
+    emit_itoa_finish_aarch64(emitter);
     emitter.instruction("add x1, x9, #1");                                      // result ptr = one past last written position
     emitter.instruction("mov x2, x10");                                         // result length = digit count
 
@@ -211,27 +191,7 @@ fn emit_itoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // save the caller frame pointer before using rbp locally
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the routine
 
-    // -- get concat_buf write position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat buffer offset
-    emitter.instruction("lea rsi, [r9 + 21]");                                  // offset after reserving the 21-byte scratch window
-    emitter.instruction(&format!("cmp rsi, {}", emitter.concat_capacity));      // would the window cross the end of _concat_buf?
-    emitter.instruction("ja __rt_itoa_spill");                                  // a full scratch formats into the spill ring instead
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("add r10, r9");                                         // compute the current concat buffer write position
-    emitter.instruction("jmp __rt_itoa_window_ready");                          // the scratch window is reserved
-    emitter.label("__rt_itoa_spill");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_itoa_spill_index");
-    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // load the next spill slot index
-    emitter.instruction("lea rdx, [rsi + 1]");                                  // advance the ring cursor
-    emitter.instruction(&format!("and rdx, {}", ITOA_SPILL_SLOTS - 1));         // wrap the cursor inside the ring
-    emitter.instruction("mov QWORD PTR [r10], rdx");                            // publish the cursor for the next spill
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_itoa_spill_ring");
-    emitter.instruction("shl rsi, 5");                                          // each spill slot is 32 bytes
-    emitter.instruction("add r10, rsi");                                        // address the claimed spill slot
-    emitter.instruction("sub r9, 21");                                          // cancel the scratch advance below: the live scratch keeps its offset
-    emitter.label("__rt_itoa_window_ready");
-    emitter.instruction("add r10, 20");                                         // advance to the end of the 21-byte scratch area for right-to-left digit writes
+    emit_itoa_window_x86_64(emitter);
 
     // -- initialize counters --
     emitter.instruction("xor ecx, ecx");                                        // digit count = 0
@@ -274,8 +234,7 @@ fn emit_itoa_linux_x86_64(emitter: &mut Emitter) {
 
     // -- finalize: update concat_buf offset and return ptr/len --
     emitter.label("__rt_itoa_done");
-    emitter.instruction("add r9, 21");                                          // advance concat_off by the fixed scratch area size
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // store the updated concat buffer offset back to global storage
+    emit_itoa_finish_x86_64(emitter);
     emitter.instruction("lea rax, [r10 + 1]");                                  // return the string pointer as one byte past the last decremented position
     emitter.instruction("mov rdx, rcx");                                        // return the string length in the second string-result register
 

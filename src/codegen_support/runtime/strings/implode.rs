@@ -100,10 +100,10 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #16]");                                   // save array pointer
 
     // -- get concat_buf write position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x6");
     emitter.instruction("ldr x8, [x6]");                                        // load current write offset
     emitter.instruction("str x8, [sp, #88]");                                   // remember the entry offset: a grown join restores it, holding no scratch
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x7");
     emitter.instruction("add x9, x7, x8");                                      // compute destination pointer
     emitter.instruction("str x9, [sp, #24]");                                   // save result start pointer
     emitter.instruction("str x6, [sp, #32]");                                   // save offset variable address
@@ -437,10 +437,10 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the glue string pointer across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the glue string length across the indexed-array copy loop and concat-buffer bookkeeping
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the indexed-array pointer across the element copy loop and concat-buffer bookkeeping
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "r8");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before materializing the implode output start pointer
     emitter.instruction("mov QWORD PTR [rbp - 88], r9");                        // remember the entry offset: a grown join restores it, holding no scratch
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r10");
     emitter.instruction("lea r10, [r10 + r9]");                                 // compute the current concat-buffer destination pointer for the implode output
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the implode result start pointer so the final string result can reference the copied bytes
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the current concat-buffer destination cursor across glue and element copy loops

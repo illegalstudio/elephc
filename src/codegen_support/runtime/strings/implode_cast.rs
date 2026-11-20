@@ -48,9 +48,9 @@ pub(super) fn emit_implode_element_cast(emitter: &mut Emitter) {
     abi::emit_jump(emitter, "__rt_implode_cast_done");
 
     emitter.label("__rt_implode_cast_object");
-    abi::emit_load_symbol_to_reg(emitter, len, "_concat_off", 0);
+    elephc_memoir::strings::concat_cursor::emit_read(emitter, len);
     abi::store_at_offset(emitter, len, 16);
-    abi::emit_symbol_address(emitter, ptr, "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, ptr);
     abi::emit_call_label(emitter, "__rt_str_persist");
     abi::store_at_offset(emitter, ptr, 24);
     abi::emit_frame_slot_address(emitter, owner, 24);
@@ -74,12 +74,12 @@ pub(super) fn emit_implode_element_cast(emitter: &mut Emitter) {
     let arg0 = abi::int_arg_reg_name(emitter.target, 0);
     let arg1 = abi::int_arg_reg_name(emitter.target, 1);
     let arg2 = abi::int_arg_reg_name(emitter.target, 2);
-    abi::emit_symbol_address(emitter, arg0, "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, arg0);
     abi::load_at_offset(emitter, arg1, 24);
     abi::load_at_offset(emitter, arg2, 16);
     abi::emit_call_label(emitter, &emitter.target.extern_symbol("memcpy"));
     abi::load_at_offset(emitter, result, 16);
-    abi::emit_store_reg_to_symbol(emitter, result, "_concat_off", 0);
+    elephc_memoir::strings::concat_cursor::emit_write(emitter, result);
     abi::load_at_offset(emitter, result, 24);
     abi::emit_call_label(emitter, "__rt_heap_free_safe");
     abi::load_at_offset(emitter, ptr, 32);

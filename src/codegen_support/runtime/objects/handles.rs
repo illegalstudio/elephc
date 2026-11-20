@@ -7,7 +7,7 @@
 //! Key details:
 //! - Pool storage and recycling live in Memoir; PHP hash string formatting stays here.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 pub(crate) use elephc_memoir::object_handles::emit_acquire_object_handle;
 #[cfg(test)]
 use elephc_memoir::object_handles::{object_handle_index_slots, object_handle_free_slots};
@@ -41,9 +41,9 @@ fn emit_spl_object_hash_arm64(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
     emitter.instruction("bl __rt_object_handle_of");                            // x0 = this object's PHP handle
-    abi::emit_symbol_address(emitter, "x6", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x6");
     emitter.instruction("ldr x8, [x6]");                                        // x8 = current scratch-buffer offset
-    abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x7");
     emitter.instruction("add x9, x7, x8");                                      // x9 = write cursor for the 32 hash bytes
     emitter.instruction("add x10, x8, #32");                                    // reserve exactly 32 scratch bytes
     emitter.instruction("str x10, [x6]");                                       // publish the advanced scratch offset
@@ -93,9 +93,9 @@ fn emit_spl_object_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 8");                                          // restore the SysV 16-byte call alignment the odd push broke
 
     emitter.instruction("call __rt_object_handle_of");                          // rax = this object's PHP handle
-    abi::emit_symbol_address(emitter, "r8", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "r8");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // r9 = current scratch-buffer offset
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r10");
     emitter.instruction("mov rbx, r10");                                        // rbx = write cursor for the 32 hash bytes
     emitter.instruction("add rbx, r9");                                         // advance the cursor to the reserved scratch slot
     emitter.instruction("mov r11, r9");                                         // copy the offset before reserving space
@@ -128,7 +128,7 @@ fn emit_spl_object_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r8, 1");                                           // count the padding byte
     emitter.instruction("jnz __rt_spl_object_hash_pad");                        // keep padding to the full 32 bytes
 
-    abi::emit_symbol_address(emitter, "rax", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "rax");
     emitter.instruction("add rax, r9");                                         // rax = pointer to the first hash byte
     emitter.instruction("mov rdx, 32");                                         // rdx = PHP's fixed spl_object_hash length
     emitter.instruction("add rsp, 8");                                          // release the alignment pad

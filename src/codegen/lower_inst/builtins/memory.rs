@@ -157,41 +157,8 @@ pub(crate) fn lower_set_memory_limit(
     let publish = ctx.next_label("memory_limit_publish");
     let rejected = ctx.next_label("memory_limit_rejected");
     let done = ctx.next_label("memory_limit_done");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("cmn x0, #1");                              // is the request exactly -1 (PHP's unlimited spelling)?
-            ctx.emitter.instruction(&format!("b.eq {unlimited}"));              // -1 selects the reserved arena capacity
-            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_heap_max", 0);
-            ctx.emitter.instruction("cmp x0, x9");                              // compare the request against the reserved capacity
-            ctx.emitter.instruction(&format!("b.hi {rejected}"));               // a finite request above the arena cannot be honored
-            ctx.emitter.instruction(&format!("b {publish}"));                   // publish an in-arena ceiling
-            ctx.emitter.label(&unlimited);
-            abi::emit_load_symbol_to_reg(ctx.emitter, "x0", "_heap_max", 0);   // unlimited is the whole reserved arena
-            ctx.emitter.label(&publish);
-            abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_heap_limit", 0);
-            ctx.emitter.instruction("mov x0, #0");                              // report a successful installation
-            ctx.emitter.instruction(&format!("b {done}"));                      // skip the rejection status
-            ctx.emitter.label(&rejected);
-            ctx.emitter.instruction("mov x0, #1");                              // report a request the arena cannot grow to
-            ctx.emitter.label(&done);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, -1");                             // is the request exactly -1 (PHP's unlimited spelling)?
-            ctx.emitter.instruction(&format!("je {unlimited}"));                // -1 selects the reserved arena capacity
-            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_heap_max", 0);
-            ctx.emitter.instruction("cmp rax, r10");                            // compare the request against the reserved capacity
-            ctx.emitter.instruction(&format!("ja {rejected}"));                 // a finite request above the arena cannot be honored
-            ctx.emitter.instruction(&format!("jmp {publish}"));                 // publish an in-arena ceiling
-            ctx.emitter.label(&unlimited);
-            abi::emit_load_symbol_to_reg(ctx.emitter, "rax", "_heap_max", 0);  // unlimited is the whole reserved arena
-            ctx.emitter.label(&publish);
-            abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_heap_limit", 0);
-            ctx.emitter.instruction("xor eax, eax");                            // report a successful installation
-            ctx.emitter.instruction(&format!("jmp {done}"));                    // skip the rejection status
-            ctx.emitter.label(&rejected);
-            ctx.emitter.instruction("mov eax, 1");                              // report a request the arena cannot grow to
-            ctx.emitter.label(&done);
-        }
-    }
+    elephc_memoir::memory::emit_set_limit(
+        ctx.emitter, &unlimited, &publish, &rejected, &done,
+    );
     store_if_result(ctx, inst)
 }

@@ -91,9 +91,9 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], rdi");                       // remember how many records the caller pushed
     emitter.instruction("mov QWORD PTR [rbp - 680], rsi");                      // preserve optional eval context for Stringable dispatch
     emitter.instruction("mov QWORD PTR [rbp - 688], 0");                        // no formatter-owned temporary string is live
-    abi::emit_symbol_address(emitter, "r10", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "r10");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // current concat-buffer write offset
-    abi::emit_symbol_address(emitter, "rcx", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "rcx");
     emitter.instruction("lea rbx, [rcx + r11]");                                // write cursor = buffer base + offset
     emitter.instruction("mov QWORD PTR [rbp - 48], rbx");                       // remember where this result starts
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // remember the concat-offset symbol address
@@ -154,7 +154,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, rbx");                                        // current write cursor
     emitter.instruction("sub rdx, rax");                                        // result byte length
     emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // concat-offset symbol address
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r11");
     emitter.instruction("sub rbx, r11");                                        // derive the absolute cursor after nested concat-producing conversions
     emitter.instruction("mov QWORD PTR [r10], rbx");                            // publish the exact new write offset without double-counting
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // packed argument record count
@@ -436,7 +436,7 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sprintf_t_int_x64");                          // format through the integer path
 
     emitter.label("__rt_sprintf_str_mixed_x64");
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r9");
     emitter.instruction("mov rax, rbx");                                        // copy the partial-result write cursor
     emitter.instruction("sub rax, r9");                                         // compute bytes already written before nested __toString
     emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload the address of the global concat offset

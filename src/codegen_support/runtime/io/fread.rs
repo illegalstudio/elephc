@@ -70,9 +70,9 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("mov x12, x0");                                         // destination pointer for the read
     emitter.instruction("b __rt_fread_dest_ready");                             // the destination window is reserved
     emitter.label("__rt_fread_dest_scratch");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
     emitter.instruction("ldr x10, [x9]");                                       // load current write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x11");
     emitter.instruction("add x12, x11, x10");                                   // compute write pointer: buf + offset
     emitter.label("__rt_fread_dest_ready");
     emitter.instruction("str x12, [sp, #16]");                                  // save start pointer for return value
@@ -189,8 +189,8 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the reserved destination pointer for the final elephc string result
     emitter.instruction("jmp __rt_fread_dest_ready_x86");                       // the destination window is reserved
     emitter.label("__rt_fread_dest_scratch_x86");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer absolute offset before appending the fread() result
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base address once for the x86_64 fread() helper
+    elephc_memoir::strings::concat_cursor::emit_read(emitter, "r10");             // load the current concat-buffer absolute offset before appending the fread() result
+    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r11");                    // materialize the concat-buffer base address once for the x86_64 fread() helper
     emitter.instruction("lea rax, [r11 + r10]");                                // compute the start pointer for the bytes that libc read() will append
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the concat-buffer start pointer for the final elephc string result
     emitter.label("__rt_fread_dest_ready_x86");

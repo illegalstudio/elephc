@@ -84,19 +84,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // User boundary code reads this value from its linked runtime, including cached objects.
     elephc_memoir::data::append_string_scratch_capacity(&mut out, heap_size);
 
-    out.push_str(&comm_directive(
-        "_itoa_spill_ring",
-        32 * crate::codegen_support::runtime::strings::itoa::ITOA_SPILL_SLOTS,
-        target,
-    ));
-    out.push_str(&comm_directive("_itoa_spill_index", 8, target));
-    out.push_str(&comm_directive(
-        "_float_spill_ring",
-        crate::codegen_support::runtime::strings::FLOAT_WINDOW_BYTES
-            * crate::codegen_support::runtime::strings::FLOAT_SPILL_SLOTS,
-        target,
-    ));
-    out.push_str(&comm_directive("_float_spill_index", 8, target));
+    elephc_memoir::strings::format_windows::append_spill_rings(&mut out, &target);
     out.push_str(&comm_directive("_mbstring_catalog_array", 8, target));
     out.push_str(&comm_directive("_mbstring_deferred_capture_head", 8, target));
     out.push_str(&comm_directive("_mbstring_deferred_capture_tail", 8, target));
@@ -493,8 +481,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // These two are read by every compiled prologue, so keep them in `.data` near the
     // text: a large `--heap-size` pushes `.comm` far enough that ADRP cannot reach the
     // end of the common block from `__text` (a 2G heap already crosses the 4G window).
-    out.push_str(".p2align 3\n.globl _stack_limit\n_stack_limit:\n    .quad 0\n");
-    out.push_str(".p2align 3\n.globl _stack_limit_main\n_stack_limit_main:\n    .quad 0\n");
+    elephc_memoir::stacks::append_stack_floor_data(&mut out);
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_closure_bind_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_wrap_callback_fn", 8, target));

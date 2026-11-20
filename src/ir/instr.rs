@@ -148,7 +148,13 @@ impl Instruction {
                 | Op::FToStr
                 | Op::BoolToStr
                 | Op::ResourceToStr
-        )
+        ) || (self.op == Op::RuntimeCall && matches!(
+            self.immediate,
+            Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(target)
+                | RuntimeCallTarget::ProfiledFunction { target, .. }
+            )) if target.creates_transient_string()
+        ))
     }
 
     /// Returns whether ordinary string cleanup must skip this producer.

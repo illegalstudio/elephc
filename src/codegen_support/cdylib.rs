@@ -310,7 +310,7 @@ fn emit_clear_error_inline(emitter: &mut Emitter) {
 
 /// Restores the process-global concat scratch cursor between native host calls.
 fn emit_reset_concat_inline(emitter: &mut Emitter) {
-    emit_store_immediate_to_symbol(emitter, "_concat_off", 0);
+    elephc_memoir::strings::concat_cursor::emit_boundary_reset(emitter);
 }
 
 /// Stores one small integer in a fixed cdylib state symbol.

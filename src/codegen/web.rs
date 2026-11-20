@@ -739,5 +739,5 @@ fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
 /// correct base; the handler then captures this fresh base for its frame.
 fn emit_concat_offset_reset(emitter: &mut Emitter) {
     emitter.comment("reset the concat-buffer write offset for the next request");
-    abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
+    elephc_memoir::strings::concat_cursor::emit_reset(emitter);
 }

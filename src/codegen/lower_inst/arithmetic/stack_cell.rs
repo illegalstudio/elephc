@@ -15,6 +15,7 @@
 //! - Tagged numeric arithmetic remains a clobber point, so its extra caller-saved tag registers
 //!   cannot contain unrelated live SSA values. Both operand homes are read first.
 
+use elephc_memoir::{FrameOffset, values::stack_cell::{CellTag, emit_scalar_cell}};
 use crate::codegen::{abi, platform::Arch, Result};
 use crate::codegen::context::FunctionContext;
 use crate::ir::{Instruction, MinMaxRule, MixedNumericOp, Op};
@@ -143,14 +144,14 @@ pub(super) fn lower_min_max(ctx: &mut FunctionContext<'_>, inst: &Instruction, o
     }
     // -- copy the winner's own tag and payload into the frame-local Mixed cell --
     ctx.emitter.label(&take_left);
-    write_cell(ctx, offset, left, CellTag::Register(left_tag));
+    emit_scalar_cell(ctx.emitter, FrameOffset::new(offset), left, CellTag::Register(left_tag));
     ctx.emit_branch(&done);
     ctx.emitter.label(&take_right);
     // The right tag lives in the register `store_at_offset` uses as its AArch64 address
     // scratch for a cell beyond the short frame range, so the payload store would destroy it.
     // The combined-tag register is dead after the comparison and is never a store scratch.
     abi::emit_reg_move(ctx.emitter, combined, right_tag);
-    write_cell(ctx, offset, right, CellTag::Register(combined));
+    emit_scalar_cell(ctx.emitter, FrameOffset::new(offset), right, CellTag::Register(combined));
     ctx.emitter.label(&done);
     abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
     store_if_result(ctx, inst)
@@ -227,7 +228,7 @@ pub(super) fn store_selected(ctx: &mut FunctionContext<'_>, inst: &Instruction, 
     abi::emit_load_from_address(ctx.emitter, tag, payload, 0);
     abi::emit_load_from_address(ctx.emitter, payload, payload, 8);
     abi::emit_release_temporary_stack(ctx.emitter, staging);
-    write_cell(ctx, offset, payload, CellTag::Register(tag));
+    emit_scalar_cell(ctx.emitter, FrameOffset::new(offset), payload, CellTag::Register(tag));
     abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
     store_if_result(ctx, inst)
 }
@@ -270,7 +271,7 @@ pub(super) fn store_guarded(ctx: &mut FunctionContext<'_>, inst: &Instruction, o
     ctx.emitter.label(&numeric);
     abi::emit_load_from_address(ctx.emitter, payload, payload, 8);
     abi::emit_release_temporary_stack(ctx.emitter, staging);
-    write_cell(ctx, offset, payload, CellTag::Register(tag));
+    emit_scalar_cell(ctx.emitter, FrameOffset::new(offset), payload, CellTag::Register(tag));
     abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)
@@ -322,7 +323,7 @@ pub(in crate::codegen::lower_inst) fn lower_clone(ctx: &mut FunctionContext<'_>,
     ctx.load_value_to_reg(value, payload)?;
     numeric_payloads::payload(ctx, value, payload, tag)?;
     // -- copy the numeric tag and payload into the clone's frame-local Mixed cell --
-    write_cell(ctx, cell, payload, CellTag::Register(tag));
+    emit_scalar_cell(ctx.emitter, FrameOffset::new(cell), payload, CellTag::Register(tag));
     abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), cell);
     store_if_result(ctx, inst)
 }
@@ -399,28 +400,7 @@ fn tagged(ctx: &mut FunctionContext<'_>, inst: &Instruction, offset: usize, op: 
 /// Writes the current scalar bits and its concrete runtime tag to the reserved cell.
 fn store(ctx: &mut FunctionContext<'_>, offset: usize, tag: i64) {
     let result = abi::int_result_reg(ctx.emitter);
-    write_cell(ctx, offset, result, CellTag::Immediate(tag));
-}
-
-/// Where a frame cell's runtime tag comes from.
-enum CellTag<'a> {
-    Immediate(i64),
-    Register(&'a str),
-}
-
-/// Lays out one 24-byte frame cell: payload at `offset - 8`, tag at `offset`, a cleared
-/// word at `offset - 16`. The payload register is clobbered.
-fn write_cell(ctx: &mut FunctionContext<'_>, offset: usize, payload: &str, tag: CellTag<'_>) {
-    abi::store_at_offset(ctx.emitter, payload, offset - 8);
-    match tag {
-        CellTag::Immediate(tag) => {
-            abi::emit_load_int_immediate(ctx.emitter, payload, tag);
-            abi::store_at_offset(ctx.emitter, payload, offset);
-        }
-        CellTag::Register(tag) => abi::store_at_offset(ctx.emitter, tag, offset),
-    }
-    abi::emit_load_int_immediate(ctx.emitter, payload, 0);
-    abi::store_at_offset(ctx.emitter, payload, offset - 16);
+    emit_scalar_cell(ctx.emitter, FrameOffset::new(offset), result, CellTag::Immediate(tag));
 }
 
 /// Preserves both ARM64 inputs until the overflow branch has selected its result type.

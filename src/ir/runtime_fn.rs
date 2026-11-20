@@ -2818,6 +2818,11 @@ impl RuntimeFnId {
         )
     }
 
+    /// Reports runtime string results with checked scratch and adoptable heap fallback.
+    pub const fn creates_transient_string(self) -> bool {
+        matches!(self, Self::Chr | Self::Long2ip | Self::Gethostname | Self::PhpUname)
+    }
+
     /// Returns the ownership and argument-aliasing contract for this operation.
     pub const fn result_ownership(
         self,
@@ -3285,8 +3290,8 @@ impl RuntimeFnId {
                 // block per iteration for `strstr($h, $cond ? "a" : "b")` in a loop.
                 | RuntimeFnId::Strstr
                 // `tempnam(directory, prefix)` returns the generated path that `mkstemp()`
-                // wrote into a buffer `__rt_tempnam` allocated itself, then copied out with
-                // `__rt_str_persist` — it is neither of its two argument strings. This was the
+                // wrote into a buffer allocated by `__rt_tempnam`. The returned path owns
+                // that buffer and never aliases either input string. This was the
                 // declared debt; measuring it showed the leak is PER CALL, not the reported
                 // constant 48 bytes, and that `sys_get_temp_dir()` and `tmpfile()` — named
                 // alongside it in that report — are both clean.
@@ -3354,6 +3359,11 @@ impl RuntimeFnId {
                 // but scratch-backed results still need ordinary string persistence.
                 | RuntimeFnId::StrReplace
                 | RuntimeFnId::StrIreplace
+                // These producers format fresh bytes into scratch or a heap reservation.
+                | RuntimeFnId::Chr
+                | RuntimeFnId::Long2ip
+                | RuntimeFnId::Gethostname
+                | RuntimeFnId::PhpUname
                 // Repetition uses separate concat storage and cannot alias its subject.
                 | RuntimeFnId::StrRepeat
                 // Wire bytes occupy concat storage, never an operand's allocation. This also
@@ -4176,7 +4186,15 @@ mod tests {
         ] {
             assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
         }
-        for target in [RuntimeFnId::StrRepeat, RuntimeFnId::StrReplace, RuntimeFnId::Fread] {
+        for target in [
+            RuntimeFnId::StrRepeat,
+            RuntimeFnId::StrReplace,
+            RuntimeFnId::Fread,
+            RuntimeFnId::Chr,
+            RuntimeFnId::Long2ip,
+            RuntimeFnId::Gethostname,
+            RuntimeFnId::PhpUname,
+        ] {
             assert_eq!(
                 target.result_ownership(),
                 BuiltinResultOwnership::Independent

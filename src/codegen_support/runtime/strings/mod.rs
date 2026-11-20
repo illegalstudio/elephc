@@ -159,7 +159,6 @@ pub use strcopy::{emit_str_dup_owned, emit_strcopy};
 pub use concat_scratch::emit_concat_scratch;
 pub use str_new_owned::emit_str_new_owned;
 /// Fixed capacity shared by emitters that prove a result fits the concat scratch buffer.
-pub(crate) use concat_scratch::{FLOAT_SPILL_SLOTS, FLOAT_WINDOW_BYTES};
 pub use strbuf::emit_strbuf;
 /// Emit the growable output buffer used by `json_encode()` and `serialize()`.
 pub(crate) use strbuf::{STRBUF_SIZE, STRBUF_WRITE};

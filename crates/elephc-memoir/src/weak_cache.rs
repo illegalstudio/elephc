@@ -27,10 +27,7 @@ fn emit_aarch64<E: AssemblyEmitter + TargetAbi>(emitter: &mut E, class_id_symbol
     emitter.instruction("str x0, [sp, #32]");                                   // preserve the object or Closure runtime tag
     emitter.instruction("mov x0, x1");                                          // weak identity is the borrowed payload allocation
     emitter.instruction("str x0, [sp, #16]");                                   // preserve the borrowed referent during allocation
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
-    emitter.instruction("sub x10, x0, x9");                                     // derive the referent's direct-mapped heap offset
-    emitter.instruction("lsr x10, x10, #4");                                    // select the referent's unique allocation granule
-    abi::emit_symbol_address(emitter, "x9", "_obj_weak_reference_index");
+    emit_slot_components(emitter);
     emitter.instruction("add x9, x9, x10, lsl #3");                             // address the non-owning cached wrapper slot
     emitter.instruction("str x9, [sp, #24]");                                   // preserve the cache slot across heap allocation
     emitter.instruction("ldr x0, [x9]");                                        // reuse the unique live wrapper when one already exists
@@ -108,11 +105,7 @@ fn emit_x86_64<E: AssemblyEmitter + TargetAbi>(emitter: &mut E, class_id_symbol:
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the object or Closure runtime tag
     emitter.instruction("mov rax, rdi");                                        // index the borrowed payload rather than its Mixed cell
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the referent without acquiring an owner
-    abi::emit_symbol_address(emitter, "r11", "_heap_buf");
-    emitter.instruction("mov r10, rax");                                        // copy the referent before computing its granule
-    emitter.instruction("sub r10, r11");                                        // derive its heap-relative byte offset
-    emitter.instruction("shr r10, 4");                                          // select the unique allocation granule
-    abi::emit_symbol_address(emitter, "r11", "_obj_weak_reference_index");
+    emit_slot_components(emitter);
     emitter.instruction("lea r10, [r11 + r10 * 8]");                            // locate the non-owning wrapper cache entry
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // preserve the cache slot across allocation
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // reuse the unique live wrapper
@@ -174,4 +167,43 @@ fn emit_x86_64<E: AssemblyEmitter + TargetAbi>(emitter: &mut E, class_id_symbol:
     emitter.instruction("mov QWORD PTR [r8 + r11 * 8], 0");                     // unlink this wrapper before its own storage is freed
     emitter.label("__rt_weak_reference_retire_done");
     emitter.instruction("ret");                                                 // preserve rax for the allocator's remaining work
+}
+
+/// Computes the weak table base and index for a borrowed allocation in x0/rax.
+///
+/// Leaves the base and index in x9/x10 or r11/r10. The caller can load, test, or
+/// take the address of the same cache entry without altering the referent.
+fn emit_slot_components(emitter: &mut (impl AssemblyEmitter + TargetAbi)) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+            emitter.instruction("sub x10, x0, x9");                             // compute the allocation offset
+            emitter.instruction("lsr x10, x10, #4");                            // index by allocation granule
+            abi::emit_symbol_address(emitter, "x9", "_obj_weak_reference_index");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r11", "_heap_buf");
+            emitter.instruction("mov r10, rax");                                // preserve the caller's borrowed pointer
+            emitter.instruction("sub r10, r11");                                // compute the allocation offset
+            emitter.instruction("shr r10, 4");                                  // index by allocation granule
+            abi::emit_symbol_address(emitter, "r11", "_obj_weak_reference_index");
+        }
+    }
+}
+
+/// Branches if the borrowed allocation has no observer in its weak cache slot.
+pub fn emit_branch_if_unobserved(
+    emitter: &mut (impl AssemblyEmitter + TargetAbi), arm_entry: &str, unobserved: &str,
+) {
+    emit_slot_components(emitter);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr {arm_entry}, [x9, x10, lsl #3]")); // read the non-owning cache slot
+            emitter.instruction(&format!("cbz {arm_entry}, {unobserved}"));     // skip notifications for an empty slot
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp QWORD PTR [r11 + r10 * 8], 0");            // test the same non-owning cache slot
+            emitter.instruction(&format!("je {unobserved}"));                   // skip notifications for an empty slot
+        }
+    }
 }

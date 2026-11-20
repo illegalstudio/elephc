@@ -104,7 +104,7 @@ pub(crate) use json_throw_error::emit_json_throw_error;
 pub(crate) use match_unhandled::emit_match_unhandled;
 pub(crate) use stack_guard::{
     emit_stack_limit_init, emit_stack_overflow, STACK_GUARD_RESERVE_BYTES,
-    STACK_LIMIT_MAIN_SYMBOL, STACK_LIMIT_SYMBOL,
+    STACK_LIMIT_SYMBOL,
 };
 pub(crate) use microtime::emit_microtime;
 pub(crate) use microtime::emit_microtime_build_into;
