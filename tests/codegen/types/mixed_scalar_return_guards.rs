@@ -236,3 +236,38 @@ echo "end\n";
     assert_eq!(output.stdout, "LogicException:d previous TypeError: gs(): Return value must be of type string, D returned\nLogicException:d previous TypeError: gf(): Return value must be of type float, D returned\nLogicException:d previous TypeError: gb(): Return value must be of type bool, D returned\nlogic d\nend\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A refused `string`/`float`/`bool` return releases the returned temporary, and the exception
+/// its destructor throws reaches the returning function's own `catch`: the checker keeps the
+/// catch's assignments for the code after it, and an uncaught one carries the `TypeError` as its
+/// previous exception.
+#[test]
+fn test_refused_return_cleanup_exception_reaches_the_local_catch() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class D { public function __destruct() { throw new LogicException("dtor"); } }
+function mk(): mixed { return new D; }
+function gs(): string {
+    $w = null;
+    try { return mk(); } catch (LogicException $e) { $w = "caught " . $e->getMessage(); }
+    echo strlen($w), " ", $w, "\n";
+    return "after";
+}
+function gb(): bool {
+    $w = 1;
+    try { return mk(); } catch (LogicException $e) { $w = "caught"; } finally { echo "fin\n"; }
+    echo strlen($w), "\n";
+    return false;
+}
+function gf(): float {
+    try { return mk(); } catch (TypeError $e) { echo "TypeError ", get_class($e->getPrevious() ?? $e), "\n"; }
+    return 2.5;
+}
+var_dump(gs(), gb());
+try { var_dump(gf()); } catch (LogicException $e) { echo "outer ", $e->getMessage(), " prev=", get_class($e->getPrevious()), "\n"; }
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "11 caught dtor\nfin\n6\nstring(5) \"after\"\nbool(false)\nouter dtor prev=TypeError\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}

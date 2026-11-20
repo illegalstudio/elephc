@@ -185,7 +185,7 @@ pub(super) fn active_return_boundary_may_throw(expr: &Expr) -> bool {
 
 /// Returns whether the active boundary releases a refused returned temporary while its
 /// `TypeError` unwinds (declared `string`, `float` and `bool`; the `int` check does not).
-pub(super) fn active_return_boundary_releases_refused_value() -> bool {
+pub(crate) fn active_return_boundary_releases_refused_value() -> bool {
     ACTIVE_RETURN_BOUNDARY.with(|slot| slot.borrow().as_ref().is_some_and(|facts|
         matches!(facts.declared_scalar, Some(PhpType::Str | PhpType::Float | PhpType::Bool))))
 }
