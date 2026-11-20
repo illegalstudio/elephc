@@ -236,7 +236,7 @@ fn eval_source_argument_with_type(argument: &EvalCallArg, position: usize,
         && !modes.by_reference(argument.name(), position)
         && !matches!(argument.value(), EvalExpr::Array(_)) {
         let (value, source) = mixed_eval::evaluate(argument.value(), context, scope, values)?;
-        return Ok((value, None, Some(ArgumentSource::capture(crate::eval_ir::parameter_type(&source), context))));
+        return Ok((value, None, source.as_ref().map(|source| ArgumentSource::capture(crate::eval_ir::parameter_type(source), context))));
     }
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
         && !modes.by_reference(argument.name(), position) {

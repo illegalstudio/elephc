@@ -84,10 +84,9 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
             builtin.or_else(|| context.function(&name).and_then(|function| function.return_type()).cloned())
                 .or_else(|| context.native_function(&name).and_then(|function| function.return_type().cloned()))
                 .map(|ty| if arrays { ty } else { parameter_type(&binding_kind_type(generic_type(&ty))) })
-                .or_else(|| Some(mixed()))
         }
         EvalExpr::DynamicCall { .. } | EvalExpr::DynamicMethodCall { .. }
-            | EvalExpr::DynamicStaticMethodCall { .. } => Some(mixed()),
+            | EvalExpr::DynamicStaticMethodCall { .. } => None,
         _ => None,
     }
 }
@@ -180,14 +179,13 @@ pub(in crate::interpreter) fn store_local_with_origin(context: &mut ElephcEvalCo
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     let LocalAssignmentProducer { binding: producer, source } = producer;
     let source = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
-        || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
-        match source.map(Ok).unwrap_or_else(|| if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
-            Ok(parameter_type(&Type::atom("mixed")))
-        } else { value_contract(value, context, values) }) {
+        && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        match source.map(Ok).unwrap_or_else(|| value_contract(value, context, values)) {
             Ok(source) => Some(source),
             Err(status) => { let _ = eval_release_value(context, values, value); return Err(status); }
         }
-    } else { None };
+    } else if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { source }
+    else { None };
     let fresh = context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals)
         && visible_scope_cell(context, scope, &name).is_none()
         && scope.local_type(&name).is_none();

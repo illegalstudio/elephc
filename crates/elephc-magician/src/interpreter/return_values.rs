@@ -241,8 +241,8 @@ pub(in crate::interpreter) fn eval_source_return_expression(expr: &EvalExpr,
             let target = resolve_return_source_type(&crate::eval_ir::generic_type(&contract.ty),
                 &contract, context)?;
             let expected = crate::eval_ir::parameter_type(&target);
-            let source = ArgumentSource::capture(crate::eval_ir::parameter_type(&source), context);
-            mixed_source_proofs::require_argument(&expected, Some(&source), value, false, context, values)?;
+            let source = source.as_ref().map(|source| ArgumentSource::capture(crate::eval_ir::parameter_type(source), context));
+            mixed_source_proofs::require_argument(&expected, source.as_ref(), value, false, context, values)?;
         }
         Ok(value)
     })();

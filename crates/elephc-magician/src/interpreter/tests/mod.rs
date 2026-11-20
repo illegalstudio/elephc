@@ -145,3 +145,4 @@ mod strict_array_contents;
 mod strict_array_mutation_origins;
 mod strict_mixed_runtime;
 mod strict_mixed_boundaries;
+mod strict_mixed_producer_origins;

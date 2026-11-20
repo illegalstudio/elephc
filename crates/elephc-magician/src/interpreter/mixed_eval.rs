@@ -16,7 +16,7 @@ use crate::runtime_hooks::owner_frames::with_runtime_owners;
 /// Evaluates a source once, keeping declared returns independent from their concrete occupants.
 pub(super) fn evaluate(expr: &EvalExpr, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-) -> Result<(RuntimeCellHandle, Type), EvalStatus> {
+) -> Result<(RuntimeCellHandle, Option<Type>), EvalStatus> {
     match expr {
         EvalExpr::Binary { op, left, right } if !matches!(op, EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr) =>
             binary(*op, left, right, context, scope, values),
@@ -39,17 +39,16 @@ pub(super) fn evaluate(expr: &EvalExpr, context: &mut ElephcEvalContext,
 }
 
 /// Takes a producer snapshot without inferring a proof from its evaluated runtime tag.
-fn source_type(expr: &EvalExpr, context: &ElephcEvalContext, scope: &ElephcEvalScope) -> Type {
-    mixed_source_proofs::value_source(local_binding_origins::source_view(expr, context, scope)
-        .as_ref().map(generic_type).unwrap_or_else(|| Type::atom("mixed")))
+fn source_type(expr: &EvalExpr, context: &ElephcEvalContext, scope: &ElephcEvalScope) -> Option<Type> {
+    local_binding_origins::source_view(expr, context, scope).as_ref().map(generic_type)
 }
 
 /// Roots each detached operand before evaluating the next source and preserves failure cleanup.
 fn with_sources<V: RuntimeValueOps>(args: &[&EvalExpr], context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut V,
-    consume: impl FnOnce(&[RuntimeCellHandle], &[Type], &mut ElephcEvalContext,
-        &mut ElephcEvalScope, &mut V) -> Result<(RuntimeCellHandle, Type), EvalStatus>,
-) -> Result<(RuntimeCellHandle, Type), EvalStatus> {
+    consume: impl FnOnce(&[RuntimeCellHandle], &[Option<Type>], &mut ElephcEvalContext,
+        &mut ElephcEvalScope, &mut V) -> Result<(RuntimeCellHandle, Option<Type>), EvalStatus>,
+) -> Result<(RuntimeCellHandle, Option<Type>), EvalStatus> {
     let mut owners = Vec::with_capacity(args.len()); let mut sources = Vec::with_capacity(args.len());
     let prepared = (|| {
         for arg in args {
@@ -71,29 +70,31 @@ fn with_sources<V: RuntimeValueOps>(args: &[&EvalExpr], context: &mut ElephcEval
 /// Validates complete source alternatives after both ordinary operands have run.
 pub(super) fn binary(op: EvalBinOp, left: &EvalExpr, right: &EvalExpr,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-) -> Result<(RuntimeCellHandle, Type), EvalStatus> {
+) -> Result<(RuntimeCellHandle, Option<Type>), EvalStatus> {
     with_sources(&[left, right], context, scope, values, |operands, sources, context, _, values| {
-        mixed_source_proofs::require_binary(op, &sources[0], &sources[1], context, values)?;
+        let left = whole_source(sources[0].as_ref()); let right = whole_source(sources[1].as_ref());
+        mixed_source_proofs::require_binary(op, &left, &right, context, values)?;
         let value = eval_binary_result(op, operands[0], operands[1], context, values)?;
-        Ok((value, binary_result_source(op, &sources[0], &sources[1], context)))
+        Ok((value, Some(binary_result_source(op, &left, &right, context))))
     })
 }
 
 /// Applies unary source proofs before delegating value semantics to the existing operation adapter.
 pub(super) fn unary(op: EvalUnaryOp, expr: &EvalExpr, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-) -> Result<(RuntimeCellHandle, Type), EvalStatus> {
+) -> Result<(RuntimeCellHandle, Option<Type>), EvalStatus> {
     with_sources(&[expr], context, scope, values, |operands, sources, context, _, values| {
+        let operand = whole_source(sources[0].as_ref());
         if op != EvalUnaryOp::LogicalNot {
-            mixed_source_proofs::require_source(&sources[0], "unary operations", context, values,
+            mixed_source_proofs::require_source(&operand, "unary operations", context, values,
                 |ty, _| matches!(ty, Type::Atom(name) if matches!(name.as_str(),
                     "int" | "float" | "string" | "bool" | "true" | "false" | "null" | "void")))?;
         }
         let value = eval_unary_value(op, operands[0], context, values)?;
         let source = if op == EvalUnaryOp::LogicalNot { Type::atom("bool") }
-            else if op == EvalUnaryOp::BitNot && sources[0] == Type::atom("string") { Type::atom("string") }
+            else if op == EvalUnaryOp::BitNot && operand == Type::atom("string") { Type::atom("string") }
             else if op == EvalUnaryOp::BitNot { Type::atom("int") } else { numeric_source() };
-        Ok((value, source))
+        Ok((value, Some(source)))
     })
 }
 
@@ -114,4 +115,9 @@ fn binary_result_source(op: EvalBinOp, left: &Type, right: &Type, context: &Elep
             matches!(ty, Type::Atom(name) | Type::Apply(name, _) if name == "array")) => Type::atom("array"),
         _ => numeric_source(),
     }
+}
+
+/// Normalizes only the consumed whole-kind proof, preserving optional producer metadata in transit.
+fn whole_source(source: Option<&Type>) -> Type {
+    source.cloned().map(mixed_source_proofs::value_source).unwrap_or_else(|| Type::atom("mixed"))
 }

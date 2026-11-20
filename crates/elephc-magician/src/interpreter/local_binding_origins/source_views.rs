@@ -37,7 +37,10 @@ pub(in crate::interpreter) fn source_view(expr: &EvalExpr,
             if view.as_ref().is_some_and(|ty| generic_type(ty) == Type::atom("array"))
                 && generic_local_contracts(scope, name, context).iter()
                     .any(|ty| arrays::contains_contents(&generic_type(ty))) {
-                local_producer_contract(expr, context, scope)
+                let mut members = view.as_ref().map(generic_type).into_iter().collect::<Vec<_>>();
+                members.extend(generic_local_contracts(scope, name, context).iter().map(generic_type)
+                    .filter(arrays::contains_contents));
+                Some(parameter_type(&Type::Intersection(members)))
             } else { view.or_else(|| {
                 let known = scope.inferred_local_type(name).or_else(|| scope.native_binding_type(name)).is_some()
                     || generic_local_contracts(scope, name, context).iter()
@@ -78,7 +81,7 @@ pub(in crate::interpreter) fn evaluate_assignment(expr: &EvalExpr, name: &str,
     }
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
         let (value, source) = mixed_eval::evaluate(expr, context, scope, values)?;
-        producer.source = Some(parameter_type(&source));
+        producer.source = source.as_ref().map(parameter_type);
         return Ok(value);
     }
     eval_owned_expr(expr, context, scope, values)
