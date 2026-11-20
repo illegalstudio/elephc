@@ -25,12 +25,29 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, body: &[crate::parser::as
         // native `storage` array and selects by the key `__elephc_offset_index` answered.
         let storage_property = if ctx.owner_name().starts_with("ArrayObject") { "storage" } else { "values" };
         let property = ctx.intern_string(storage_property);
-        let array = ctx.emit_value(Op::PropGetForWrite, vec![receiver.value],
-            Some(Immediate::Data(property)), PhpType::Array(Box::new(PhpType::Mixed)),
-            Op::PropGetForWrite.default_effects(), None);
-        ctx.builder.set_value_ownership(array.value, crate::ir::Ownership::Borrowed);
-        let result = ctx.emit_owned_value(Op::ArrayGetForWrite, vec![array.value, index.value],
-            None, PhpType::Mixed, Op::ArrayGetForWrite.default_effects(), None);
+        let result = if ctx.owner_name().starts_with("ArrayObject") {
+            // `storage` is declared `array`, so it is a boxed Mixed cell that may hold a hash with
+            // any int or string key: the cell is fetched for write and the key ENSURED through the
+            // boxed-receiver fetch, which attaches (or autovivifies) the element and answers the
+            // stored cell. Reading the box as a packed `Array` (`ArrayGetForWrite`) took the key
+            // for a slot, and a nested write (`$ao['k'][0] += 4`) landed in a detached copy.
+            let storage = ctx.emit_value(Op::PropGetForWrite, vec![receiver.value],
+                Some(Immediate::Data(property)), PhpType::Mixed, Op::PropGetForWrite.default_effects(), None);
+            ctx.builder.set_value_ownership(storage.value, crate::ir::Ownership::Borrowed);
+            let storage = super::ownership::acquire_if_refcounted(ctx, storage, None);
+            let cell = ctx.emit_value(Op::RuntimeCall, vec![storage.value, index.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+                PhpType::Mixed, super::effects_lookup::runtime_effects(), None);
+            super::ownership::release_if_owned(ctx, storage, None);
+            cell
+        } else {
+            let array = ctx.emit_value(Op::PropGetForWrite, vec![receiver.value],
+                Some(Immediate::Data(property)), PhpType::Array(Box::new(PhpType::Mixed)),
+                Op::PropGetForWrite.default_effects(), None);
+            ctx.builder.set_value_ownership(array.value, crate::ir::Ownership::Borrowed);
+            ctx.emit_owned_value(Op::ArrayGetForWrite, vec![array.value, index.value],
+                None, PhpType::Mixed, Op::ArrayGetForWrite.default_effects(), None)
+        };
         super::stmt::terminate_return(ctx, Some(result.value));
         return true;
     }

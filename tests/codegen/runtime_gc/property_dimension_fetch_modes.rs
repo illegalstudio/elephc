@@ -377,3 +377,45 @@ $box = new ConcreteNestedHolder(); $box->step(); unset($box);
     assert_eq!(out.stdout, "7|5|6|9|10|7|8|9|10|", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Nested writes through an `ArrayObject` property reach the stored element, as php's do.
+///
+/// The object keeps one native `storage` array, a boxed Mixed cell whose elements need not be
+/// attached cells: the write-fetch selector read it as a packed array, so `+=`, `++`, `=` and an
+/// append on `$this->data['k'][...]` landed in a detached copy. Expected output is `php -n`'s.
+#[test]
+fn test_property_array_object_nested_updates_reach_storage() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ArrayObjectNestedHolder {
+    public ArrayObject $data;
+    public function __construct() { $this->data = new ArrayObject(['k' => [1]]); }
+    public function step(): void {
+        $this->data['k'][0] += 4;
+        echo $this->data['k'][0], '|';
+        echo ($this->data['k'][0] += 2), '|';
+        $this->data['k'][0]++;
+        echo $this->data['k'][0], '|';
+        $this->data['k'][0] = 3;
+        echo $this->data['k'][0], '|';
+        $this->data['k'][] = 9;
+        echo count($this->data['k']), '|';
+        $this->data['k']['z'] = 5;
+        echo $this->data['k']['z'], '|';
+        $this->data['n'][0] = 7;
+        echo $this->data['n'][0], "\n";
+    }
+}
+$box = new ArrayObjectNestedHolder();
+$box->step();
+$box->data['k'][0] -= 1;
+echo $box->data['k'][0], "\n";
+$ao = new ArrayObject(['k' => [1]]);
+$ao['k'][] = 3;
+$ao['k']['z'] = 3;
+$ao['k'][0]++;
+echo json_encode($ao->getArrayCopy()), "\n";
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "5|7|8|3|2|5|7\n2\n{\"k\":{\"0\":2,\"1\":3,\"z\":3}}\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

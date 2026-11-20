@@ -63,10 +63,22 @@ $getter = new StorageGetterOverride(['x' => [1]]); $getter['x'][] = 2;
             let method_name = format!("{class}::__elephc_fetch_for_write");
             let method = module.class_methods.iter().find(|method| method.name == method_name).unwrap();
             let storage = method.instructions.iter().find(|inst| inst.op == Op::PropGetForWrite).unwrap();
-            assert_eq!(storage.result_php_type, PhpType::Array(Box::new(PhpType::Mixed)), "{name}: {class}");
-            let fetch = method.instructions.iter().find(|inst| inst.op == Op::ArrayGetForWrite).unwrap();
-            assert_eq!(fetch.operands[0], storage.result.unwrap(), "{name}: {class}");
-            assert_eq!(fetch.result_php_type, PhpType::Mixed, "{name}: {class}");
+            if class == "ArrayObject" {
+                // One native `storage` array, a boxed Mixed cell: the cell is fetched through the
+                // boxed-receiver runtime call, which attaches the element and answers its stored cell.
+                assert_eq!(storage.result_php_type, PhpType::Mixed, "{name}: {class}");
+                let fetch = method.instructions.iter().find(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::ArrayFetchForWrite))).unwrap();
+                assert_eq!(fetch.result_php_type, PhpType::Mixed, "{name}: {class}");
+                let receiver = method.instructions.iter().find(|inst| inst.result == Some(fetch.operands[0])).unwrap();
+                assert!(receiver.result == storage.result
+                    || (receiver.op == Op::Acquire && receiver.operands[0] == storage.result.unwrap()), "{name}: {class}");
+            } else {
+                assert_eq!(storage.result_php_type, PhpType::Array(Box::new(PhpType::Mixed)), "{name}: {class}");
+                let fetch = method.instructions.iter().find(|inst| inst.op == Op::ArrayGetForWrite).unwrap();
+                assert_eq!(fetch.operands[0], storage.result.unwrap(), "{name}: {class}");
+                assert_eq!(fetch.result_php_type, PhpType::Mixed, "{name}: {class}");
+            }
             assert!(!method.instructions.iter().any(|inst| inst.op == Op::LoadArrayElemRefCell), "{name}: {class}");
         }
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
