@@ -163,7 +163,7 @@ pub(super) fn require_condition(ty: &Type,context: &mut ElephcEvalContext,
 }
 
 /// Uses nominal Stringable evidence without invoking user code to manufacture a source proof.
-fn string_context_source(ty: &Type, context: &ElephcEvalContext) -> bool {
+pub(super) fn string_context_source(ty: &Type, context: &ElephcEvalContext) -> bool {
     if scalar_atom(ty, &["int", "float", "string", "bool", "false", "true", "null", "void",
         elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC]) { return true; }
     let Type::Atom(name) = ty else { return false; };

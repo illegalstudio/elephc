@@ -97,8 +97,14 @@ pub(in crate::interpreter) fn eval_dynamic_member_name(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
-    let source = eval_owned_expr(expr, context, scope, values)?;
+    let (source,evidence)=if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        mixed_eval::evaluate(expr,context,scope,values)?
+    } else {(eval_owned_expr(expr,context,scope,values)?,None)};
     let result = (|| {
+        let evidence=evidence.map(mixed_source_proofs::value_source)
+            .unwrap_or_else(||elephc_generics::Type::atom("mixed"));
+        mixed_source_proofs::require_source(&evidence,"member name selection",context,values,
+            mixed_source_proofs::string_context_source)?;
         let value = eval_string_context_value(source, context, values)?;
         let bytes = values.string_bytes(value);
         let released = if value != source {

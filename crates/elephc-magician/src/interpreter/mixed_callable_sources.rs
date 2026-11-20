@@ -20,7 +20,7 @@ fn declared(ty: Option<&EvalParameterType>,owner: Option<&str>,called: Option<&s
 }
 
 /// Reads a named function, closure or builtin declaration without inferring a result from storage.
-fn named(name: &str,context: &ElephcEvalContext) -> Result<Option<Type>,EvalStatus> {
+pub(super) fn named(name: &str,context: &ElephcEvalContext) -> Result<Option<Type>,EvalStatus> {
     if let Some(closure)=context.closure(name) {return declared(closure.function().return_type(),None,None,context);}
     if let Some(function)=context.function(name) {return declared(function.return_type(),None,None,context);}
     if let Some(function)=context.native_function(name) {return declared(function.return_type(),None,None,context);}
@@ -29,7 +29,7 @@ fn named(name: &str,context: &ElephcEvalContext) -> Result<Option<Type>,EvalStat
 }
 
 /// Identifies the selected receiver class while its normalized callback owner remains alive.
-fn object_class(object: RuntimeCellHandle,context: &ElephcEvalContext,
+pub(super) fn object_class(object: RuntimeCellHandle,context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String,EvalStatus> {
     if let Some(class)=values.object_identity(object).ok().and_then(|identity|context.dynamic_object_class(identity)) {
@@ -104,6 +104,14 @@ pub(super) fn invoke(callback: &EvaluatedCallable, arguments: Vec<EvaluatedCallA
         if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
             && matches!(name.as_str(), "call_user_func" | "call_user_func_array") {
             return eval_builtin_callback_with_arguments_and_source(name, arguments, !by_value, context, values);
+        }
+    }
+    let mut source = source;
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        if let EvaluatedCallable::ObjectMethod { object, method, .. } = callback {
+            if let Some(reflected) = eval_reflection_invocation_source(*object, method, &arguments, context, values)? {
+                source = reflected;
+            }
         }
     }
     let result = if by_value {

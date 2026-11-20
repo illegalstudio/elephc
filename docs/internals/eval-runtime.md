@@ -794,6 +794,12 @@ Callback forwarding through `call_user_func` and `call_user_func_array` carries
 the selected target declaration through the shared argument owner coordinator,
 including nested wrappers. Each invocation returns its value and optional source
 together; source metadata never uses a global last-result slot.
+Selected object and static method calls retain their actual declaration through
+argument effects. Runtime member names validate their logical string-conversion
+domain before conversion; class selectors require a string or object source.
+Reflection `invoke` and `invokeArgs` read the reflected declaration, including
+callback forwarding. Discarded method results share the same receiver scope and
+retain their existing warning behavior.
 
 Native descriptor signatures retain their original twelve physical metadata words.
 Flag bit 1 marks an appended logical-source record pointer at word 12. The

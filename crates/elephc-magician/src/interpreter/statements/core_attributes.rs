@@ -85,6 +85,10 @@ pub(super) fn eval_discarded_core_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+        && mixed_method_results::handles(expression) {
+        return mixed_method_results::discarded(expression,context,scope,values);
+    }
     match expression {
         EvalExpr::MethodCall { object, method, args }
         | EvalExpr::NullsafeMethodCall { object, method, args } => {
@@ -116,7 +120,7 @@ pub(super) fn eval_discarded_core_expr(
 }
 
 /// Warns for an eval method's discarded result and releases it if a warning handler throws.
-fn warn_eval_discarded_instance_result(
+pub(in crate::interpreter) fn warn_eval_discarded_instance_result(
     object: RuntimeCellHandle,
     method: &str,
     result: RuntimeCellHandle,

@@ -129,3 +129,5 @@ use scalar_offsets::{eval_array_autovivification, eval_false_array_parent_diagno
 pub(in crate::interpreter) use static_method_dispatch::*;
 pub(in crate::interpreter) use static_property_access::*;
 pub(in crate::interpreter) use trait_declarations::*;
+
+pub(in crate::interpreter) use core_attributes::warn_eval_discarded_instance_result;

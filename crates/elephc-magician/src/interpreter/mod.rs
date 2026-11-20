@@ -64,6 +64,7 @@ mod mixed_source_proofs;
 mod mixed_eval;
 mod mixed_result_sources;
 mod mixed_callable_sources;
+mod mixed_method_results;
 mod mixed_guards;
 mod initialization;
 mod probe_reads;

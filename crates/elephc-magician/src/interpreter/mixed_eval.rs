@@ -17,6 +17,7 @@ use crate::runtime_hooks::owner_frames::with_runtime_owners;
 pub(super) fn evaluate(expr: &EvalExpr, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<Type>), EvalStatus> {
+    if mixed_method_results::handles(expr) { return mixed_method_results::evaluate(expr,context,scope,values); }
     match expr {
         EvalExpr::Binary { op, left, right } if !matches!(op, EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr) =>
             binary(*op, left, right, context, scope, values),
@@ -71,7 +72,7 @@ fn source_type(expr: &EvalExpr, context: &ElephcEvalContext, scope: &ElephcEvalS
 }
 
 /// Roots each detached operand before evaluating the next source and preserves failure cleanup.
-fn with_sources<V: RuntimeValueOps>(args: &[&EvalExpr], context: &mut ElephcEvalContext,
+pub(super) fn with_sources<V: RuntimeValueOps>(args: &[&EvalExpr], context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut V,
     consume: impl FnOnce(&[RuntimeCellHandle], &[Option<Type>], &mut ElephcEvalContext,
         &mut ElephcEvalScope, &mut V) -> Result<(RuntimeCellHandle, Option<Type>), EvalStatus>,

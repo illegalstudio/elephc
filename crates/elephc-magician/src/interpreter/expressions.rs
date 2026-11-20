@@ -109,6 +109,10 @@ fn eval_expr_with_result_ownership(
         return super::nullsafe_chains::evaluate_receiver(expr, false, context, scope, values)?
             .map_or_else(|| values.null(), Ok);
     }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+        && mixed_method_results::handles(expr) {
+        return mixed_method_results::evaluate(expr,context,scope,values).map(|result|result.0);
+    }
     match expr {
         EvalExpr::DeferredDefaultError(message) => throwables::eval_throw_error(message, context, values),
         EvalExpr::Array(elements) => {
