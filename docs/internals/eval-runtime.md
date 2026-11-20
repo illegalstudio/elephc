@@ -830,6 +830,13 @@ prospective declaration to exactly one publication, before callbacks execute.
 Nested callback writes keep the actual unbound storage rules; successful binding
 then publishes the normal property association. These admissions own metadata,
 while existing runtime frames retain the original values and canonical cells.
+Interior local array writes additionally project the live property associations
+into conditional content checks. These borrowed obligations are consulted at the
+write and never copied into persistent local or parameter contracts, so retiring
+the receiver releases its constraints. Whole reference replacements still use
+the original-RHS coordinator and preserve weak scalar conversion. Instance and
+static property defaults share initialization that widens an integer literal
+to a sole declared float representation, independently of assignment coercions.
 
 Native descriptor signatures retain their original twelve physical metadata words.
 Flag bit 1 marks an appended logical-source record pointer at word 12. The

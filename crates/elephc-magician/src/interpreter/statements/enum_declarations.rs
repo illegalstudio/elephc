@@ -360,6 +360,22 @@ pub(super) fn eval_class_like_member_default(
     result
 }
 
+/// Evaluates a declared default with the scalar representation required by its declaration.
+pub(super) fn eval_property_default(
+    owner: &str, property: &EvalClassProperty, default: &EvalExpr,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let value = eval_class_like_member_default(owner, property.trait_origin(), default, context, scope, values)?;
+    let float_only = property.property_type().is_some_and(|ty| !ty.is_intersection()
+        && ty.variants() == [EvalParameterTypeVariant::Float]);
+    if float_only && values.type_tag(value)? == EVAL_TAG_INT {
+        let converted = values.cast_float(value);
+        return finish_synthesized_method_arguments(converted, [value], context, values);
+    }
+    Ok(value)
+}
+
 /// Initializes static property cells for a newly declared eval class.
 pub(super) fn initialize_eval_static_properties(
     class: &EvalClass,
@@ -373,14 +389,7 @@ pub(super) fn initialize_eval_static_properties(
         .filter(|property| property.is_static())
     {
         let value = if let Some(default) = property.default() {
-            Some(eval_class_like_member_default(
-                class.name(),
-                property.trait_origin(),
-                default,
-                context,
-                scope,
-                values,
-            )?)
+            Some(eval_property_default(class.name(), property, default, context, scope, values)?)
         } else if property.property_type().is_none() {
             Some(values.null()?)
         } else {

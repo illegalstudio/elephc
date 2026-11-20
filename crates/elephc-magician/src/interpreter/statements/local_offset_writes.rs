@@ -109,7 +109,7 @@ fn eval_local_offset_write(
             }
         };
         super::false_array_completion::with_completion(captured_parent, index, context, values, |context, values| {
-            let declared = generic_local_contracts(scope, name, context);
+            let declared = generic_local_element_contracts(scope, name, context);
             let origin;
             let replacement = if let Some(index) = index {
                 checked_array_keys::for_receiver(array, index, context, values)?;

@@ -8,9 +8,38 @@
 //! - Validation happens after operand evaluation and before storage mutation.
 
 use super::*;
+use crate::eval_ir::parameter_type;
+
+/// Collects live declaration obligations on canonical storage without retaining their owners.
+fn generic_cell_contracts(cell: RuntimeCellHandle, context: &ElephcEvalContext, property_contents: bool) -> Vec<EvalParameterType> {
+    let mut contracts = context.local_reference_types(cell);
+    if property_contents && context.semantic_profile().checked_property_references() {
+        for source in context.property_reference_types(cell) {
+            let Some(contents) = local_binding_origins::array_source_schema(&generic_type(&source.declared))
+                .and_then(crate::eval_ir::array_contents_type) else { continue; };
+            let contents = parameter_type(&contents);
+            if !contracts.contains(&contents) { contracts.push(contents); }
+        }
+    }
+    contracts
+}
 
 /// Collects contracts from a local alias group and its persistent shared storage.
 pub(in crate::interpreter) fn generic_local_contracts(scope: &ElephcEvalScope, name: &str, context: &ElephcEvalContext) -> Vec<EvalParameterType> {
+    collect_local_contracts(scope, name, context, false)
+}
+
+/// Reads temporary property obligations for an interior write without copying them into persistent local metadata.
+pub(in crate::interpreter) fn generic_local_element_contracts(scope: &ElephcEvalScope, name: &str,
+    context: &ElephcEvalContext,
+) -> Vec<EvalParameterType> {
+    collect_local_contracts(scope, name, context, true)
+}
+
+/// Traverses the live alias graph, selecting binding metadata or the current interior-write obligations.
+fn collect_local_contracts(scope: &ElephcEvalScope, name: &str, context: &ElephcEvalContext,
+    property_contents: bool,
+) -> Vec<EvalParameterType> {
     let mut types = Vec::new();
     let mut pending = vec![(scope as *const ElephcEvalScope, name.to_string())];
     let mut seen = std::collections::HashSet::new();
@@ -19,7 +48,7 @@ pub(in crate::interpreter) fn generic_local_contracts(scope: &ElephcEvalScope, n
         let Some(scope) = (unsafe { scope.as_ref() }) else { continue; };
         for ty in scope.local_type_contracts(&name) { if !types.contains(&ty) { types.push(ty); } }
         if let Some(cell) = visible_scope_cell(context, scope, &name) {
-            for ty in context.local_reference_types(cell) { if !types.contains(&ty) { types.push(ty); } }
+            for ty in generic_cell_contracts(cell, context, property_contents) { if !types.contains(&ty) { types.push(ty); } }
         }
         if let Some(global_name) = scope.global_alias_target(&name) {
             if let Some(global) = context.global_scope_ptr() { pending.push((global, global_name.to_string())); }
@@ -27,7 +56,7 @@ pub(in crate::interpreter) fn generic_local_contracts(scope: &ElephcEvalScope, n
         match scope.reference_target(&name) {
             Some(EvalReferenceTarget::Variable { scope, name }) => pending.push((*scope, name.clone())),
             Some(EvalReferenceTarget::Cell { cell }) => {
-                for ty in context.local_reference_types(*cell) { if !types.contains(&ty) { types.push(ty); } }
+                for ty in generic_cell_contracts(*cell, context, property_contents) { if !types.contains(&ty) { types.push(ty); } }
             }
             _ => {}
         }

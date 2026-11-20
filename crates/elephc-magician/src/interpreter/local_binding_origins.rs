@@ -27,6 +27,7 @@ pub(super) use source_views::{LocalAssignmentProducer, prepare_assignment, sourc
 
 pub(super) use arrays::{element_source_type, element_value_source_type, refresh_reference_sources, refresh_value_sources};
 pub(super) use arrays::{prepare_write as prepare_array_local_write, publish_write as publish_array_local_write};
+pub(super) use arrays::source_schema as array_source_schema;
 
 /// Captures a producer's declared alternatives without executing PHP or borrowing live maps.
 pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,

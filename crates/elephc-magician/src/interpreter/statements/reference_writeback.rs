@@ -534,7 +534,7 @@ pub(super) fn write_back_method_array_element_ref_target(
 ) -> Result<(), EvalStatus> {
     let mut ownership = ScopeCellOwnership::Owned;
     if let Some(current) = visible_scope_cell(context, scope, array_name) {
-        for declared in generic_local_contracts(scope, array_name, context) {
+        for declared in generic_local_element_contracts(scope, array_name, context) {
             validate_generic_local_element(Some(&declared), current, index, value, context, values)?;
         }
     }

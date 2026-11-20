@@ -769,14 +769,7 @@ fn eval_dynamic_class_allocate_object_inner(
                     continue;
                 }
                 let value = if let Some(default) = property.default() {
-                    Some(eval_class_like_member_default(
-                        class.name(),
-                        property.trait_origin(),
-                        default,
-                        context,
-                        caller_scope,
-                        values,
-                    )?)
+                    Some(eval_property_default(class.name(), property, default, context, caller_scope, values)?)
                 } else if property.property_type().is_none() {
                     Some(values.null()?)
                 } else {
