@@ -196,3 +196,52 @@ fn strict_mixed_native_sources_runtime_dispatch_preserves_input_proofs() {
         assert_eq!(values.cell_owners.values().sum::<usize>(),0);
     }
 }
+
+/// Descriptor staging validates logical declarations before losing source packets to a value array.
+#[test]
+fn strict_descriptor_sources_validate_inputs_before_native_staging() {
+    for declared in [false,true] {for source in ["int","mixed"] {
+        let mut context=ElephcEvalContext::new();
+        context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Mixed,true)).unwrap();
+        let mut values=FakeOps::default();let value=values.int(1).unwrap();
+        let mut argument=native_source_argument(value,None,source,&context);argument.value=value;
+        let signature=NativeCallableSignatureMetadata {
+            has_logical_sources:true,
+            return_type:Some(elephc_generics::Type::atom("int")),display_name:"descriptor_source".into(),
+            parameters:vec![NativeCallableParameterMetadata{name:"value".into(),type_tag:EVAL_TAG_INT,by_ref:false,
+                logical_type:declared.then(||elephc_generics::Type::atom("int"))}],
+            regular_param_count:1,variadic_index:None,
+        };
+        let result=stage_native_descriptor_args(&signature,vec![argument],&mut context,&mut values);
+        if declared && source=="mixed" {
+            assert!(matches!(result,Err(EvalStatus::UncaughtThrowable)));
+            let error=context.take_pending_throw().unwrap();
+            assert!(values.object_is_a(error,"TypeError",false).unwrap());values.release(error).unwrap();
+        } else {for value in result.unwrap().values {values.release(value).unwrap();}}
+        assert!(context.take_pending_throw().is_none());
+        assert_eq!(values.cell_owners.values().sum::<usize>(),0);
+    }}
+}
+
+/// Legacy descriptors retain permissive calls but cannot silently grant open strict parameter contracts.
+#[test]
+fn strict_descriptor_sources_reject_missing_metadata_only_in_mixed_mode() {
+    for strict in [false,true] {
+        let mut context=ElephcEvalContext::new();
+        context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Mixed,strict)).unwrap();
+        let mut values=FakeOps::default();let value=values.int(1).unwrap();
+        let mut argument=native_source_argument(value,None,"int",&context);argument.value=value;
+        let signature=NativeCallableSignatureMetadata {
+            has_logical_sources:false,return_type:None,display_name:"legacy_descriptor".into(),
+            parameters:vec![NativeCallableParameterMetadata{name:"value".into(),type_tag:EVAL_TAG_INT,
+                by_ref:false,logical_type:None}],regular_param_count:1,variadic_index:None,
+        };
+        let result=stage_native_descriptor_args(&signature,vec![argument],&mut context,&mut values);
+        if strict {
+            assert!(matches!(result,Err(EvalStatus::UncaughtThrowable)));
+            let error=context.take_pending_throw().unwrap();
+            assert!(values.object_is_a(error,"TypeError",false).unwrap());values.release(error).unwrap();
+        } else {for value in result.unwrap().values {values.release(value).unwrap();}}
+        assert_eq!(values.cell_owners.values().sum::<usize>(),0);
+    }
+}

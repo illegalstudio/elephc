@@ -27,6 +27,8 @@ pub(in crate::interpreter) use call_user_func::*;
 pub(in crate::interpreter) use execution::*;
 use object_dispatch::*;
 use native_descriptor::*;
+#[cfg(test)]
+pub(in crate::interpreter) use native_descriptor::stage_native_descriptor_args;
 use static_dispatch::*;
 
 /// Distinguishes PHP's invokable-object callback form from an explicit method callback.

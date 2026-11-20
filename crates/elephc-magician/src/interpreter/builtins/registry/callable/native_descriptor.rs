@@ -55,7 +55,7 @@ pub(super) fn eval_native_descriptor_with_call_args(
 }
 
 /// Transfers by-value inputs and replaces by-reference inputs with invoker marker cells.
-fn stage_native_descriptor_args(
+pub(in crate::interpreter) fn stage_native_descriptor_args(
     signature: &NativeCallableSignatureMetadata,
     evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,
@@ -69,9 +69,22 @@ fn stage_native_descriptor_args(
     };
     let mut binding = DescriptorBindingState::new(signature.regular_param_count);
     let mut pending = std::collections::VecDeque::from(evaluated_args);
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) && !signature.has_logical_sources {
+        let status=eval_throw_type_error::<RuntimeCellHandle>(
+            "--strict-mixed: native descriptor has no logical declaration metadata",context,values)
+            .expect_err("a descriptor source violation always throws");
+        return abort_native_descriptor_staging(status,staged,pending,context,values);
+    }
     while let Some(argument) = pending.front().cloned() {
         let parameter_index = binding.parameter_index(signature, argument.name.as_deref());
         let parameter = parameter_index.and_then(|index| signature.parameters.get(index));
+        if let Some(ty)=parameter.and_then(|parameter|parameter.logical_type.as_ref()) {
+            let expected=EvalParameterType::new(vec![EvalParameterTypeVariant::Generic(ty.clone())],false);
+            if let Err(status)=mixed_source_proofs::require_argument_with_target(&expected,
+                argument.source_type.as_ref(),argument.value,argument.ref_target.as_ref(),context,values) {
+                return abort_native_descriptor_staging(status,staged,pending,context,values);
+            }
+        }
         if !parameter.is_some_and(|parameter| parameter.by_ref) {
             let argument = pending.pop_front().expect("the staged argument is still pending");
             staged.named_keys.push(argument.name);

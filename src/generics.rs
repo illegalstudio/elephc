@@ -27,6 +27,7 @@ pub mod methods;
 pub mod promotable_clones;
 mod report;
 mod shared;
+pub(crate) use shared::to_shared as shared_type;
 mod value_types;
 pub(crate) use value_types::{substitute_value_type, value_carrier_type};
 mod site_scope;

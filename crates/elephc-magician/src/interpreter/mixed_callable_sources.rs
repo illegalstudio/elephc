@@ -55,7 +55,10 @@ pub(super) fn resolved(callback: &EvaluatedCallable,context: &ElephcEvalContext,
             let context=unsafe{owner.context_ptr().as_ref()}.ok_or(EvalStatus::RuntimeFatal)?;
             resolved(callback,context,values)
         },
-        EvaluatedCallable::NativeDescriptor{..}=>Ok(None),
+        EvaluatedCallable::NativeDescriptor{callback,..}=>{
+            let source=values.native_callable_signature(*callback)?.and_then(|signature|signature.return_type);
+            Ok(source.and_then(|ty|local_binding_origins::resolve_declared_source_type(&ty,None,None,context).ok()))
+        },
         EvaluatedCallable::Named{name,..}=>named(name,context),
         EvaluatedCallable::BoundClosure{name,bound_this,bound_scope}=>{
             let Some(closure)=context.closure(name) else {return named(name,context);};

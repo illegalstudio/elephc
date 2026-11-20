@@ -16,6 +16,7 @@
 //!   ABI is `(descriptor, argument array, invocation scope) -> Mixed`.
 
 mod object_identity;
+mod source_types;
 
 pub(crate) use object_identity::emit_require_object_handle;
 
@@ -442,12 +443,13 @@ fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
     let variadic_index = source_variadic_index
         .map(|_| regular_param_count as u64)
         .unwrap_or(CALLABLE_DESC_VARIADIC_NONE);
-    let flags = u64::from(sig.declared_return);
+    let flags = u64::from(sig.declared_return) | elephc_semantics::native_callable_sources::SOURCE_FLAG;
     let param_names = optional_symbol(param_name_table(data, &public_params));
     let param_types = optional_symbol(param_type_table(data, &public_params));
     let defaults = optional_symbol(default_table(data, &public_defaults));
     let ref_flags = optional_symbol(flag_table(data, &public_ref_flags));
     let declared_flags = optional_symbol(flag_table(data, &public_declared_flags));
+    let sources = source_types::record(data, sig, &public_indices);
 
     data.add_words(vec![
         DataWord::U64(visible_param_count as u64),
@@ -462,6 +464,7 @@ fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
         defaults,
         ref_flags,
         declared_flags,
+        DataWord::Symbol(sources),
     ])
 }
 
@@ -820,4 +823,24 @@ mod tests {
         assert!(!asm.contains(crate::func_args::HIDDEN_ARGC_PARAM));
         assert!(!asm.contains(crate::func_args::HIDDEN_ARGS_PARAM));
     }
+    /// Every supported target retains logical array declarations independently from storage metadata.
+    #[test]
+    fn strict_descriptor_sources_emit_logical_array_types_on_all_targets() {
+        let sig=FunctionSig {
+            params:vec![("value".into(),PhpType::Array(Box::new(PhpType::Int)))],
+            param_type_exprs:vec![Some(crate::parser::ast::TypeExpr::Array(Box::new(crate::parser::ast::TypeExpr::Int)))],
+            param_attributes:Vec::new(),defaults:vec![None],return_type:PhpType::Array(Box::new(PhpType::Str)),
+            declared_return:true,by_ref_return:false,ref_params:vec![false],declared_params:vec![true],
+            variadic:None,deprecation:None,is_generator:false,
+        };
+        for name in ["macos-aarch64","ios-arm64","ios-sim-arm64","linux-aarch64","linux-x86_64"] {
+            let mut data=DataSection::new();let signature=signature_record(&mut data,&sig);
+            let asm=data.emit(Target::parse(name).unwrap());
+            assert!(asm.contains("Apply"),"{name}: missing logical array source metadata");
+            let record=asm.split(&format!("{signature}:\n")).nth(1).unwrap();
+            let words=record.lines().take_while(|line|line.trim_start().starts_with(".quad ")).count();
+            assert_eq!(words,13,"{name}: source side record follows all existing signature words");
+        }
+    }
+
 }

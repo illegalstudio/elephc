@@ -51,3 +51,55 @@ pub(crate) fn member_specs(members: &[PhpType]) -> Option<String> {
         .map(|members| members.join("|"))
 }
 
+
+/// Retains full declared array/value terms separately from PHP reflection and storage spellings.
+pub(crate) fn logical_type(php_type: &PhpType,allow_return_atoms: bool) -> Option<elephc_generics::Type> {
+    use elephc_generics::Type;
+    Some(match php_type {
+        PhpType::Array(element)=>Type::Apply("array".into(),vec![Type::atom("int"),logical_type(element,false)?]),
+        PhpType::AssocArray{key,value}=>Type::Apply("array".into(),vec![logical_type(key,false)?,logical_type(value,false)?]),
+        PhpType::Union(members)=>Type::Union(members.iter().map(|ty|logical_type(ty,false)).collect::<Option<Vec<_>>>()?),
+        ty=>Type::atom(php_type_spec(ty,allow_return_atoms)?),
+    })
+}
+
+/// Canonicalizes value-position null atoms while retaining a callable's declared void return.
+pub(crate) fn logical_parameter_type(expr: &crate::parser::ast::TypeExpr) -> elephc_generics::Type {
+    use crate::parser::ast::TypeExpr;
+    use elephc_generics::Type;
+    match expr {
+        TypeExpr::CallableSig { params, ret } => {
+            let returned = if matches!(ret.as_ref(), TypeExpr::Void) { Type::atom("void") }
+                else { logical_parameter_type(ret) };
+            Type::Callable(params.iter().map(logical_parameter_type).collect(), Box::new(returned))
+        }
+        TypeExpr::Array(element) => Type::Apply("array".into(), vec![logical_parameter_type(element)]),
+        TypeExpr::AssocArray { key, value } => Type::Apply("array".into(),
+            vec![logical_parameter_type(key), logical_parameter_type(value)]),
+        TypeExpr::GenericClass { name, args } => Type::Apply(name.as_str().into(),
+            args.iter().map(logical_parameter_type).collect()),
+        TypeExpr::Nullable(inner) => Type::Nullable(Box::new(logical_parameter_type(inner))),
+        TypeExpr::Union(members) => Type::Union(members.iter().map(logical_parameter_type).collect()),
+        TypeExpr::Intersection(members) => Type::Intersection(members.iter().map(logical_parameter_type).collect()),
+        _ => crate::generics::shared_type(expr),
+    }
+}
+
+#[cfg(test)]
+mod logical_source_tests {
+    use super::*;
+    use crate::parser::ast::TypeExpr;
+    use elephc_generics::Type;
+
+    /// Value nulls remain distinct from callable void returns and reflection erases only its own array role.
+    #[test]
+    fn strict_descriptor_sources_keep_null_values_and_callable_void_returns() {
+        let array=TypeExpr::Array(Box::new(TypeExpr::Void));
+        assert_eq!(logical_parameter_type(&array),Type::Apply("array".into(),vec![Type::atom("null")]));
+        let callback=TypeExpr::CallableSig{params:vec![TypeExpr::Void],ret:Box::new(TypeExpr::Void)};
+        assert_eq!(logical_parameter_type(&callback),Type::Callable(vec![Type::atom("null")],Box::new(Type::atom("void"))));
+        let array=PhpType::Array(Box::new(PhpType::Int));
+        assert_eq!(php_type_spec(&array,false).as_deref(),Some("array"));
+        assert_eq!(logical_type(&array,false),Some(Type::Apply("array".into(),vec![Type::atom("int"),Type::atom("int")])));
+    }
+}

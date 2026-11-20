@@ -789,6 +789,16 @@ class scopes through the same declaration resolver. The value and optional sourc
 leave the receiver owner scope together. Unknown or missing descriptor declarations
 remain unknown rather than acquiring evidence from their current return tags.
 
+Native descriptor signatures retain their original twelve physical metadata words.
+Flag bit 1 marks an appended logical-source record pointer at word 12. The
+versioned record carries optional parameter and return declarations as JSON of the
+shared structural `Type`, preserving nested arrays and unions independently from
+storage tags or PHP reflection names. A signature without the flag supplies no
+logical source evidence and is read without accessing the extension slot. Mixed
+rejects invocation through such legacy descriptors with a catchable TypeError;
+permissive invocation retains its existing behavior. An untyped parameter in a
+new record remains distinct from an absent record. The same data-section writer emits this record for every supported target.
+
 
 ## Runtime script cache
 

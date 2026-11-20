@@ -29,6 +29,7 @@ pub mod scalar_value;
 pub mod scalar_compare;
 pub mod constant_numeric;
 pub mod native_local_contract;
+pub mod native_callable_sources;
 pub mod initialization;
 pub mod nullability;
 

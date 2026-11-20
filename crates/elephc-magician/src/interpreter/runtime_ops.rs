@@ -41,11 +41,17 @@ pub struct NativeCallableParameterMetadata {
     pub type_tag: u64,
     /// Whether the PHP declaration passes this parameter by reference.
     pub by_ref: bool,
+    /// Exact optional source declaration, independent from the physical type tag.
+    pub logical_type: Option<elephc_generics::Type>,
 }
 
 /// The caller-visible argument shape carried by a native callable descriptor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeCallableSignatureMetadata {
+    /// Whether the declaration record exists, separate from untyped parameters in a new record.
+    pub has_logical_sources: bool,
+    /// Optional immutable declared result, never inferred from a returned cell.
+    pub return_type: Option<elephc_generics::Type>,
     /// PHP display name retained by the descriptor.
     pub display_name: String,
     /// Caller-visible regular parameters followed by the source variadic, when present.
