@@ -838,6 +838,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("mov edi, 255");                                        // PHP fatal exit status
     emitter.instruction("mov eax, 231");                                        // Linux exit_group syscall
     emitter.instruction("syscall");                                             // exit with PHP's fatal status
+    emitter.instruction("ud2");                                                 // keep a failed exit from reaching the overflow entry
 
     emitter.label("__rt_heap_alloc_size_overflow");
     emitter.instruction("jmp __rt_heap_exhausted");                             // report an impossible header size through the established fatal path
