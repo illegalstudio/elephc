@@ -54,6 +54,7 @@ mod return_type_compat;
 mod return_values;
 mod value_contracts;
 mod property_value_contracts;
+mod write_source_domains;
 mod member_write_sources;
 mod property_reference_contracts;
 mod property_reference_candidates;

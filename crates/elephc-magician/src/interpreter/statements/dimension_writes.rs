@@ -13,7 +13,7 @@ use super::*;
 use super::property_dimension_writes::{stage_operands_with_source, write_attached_value, write_value};
 use super::array_parent_publication::{ArrayParentPlace, PreparedArrayParent, prepare_empty_array_parent};
 use super::property_dimension_guards::{DimensionFetchMode, selected_property};
-use super::property_write_receivers::{PreparedWriteReceiver, finish_index, finish_name};
+use super::property_write_receivers::{PreparedWriteReceiver, finish_index_with_source, finish_name};
 
 /// One traversal parent which can receive a copied child or terminate attached propagation.
 enum Parent {
@@ -28,6 +28,7 @@ enum Parent {
 struct ResolvedValue {
     value: RuntimeCellHandle,
     published: bool,
+    source: Option<elephc_generics::Type>,
 }
 
 /// Prepares source operands once and commits array replacements from the leaf toward its root.
@@ -38,10 +39,16 @@ pub(super) fn eval_dimension_write(
     let mut owners = Vec::new();
     let mut result = (|| {
         let plan = prepare_property_write_receiver(array, &mut owners, context, scope, values)?;
-        let (key, assigned, producer) = stage_operands_with_source(index, value, &mut owners, context, scope, values)?;
+        let (key, assigned, producer, key_source) = stage_operands_with_source(index, value, &mut owners, context, scope, values)?;
         let mut parents = Vec::new();
         let mode = if op.is_some() { DimensionFetchMode::ReadWrite } else { DimensionFetchMode::Write };
         let mut current = resolve(plan, &mut parents, &mut owners, mode, true, context, scope, values)?;
+        let key_source = key.map(|key| write_source_domains::source_type(key_source.as_ref(), key, context, values)).transpose()?.flatten();
+        write_source_domains::offset(current.source.as_ref(), key_source.as_ref(), key.is_some(), context, values)?;
+        if op.is_none() {
+            let contracts = current.source.as_ref().map(crate::eval_ir::parameter_type).into_iter().collect::<Vec<_>>();
+            write_source_domains::elements(&contracts, current.value, producer.as_ref(), assigned, context, values)?;
+        }
         if op.is_some() {
             if let [Parent::Variable(name)] = parents.as_slice() {
                 let prepared = prepare_empty_array_parent(ArrayParentPlace::Variable(name), current.value,
@@ -104,29 +111,39 @@ fn resolve(
     mode: DimensionFetchMode, dimension_container: bool,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<ResolvedValue, EvalStatus> {
+    let source;
     let current = match plan {
         PreparedWriteReceiver::Late(EvalExpr::LoadVar(name)) => {
             let current = match visible_scope_cell(context, scope, name) {
                 Some(cell) => values.retain(cell)?,
                 None => values.null()?,
             };
+            source = local_binding_origins::source_view(&EvalExpr::LoadVar(name.clone()), context, scope).as_ref().map(crate::eval_ir::generic_type);
             parents.push(Parent::Variable(name.clone()));
             current
         }
         PreparedWriteReceiver::Late(EvalExpr::StaticPropertyGet { class_name, property }) => {
             let current = eval_static_property_get_result(class_name, property, context, values)?;
+            source = local_binding_origins::source_view(&EvalExpr::StaticPropertyGet { class_name: class_name.clone(), property: property.clone() }, context, scope).as_ref().map(crate::eval_ir::generic_type);
             parents.push(Parent::Static { class: class_name.clone(), property: property.clone() });
             current
         }
         PreparedWriteReceiver::Static { class, property } => {
             let current = eval_static_property_get_result(&class, &property, context, values)?;
+            source = local_binding_origins::source_view(&EvalExpr::StaticPropertyGet { class_name: class.clone(), property: property.clone() }, context, scope).as_ref().map(crate::eval_ir::generic_type);
             parents.push(Parent::Static { class, property });
             current
         }
-        PreparedWriteReceiver::Late(expr) => eval_owned_expr(expr, context, scope, values)?,
-        PreparedWriteReceiver::Value(value) => values.retain(value)?,
+        PreparedWriteReceiver::Late(expr) => {
+            let (value, observed) = super::property_write_receivers::evaluate_receiver_source(expr, context, scope, values)?;
+            source = observed; value
+        }
+        PreparedWriteReceiver::Value(value, observed) => { source = observed; values.retain(value)? },
         PreparedWriteReceiver::Property(parent, property) => {
-            let object = resolve(*parent, parents, owners, mode, false, context, scope, values)?.value;
+            let receiver = resolve(*parent, parents, owners, mode, false, context, scope, values)?;
+            let object = receiver.value;
+            write_source_domains::object(receiver.source.as_ref(), context, values)?;
+            source = nullsafe_chains::property_source(object, &property, context, values)?;
             let current = if dimension_container {
                 selected_property(object, &property, mode, context, values)?
             } else { eval_write_property_get_result(object, &property, context, values)? };
@@ -134,11 +151,15 @@ fn resolve(
             current
         }
         PreparedWriteReceiver::DynamicProperty(parent, property, name_first) => {
-            let early = if name_first { Some(finish_name(property, owners, context, scope, values)?) } else { None };
-            let object = resolve(*parent, parents, owners, mode, false, context, scope, values)?.value;
+            let mut property = Some(property);
+            let early = if name_first { Some(finish_name(property.take().unwrap(), owners, context, scope, values)?) } else { None };
+            let receiver = resolve(*parent, parents, owners, mode, false, context, scope, values)?;
+            let object = receiver.value;
             let property = if let Some(name) = early { name } else {
-                finish_name(property, owners, context, scope, values)?
+                finish_name(property.take().unwrap(), owners, context, scope, values)?
             };
+            write_source_domains::object(receiver.source.as_ref(), context, values)?;
+            source = nullsafe_chains::property_source(object, &property, context, values)?;
             let current = if dimension_container {
                 selected_property(object, &property, mode, context, values)?
             } else { eval_write_property_get_result(object, &property, context, values)? };
@@ -148,7 +169,10 @@ fn resolve(
         PreparedWriteReceiver::Index(parent, index) => {
             let resolved_array = resolve(*parent, parents, owners, mode, true, context, scope, values)?;
             let array = resolved_array.value;
-            let index = finish_index(index, owners, context, scope, values)?;
+            let (index, key_source) = finish_index_with_source(index, owners, context, scope, values)?;
+            let key_source = write_source_domains::source_type(key_source.as_ref(), index, context, values)?;
+            write_source_domains::offset(resolved_array.source.as_ref(), key_source.as_ref(), true, context, values)?;
+            let source = resolved_array.source.as_ref().and_then(local_binding_origins::declared_offset_result);
             let native = super::super::runtime_ops::simplexml_properties::dimension(
                 values, array.borrowed(), elephc_builtin_contract::ObjectDimension::WriteSelect,
                 vec![index.borrowed()],
@@ -192,12 +216,12 @@ fn resolve(
                     published: resolved_array.published,
                 });
             }
-            return Ok(ResolvedValue { value: current, published: attached_spl });
+            return Ok(ResolvedValue { value: current, published: attached_spl, source });
         }
     };
     let current = if current.is_borrowed() { values.retain(current)? } else { current };
     owners.push(current);
-    Ok(ResolvedValue { value: current, published: false })
+    Ok(ResolvedValue { value: current, published: false, source })
 }
 
 /// Marks an imported root dirty once the attached fetch may have autovivified SPL storage.

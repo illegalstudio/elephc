@@ -11,6 +11,7 @@
 use super::*;
 use elephc_generics::Type;
 mod source_types;
+pub(super) use source_types::{offset_key as validate_offset_key_source, property as property_source};
 
 /// Finds only postfix receivers, keeping keys and arguments outside the chain's structure.
 pub(super) fn receiver(expr: &EvalExpr) -> Option<(&EvalExpr, bool)> {

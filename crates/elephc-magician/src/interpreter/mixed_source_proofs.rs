@@ -177,6 +177,21 @@ pub(super) fn require_argument(expected: &EvalParameterType, source: Option<&Arg
     value: RuntimeCellHandle, shared: bool, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    require_argument_domain(expected, source, value, shared, false, context, values)
+}
+
+/// Checks structural container inputs whose elements never use PHP weak scalar parameter conversion.
+pub(super) fn require_exact_argument(expected: &EvalParameterType, source: Option<&ArgumentSource>,
+    value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    require_argument_domain(expected, source, value, false, true, context, values)
+}
+
+/// Shares original packet and reference-epoch validation across PHP binding and exact structural inputs.
+fn require_argument_domain(expected: &EvalParameterType, source: Option<&ArgumentSource>,
+    value: RuntimeCellHandle, shared: bool, exact: bool, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     if !context.semantic_profile().contains(StrictFeature::Mixed) { return Ok(()); }
     let target = crate::eval_ir::generic_type(expected);
     if target == Type::atom("mixed") { return Ok(()); }
@@ -184,7 +199,7 @@ pub(super) fn require_argument(expected: &EvalParameterType, source: Option<&Arg
     let source = source.filter(|source| !shared || context.source_view_is_current(value, source.write_epoch));
     let actual = value_source(source.map(|source| crate::eval_ir::generic_type(&source.ty))
         .unwrap_or_else(|| Type::atom("mixed")));
-    if !dynamic_source(&actual) || source_assignable(&actual, &target, context, values)? { return Ok(()); }
+    if !dynamic_source(&actual) || source_assignable(&actual, &target, exact, context, values)? { return Ok(()); }
     eval_throw_type_error(&format!("--strict-mixed: narrow {actual} before binding {target}; every alternative must support the operation"),
         context, values)
 }
@@ -201,21 +216,21 @@ pub(super) fn require_argument_with_target(expected: &EvalParameterType,
 }
 
 /// Shares finite alternative traversal with exact generic/nominal membership and weak scalar domains.
-fn source_assignable(actual: &Type, target: &Type, context: &ElephcEvalContext,
+fn source_assignable(actual: &Type, target: &Type, exact: bool, context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     match actual {
         Type::Atom(name) if name == "mixed" => return Ok(false),
         Type::Atom(name) if name == "never" => return Ok(true),
         Type::Union(members) => {
-            for member in members { if !source_assignable(member, target, context, values)? { return Ok(false); } }
+            for member in members { if !source_assignable(member, target, exact, context, values)? { return Ok(false); } }
             return Ok(true);
         }
-        Type::Nullable(inner) => return Ok(source_assignable(inner, target, context, values)?
-            && source_assignable(&Type::atom("null"), target, context, values)?),
+        Type::Nullable(inner) => return Ok(source_assignable(inner, target, exact, context, values)?
+            && source_assignable(&Type::atom("null"), target, exact, context, values)?),
         _ => {}
     }
-    if context.semantic_profile().contains(StrictFeature::Coercions) {
+    if exact || context.semantic_profile().contains(StrictFeature::Coercions) {
         return generic_type_is_a(actual, target, context, values);
     }
     if let Some(kind) = scalar_source_kind(actual) {

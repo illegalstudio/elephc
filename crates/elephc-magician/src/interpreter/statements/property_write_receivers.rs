@@ -15,7 +15,7 @@ use super::property_dimension_writes::DimensionProperty;
 /// A receiver traversal with computed operands captured before the assignment RHS.
 pub(super) enum PreparedWriteReceiver<'a> {
     Late(&'a EvalExpr),
-    Value(RuntimeCellHandle),
+    Value(RuntimeCellHandle, Option<elephc_generics::Type>),
     Static { class: String, property: String },
     Property(Box<Self>, String),
     DynamicProperty(Box<Self>, PreparedWriteIndex<'a>, bool),
@@ -23,8 +23,8 @@ pub(super) enum PreparedWriteReceiver<'a> {
 }
 
 /// Variable dimensions remain late loads; computed dimensions are independently owned.
-#[derive(Clone, Copy)]
-pub(super) enum PreparedWriteIndex<'a> { Late(&'a EvalExpr), Value(RuntimeCellHandle) }
+#[derive(Clone)]
+pub(super) enum PreparedWriteIndex<'a> { Late(&'a EvalExpr), Value(RuntimeCellHandle, Option<ArgumentSource>) }
 
 /// Literal names need no conversion; computed name values are converted after the RHS.
 pub(super) enum PreparedPropertyName<'a> { Literal(String), Dynamic(PreparedWriteIndex<'a>) }
@@ -62,9 +62,9 @@ pub(super) fn prepare_property_write_receiver<'a>(
             PreparedWriteReceiver::Index(Box::new(parent), index)
         }
         _ => {
-            let value = eval_owned_expr(expr, context, scope, values)?;
+            let (value, source) = evaluate_receiver_source(expr, context, scope, values)?;
             owners.push(value);
-            PreparedWriteReceiver::Value(value)
+            PreparedWriteReceiver::Value(value, source)
         }
     })
 }
@@ -74,7 +74,7 @@ pub(super) fn finish_property_write_receiver(
     plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    finish_receiver(plan, owners, context, scope, values, false, false)
+    finish_receiver(plan, owners, context, scope, values, false, false).map(|(value, _)| value)
 }
 
 /// Fetches unset properties for write while keeping every dimension hop non-creating and quiet.
@@ -82,7 +82,7 @@ pub(super) fn finish_property_unset_receiver(
     plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    finish_receiver(plan, owners, context, scope, values, true, true)
+    finish_receiver(plan, owners, context, scope, values, true, true).map(|(value, _)| value)
 }
 
 /// Fetches an unset dimension receiver whose selected value will feed another dimension.
@@ -90,67 +90,94 @@ pub(super) fn finish_dimension_unset_receiver(
     plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    finish_receiver(plan, owners, context, scope, values, true, false)
+    finish_receiver(plan, owners, context, scope, values, true, false).map(|(value, _)| value)
 }
 
-/// Resolves prepared storage with distinct property and dimension behavior for unset.
+/// Resolves the final receiver together with the declaration captured at each actual fetch.
+pub(super) fn finish_sourced_write_receiver(plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<elephc_generics::Type>), EvalStatus> {
+    finish_receiver(plan, owners, context, scope, values, false, false)
+}
+
+/// Captures computed callable/member returns once while variable loads remain late.
+pub(super) fn evaluate_receiver_source(expr: &EvalExpr, context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<elephc_generics::Type>), EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        mixed_eval::evaluate(expr, context, scope, values)
+    } else {
+        let source = local_binding_origins::source_view(expr, context, scope).as_ref().map(crate::eval_ir::generic_type);
+        eval_owned_expr(expr, context, scope, values).map(|value| (value, source))
+    }
+}
+
+/// Resolves prepared storage with distinct quiet unset and checked write-consumer behavior.
 fn finish_receiver(
     plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
     unset: bool, as_object: bool,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = match plan {
-        PreparedWriteReceiver::Late(expr) => return eval_owned_expr(expr, context, scope, values),
-        PreparedWriteReceiver::Value(value) => return values.retain(value),
-        PreparedWriteReceiver::Static { class, property } =>
-            eval_static_property_get_result(&class, &property, context, values)?,
+) -> Result<(RuntimeCellHandle, Option<elephc_generics::Type>), EvalStatus> {
+    let (value, source) = match plan {
+        PreparedWriteReceiver::Late(expr) => return evaluate_receiver_source(expr, context, scope, values),
+        PreparedWriteReceiver::Value(value, source) => return values.retain(value).map(|value| (value, source)),
+        PreparedWriteReceiver::Static { class, property } => {
+            let expr = EvalExpr::StaticPropertyGet { class_name: class.clone(), property: property.clone() };
+            let source = local_binding_origins::source_view(&expr, context, scope).as_ref().map(crate::eval_ir::generic_type);
+            (eval_static_property_get_result(&class, &property, context, values)?, source)
+        }
         PreparedWriteReceiver::Property(parent, property) => {
-            let parent = finish_receiver(*parent, owners, context, scope, values, unset, true)?;
+            let (parent, source) = finish_receiver(*parent, owners, context, scope, values, unset, true)?;
             owners.push(parent);
-            if unset && !matches!(values.type_tag(parent)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) { values.null()? }
-            else if unset { eval_unset_property_get_result(parent, &property, context, values)? }
-            else { eval_write_property_get_result(parent, &property, context, values)? }
+            if !unset { write_source_domains::object(source.as_ref(), context, values)?; }
+            let source = nullsafe_chains::property_source(parent, &property, context, values)?;
+            let value = if unset && !matches!(values.type_tag(parent)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) { values.null()? }
+                else if unset { eval_unset_property_get_result(parent, &property, context, values)? }
+                else { eval_write_property_get_result(parent, &property, context, values)? };
+            (value, source)
         }
         PreparedWriteReceiver::DynamicProperty(parent, property, name_first) => {
-            let early = if name_first && !unset { Some(finish_name_with_source(property, owners, context, scope, values)?) } else { None };
-            let parent = finish_receiver(*parent, owners, context, scope, values, unset, true)?;
+            let mut property = Some(property);
+            let early = if name_first && !unset { Some(finish_name_with_source(property.take().unwrap(), owners, context, scope, values)?) } else { None };
+            let (parent, source) = finish_receiver(*parent, owners, context, scope, values, unset, true)?;
             owners.push(parent);
-            if unset && !matches!(values.type_tag(parent)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) { return values.null(); }
+            if unset && !matches!(values.type_tag(parent)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) { return values.null().map(|value| (value, None)); }
             let (property, name_owner) = if let Some(property) = early { property } else {
-                finish_name_with_source(property, owners, context, scope, values)?
+                finish_name_with_source(property.take().unwrap(), owners, context, scope, values)?
             };
+            if !unset { write_source_domains::object(source.as_ref(), context, values)?; }
+            let source = nullsafe_chains::property_source(parent, &property, context, values)?;
             let selected = if unset { eval_unset_property_get_result(parent, &property, context, values) }
                 else { eval_write_property_get_result(parent, &property, context, values) };
-            // A property-name temporary expires at this traversal step. Its destructor can
-            // change the selected object's fields before the outer write reads them.
+            // The temporary name expires after selection, before the outer write fetches storage.
             let selected = selected.and_then(|value| if value.is_borrowed() { values.retain(value) } else { Ok(value) });
             let released = retire_name_source(name_owner, owners, context, values);
             return match (selected, released) {
-                (Ok(value), Ok(())) => Ok(value),
-                (Ok(value), Err(status)) => {
-                    let _ = eval_release_value(context, values, value);
-                    Err(status)
-                }
+                (Ok(value), Ok(())) => Ok((value, source)),
+                (Ok(value), Err(status)) => { let _ = eval_release_value(context, values, value); Err(status) }
                 (Err(status), _) => Err(status),
             };
         }
         PreparedWriteReceiver::Index(parent, index) => {
-            let parent = finish_receiver(*parent, owners, context, scope, values, unset, false)?;
+            let (parent, source) = finish_receiver(*parent, owners, context, scope, values, unset, false)?;
             owners.push(parent);
-            let index = finish_index(index, owners, context, scope, values)?;
+            let (index, key_source) = finish_index_with_source(index, owners, context, scope, values)?;
             if unset {
                 let value = unset_dimension(parent, index, as_object, owners, context, values)?;
-                return if value.is_borrowed() { values.retain(value) } else { Ok(value) };
+                return if value.is_borrowed() { values.retain(value).map(|value| (value, None)) } else { Ok((value, None)) };
             }
-            match super::super::runtime_ops::simplexml_properties::dimension(
+            let key_source = write_source_domains::source_type(key_source.as_ref(), index, context, values)?;
+            write_source_domains::offset(source.as_ref(), key_source.as_ref(), true, context, values)?;
+            let value = match super::super::runtime_ops::simplexml_properties::dimension(
                 values, parent.borrowed(), elephc_builtin_contract::ObjectDimension::WriteSelect, vec![index.borrowed()],
             )? {
                 Some(value) => value,
                 None => eval_array_get_quiet_result(parent, index, context, values)?,
-            }
+            };
+            (value, source.as_ref().and_then(local_binding_origins::declared_offset_result))
         }
     };
-    if value.is_borrowed() { values.retain(value) } else { Ok(value) }
+    if value.is_borrowed() { values.retain(value).map(|value| (value, source)) } else { Ok((value, source)) }
 }
 
 /// Reads an unset dimension without inserting an XML sibling or warning on a missing array key.
@@ -316,9 +343,9 @@ fn with_write_operands<V: RuntimeValueOps>(
             sources.push(source);
         }
         let mut receiver = if matches!(object, EvalExpr::LoadVar(_)) { None } else {
-            let value = finish_property_write_receiver(plan.take().ok_or(EvalStatus::RuntimeFatal)?, &mut owners, context, scope, values)?;
+            let (value, source) = finish_sourced_write_receiver(plan.take().ok_or(EvalStatus::RuntimeFatal)?, &mut owners, context, scope, values)?;
             owners.push(value);
-            Some(value)
+            Some((value, source))
         };
         let property = match property {
             Some(PreparedPropertyName::Literal(name)) => Some(name),
@@ -326,11 +353,12 @@ fn with_write_operands<V: RuntimeValueOps>(
             None => None,
         };
         if receiver.is_none() {
-            let value = finish_property_write_receiver(plan.take().ok_or(EvalStatus::RuntimeFatal)?, &mut owners, context, scope, values)?;
+            let (value, source) = finish_sourced_write_receiver(plan.take().ok_or(EvalStatus::RuntimeFatal)?, &mut owners, context, scope, values)?;
             owners.push(value);
-            receiver = Some(value);
+            receiver = Some((value, source));
         }
-        let receiver = receiver.ok_or(EvalStatus::RuntimeFatal)?;
+        let (receiver, receiver_source) = receiver.ok_or(EvalStatus::RuntimeFatal)?;
+        write_source_domains::object(receiver_source.as_ref(), context, values)?;
         let mut operands = vec![receiver];
         operands.extend(suffix);
         consume(&operands, property.as_deref(), &sources, context, scope, values)
@@ -344,9 +372,9 @@ pub(super) fn prepare_index<'a>(
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<PreparedWriteIndex<'a>, EvalStatus> {
     if matches!(expr, EvalExpr::LoadVar(_)) { return Ok(PreparedWriteIndex::Late(expr)); }
-    let value = eval_owned_expr(expr, context, scope, values)?;
+    let (value, source) = evaluate_member_value(expr, context, scope, values)?;
     owners.push(value);
-    Ok(PreparedWriteIndex::Value(value))
+    Ok(PreparedWriteIndex::Value(value, source))
 }
 
 /// Reads a late variable only after the RHS and keeps the resulting cell owned through the write.
@@ -354,12 +382,19 @@ pub(super) fn finish_index(
     index: PreparedWriteIndex<'_>, owners: &mut Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    finish_index_with_source(index, owners, context, scope, values).map(|(value, _)| value)
+}
+
+/// Resolves one prepared key and retains its original producer independently from the receiver source.
+pub(super) fn finish_index_with_source(index: PreparedWriteIndex<'_>, owners: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<ArgumentSource>), EvalStatus> {
     match index {
-        PreparedWriteIndex::Value(value) => Ok(value),
+        PreparedWriteIndex::Value(value, source) => Ok((value, source)),
         PreparedWriteIndex::Late(expr) => {
-            let value = eval_owned_expr(expr, context, scope, values)?;
+            let (value, source) = evaluate_member_value(expr, context, scope, values)?;
             owners.push(value);
-            Ok(value)
+            Ok((value, source))
         }
     }
 }

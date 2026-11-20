@@ -28,7 +28,7 @@ pub(super) fn receiver(expr: &EvalExpr, source: Option<&Type>, nullsafe: bool, q
 }
 
 /// Projects one physical property's declaration in the selected declaring and called scopes.
-pub(super) fn property(object: RuntimeCellHandle, property: &str, context: &ElephcEvalContext,
+pub(in crate::interpreter) fn property(object: RuntimeCellHandle, property: &str, context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<Type>,EvalStatus> {
     if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { return Ok(None); }
@@ -51,7 +51,7 @@ fn uses_php_key(ty: &Type) -> bool {
 }
 
 /// Validates a reached scalar-key consumer while custom ArrayAccess targets keep their own key domain.
-pub(super) fn offset_key(receiver: Option<&Type>, key: Option<&Type>, context: &mut ElephcEvalContext,
+pub(in crate::interpreter) fn offset_key(receiver: Option<&Type>, key: Option<&Type>, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(),EvalStatus> {
     if receiver.is_some_and(|ty| !uses_php_key(ty)) {return Ok(());}

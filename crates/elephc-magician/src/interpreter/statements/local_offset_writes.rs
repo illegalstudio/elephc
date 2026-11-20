@@ -33,15 +33,19 @@ fn eval_local_offset_write(
 ) -> Result<(), EvalStatus> {
     let mut operands = Vec::new();
     let mut result = (|| {
-        let index = index.map(|index| eval_owned_expr(index, context, scope, values)).transpose()?;
-        if let Some(index) = index { operands.push(index); }
-        let (value, producer) = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
-            array_literals::evaluate_value(value, context, scope, values)?
-        } else {
-            let producer = local_binding_origins::source_view(value, context, scope);
-            (eval_owned_expr(value, context, scope, values)?, producer)
+        let (index, key_source) = match index {
+            Some(index) => {
+                let (key, source) = evaluate_member_value(index, context, scope, values)?;
+                operands.push(key); (Some(key), source)
+            }
+            None => (None, None),
         };
+        let (value, producer) = evaluate_member_value(value, context, scope, values)?;
         operands.push(value);
+        let receiver_source = local_binding_origins::source_view(&EvalExpr::LoadVar(name.to_string()), context, scope)
+            .as_ref().map(crate::eval_ir::generic_type);
+        let key_source_type = index.map(|key| write_source_domains::source_type(key_source.as_ref(), key, context, values)).transpose()?.flatten();
+        write_source_domains::offset(receiver_source.as_ref(), key_source_type.as_ref(), index.is_some(), context, values)?;
         let current = visible_scope_cell(context, scope, name).map(|cell| values.retain(cell)).transpose()?;
         if let Some(current) = current { operands.push(current); }
         let tag = current.map(|cell| values.type_tag(cell)).transpose()?;
@@ -110,6 +114,7 @@ fn eval_local_offset_write(
         };
         super::false_array_completion::with_completion(captured_parent, index, context, values, |context, values| {
             let declared = generic_local_element_contracts(scope, name, context);
+            write_source_domains::elements(&declared, array, producer.as_ref(), value, context, values)?;
             let origin;
             let replacement = if let Some(index) = index {
                 checked_array_keys::for_receiver(array, index, context, values)?;
@@ -118,7 +123,7 @@ fn eval_local_offset_write(
                     None => index,
                 };
                 origin = local_binding_origins::prepare_array_local_write(scope, name, array, Some(index),
-                    value, producer.as_ref(), context, values)?;
+                    value, producer.as_ref().map(|source| &source.ty), context, values)?;
                 for ty in &declared { validate_generic_local_element(Some(ty), array, index, value, context, values)?; }
                 let receiver = if origin.is_some() && !captured_parent {
                     let detached = copy_scope_value(array, context, values)?;
@@ -135,7 +140,7 @@ fn eval_local_offset_write(
                 replacement
             } else {
                 origin = local_binding_origins::prepare_array_local_write(scope, name, array, None,
-                    value, producer.as_ref(), context, values)?;
+                    value, producer.as_ref().map(|source| &source.ty), context, values)?;
                 let receiver = if origin.is_some() && !captured_parent {
                     let detached = copy_scope_value(array, context, values)?;
                     operands.push(detached); detached

@@ -1070,3 +1070,11 @@ separate from original argument proof packets. First builtin mutations update
 only the live property binding, before displaced-value callbacks, without copying
 its obligation into permanent local metadata. Mixed-only literal capture uses
 ordinary runtime type projection and does not enable homogeneous array inference.
+
+Mutable consumers retain original operand proofs through receiver and early/late
+key staging. Reached instance/static/nested array writes check key domains and
+declared element inputs before changing contents. Exact structural element input
+checks share packet/reference-epoch validation with PHP argument binding, while
+PHP scalar parameters keep their selected weak conversion policy. Computed and
+nested receivers project the selected declaration without inspecting their boxed
+occupants to manufacture a logical proof. Quiet unset traversal remains quiet.
