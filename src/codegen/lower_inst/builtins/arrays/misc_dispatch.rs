@@ -140,9 +140,7 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     // A reference-cell load borrows the stored array. Keep a separate helper owner so the
     // consuming COW split and the subsequent store-back each retire their own reference.
-    if matches!(receiver, ReceiverPlace::RefCell(_)) {
-        receiver.prepare_consuming_storeback(ctx, array)?;
-    }
+    receiver.prepare_ref_cell_consuming_split(ctx, array)?;
     ensure_unique_array_pop_source(ctx, array)?;
     receiver.store_back_after_consuming_split(ctx, array)?;
     match ctx.emitter.target.arch {

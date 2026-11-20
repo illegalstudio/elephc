@@ -63,3 +63,20 @@ echo count($b), "|", count($cb), "\n";
     assert_eq!(out.stdout, "NULL\nNULL\n0|0\n");
     assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
 }
+
+/// A reference binding skipped at runtime leaves the slot raw, so no extra owner may be taken.
+#[test]
+fn test_pop_shift_splice_skipped_reference_binding_leaves_clean_heap() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$a = [1, 2, 3]; if ($argc > 100) { $ra = &$a; }
+for ($i = 0; $i < 2; $i++) { array_pop($a); }
+$b = [1, 2, 3]; if ($argc > 100) { $rb = &$b; }
+for ($j = 0; $j < 2; $j++) { array_shift($b); }
+$c = [1, 2, 3]; if ($argc > 100) { $rc = &$c; }
+for ($k = 0; $k < 2; $k++) { array_splice($c, 0, 1, [$k]); }
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1|3|1,2,3\n");
+    assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
