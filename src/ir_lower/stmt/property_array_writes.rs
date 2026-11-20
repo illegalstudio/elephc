@@ -1538,6 +1538,15 @@ pub(super) fn initialize_uninitialized_array_property_for_write(
     };
     let slot_is_boxed = matches!(property_ty.codegen_repr(), PhpType::Mixed);
     let data = ctx.intern_string(property);
+    let initialize = ctx
+        .builder
+        .create_named_block("property_array.initialize", Vec::new());
+    let ready = ctx
+        .builder
+        .create_named_block("property_array.ready", Vec::new());
+    // A missed element read answers the null sentinel: it is rejected by the fetch for write
+    // that follows, not initialized (the store would report an assignment on null).
+    runtime_receivers::skip_initialization_for_null_receiver(ctx, object, ready, span);
     let initialized = ctx.emit_value(
         Op::PropInitialized,
         vec![object],
@@ -1546,12 +1555,6 @@ pub(super) fn initialize_uninitialized_array_property_for_write(
         Op::PropInitialized.default_effects(),
         Some(span),
     );
-    let initialize = ctx
-        .builder
-        .create_named_block("property_array.initialize", Vec::new());
-    let ready = ctx
-        .builder
-        .create_named_block("property_array.ready", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
         cond: initialized.value,
         then_target: ready,

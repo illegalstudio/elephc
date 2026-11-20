@@ -430,6 +430,15 @@ fn skip_guard_for_null_receiver(
     ctx.builder.position_at_end(probe);
 }
 
+/// Lets a null receiver skip an autovivification probe, so its fetch-for-write raises PHP's
+/// `Attempt to modify property` instead of the probe's store reporting an assignment.
+pub(super) fn skip_initialization_for_null_receiver(
+    ctx: &mut LoweringContext<'_, '_>, object: ValueId, ready: crate::ir::BlockId, span: Span,
+) {
+    let receiver = LoweredValue { value: object, ir_type: crate::ir::IrType::I64 };
+    skip_guard_for_null_receiver(ctx, receiver, ready, "property.array.receiver_probe", span);
+}
+
 /// Returns whether a write receiver is a concrete class value other than a load of `$this`.
 ///
 /// Interface-typed and classless object values travel boxed, where null is not the sentinel.
