@@ -318,7 +318,11 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
         .or_else(|| simple_interpolation_offset_error(source, tokens));
     // Precheck errors are only authoritative when they happen before the main parser's
     // failure: `echo ;` followed by `${1+}` must report the earlier `echo` error.
-    let (view, map) = parser_view(source, tokens);
+    let (view, map, reference_error) = parser_view(source, tokens, source.len());
+    let precheck = match (precheck, reference_error) {
+        (Some(precheck), Some(reference)) if precheck.pos < reference.pos => Some(precheck),
+        (precheck, reference) => reference.or(precheck),
+    };
     let view_tokens = match crate::syntax::lexer::tokenize(&view) {
         Ok(tokens) => tokens,
         Err(error) => {

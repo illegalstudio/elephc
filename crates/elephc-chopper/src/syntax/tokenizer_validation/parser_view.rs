@@ -12,8 +12,12 @@ use std::cell::OnceCell;
 
 use super::*;
 
-/// Builds the PHP-only parser view and a view-byte to source-byte map.
-pub(crate) fn parser_view<T: SourceToken>(source: &[u8], tokens: &[T]) -> (String, Vec<u32>) {
+/// Builds the PHP-only parser view, its source map and any error in a normalized reference.
+pub(crate) fn parser_view<T: SourceToken>(
+    source: &[u8],
+    tokens: &[T],
+    end_pos: usize,
+) -> (String, Vec<u32>, Option<ValidationError>) {
     let mut view = Vec::with_capacity(source.len() + 8);
     let mut map = Vec::with_capacity(source.len() + 8);
     append_mapped(&mut view, &mut map, b"<?php ", 0);
@@ -31,6 +35,7 @@ pub(crate) fn parser_view<T: SourceToken>(source: &[u8], tokens: &[T]) -> (Strin
     let mut control_close = vec![false; tokens.len()];
     // Build the delimiter map only if a grouped reference target needs it.
     let reference_closes = OnceCell::new();
+    let mut reference_error: Option<ValidationError> = None;
     while index < tokens.len() {
         let token = &tokens[index];
         match token.id() {
@@ -82,7 +87,35 @@ pub(crate) fn parser_view<T: SourceToken>(source: &[u8], tokens: &[T]) -> (Strin
             brackets.last().copied(),
             parens.last().copied(),
             braces.last().copied(),
-            |open| reference_closes.get_or_init(|| delimiter_close_indices(tokens))[open],
+            || {
+                let Some(target) = next_significant_index(tokens, index) else { return false; };
+                let target_id = tokens[target].id();
+                if target_id != i64::from(b'(') && target_id != tok::T_READONLY {
+                    return reference_target_starts_at(tokens, target);
+                }
+                if reference_error.as_ref().is_none_or(|error| token.pos() < error.pos) {
+                    let error = if target_id == tok::T_READONLY {
+                        readonly_reference_error(source, tokens, target, end_pos)
+                    } else {
+                        grouped_reference_error(
+                            source,
+                            tokens,
+                            target,
+                            reference_closes.get_or_init(|| delimiter_close_indices(tokens)),
+                            previous_significant == i64::from(b'='),
+                            end_pos,
+                        )
+                    };
+                    if let Some(error) = error {
+                        if reference_error.as_ref().is_none_or(|previous| error.pos < previous.pos) {
+                            reference_error = Some(error);
+                        }
+                    }
+                }
+                // Parse the ordinary expression to keep earlier syntax errors and identifier
+                // feedback. The reference-specific error retains its own source position.
+                true
+            },
         ) {
             append_mapped(&mut view, &mut map, b" ", token.pos());
             index += 1;
@@ -353,7 +386,7 @@ pub(crate) fn parser_view<T: SourceToken>(source: &[u8], tokens: &[T]) -> (Strin
         index += 1;
     }
     normalize_parse_newlines(&mut view);
-    (sanitize_view(view), map)
+    (sanitize_view(view), map, reference_error)
 }
 
 /// Replaces each invalid UTF-8 byte with one ASCII placeholder, preserving byte offsets.
@@ -392,23 +425,18 @@ pub(crate) fn sanitize_invalid_utf8(view: Vec<u8>) -> String {
     out
 }
 
-/// Returns whether the token after a reference `&` can begin a referenceable expression.
+/// Returns whether an ordinary reference target can start at `next`.
 ///
 /// PHP allows `$a = &$b`, `$a = &$b[0]`, and `$a = &foo()`, but not `$a = &1` or
 /// `$a = &new C`. Keeping the ampersand in the view for the latter lets the parser reject it.
-pub(crate) fn reference_target_starts_at<T: SourceToken>(
-    tokens: &[T],
-    index: usize,
-    close_of: impl FnOnce(usize) -> Option<usize>,
-) -> bool {
-    let Some(next) = next_significant_index(tokens, index) else { return false; };
+pub(crate) fn reference_target_starts_at<T: SourceToken>(tokens: &[T], next: usize) -> bool {
     match tokens[next].id() {
         id if id == tok::T_VARIABLE => true,
         // `$$name` / `${$name}`: the variable variable's name is computed at run time.
         id if id == i64::from(b'$') => true,
         id if id == tok::T_STATIC => next_significant_index(tokens, next)
             .is_some_and(|after| tokens[after].id() == tok::T_DOUBLE_COLON),
-        id if id == tok::T_STRING || id == tok::T_IDENTIFIER || id == tok::T_READONLY => {
+        id if id == tok::T_STRING || id == tok::T_IDENTIFIER => {
             next_significant_index(tokens, next).is_some_and(|after| {
                 matches!(
                     tokens[after].id(),
@@ -433,20 +461,6 @@ pub(crate) fn reference_target_starts_at<T: SourceToken>(
                 )
             })
         }
-        // PHP allows a grouped base with a call or member/index access, such as `&($a)[0]`.
-        id if id == i64::from(b'(') => close_of(next)
-            .filter(|&close| tokens[close].id() == i64::from(b')'))
-            .and_then(|close| next_significant_index(tokens, close))
-            .is_some_and(|after| {
-                matches!(
-                    tokens[after].id(),
-                    id if id == i64::from(b'(')
-                        || id == i64::from(b'[')
-                        || id == tok::T_OBJECT_OPERATOR
-                        || id == tok::T_NULLSAFE_OBJECT_OPERATOR
-                        || id == tok::T_DOUBLE_COLON
-                )
-            }),
         _ => false,
     }
 }
@@ -600,9 +614,9 @@ pub(crate) fn normalize_parse_newlines(view: &mut [u8]) {
 
 /// Returns whether one ampersand is a PHP reference marker the parser view should remove.
 ///
-/// Only declaration, capture, foreach and literal contexts accept a reference marker. A call
-/// argument such as `foo(&$a)` is a PHP ParseError, so its `&` must stay in the view and let the
-/// parser reject it. The same rule keeps `($a & $b)` as the bitwise operator.
+/// Declarations, captures, foreach and reference assignments or array entries accept a marker.
+/// The view keeps the ampersand in `foo(&$a)` for the parser to reject, and in `($a & $b)`
+/// for the parser to interpret as the bitwise operator.
 pub(crate) fn is_reference_ampersand<T: SourceToken>(
     tokens: &[T],
     index: usize,
@@ -610,7 +624,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
     enclosing_bracket: Option<usize>,
     enclosing_paren: Option<usize>,
     enclosing_brace: Option<usize>,
-    close_of: impl FnOnce(usize) -> Option<usize>,
+    reference_value: impl FnOnce() -> bool,
 ) -> bool {
     let ampersand = tokens[index].id() == tok::T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG
         || tokens[index].id() == tok::T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG;
@@ -623,7 +637,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
         if enclosing_paren.is_some_and(|open| paren_is_declaration_parameters(tokens, open)) {
             return false;
         }
-        return reference_target_starts_at(tokens, index, close_of);
+        return reference_value();
     }
     if [tok::T_FUNCTION, tok::T_AS, tok::T_YIELD].contains(&previous_significant) {
         return true;
@@ -632,14 +646,13 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
     // (`fn() => &$x` is a PHP ParseError), so its marker must stay for the parser to reject.
     if previous_significant == tok::T_DOUBLE_ARROW {
         let Some(arrow) = previous_significant_index(tokens, index) else { return false; };
-        return reference_target_starts_at(tokens, index, close_of)
-            && arrow_pair_is_array_value(
-                tokens,
-                arrow,
-                enclosing_bracket,
-                enclosing_paren,
-                enclosing_brace,
-            );
+        return arrow_pair_is_array_value(
+            tokens,
+            arrow,
+            enclosing_bracket,
+            enclosing_paren,
+            enclosing_brace,
+        ) && reference_value();
     }
     if previous_significant != i64::from(b'(') && previous_significant != i64::from(b',')
         && previous_significant != i64::from(b'[')
@@ -651,7 +664,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
     if previous_significant == i64::from(b'[') {
         if let Some(open) = enclosing_bracket {
             if bracket_opens_array_literal(tokens, open) {
-                return reference_target_starts_at(tokens, index, close_of);
+                return reference_value();
             }
         }
         return false;
@@ -662,7 +675,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
                 && delimiter_is_outside(open, enclosing_paren)
                 && delimiter_is_outside(open, enclosing_brace)
             {
-                return reference_target_starts_at(tokens, index, close_of);
+                return reference_value();
             }
         }
     }
@@ -678,7 +691,7 @@ pub(crate) fn is_reference_ampersand<T: SourceToken>(
     // and silently approve invalid PHP. Declaration and capture lists keep their marker
     // unconditionally because the parser still validates the following parameter or capture.
     if [tok::T_ARRAY, tok::T_LIST].contains(&tokens[before].id()) {
-        return reference_target_starts_at(tokens, index, close_of);
+        return reference_value();
     }
     if [tok::T_FUNCTION, tok::T_FN, tok::T_USE].contains(&tokens[before].id()) {
         return true;

@@ -195,6 +195,7 @@ fn tokenizer_php85_accepts_grammar_beyond_compiler_subset() {
         "<?php class C { public static function __construct(public int $x) {} }",
         "<?php function f($this) {} class C { function m($this) {} }",
         "<?php function f(int $this) {} function g(int &...$this) {} class C { function m(int $this) {} function n(int &...$this) {} }",
+        "<?php function($this) {}; static fn($this) => 1; fn(int &...$this) => 1;",
         "<?php ($o->p++)[0]; ($o->p++)->q; $o->p++ + 1;",
         r#"<?php function f(\empty $x) {} function g(Foo\empty $x) {}"#,
         r#"<?php $s = `{$$a}`; $t = `{$$$a}`; $u = `{$$a[0]}`; $v = `{$a[$$b]}`; $w = `{$a[${"k"}]}`;"#,
@@ -308,6 +309,8 @@ fn tokenizer_php85_accepts_grammar_beyond_compiler_subset() {
         "<?php $a = [&readonly()]; $b = array(&readonly());",
         "<?php $r = &($get)()[$key]; $s = &($a)[0]; $t = &($a)->p; $u = &($a)();",
         "<?php $a = [&($b)[0]]; $b = array(&($g)());",
+        r#"<?php $r = &($a)::FOO[0]; $s = &($a)::$c; $t = &($a)::{"m"}(); $u = &($a)?->p;"#,
+        "<?php $r = &($a)->p + 2; $a = ['key' => &($a)::FOO->p];",
         "<?php strlen(...); $f = $a(...); $g = $o->m(...); $h = C::m(...);",
         "<?php $cls::MATCH; (foo())::MATCH; $cls::LIST; $o::ENUM;",
         "<?php (foo())(...); $a[0](...); (new Foo)(...);",
@@ -370,6 +373,11 @@ fn tokenizer_php85_rejects_dialect_and_accept_invalid_inputs() {
         "<?php echo (1) label:;",
         "<?php $o->p++[0];",
         "<?php $r = &($a);",
+        "<?php $r = &($a)::FOO;",
+        "<?php $a = [&($a)::class];",
+        "<?php $r = &($a)[0] = 1;",
+        "<?php $r = &($a)->p += 1;",
+        "<?php $a = &readonly[0];",
         "<?php $o->p++->q;",
         "<?php $o->p++();",
         "<?php list(...$a $b) = $row;",
@@ -592,6 +600,27 @@ fn parse_message_corpus() -> Vec<Vec<u8>> {
         r"<?php $a = &\foo();",
         r"<?php $a = &Ns\foo();",
         r"<?php $a = &namespace\foo();",
+        "<?php $r = &($a);",
+        "<?php $r = &($a)",
+        "<?php $r = &($a) ?>",
+        "<?php $r = &($a)::FOO;",
+        "<?php $r = &($a)::class;",
+        r#"<?php $r = &($a)::{"p"};"#,
+        "<?php $r = &($a)::FOO + 1;",
+        "<?php $r = &($a)::FOO->p::BAR;",
+        "<?php $a = [&($a)::FOO];",
+        "<?php $a = ['key' => &($a)::class];",
+        "<?php array(&($a)[0] = 1);",
+        "<?php $r = &($a)[0] = 1;",
+        "<?php $r = &($a)->p += 1;",
+        "<?php $r = &($a)::$c ??= 1;",
+        "<?php $r = &($a)[0]++;",
+        "<?php $a = &readonly[0];",
+        "<?php $r = &readonly::$a;",
+        "<?php $a = [&readonly];",
+        "<?php $r = &readonly",
+        "<?php $r = &readonly ?>",
+        "<?php echo ;\n$r = &($a)::FOO;",
         "<?php $a[&$b];",
         "<?php function f(callable(int): string $cb) {}",
         "<?php function f(buffer<int> $value) {}",
@@ -1101,6 +1130,8 @@ fn fixtures() -> Vec<Vec<u8>> {
         "<?php $a = [&readonly()]; $b = array(&readonly());",
         "<?php $r = &($get)()[$key]; $s = &($a)[0]; $t = &($a)->p; $u = &($a)();",
         "<?php $a = [&($b)[0]]; $b = array(&($g)());",
+        r#"<?php $r = &($a)::FOO[0]; $s = &($a)::$c; $t = &($a)::{"m"}(); $u = &($a)?->p;"#,
+        "<?php $r = &($a)->p + 2; $a = ['key' => &($a)::FOO->p];",
         "<?php $o->$method(value: 1);",
         "<?php C::$method(value: 1);",
         "<?php $a[&$b];",
@@ -1156,6 +1187,7 @@ fn fixtures() -> Vec<Vec<u8>> {
         "<?php class C { public static function __construct(public int $x) {} }",
         "<?php function f($this) {} class C { function m($this) {} }",
         "<?php function f(int $this) {} function g(int &...$this) {} class C { function m(int $this) {} function n(int &...$this) {} }",
+        "<?php function($this) {}; static fn($this) => 1; fn(int &...$this) => 1;",
         "<?php ($o->p++)[0]; ($o->p++)->q; $o->p++ + 1;",
         r#"<?php function f(\empty $x) {} function g(Foo\empty $x) {}"#,
         r#"<?php $s = `{$$a}`; $t = `{$$$a}`; $u = `{$$a[0]}`; $v = `{$a[$$b]}`; $w = `{$a[${"k"}]}`;"#,
@@ -1676,23 +1708,25 @@ fn tokenizer_long_interpolation_and_reference_arrays_stay_linear() {
 /// the source; the old per-marker target walk revisited every enclosing body quadratically.
 #[test]
 fn tokenizer_nested_reference_targets_stay_linear() {
-    let mut source = String::from("<?php $v = ");
-    for _ in 0..20_000 {
-        source.push_str("array(&$a[");
+    for target in ["array(&$a[", "array(&($a)["] {
+        let mut source = String::from("<?php $v = ");
+        for _ in 0..20_000 {
+            source.push_str(target);
+        }
+        source.push_str("$b");
+        for _ in 0..20_000 {
+            source.push_str("])");
+        }
+        source.push(';');
+        let started = std::time::Instant::now();
+        // The parser rejects this at its nesting cap; the precheck must still finish linearly.
+        let _ = tokenize(source.as_bytes(), TOKEN_PARSE);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "nested {target:?} reference target scan took {:?}",
+            started.elapsed()
+        );
     }
-    source.push_str("$b");
-    for _ in 0..20_000 {
-        source.push_str("])");
-    }
-    source.push(';');
-    let started = std::time::Instant::now();
-    // The parser rejects this at its nesting cap; the precheck must still finish linearly.
-    let _ = tokenize(source.as_bytes(), TOKEN_PARSE);
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
-        "nested reference target scan took {:?}",
-        started.elapsed()
-    );
 }
 
 /// Repeated computed variables must not walk the same statement prefix for every `$$`.
@@ -1886,7 +1920,12 @@ fn tokenizer_validation_preserves_compiler_declaration_rules() {
         assert_eq!(constant.attributes.len(), 1);
     }
 
-    for source in ["<?php function f(int $this) {}", "<?php class C { function m(int &...$this) {} }"] {
+    for source in [
+        "<?php function f(int $this) {}",
+        "<?php class C { function m(int &...$this) {} }",
+        "<?php $f = function($this) {};",
+        "<?php $f = static fn(int &...$this) => 1;",
+    ] {
         tokenize(source.as_bytes(), TOKEN_PARSE).expect("PHP accepts the parameter grammar");
         assert!(parser::parse_test_source(source).is_err(), "compiler accepted {source}");
     }

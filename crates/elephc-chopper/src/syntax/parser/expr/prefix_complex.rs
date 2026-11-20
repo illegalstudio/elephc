@@ -18,6 +18,7 @@ use crate::syntax::parser::ast::{
     CallableTarget, Expr, ExprKind, RuntimeClassReceiver, StaticReceiver, Stmt, StmtKind, TypeExpr,
 };
 use crate::syntax::parser::stmt::parse_type_arguments_only;
+use crate::syntax::parser::stmt::params::parameter_variable_name;
 use crate::syntax::parser::stmt::{
     looks_like_typed_param, parameter_error_span, parse_anonymous_class, parse_block, parse_name,
     parse_type_expr,
@@ -744,34 +745,27 @@ fn parse_closure_params(
             // A typed variadic (`int ...$xs`) is accepted on closures/arrow functions too; the
             // declared element type is preserved so call validation can check collected args.
             *pos += 1;
-            match tokens.get(*pos).map(|(token, _)| token) {
-                Some(Token::Variable(name)) => {
-                    variadic = Some(name.clone());
-                    variadic_by_ref = is_ref;
-                    variadic_type = type_ann;
-                    *pos += 1;
-                }
-                _ => return Err(CompileError::expected_variable(span, "Expected variable after '...'")),
-            }
+            let Some(name) = tokens.get(*pos).and_then(|(token, _)| parameter_variable_name(token)) else {
+                return Err(CompileError::expected_variable(span, "Expected variable after '...'"));
+            };
+            variadic = Some(name.to_owned());
+            variadic_by_ref = is_ref;
+            variadic_type = type_ann;
+            *pos += 1;
             continue;
         }
-        match tokens.get(*pos).map(|(token, _)| token) {
-            Some(Token::Variable(name)) => {
-                let name = name.clone();
-                *pos += 1;
-                let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
-                    *pos += 1;
-                    Some(parse_expr(tokens, pos)?)
-                } else {
-                    None
-                };
-                params.push((name, type_ann, default, is_ref));
-            }
-            _ => {
-                let error_span = parameter_error_span(tokens, *pos, span);
-                return Err(CompileError::new(error_span, "Expected parameter variable"));
-            }
-        }
+        let Some(name) = tokens.get(*pos).and_then(|(token, _)| parameter_variable_name(token)) else {
+            let error_span = parameter_error_span(tokens, *pos, span);
+            return Err(CompileError::new(error_span, "Expected parameter variable"));
+        };
+        *pos += 1;
+        let default = if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+            *pos += 1;
+            Some(parse_expr(tokens, pos)?)
+        } else {
+            None
+        };
+        params.push((name.to_owned(), type_ann, default, is_ref));
     }
     if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
         return Err(CompileError::new(span, "Expected ')' after parameters"));

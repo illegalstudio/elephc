@@ -900,7 +900,7 @@ fn ident_matches(name: &str, keywords: &[&str]) -> bool {
 }
 
 /// Returns the parameter name, allowing `$this` only when checking PHP grammar for TOKEN_PARSE.
-pub(super) fn parameter_variable_name(token: &Token) -> Option<&str> {
+pub(in crate::syntax::parser) fn parameter_variable_name(token: &Token) -> Option<&str> {
     match token {
         Token::Variable(name) => Some(name),
         Token::This if validation_only() => Some("this"),
