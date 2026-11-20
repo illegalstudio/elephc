@@ -589,6 +589,7 @@ pub(crate) fn eval_property_set_result(
             values,
         )?;
     }
+    eval_validate_instance_property_array_value(identity, &storage_property_name, value, context, values)?;
     if let Some(target) = context
         .dynamic_property_alias(identity, &storage_property_name)
         .cloned()
@@ -606,11 +607,13 @@ pub(crate) fn eval_property_set_result(
             values,
         )?;
         context.mark_dynamic_property_initialized(identity, &storage_property_name);
+        eval_note_instance_property_array_value(identity, &storage_property_name, storage, context, values)?;
         return eval_with_native_property_storage_scope(
             &object_class_name, &storage_property_name, context, values,
             |values| values.property_set(object, &storage_property_name, storage),
         );
     }
+    eval_note_instance_property_array_value(identity, &storage_property_name, value, context, values)?;
     eval_with_native_property_storage_scope(
         &object_class_name, &storage_property_name, context, values,
         |values| values.property_set(object, &storage_property_name, value),
@@ -734,7 +737,9 @@ pub(super) fn eval_property_reference_bind_result(
     let value = eval_reference_target_value(&target, context, values)?;
     with_eval_value_lease(value, context, values, |value, context, values| {
         eval_validate_property_value(&declaring_class, &property, value, context, values)?;
+        eval_validate_instance_property_array_value(identity, &storage_property_name, value, context, values)?;
         context.bind_dynamic_property_alias(identity, &storage_property_name, target);
+        eval_note_instance_property_array_value(identity, &storage_property_name, value, context, values)?;
         eval_with_native_property_storage_scope(
             &object_class_name, &storage_property_name, context, values,
             |values| values.property_set(object, &storage_property_name, value),

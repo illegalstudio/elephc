@@ -170,7 +170,8 @@ fn write_selected(
         ArrayWriteStorage::Captured
     } else { ArrayWriteStorage::Snapshot };
     prepared.finish_write(index, context, values, |context, values| {
-        if let Some(array) = write_value_in_storage(prepared.value(), index, op, assigned, storage, operands, context, values)? {
+        let contracts = property_dimension_guards::array_contracts(object, property, context, values)?;
+        if let Some(array) = write_value_in_storage(prepared.value(), index, op, assigned, storage, &contracts, operands, context, values)? {
             if matches!(prepared, PreparedArrayParent::Detached(_)) { return Ok(()); }
             if dynamic {
                 super::property_append_fetch::write(object, property, array, context, values)?;
@@ -229,7 +230,7 @@ pub(super) fn write_value(
     assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    write_value_in_storage(current, index, op, assigned, ArrayWriteStorage::Snapshot,
+    write_value_in_storage(current, index, op, assigned, ArrayWriteStorage::Snapshot, &[],
         operands, context, values)
 }
 
@@ -239,7 +240,7 @@ pub(super) fn write_attached_value(
     assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    write_value_in_storage(current, index, op, assigned, ArrayWriteStorage::Attached,
+    write_value_in_storage(current, index, op, assigned, ArrayWriteStorage::Attached, &[],
         operands, context, values)
 }
 
@@ -255,7 +256,7 @@ enum ArrayWriteStorage {
 /// Shares dimension semantics while preserving published or attached runtime storage identity.
 fn write_value_in_storage(
     current: RuntimeCellHandle, index: Option<RuntimeCellHandle>, op: Option<EvalBinOp>,
-    assigned: RuntimeCellHandle, storage: ArrayWriteStorage, operands: &mut Vec<RuntimeCellHandle>,
+    assigned: RuntimeCellHandle, storage: ArrayWriteStorage, declared: &[EvalParameterType], operands: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let append = index.is_none();
@@ -356,6 +357,9 @@ fn write_value_in_storage(
     let array = promoted;
     checked_array_keys::for_receiver(array, index, context, values)?;
     let value = compound_value(array, index, op, assigned, operands, context, values)?;
+    for declared in declared {
+        validate_generic_local_element(Some(declared), array, index, value, context, values)?;
+    }
     for declared in context.local_reference_types(current) {
         validate_generic_local_element(Some(&declared), array, index, value, context, values)?;
     }
@@ -411,8 +415,9 @@ fn static_write(
                 }
                 None => (current, ArrayWriteStorage::Snapshot),
             } };
+            let contracts = eval_static_property_array_contracts(class_name, property, context)?;
             if let Some(array) = write_value_in_storage(
-                current, key, op, assigned, storage, &mut operands, context, values,
+                current, key, op, assigned, storage, &contracts, &mut operands, context, values,
             )? {
                 if !matches!(prepared, PreparedArrayParent::Detached(_)) {
                     eval_static_property_set_result(class_name, property, array, context, values)?;

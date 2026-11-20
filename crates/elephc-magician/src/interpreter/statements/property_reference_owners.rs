@@ -85,8 +85,10 @@ pub(super) fn bind_escaped_cell(
     if property.is_readonly() { return Err(EvalStatus::RuntimeFatal); }
     eval_validate_property_value(&declaring_class, &property, reference, context, values)?;
     let storage_name = eval_instance_property_storage_name(&declaring_class, &property);
+    eval_validate_instance_property_array_value(identity, &storage_name, reference, context, values)?;
     context.bind_dynamic_property_alias(identity, &storage_name,
         EvalReferenceTarget::Cell { cell: reference.borrowed() });
+    eval_note_instance_property_array_value(identity, &storage_name, reference, context, values)?;
     eval_with_native_property_storage_scope(&object_class_name, &storage_name, context, values,
         |values| values.property_set(object, &storage_name, reference))?;
     context.mark_dynamic_property_initialized(identity, &storage_name);
@@ -105,7 +107,7 @@ pub(super) fn bind_escaped_static_cell(
     }
     validate_eval_property_write_access(&owner, &property, context)?;
     if property.is_readonly() { return Err(EvalStatus::RuntimeFatal); }
-    eval_validate_property_value(&owner, &property, reference, context, values)?;
+    eval_validate_static_property_value(&owner, property.name(), reference, context, values)?;
     context.bind_static_property_alias(&owner, property.name(),
         EvalReferenceTarget::Cell { cell: reference.borrowed() });
     store_borrowed_static_property(&owner, property.name(), reference, context, values)?;

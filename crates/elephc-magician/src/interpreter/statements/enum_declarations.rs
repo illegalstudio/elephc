@@ -396,7 +396,11 @@ pub(super) fn initialize_eval_static_properties(
             None
         };
         if let Some(value) = value {
+            let origin = eval_default_property_array_origin(property, value, context, values)?;
             store_static_property_value(class.name(), property.name(), value, context, values)?;
+            if let Some(origin) = origin { context.set_static_property_array_type(class.name(), property.name(), origin); }
+            let stored = context.static_property(class.name(), property.name()).ok_or(EvalStatus::RuntimeFatal)?;
+            eval_note_static_property_array_value(class.name(), property.name(), stored, context, values)?;
         }
     }
     Ok(())

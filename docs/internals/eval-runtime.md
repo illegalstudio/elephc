@@ -837,6 +837,15 @@ the receiver releases its constraints. Whole reference replacements still use
 the original-RHS coordinator and preserve weak scalar conversion. Instance and
 static property defaults share initialization that widens an integer literal
 to a sole declared float representation, independently of assignment coercions.
+Untyped array defaults additionally establish conditional origins owned by the
+physical property binding. Whole replacements validate that origin, while
+instance/static dimension writers validate the candidate element before any
+published payload changes. Private storage names and cloned bindings retain
+separate origins; unset and final-object retirement remove instance metadata.
+Each origin tracks its currently published array through an allocation-validity
+token, without retaining a PHP owner. Canonical reference checks also inspect
+these property-owned roots, so nested element aliases cannot invalidate their
+contents. Rebinding or replacing a property retires only its departed root.
 
 Native descriptor signatures retain their original twelve physical metadata words.
 Flag bit 1 marks an appended logical-source record pointer at word 12. The

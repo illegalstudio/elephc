@@ -75,6 +75,8 @@ fn strict_member_promises_native_eval_array_aliases_and_float_defaults() {
     let fragment="class NativeArrayPromise{public array<int> $items=[1];public static array<int> $cached=[2]; \
         public float $number=0;public static float $floating=0;} \
         $object=new NativeArrayPromise();array $instance=[1];array $cached=[2]; \
+        try{$object->items[]='bad';}catch(TypeError $error){echo 'D';} \
+        try{NativeArrayPromise::$cached[]='bad';}catch(TypeError $error){echo 'E';} \
         $object->items=&$instance;NativeArrayPromise::$cached=&$cached; \
         try{$instance[]='bad';}catch(TypeError $error){echo 'I';} \
         try{$cached[]='bad';}catch(TypeError $error){echo 'S';} \
@@ -88,6 +90,6 @@ fn strict_member_promises_native_eval_array_aliases_and_float_defaults() {
     let output=super::native_module::run(&module);
     let stderr=String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(),"{:?}: stdout={}; {stderr}",output.status,String::from_utf8_lossy(&output.stdout));
-    assert_eq!(String::from_utf8_lossy(&output.stdout),"IS11:double:double:3","{stderr}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout),"DEIS11:double:double:3","{stderr}");
     assert!(stderr.contains("HEAP DEBUG: leak summary: clean"),"{stderr}");
 }

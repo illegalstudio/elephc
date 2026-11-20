@@ -39,6 +39,7 @@ pub(in crate::interpreter) fn store_borrowed_static_property(
         return Ok(());
     }
     let retained = values.retain(value)?;
+    eval_note_static_property_array_value(class_name, property_name, value, context, values)?;
     if let Some(previous) = context.set_static_property(class_name, property_name, retained) {
         eval_release_value(context, values, previous)?;
     }
@@ -57,6 +58,7 @@ pub(in crate::interpreter) fn store_static_property_value(
     if value.is_borrowed() {
         return store_borrowed_static_property(class_name, property_name, value, context, values);
     }
+    eval_note_static_property_array_value(class_name, property_name, value, context, values)?;
     if let Some(previous) = context.set_static_property(class_name, property_name, value) {
         eval_release_value(context, values, previous)?;
     }
@@ -611,7 +613,7 @@ pub(super) fn eval_static_property_reference_bind_result(
         prepare_property_reference_admission(&declaring_class,&property,&target,context,values)?;
         let value = eval_reference_target_value(&target, context, values)?;
         return with_eval_value_lease(value, context, values, |value, context, values| {
-            eval_validate_property_value(&declaring_class, &property, value, context, values)?;
+            eval_validate_static_property_value(&declaring_class, property.name(), value, context, values)?;
             context.bind_static_property_alias(&declaring_class, property.name(), target);
             store_borrowed_static_property(&declaring_class, property.name(), value, context, values)
         });
@@ -829,7 +831,7 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
             );
         }
         validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
-        eval_validate_property_value(&declaring_class, &property, value, context, values)?;
+        eval_validate_static_property_value(&declaring_class, property.name(), value, context, values)?;
         if context.static_property_alias(&declaring_class,property.name()).is_none() {
             if let Some(candidate)=coerce_property_value_candidate(&declaring_class,&property,value,context,values)? {
                 return with_eval_value_lease(candidate,context,values,|candidate,context,values|

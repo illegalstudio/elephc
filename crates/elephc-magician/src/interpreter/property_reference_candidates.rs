@@ -31,6 +31,7 @@ pub(crate) fn prepare_property_reference_candidates(
     let mut sources=context.property_reference_types(reference);
     sources.extend(context.claim_property_reference_admission(reference));
     for source in sources {
+        array_reference_contracts::validate_new_owner(reference, original, std::slice::from_ref(&source.declared), context, values)?;
         prepared.push(prepare_property_value_candidate(&source.owner,&source.property,&source.declared,original,context,values)?);
     }
     Ok(prepared)

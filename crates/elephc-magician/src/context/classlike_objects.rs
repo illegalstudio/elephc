@@ -248,6 +248,7 @@ impl ElephcEvalContext {
         self.dynamic_destructed_objects.remove(&identity);
         self.dynamic_initialized_properties
             .retain(|(object, _)| *object != identity);
+        self.dynamic_property_array_types.retain(|(object, _), _| *object != identity);
     }
 
     /// Removes one dynamic object identity and all per-object eval metadata.
@@ -261,6 +262,7 @@ impl ElephcEvalContext {
             .retain(|(object, _), _| *object != identity);
         self.dynamic_initialized_properties
             .retain(|(object, _)| *object != identity);
+        self.dynamic_property_array_types.retain(|(object, _), _| *object != identity);
         crate::ffi::dynamic_destructors::unregister_dynamic_object(identity);
     }
 
@@ -526,6 +528,7 @@ impl ElephcEvalContext {
     ) {
         self.dynamic_initialized_properties
             .remove(&(identity, storage_property_name.to_string()));
+        self.dynamic_property_array_types.remove(&(identity, storage_property_name.to_string()));
     }
 
     /// Returns whether one eval object storage slot is known to be initialized.
@@ -560,5 +563,8 @@ impl ElephcEvalContext {
         for property in initialized {
             self.mark_dynamic_property_initialized(clone_identity, &property);
         }
+        let contents = self.dynamic_property_array_types.iter().filter_map(|((identity, property), ty)|
+            (*identity == source_identity).then(|| (property.clone(), ty.clone()))).collect::<Vec<_>>();
+        for (property, origin) in contents { self.dynamic_property_array_types.insert((clone_identity, property), origin); }
     }
 }

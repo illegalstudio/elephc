@@ -11,6 +11,53 @@
 
 use super::*;
 
+/// Publishes a borrowed physical array root on its existing instance binding before old-value retirement.
+pub(in crate::interpreter) fn eval_note_instance_property_array_value(identity: u64, storage: &str,
+    value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let array = matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC);
+    context.publish_dynamic_property_array_source(identity, storage, array.then_some(value));
+    Ok(())
+}
+
+/// Publishes a declaring static slot's borrowed root independently from local array owner metadata.
+pub(in crate::interpreter) fn eval_note_static_property_array_value(class: &str, property: &str,
+    value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let array = matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC);
+    context.publish_static_property_array_source(class, property, array.then_some(value));
+    Ok(())
+}
+
+/// Copies static declaration and binding origins before a published array payload can change.
+pub(in crate::interpreter) fn eval_static_property_array_contracts(class: &str, name: &str,
+    context: &ElephcEvalContext,
+) -> Result<Vec<EvalParameterType>, EvalStatus> {
+    let class = resolve_eval_static_member_class_name(class, context)?;
+    let Some((owner, property)) = context.class_property(&class, name) else { return Ok(Vec::new()); };
+    Ok(property.property_type().into_iter().chain(context.static_property_array_type(&owner, property.name())).cloned().collect())
+}
+
+/// Prepares an untyped default's content origin while the caller owns its initialized value.
+pub(in crate::interpreter) fn eval_default_property_array_origin(property: &EvalClassProperty,
+    value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalParameterType>, EvalStatus> {
+    if property.property_type().is_some() { return Ok(None); }
+    let prepared = local_binding_origins::prepare_array_value_origin(None, None, value, property.name(), context, values);
+    if prepared.is_err() { let _ = eval_release_value(context, values, value); }
+    prepared
+}
+
+/// Checks a physical instance binding without retaining its receiver or mutating its content origin.
+pub(in crate::interpreter) fn eval_validate_instance_property_array_value(identity: u64, storage: &str,
+    value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if let Some(origin) = context.dynamic_property_array_type(identity, storage).cloned() {
+        validate_generic_local(&origin, storage, value, context, values)?;
+    }
+    Ok(())
+}
+
 /// Validates an eval-declared property before changing its backing slot or a reference alias.
 pub(in crate::interpreter) fn eval_validate_property_value(
     owner: &str,
@@ -62,6 +109,9 @@ pub(in crate::interpreter) fn eval_validate_static_property_value(
 ) -> Result<(), EvalStatus> {
     if let Some((owner, metadata)) = context.class_property(class, property) {
         eval_validate_property_value(&owner, &metadata, value, context, values)?;
+        if let Some(origin) = context.static_property_array_type(&owner, metadata.name()).cloned() {
+            validate_generic_local(&origin, metadata.name(), value, context, values)?;
+        }
     }
     Ok(())
 }

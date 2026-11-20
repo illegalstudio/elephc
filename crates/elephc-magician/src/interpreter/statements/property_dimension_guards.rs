@@ -11,6 +11,18 @@
 
 use super::*;
 
+/// Copies array-write obligations for the selected physical instance slot, without invoking accessors.
+pub(super) fn array_contracts(object: RuntimeCellHandle, name: &str,
+    context: &ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvalParameterType>, EvalStatus> {
+    let identity = values.object_identity(object)?;
+    let Some(class) = context.dynamic_object_class(identity) else { return Ok(Vec::new()); };
+    let Some((owner, property)) = eval_dynamic_property_for_access(class.name(), name, context) else { return Ok(Vec::new()); };
+    let storage = eval_instance_property_storage_name(&owner, &property);
+    Ok(property.property_type().into_iter().chain(context.dynamic_property_array_type(identity, &storage)).cloned().collect())
+}
+
+
 /// Selects PHP write-fetch initialization rules independently of key diagnostic suppression.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum DimensionFetchMode { Write, ReadWrite }

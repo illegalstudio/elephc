@@ -39,18 +39,20 @@ impl ElephcEvalContext {
                 private.split_once('\0').and_then(|(owner, name)| self.class_own_property(owner, name))
             } else { self.class_property(class.name(), storage) };
             let Some((owner, property)) = declared else { continue; };
-            let Some(ty) = property.property_type() else { continue; };
-            types.push(EvalPropertyReferenceType {
-                owner, property: property.name().to_string(), declared: ty.clone(),
-            });
+            for ty in property.property_type().into_iter().chain(self.dynamic_property_array_type(*identity, storage)) {
+                types.push(EvalPropertyReferenceType {
+                    owner: owner.clone(), property: property.name().to_string(), declared: ty.clone(),
+                });
+            }
         }
         for ((class, name), target) in &self.static_property_aliases {
             if !same_cell(target) { continue; }
             let Some((owner, property)) = self.class_property(class, name) else { continue; };
-            let Some(ty) = property.property_type() else { continue; };
-            types.push(EvalPropertyReferenceType {
-                owner, property: property.name().to_string(), declared: ty.clone(),
-            });
+            for ty in property.property_type().into_iter().chain(self.static_property_array_type(&owner, name)) {
+                types.push(EvalPropertyReferenceType {
+                    owner: owner.clone(), property: property.name().to_string(), declared: ty.clone(),
+                });
+            }
         }
         types.sort_by(|left, right| (&left.owner, &left.property).cmp(&(&right.owner, &right.property)));
         types

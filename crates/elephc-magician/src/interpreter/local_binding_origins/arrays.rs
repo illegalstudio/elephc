@@ -22,6 +22,15 @@ pub(super) fn prepare(scope: &ElephcEvalScope, name: &str, producer: Option<&Eva
     }
     let declared = scope.local_type(name).or_else(|| scope.inferred_local_type(name)
         .filter(|ty| contains_contents(&generic_type(ty))));
+    prepare_value(declared, producer, value, name, context, values)
+}
+
+/// Prepares a binding-owned content obligation from its declaration and evaluated producer.
+pub(in crate::interpreter) fn prepare_value(declared: Option<&EvalParameterType>, producer: Option<&EvalParameterType>,
+    value: RuntimeCellHandle, name: &str, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalParameterType>, EvalStatus> {
+    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
+        || !matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) { return Ok(None); }
     let retained = declared.and_then(|ty| source_schema(&generic_type(ty)))
         .filter(|schema| array_contents_type(schema.clone()).is_none_or(|ty| !pending_array_contents(&ty)));
     let schema = if let Some(schema) = retained { schema }

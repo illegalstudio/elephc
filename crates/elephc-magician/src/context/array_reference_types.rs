@@ -35,6 +35,6 @@ impl ElephcEvalContext {
         self.array_element_aliases.iter().filter(|(_, aliases)| aliases.lifetime.is_live() && !aliases.contracts.is_empty())
             .map(|(address, aliases)| EvalArrayReferenceSource {
                 array: RuntimeCellHandle::from_raw(*address as *mut _).borrowed(), contracts: aliases.contracts.clone(),
-            }).collect()
+            }).chain(self.property_array_reference_sources()).collect()
     }
 }

@@ -172,3 +172,5 @@ mod strict_mixed_class_sources;
 mod strict_mixed_member_promises;
 
 mod strict_array_member_promises;
+
+mod strict_array_member_origins;
