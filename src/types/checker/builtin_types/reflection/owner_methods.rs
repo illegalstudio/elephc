@@ -466,13 +466,17 @@ pub(super) fn add_reflection_member_flag_methods(
         ));
         methods.push(builtin_reflection_lazy_mixed_method("getValue", "__value"));
     }
-    if class_name == "ReflectionEnumBackedCase" {
+    // The unit case carries the slot too: `new ReflectionEnumUnitCase(BackedEnum::class, 'Case')` is
+    // valid php and reads the backed case's table row, so both classes share one slot layout.
+    if matches!(class_name, "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase") {
         properties.push(builtin_property(
             "__backing_value",
             Visibility::Private,
             Some(mixed_type()),
             Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
         ));
+    }
+    if class_name == "ReflectionEnumBackedCase" {
         methods.push(builtin_reflection_lazy_mixed_method(
             "getBackingValue",
             "__backing_value",
