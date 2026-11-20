@@ -296,6 +296,90 @@ foreach ([PHP_INT_MIN, -4294967296, 4294967296, -4294967295, 4294967297] as $inc
     assert_eq!(out, "bool(true)\n0\nbool(true)\n0\nbool(true)\n0\nbool(true)\n1\nbool(true)\n2\n");
 }
 
+/// Through a `callable` parameter, a first-class callable or `call_user_func()`, the signal
+/// and priority reach the helper unconverted: `[9]` is php-src's TypeError (not SIGHUP), a
+/// fractional float warns, an omitted signal is SIGTERM and an out-of-range one is narrowed.
+#[test]
+fn test_proc_terminate_and_nice_through_callables_keep_php_checks() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function call(callable $f, ...$args) {
+    try { var_dump($f(...$args)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+function termsig($process) {
+    $status = proc_get_status($process);
+    for ($i = 0; $status['running'] && $i < 200; $i++) {
+        usleep(10000);
+        $status = proc_get_status($process);
+    }
+    echo $status['running'] ? 'running' : $status['termsig'], "\n";
+    if ($status['running']) {
+        proc_terminate($process, 9);
+    }
+    proc_close($process);
+}
+$process = proc_open(['sleep', '5'], [], $pipes);
+call('proc_terminate', $process, json_decode('[9]'));
+call(proc_terminate(...), $process, json_decode('[9]'));
+usleep(100000);
+var_dump(proc_get_status($process)['running']);
+call('proc_terminate', $process);
+termsig($process);
+$process = proc_open(['sleep', '5'], [], $pipes);
+var_dump(call_user_func(proc_terminate(...), $process, 4294967305));
+termsig($process);
+$process = proc_open(['sleep', '5'], [], $pipes);
+call('proc_terminate', $process, 9.5);
+termsig($process);
+call('proc_nice', json_decode('"x"'));
+call(proc_nice(...), 0.5);
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "proc_terminate(): Argument #2 ($signal) must be of type int, array given\n\
+         proc_terminate(): Argument #2 ($signal) must be of type int, array given\n\
+         bool(true)\nbool(true)\n15\nbool(true)\n9\nbool(true)\n9\n\
+         proc_nice(): Argument #1 ($priority) must be of type int, string given\n\
+         bool(true)\n",
+        "{}",
+        out.stderr
+    );
+    assert_eq!(
+        out.stderr.matches("Implicit conversion from float").count(),
+        2,
+        "{}",
+        out.stderr
+    );
+}
+
+/// Under `strict_types` a callable call keeps php-src's strict TypeErrors.
+#[test]
+fn test_proc_terminate_and_nice_through_callables_honor_strict_types() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+function call(callable $f, ...$args) {
+    try { var_dump($f(...$args)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+$process = proc_open(['sleep', '5'], [], $pipes);
+call('proc_terminate', $process, json_decode('"9"'));
+call(proc_terminate(...), $process, 9.0);
+call('proc_nice', json_decode('"0"'));
+var_dump(proc_get_status($process)['running']);
+proc_terminate($process, 9);
+proc_close($process);
+"#,
+    );
+    assert_eq!(
+        out,
+        "proc_terminate(): Argument #2 ($signal) must be of type int, string given\n\
+         proc_terminate(): Argument #2 ($signal) must be of type int, float given\n\
+         proc_nice(): Argument #1 ($priority) must be of type int, string given\n\
+         bool(true)\n"
+    );
+}
+
 /// A proc builtin reached only through a string callable keeps its prelude helper.
 #[test]
 fn test_proc_nice_through_call_user_func_keeps_helper() {
