@@ -18,6 +18,10 @@
 //!   deprecation, a float outside the int range and every other string throw).
 //! - Registers are free to clobber: later instructions reload their operands, and the only
 //!   value the instruction leaves is its own result.
+//! - A virtual call whose overrides bind the parameter differently carries a per-class table
+//!   after the message suffix and its receiver as the last operand (or reads the late-bound
+//!   called class). Only the cold path reads it: the receiver's class selects the message of
+//!   the method PHP runs, or the unchecked binding when that method accepts more.
 //! - Descriptor invokers (calls through a callable value) have no `FunctionContext`; their
 //!   coercive `int`/`float` binding calls the module helpers `emit_invoker_numeric_param_helpers`
 //!   emits once from this same conversion code.
@@ -117,11 +121,23 @@ pub(in crate::codegen::lower_inst) fn lower_scalar_param_guard(
         .next()
         .and_then(Rule::parse)
         .ok_or_else(|| CodegenIrError::unsupported(format!("unknown scalar_param_guard mode {mode}")))?;
+    let (suffix, dispatch) = match suffix.split_once('\u{1e}') {
+        Some((suffix, table)) => (suffix, OverrideDispatch::parse(ctx, table)),
+        None => (suffix, None),
+    };
     let (prefix, suffix) = (prefix.to_string(), suffix.to_string());
     let numeric = mode.chars().next().and_then(numeric_mode);
-    // A trailing `r`: the operand is an owned temporary no cleanup root covers, so the
-    // refusal releases it before throwing.
-    let release = mode.chars().nth(1) == Some('r');
+    // A trailing `r`: the operands after the checked value are owned temporaries no cleanup
+    // root covers, so the refusal releases them before throwing. A receiver the per-class
+    // table reads is the last operand and is never released here.
+    let receiver_operand = dispatch.as_ref().is_some_and(|dispatch| !dispatch.late_static);
+    let releases: Vec<crate::ir::ValueId> = if mode.chars().nth(1) == Some('r') {
+        let end = inst.operands.len() - usize::from(receiver_operand);
+        inst.operands[1..end].to_vec()
+    } else {
+        Vec::new()
+    };
+    let receiver = receiver_operand.then(|| *inst.operands.last().expect("guard receiver operand"));
 
     // Constant folding can retype the operand under the guard; a raw value is decided now.
     let loaded = ctx.load_value_to_result(value)?.codegen_repr();
@@ -143,6 +159,29 @@ pub(in crate::codegen::lower_inst) fn lower_scalar_param_guard(
             PhpType::Callable => "Closure",
             _ => "object",
         };
+        if let Some(dispatch) = &dispatch {
+            // -- a raw refused value: the receiver's selected method decides --
+            let labels = emit_override_dispatch(ctx, dispatch, receiver)?;
+            super::exceptions::emit_type_error(ctx, &format!("{prefix}{given}{suffix}"));
+            let done = ctx.next_label("scalar_param_guard_static_dispatch_done");
+            for (group, label) in dispatch.groups.iter().zip(&labels) {
+                ctx.emitter.label(label);
+                if group.accept {
+                    if let Some((target, _)) = numeric {
+                        // The unchecked binding of a refused raw value (null) is zero.
+                        emit_zero_numeric_result(ctx, target);
+                    }
+                    abi::emit_jump(ctx.emitter, &done);
+                } else {
+                    super::exceptions::emit_type_error(ctx, &format!("{}{given}{suffix}", group.prefix));
+                }
+            }
+            ctx.emitter.label(&done);
+            if numeric.is_some() {
+                return store_if_result(ctx, inst);
+            }
+            return Ok(());
+        }
         super::exceptions::emit_type_error(ctx, &format!("{prefix}{given}{suffix}"));
         return Ok(());
     }
@@ -151,19 +190,206 @@ pub(in crate::codegen::lower_inst) fn lower_scalar_param_guard(
     let done = ctx.next_label("scalar_param_guard_done");
     if let Some((target, strict)) = numeric {
         emit_numeric_hot_check(ctx, target, strict, &cold, &done);
-        ctx.emitter.label(&done);
-        ctx.emit_cold_path(|ctx| {
-            ctx.emitter.label(&cold);
-            emit_numeric_cold_check(ctx, inst, value, target, strict, &done, &prefix, &suffix, release)
-        })?;
-        return store_if_result(ctx, inst);
+    } else {
+        emit_hot_check(ctx, rule, &cold, &done);
     }
-    emit_hot_check(ctx, rule, &cold, &done);
     ctx.emitter.label(&done);
     ctx.emit_cold_path(|ctx| {
         ctx.emitter.label(&cold);
-        emit_cold_check(ctx, inst, value, rule, &done, &prefix, &suffix, release)
-    })
+        let labels = match &dispatch {
+            Some(dispatch) => emit_override_dispatch(ctx, dispatch, receiver)?,
+            None => Vec::new(),
+        };
+        // -- the method the call names (and every receiver class that selects it) --
+        emit_refusal_check(ctx, inst, value, rule, numeric, &done, &prefix, &suffix, &releases)?;
+        for (group, label) in dispatch.iter().flat_map(|dispatch| &dispatch.groups).zip(&labels) {
+            ctx.emitter.label(label);
+            if group.accept {
+                // -- the selected override accepts more: bind as an unchecked argument --
+                emit_unchecked_binding(ctx, value, numeric.map(|(target, _)| target), &done)?;
+                continue;
+            }
+            // -- the selected override refuses the value with its own name and line --
+            let mut site_inst = inst.clone();
+            if group.site.is_some() {
+                site_inst.span = group.site;
+            }
+            emit_refusal_check(ctx, &site_inst, value, rule, numeric, &done, &group.prefix, &suffix, &releases)?;
+        }
+        Ok(())
+    })?;
+    if numeric.is_some() {
+        return store_if_result(ctx, inst);
+    }
+    Ok(())
+}
+
+/// Emits the cold-path check (conversion, acceptance or `TypeError`) for one message prefix.
+#[allow(clippy::too_many_arguments)]
+fn emit_refusal_check(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: crate::ir::ValueId,
+    rule: Rule,
+    numeric: Option<(Numeric, bool)>,
+    done: &str,
+    prefix: &str,
+    suffix: &str,
+    releases: &[crate::ir::ValueId],
+) -> Result<()> {
+    match numeric {
+        Some((target, strict)) => {
+            emit_numeric_cold_check(ctx, inst, value, target, strict, done, prefix, suffix, releases)
+        }
+        None => emit_cold_check(ctx, inst, value, rule, done, prefix, suffix, releases),
+    }
+}
+
+/// One receiver-class group of an [`OverrideDispatch`].
+struct OverrideGroup {
+    /// The selected method accepts more than the declared scalar: bind without the check.
+    accept: bool,
+    class_ids: Vec<u64>,
+    /// The selected method's message prefix (`B::m(): Argument #1 ($s) must be of type string, `).
+    prefix: String,
+    /// Where the selected method declares the parameter (the `int` precision deprecation's site).
+    site: Option<crate::span::Span>,
+}
+
+/// The per-class table EIR lowering appends to a guard whose overrides bind differently.
+struct OverrideDispatch {
+    /// The late-bound called class selects the method; otherwise the receiver operand does.
+    late_static: bool,
+    groups: Vec<OverrideGroup>,
+}
+
+impl OverrideDispatch {
+    /// Decodes the table written by EIR lowering; classes absent from the module are dropped.
+    fn parse(ctx: &FunctionContext<'_>, table: &str) -> Option<Self> {
+        let mut records = table.split('\u{1d}');
+        let late_static = match records.next()? {
+            "o" => false,
+            "l" => true,
+            _ => return None,
+        };
+        let groups = records.filter_map(|record| {
+            let mut fields = record.split('\u{1c}');
+            let accept = fields.next()? == "a";
+            let class_ids = fields.next()?.split(',')
+                .filter_map(|class| ctx.module.class_infos.get(class).map(|info| info.class_id))
+                .collect::<Vec<_>>();
+            let prefix = fields.next()?.to_string();
+            let site = fields.next().and_then(|site| {
+                let mut parts = site.split(':').map(str::parse::<u32>);
+                match (parts.next(), parts.next(), parts.next()) {
+                    (Some(Ok(line)), Some(Ok(col)), Some(Ok(source))) => {
+                        Some(crate::span::Span::new_in_source(line, col, source))
+                    }
+                    _ => None,
+                }
+            });
+            (!class_ids.is_empty()).then_some(OverrideGroup { accept, class_ids, prefix, site })
+        }).collect::<Vec<_>>();
+        (!groups.is_empty()).then_some(Self { late_static, groups })
+    }
+}
+
+/// Branches to one fresh label per group when the receiver's runtime class is listed there,
+/// and falls through for every other class (the method the call names), a null receiver,
+/// or a class declared at run time. Returns the group labels, in order.
+fn emit_override_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    dispatch: &OverrideDispatch,
+    receiver: Option<crate::ir::ValueId>,
+) -> Result<Vec<String>> {
+    let labels = dispatch.groups.iter()
+        .map(|_| ctx.next_label("scalar_param_guard_override"))
+        .collect::<Vec<_>>();
+    let named = ctx.next_label("scalar_param_guard_named_method");
+    let class_id = abi::int_result_reg(ctx.emitter);
+    // -- cold path: load the runtime class that selects the method --
+    if dispatch.late_static {
+        let called = super::static_method_calls::resolve_static_method_receiver(ctx, "static")
+            .and_then(|class| super::static_method_calls::resolve_static_called_class_arg(ctx, "static", &class));
+        match called {
+            Ok(called) => super::direct_calls::materialize_called_class_id(ctx, &called)?,
+            Err(_) => {
+                abi::emit_jump(ctx.emitter, &named);
+                ctx.emitter.label(&named);
+                return Ok(labels);
+            }
+        }
+    } else {
+        let receiver = receiver.expect("guard receiver operand");
+        let loaded = ctx.load_value_to_result(receiver)?.codegen_repr();
+        if matches!(loaded, PhpType::Mixed | PhpType::Union(_)) {
+            // A boxed receiver (`?C`) holds the object pointer in the unboxed payload.
+            emit_branch_if_null_cell(ctx, &named);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            emit_tag_not_equal_branch(ctx, 6, &named);
+            let payload = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+            super::enums::emit_move_reg(ctx, class_id, payload);
+        } else if !matches!(loaded, PhpType::Object(_)) {
+            abi::emit_jump(ctx.emitter, &named);
+            ctx.emitter.label(&named);
+            return Ok(labels);
+        }
+        emit_branch_if_null_cell(ctx, &named);
+        abi::emit_load_from_address(ctx.emitter, class_id, class_id, 0);
+    }
+    // -- cold path: each listed class selects its group --
+    let compare = abi::secondary_scratch_reg(ctx.emitter);
+    for (group, label) in dispatch.groups.iter().zip(&labels) {
+        for id in &group.class_ids {
+            abi::emit_load_int_immediate(ctx.emitter, compare, *id as i64);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("cmp {class_id}, {compare}")); // does the runtime class select this group's method?
+                    ctx.emitter.instruction(&format!("b.eq {label}"));          // check against the method that class runs
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("cmp {class_id}, {compare}")); // does the runtime class select this group's method?
+                    ctx.emitter.instruction(&format!("je {label}"));            // check against the method that class runs
+                }
+            }
+        }
+    }
+    ctx.emitter.label(&named);
+    Ok(labels)
+}
+
+/// Binds the boxed value the way the call did before the check existed, for a selected
+/// override that accepts more: `string`/`bool` keep the conversion that follows, `int`/`float`
+/// take the generic Mixed cast into the result register.
+fn emit_unchecked_binding(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    numeric: Option<Numeric>,
+    done: &str,
+) -> Result<()> {
+    if let Some(target) = numeric {
+        ctx.load_value_to_result(value)?;
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the boxed argument as the SysV first argument too
+        }
+        let helper = match target {
+            Numeric::Int => "__rt_mixed_cast_int",
+            Numeric::Float => "__rt_mixed_cast_float",
+        };
+        abi::emit_call_label(ctx.emitter, helper);
+    }
+    abi::emit_jump(ctx.emitter, done);
+    Ok(())
+}
+
+/// Leaves zero in the numeric result register (an unchecked raw null binds as 0 or 0.0).
+fn emit_zero_numeric_result(ctx: &mut FunctionContext<'_>, target: Numeric) {
+    match (ctx.emitter.target.arch, target) {
+        (Arch::AArch64, Numeric::Int) => ctx.emitter.instruction("mov x0, #0"), // an unchecked null binds as int 0
+        (Arch::AArch64, Numeric::Float) => ctx.emitter.instruction("fmov d0, xzr"), // an unchecked null binds as float 0.0
+        (Arch::X86_64, Numeric::Int) => ctx.emitter.instruction("xor eax, eax"), // an unchecked null binds as int 0
+        (Arch::X86_64, Numeric::Float) => ctx.emitter.instruction("pxor xmm0, xmm0"), // an unchecked null binds as float 0.0
+    }
 }
 
 /// Converts a raw scalar operand (left by a pass that retyped the guard's operand) to the
@@ -370,7 +596,7 @@ fn emit_numeric_cold_check(
     done: &str,
     prefix: &str,
     suffix: &str,
-    release: bool,
+    releases: &[crate::ir::ValueId],
 ) -> Result<()> {
     let null_label = ctx.next_label("scalar_param_guard_null");
     let refuse = ctx.next_label("scalar_param_guard_refuse");
@@ -383,7 +609,7 @@ fn emit_numeric_cold_check(
     // operands only the refusal would release stay linked as cleanup owners meanwhile, so
     // that exception releases them too; every exit below unlinks them first.
     let protected: &[crate::ir::ValueId] =
-        if target == Numeric::Int && !strict && release { &inst.operands[1..] } else { &[] };
+        if target == Numeric::Int && !strict { releases } else { &[] };
     let accepted = ctx.next_label("scalar_param_guard_accepted");
     if target == Numeric::Int && !strict {
         // The precision deprecation names the parameter's line (the instruction's span).
@@ -455,7 +681,7 @@ fn emit_numeric_cold_check(
     ctx.emitter.label(&refuse);
     emit_unlink_operand_owners(ctx, protected.len());
     emit_rejected_type_name(ctx, value, &null_label)?;
-    emit_throw_with_name(ctx, prefix, suffix, if release { &inst.operands[1..] } else { &[] })?;
+    emit_throw_with_name(ctx, prefix, suffix, releases)?;
     Ok(())
 }
 
@@ -582,7 +808,7 @@ fn emit_cold_check(
     done: &str,
     prefix: &str,
     suffix: &str,
-    release: bool,
+    releases: &[crate::ir::ValueId],
 ) -> Result<()> {
     let null_label = ctx.next_label("scalar_param_guard_null");
     let name_label = ctx.next_label("scalar_param_guard_name");
@@ -618,7 +844,7 @@ fn emit_cold_check(
     }
     ctx.emitter.label(&name_label);
     emit_rejected_type_name(ctx, value, &null_label)?;
-    emit_throw_with_name(ctx, prefix, suffix, if release { &inst.operands[1..] } else { &[] })?;
+    emit_throw_with_name(ctx, prefix, suffix, releases)?;
     Ok(())
 }
 

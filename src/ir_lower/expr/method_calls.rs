@@ -239,10 +239,17 @@ pub(super) fn lower_method_call(
         .last_mut()
         .expect("call argument scope")
         .live_property_reference_arguments = !args.iter().any(is_spread_arg);
+    // PHP checks the parameters of the method the receiver's runtime class selects.
+    let guard_dispatch = receiver_class.clone().map(|class| super::GuardDispatch::Receiver {
+        receiver: object.value,
+        class,
+        is_static: false,
+    });
     let call_description = receiver_class
         .map(|class_name| super::scalar_param_guards::method_guard_description(ctx, &class_name, dispatch_method, false))
         .unwrap_or_else(|| dispatch_method.to_string());
     let previous_description = ctx.call_description.replace(call_description);
+    let previous_dispatch = std::mem::replace(&mut ctx.call_guard_dispatch, guard_dispatch);
     let previous_call_site = ctx.call_site_span.replace(expr.span);
     let ref_place_rewrite = sig.as_ref().and_then(|signature| {
         super::ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
@@ -254,6 +261,7 @@ pub(super) fn lower_method_call(
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), call_args);
     ctx.scalar_guards_unrecorded = false;
     ctx.call_description = previous_description;
+    ctx.call_guard_dispatch = previous_dispatch;
     ctx.call_site_span = previous_call_site;
     // php-src initializes the reflected class once the arguments are evaluated, whether the
     // static property exists or not.

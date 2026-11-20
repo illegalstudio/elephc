@@ -184,12 +184,34 @@ pub(super) fn lower_static_method_call_bound(
         .map_or(call_args, |rewrite| rewrite.args.as_slice());
     let callee_description = static_receiver_class_name(ctx, receiver)
         .unwrap_or_else(|| receiver_name(receiver).to_string());
+    // Static-call syntax can name an instance method (`parent::m()`); its message names the
+    // class declaring that instance method.
+    let names_static_method = ctx.classes.get(callee_description.trim_start_matches('\\')).is_none_or(|info| {
+        info.static_methods.contains_key(&php_symbol_key(dispatch_method))
+            || !info.methods.contains_key(&php_symbol_key(dispatch_method))
+    });
     let previous_description = ctx.call_description.replace(
-        super::scalar_param_guards::method_guard_description(ctx, &callee_description, dispatch_method, true),
+        super::scalar_param_guards::method_guard_description(ctx, &callee_description, dispatch_method, names_static_method),
     );
+    // `static::` and an object receiver select the method at run time; a named class,
+    // `self::` and `parent::` bind it statically.
+    let guard_dispatch = match (object_receiver, receiver) {
+        (Some(object), _) => super::GuardDispatch::Receiver {
+            receiver: object,
+            class: callee_description.clone(),
+            is_static: names_static_method,
+        },
+        (None, StaticReceiver::Static) => super::GuardDispatch::LateStatic {
+            class: callee_description.clone(),
+            is_static: names_static_method,
+        },
+        _ => super::GuardDispatch::Exact,
+    };
+    let previous_dispatch = ctx.call_guard_dispatch.replace(guard_dispatch);
     let previous_call_site = ctx.call_site_span.replace(expr.span);
     let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
     ctx.call_description = previous_description;
+    ctx.call_guard_dispatch = previous_dispatch;
     ctx.call_site_span = previous_call_site;
     let mut operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);

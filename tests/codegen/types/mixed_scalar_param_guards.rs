@@ -1727,7 +1727,8 @@ echo call_user_func_array([$w, "withQuery"], [$n])->toAsciiString(), "\n";
 /// receiver's static class: PHP binds the override selected at run time, which here accepts
 /// `null` and an `int` (`Child::m(mixed)`, `Other::name(?string)`), through a direct call and
 /// through the callable forms alike. (The overrides print no argument: how a value reaches a
-/// wider override through a parent-typed receiver is #2467.)
+/// wider override through a parent-typed receiver is #2467.) A direct call dispatches on the
+/// receiver's class; the callable forms leave such a method unchecked.
 #[test]
 fn test_scalar_checks_leave_overridden_methods_to_the_selected_override() {
     let output = compile_and_run_with_heap_debug(
@@ -1977,5 +1978,179 @@ echo "next\n";
     );
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "dz\ng 2 20\ndz\ng 2 20\ndz\ng 2 20\nnext\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
+
+/// A `->` call checks the parameter of the method the receiver's runtime class selects, as
+/// PHP does in the callee: an override that keeps `string` names itself (and its parameter),
+/// a subclass inheriting it does too, a wider `?string` override accepts `null`, and a final
+/// subclass that inherits the method keeps the parent's name. These calls used to bind
+/// unchecked because `A::m()` is overridden. (`B::m` prints no argument: #2467.)
+#[test]
+fn test_virtual_call_checks_the_override_the_receiver_selects() {
+    let out = compile_and_run(
+        r#"<?php
+class A { function m(string $s) { echo "A::m(", $s, ")\n"; } }
+class B extends A { function m(?string $s) { echo "B::m\n"; } }
+class C extends A { function m(string $str) { echo "C::m(", $str, ")\n"; } }
+class D extends C {}
+final class E extends A {}
+function call(A $a, mixed $v) {
+    try { $a->m($v); } catch (TypeError $e) { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+}
+function callC(C $c, mixed $v) {
+    try { $c?->m($v); } catch (TypeError $e) { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+}
+foreach ([new A, new B, new C, new D, new E] as $o) {
+    call($o, null);
+    call($o, "x");
+    if (!$o instanceof B) { call($o, [1]); }
+}
+callC(new D, null);
+callC(new C, 5);
+"#,
+    );
+    assert_eq!(out, "A::m(): Argument #1 ($s) must be of type string, null given, called in F on line 8\nA::m(x)\nA::m(): Argument #1 ($s) must be of type string, array given, called in F on line 8\nB::m\nB::m\nC::m(): Argument #1 ($str) must be of type string, null given, called in F on line 8\nC::m(x)\nC::m(): Argument #1 ($str) must be of type string, array given, called in F on line 8\nC::m(): Argument #1 ($str) must be of type string, null given, called in F on line 8\nC::m(x)\nC::m(): Argument #1 ($str) must be of type string, array given, called in F on line 8\nA::m(): Argument #1 ($s) must be of type string, null given, called in F on line 8\nA::m(x)\nA::m(): Argument #1 ($s) must be of type string, array given, called in F on line 8\nC::m(): Argument #1 ($str) must be of type string, null given, called in F on line 11\nC::m(5)\n");
+}
+
+/// `self::`, `parent::`, a named class and `new A()` bind the method statically, so its own
+/// parameter is checked even though a subclass overrides it with a wider one; `parent::m()`
+/// names the class declaring the inherited instance method.
+#[test]
+fn test_statically_bound_calls_check_the_named_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { function m(string $s) { echo "Base::m(", $s, ")\n"; } }
+class A extends Base {
+    static function s(string $s) { echo "A::s(", $s, ")\n"; }
+    function __construct(string $s = "init") { echo "A::__construct(", $s, ")\n"; }
+    static function early(mixed $v) { self::s($v); }
+}
+class B extends A {
+    static function s(?string $s) { echo "B::s\n"; }
+    function m(?string $s) { echo "B::m\n"; }
+    function __construct(?string $s) { echo "B::__construct\n"; }
+    function viaParent(mixed $v) { parent::m($v); }
+    static function viaParentStatic(mixed $v) { parent::s($v); }
+}
+function t(callable $f) { try { $f(); } catch (TypeError $e) { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; } }
+$n = json_decode("null");
+t(fn() => B::early($n));
+t(fn() => A::s($n));
+t(fn() => (new B(null))->viaParent($n));
+t(fn() => B::viaParentStatic($n));
+t(fn() => new A($n));
+t(fn() => B::early("ok"));
+"#,
+    );
+    assert_eq!(out, "A::s(): Argument #1 ($s) must be of type string, null given, called in F on line 6\nA::s(): Argument #1 ($s) must be of type string, null given, called in F on line 18\nB::__construct\nBase::m(): Argument #1 ($s) must be of type string, null given, called in F on line 12\nA::s(): Argument #1 ($s) must be of type string, null given, called in F on line 13\nA::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 21\nA::s(ok)\n");
+}
+
+/// `static::s()` checks the static method of the late-bound called class: the abstract base's
+/// own method, a subclass inheriting it, a wider override accepting `null`, and an override
+/// naming itself and its parameter.
+#[test]
+fn test_late_static_call_checks_the_called_class_method() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class K {
+    static function s(string $s) { echo "K::s(", $s, ")\n"; }
+    static function go(mixed $v) { static::s($v); }
+}
+class A extends K {}
+class B extends K { static function s(?string $s) { echo "B::s\n"; } }
+class C extends K { static function s(string $c) { echo "C::s(", $c, ")\n"; } }
+function t(callable $f) { try { $f(); } catch (TypeError $e) { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; } }
+$n = json_decode("null");
+foreach (["K", "A", "B", "C"] as $class) {
+    t(fn() => $class::go($n));
+    t(fn() => $class::go("x"));
+}
+"#,
+    );
+    assert_eq!(out, "K::s(): Argument #1 ($s) must be of type string, null given, called in F on line 4\nK::s(x)\nK::s(): Argument #1 ($s) must be of type string, null given, called in F on line 4\nK::s(x)\nB::s\nB::s\nC::s(): Argument #1 ($c) must be of type string, null given, called in F on line 4\nC::s(x)\n");
+}
+
+/// A call through an interface (inherited through another interface) checks the implementing
+/// method: its class and parameter name in the `TypeError`, a trait method under the using
+/// class, and the `int` precision deprecation on the selected method's parameter line. An
+/// implementation with a nullable union accepts `null`.
+#[test]
+fn test_interface_call_checks_the_implementation_and_its_parameter_line() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function ($no, $msg, $file, $line) { echo "deprecated: $msg on line $line\n"; return true; });
+interface I { function n(int $n); }
+interface J extends I {}
+class A implements J {
+    function n(int $n) { echo "A::n($n)\n"; }
+}
+class B extends A {
+    function n(
+        int $count
+    ) { echo "B::n($count)\n"; }
+}
+trait T { function n(int $t) { echo static::class, " T::n($t)\n"; } }
+class C extends A { use T; }
+class P implements I { function n(int|string|null $n) { echo "P::n\n"; } }
+function viaI(I $i, mixed $v) { try { $i->n($v); } catch (TypeError $e) { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; } }
+foreach ([new A, new B, new C] as $o) { viaI($o, null); viaI($o, "1.5"); viaI($o, 2.5); viaI($o, "7"); }
+viaI(new P, null);
+"#,
+    );
+    assert_eq!(out, "A::n(): Argument #1 ($n) must be of type int, null given, called in F on line 16\ndeprecated: Implicit conversion from float-string \"1.5\" to int loses precision on line 6\nA::n(1)\ndeprecated: Implicit conversion from float 2.5 to int loses precision on line 6\nA::n(2)\nA::n(7)\nB::n(): Argument #1 ($count) must be of type int, null given, called in F on line 16\ndeprecated: Implicit conversion from float-string \"1.5\" to int loses precision on line 10\nB::n(1)\ndeprecated: Implicit conversion from float 2.5 to int loses precision on line 10\nB::n(2)\nB::n(7)\nC::n(): Argument #1 ($t) must be of type int, null given, called in F on line 16\ndeprecated: Implicit conversion from float-string \"1.5\" to int loses precision on line 13\nC T::n(1)\ndeprecated: Implicit conversion from float 2.5 to int loses precision on line 13\nC T::n(2)\nC T::n(7)\nP::n\n");
+}
+
+/// Under `strict_types=1` the selected override decides too: an `int` is refused by the
+/// `string` methods (named after the runtime class's method) and accepted by a wider one.
+#[test]
+fn test_virtual_call_checks_the_selected_override_under_strict_types() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+class A { function m(string $s) { echo "A::m(", $s, ")\n"; } }
+class B extends A { function m(int|string $s) { echo "B::m\n"; } }
+class C extends A { function m(string $s) { echo "C::m(", $s, ")\n"; } }
+function call(A $a, mixed $v) {
+    try { $a->m($v); } catch (TypeError $e) { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+}
+foreach ([new A, new B, new C] as $o) { call($o, 5); call($o, "s"); }
+"#,
+    );
+    assert_eq!(out, "A::m(): Argument #1 ($s) must be of type string, int given, called in F on line 7\nA::m(s)\nB::m\nB::m\nC::m(): Argument #1 ($s) must be of type string, int given, called in F on line 7\nC::m(s)\n");
+}
+
+/// A refusal selected by the receiver's class releases the call's other owned arguments and the
+/// refused box like the statically named one: overrides that rename the parameter
+/// (`B::n($count)`, `C::m($c)`) throw from the dispatched cold path, under the heap-debug
+/// allocator.
+#[test]
+fn test_override_selected_refusal_releases_the_call_arguments() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+class A {
+    function m(string $s, array $a): int { return 1; }
+    function n(int $n, array $a): int { return 1; }
+}
+class B extends A { function n(int $count, array $a): int { return 2; } }
+class C extends A { function m(string $c, array $a): int { return 3; } }
+$objects = [new A, new B, new C];
+$null = box(null);
+$n = 0;
+for ($i = 0; $i < 3; $i++) {
+    foreach ($objects as $o) {
+        try { $n += $o->m($null, [str_repeat("a", 40 + $i)]); } catch (TypeError $e) { $n += 10; }
+        try { $n += $o->m(box([$i]), [str_repeat("b", 40)]); } catch (TypeError $e) { $n += 100; }
+        try { $n += $o->n(box(null), [str_repeat("c", 40)]); } catch (TypeError $e) { $n += 1000; }
+        try { $n += $o->n(box("7"), [str_repeat("d", 40)]); } catch (TypeError $e) { $n += 10000; }
+        try { $n += $o->m(box("s"), [str_repeat("e", 40)]); } catch (TypeError $e) { $n += 100000; }
+    }
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "10017\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
