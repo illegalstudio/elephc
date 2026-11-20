@@ -174,8 +174,17 @@ pub(crate) fn diagnostic_override<T: SourceToken>(
     if raw_message == "Expected '=' after constant name" {
         return Some(with_expectation(mapped.clone(), "\"=\""));
     }
-    if raw_message == "Expected '::' after 'static' in foreach target" {
-        return Some(with_expectation(mapped.clone(), "\"::\""));
+    let static_arrow_target = raw_message == "Expected '::' after 'static' in foreach target";
+    if static_arrow_target || raw_message == "Unexpected arrow function in foreach target" {
+        let diagnostic = ValidationError {
+            message: "syntax error, unexpected token \"fn\"".into(),
+            ..mapped.clone()
+        };
+        return Some(if static_arrow_target {
+            with_expectation(diagnostic, "\"::\"")
+        } else {
+            diagnostic
+        });
     }
     if raw_message.starts_with("Expected parent class name after 'extends'") {
         return Some(match token_after_keyword(tokens, mapped.pos, tok::T_EXTENDS) {

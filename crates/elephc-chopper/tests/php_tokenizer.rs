@@ -629,6 +629,8 @@ fn parse_message_corpus() -> Vec<Vec<u8>> {
         "<?php foreach ($a as fn(): (A&B)|C => &readonly()) {}",
         "<?php foreach ($a as fn(): int => &($b)[0]) {}",
         "<?php foreach ($a as static fn(): int => &$b) {}",
+        "<?php foreach ($a as FN() => &$b) {}",
+        "<?php foreach ($a as STATIC fN() => &$b) {}",
         "<?php foreach ($a as $k => [fn() => &$v]) {}",
         "<?php foreach ($a as $k => &$v) {}",
         "<?php foreach ($a as (fn() => 1)[0]) {}",
