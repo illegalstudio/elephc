@@ -199,12 +199,11 @@ pub(crate) fn invalid_array_reference_error<T: SourceToken>(
         let Some(target) = next_significant_index(tokens, index) else {
             return Some(end_of_file_expecting(source.len(), None));
         };
-        // The parser view checks a grouped target's postfix chain and readonly's call
-        // delimiter. A generic bad-start error would mask those more precise diagnostics.
-        if tokens[target].id() != i64::from(b'(')
-            && tokens[target].id() != tok::T_READONLY
-            && !reference_target_starts_at(tokens, target)
-        {
+        // The parser view checks these targets without hiding syntax errors inside them.
+        if tokens[target].id() == i64::from(b'(') || tokens[target].id() == tok::T_READONLY {
+            continue;
+        }
+        if !reference_target_starts_at(tokens, target) {
             return Some(token_error_at(source, tokens, tokens[target].pos()));
         }
         let mut depth = 0usize;
@@ -282,7 +281,6 @@ fn reference_chain_base_token(id: i64) -> bool {
         || id == tok::T_NAME_QUALIFIED
         || id == tok::T_NAME_RELATIVE
         || id == tok::T_STATIC
-        || id == tok::T_READONLY
         || id == i64::from(b'\\')
         || id == i64::from(b'$')
         || id == tok::T_DOUBLE_COLON
@@ -307,36 +305,34 @@ fn reference_chain_error<T: SourceToken>(
     )
 }
 
-/// Checks that the semi-reserved `readonly` keyword opens a function call in a reference.
-pub(super) fn readonly_reference_error<T: SourceToken>(
-    source: &[u8],
-    tokens: &[T],
-    target: usize,
-    end_pos: usize,
-) -> Option<ValidationError> {
-    let after = next_significant_index(tokens, target);
-    if after.is_some_and(|after| tokens[after].id() == i64::from(b'(')) {
-        return None;
-    }
-    Some(reference_expectation_error(source, tokens, after, end_pos, "\"(\""))
-}
-
-/// Checks a grouped reference's postfix chain without parsing any nested expression twice.
+/// Checks the postfix chain of a grouped reference or a reference to a `readonly()` call.
 ///
 /// A group or class constant needs another dereference. A call, index, object member or
 /// static variable can finish the chain. The shared parser still validates the expressions
 /// inside the skipped delimiters and the expression following a valid reference.
-pub(super) fn grouped_reference_error<T: SourceToken>(
+pub(super) fn normalized_reference_error<T: SourceToken>(
     source: &[u8],
     tokens: &[T],
     target: usize,
     close_of: &[Option<usize>],
     assignment: bool,
     end_pos: usize,
-) -> Option<ValidationError> {
-    let close = close_of[target].filter(|&close| tokens[close].id() == i64::from(b')'))?;
+) -> Option<ReferenceError> {
+    let mut referenceable = tokens[target].id() == tok::T_READONLY;
+    let open = if referenceable {
+        let after = next_significant_index(tokens, target);
+        let Some(open) = after.filter(|&open| tokens[open].id() == i64::from(b'(')) else {
+            return Some(ReferenceError {
+                diagnostic: reference_expectation_error(source, tokens, after, end_pos, "\"(\""),
+                readonly_pos: Some(tokens[target].pos()),
+            });
+        };
+        open
+    } else {
+        target
+    };
+    let close = close_of[open].filter(|&close| tokens[close].id() == i64::from(b')'))?;
     let mut next = next_significant_index(tokens, close);
-    let mut referenceable = false;
     while let Some(index) = next {
         let operator = tokens[index].id();
         let end = match operator {
@@ -369,21 +365,32 @@ pub(super) fn grouped_reference_error<T: SourceToken>(
         };
         next = next_significant_index(tokens, end);
     }
-    if !referenceable {
-        return Some(reference_expectation_error(
-            source,
-            tokens,
-            next,
-            end_pos,
-            REFERENCE_CONTINUATION,
-        ));
+    if !referenceable
+        || (!assignment && next.is_some_and(|next| {
+            let id = tokens[next].id();
+            id != i64::from(b',') && id != i64::from(b']') && id != i64::from(b')')
+        }))
+    {
+        return Some(ReferenceError {
+            diagnostic: reference_expectation_error(
+                source,
+                tokens,
+                next,
+                end_pos,
+                REFERENCE_CONTINUATION,
+            ),
+            readonly_pos: None,
+        });
     }
     let next = next?;
     let token = &tokens[next];
     if assignment
         && invalid_reference_assignment_continuation(&source[token.pos()..token.pos() + token.len()])
     {
-        return Some(unexpected_token_at(source, token.pos(), token.len(), None));
+        return Some(ReferenceError {
+            diagnostic: unexpected_token_at(source, token.pos(), token.len(), None),
+            readonly_pos: None,
+        });
     }
     None
 }
@@ -1204,7 +1211,7 @@ pub(crate) fn expression_slice_error<T: SourceToken>(
         Err(error) => {
             let view_pos = view_offset(&view, &lines, error.span.line, error.span.col);
             let error = token_error_at(source, tokens, map_position(view_pos));
-            return Some(earlier_error(source, reference_error, error));
+            return prefer_reference_error(Some(error), reference_error);
         }
     };
     let mut position = usize::from(
@@ -1227,14 +1234,16 @@ pub(crate) fn expression_slice_error<T: SourceToken>(
     // reports the `;` and `${1 2}` reports the `2`.
     let error = match parsed {
         Ok(_) => match view_tokens.get(position) {
-            Some((crate::syntax::lexer::Token::Eof, _)) | None => return reference_error,
+            Some((crate::syntax::lexer::Token::Eof, _)) | None => {
+                return prefer_reference_error(None, reference_error);
+            }
             Some((_, metadata)) => metadata.span,
         },
         Err(error) => error.span,
     };
     let view_pos = view_offset(&view, &lines, error.line, error.col);
     let error = token_error_at(source, tokens, map_position(view_pos));
-    Some(earlier_error(source, reference_error, error))
+    prefer_reference_error(Some(error), reference_error)
 }
 
 /// Finds the `)` matching the `(` at `open`, counting nested parentheses.

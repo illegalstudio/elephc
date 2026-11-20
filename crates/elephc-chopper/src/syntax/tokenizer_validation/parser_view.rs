@@ -13,11 +13,11 @@ use std::cell::OnceCell;
 use super::*;
 
 /// Builds the PHP-only parser view, its source map and any error in a normalized reference.
-pub(crate) fn parser_view<T: SourceToken>(
+pub(super) fn parser_view<T: SourceToken>(
     source: &[u8],
     tokens: &[T],
     end_pos: usize,
-) -> (String, Vec<u32>, Option<ValidationError>) {
+) -> (String, Vec<u32>, Option<ReferenceError>) {
     let mut view = Vec::with_capacity(source.len() + 8);
     let mut map = Vec::with_capacity(source.len() + 8);
     append_mapped(&mut view, &mut map, b"<?php ", 0);
@@ -33,9 +33,9 @@ pub(crate) fn parser_view<T: SourceToken>(
     // followed by a single-statement body, and which closing tokens proved that.
     let mut control_parens: Vec<bool> = Vec::new();
     let mut control_close = vec![false; tokens.len()];
-    // Build the delimiter map only if a grouped reference target needs it.
+    // Build the delimiter map only if a normalized reference target needs it.
     let reference_closes = OnceCell::new();
-    let mut reference_error: Option<ValidationError> = None;
+    let mut reference_error: Option<ReferenceError> = None;
     while index < tokens.len() {
         let token = &tokens[index];
         match token.id() {
@@ -93,21 +93,19 @@ pub(crate) fn parser_view<T: SourceToken>(
                 if target_id != i64::from(b'(') && target_id != tok::T_READONLY {
                     return reference_target_starts_at(tokens, target);
                 }
-                if reference_error.as_ref().is_none_or(|error| token.pos() < error.pos) {
-                    let error = if target_id == tok::T_READONLY {
-                        readonly_reference_error(source, tokens, target, end_pos)
-                    } else {
-                        grouped_reference_error(
-                            source,
-                            tokens,
-                            target,
-                            reference_closes.get_or_init(|| delimiter_close_indices(tokens)),
-                            previous_significant == i64::from(b'='),
-                            end_pos,
-                        )
-                    };
+                if reference_error.as_ref().is_none_or(|error| token.pos() < error.diagnostic.pos) {
+                    let error = normalized_reference_error(
+                        source,
+                        tokens,
+                        target,
+                        reference_closes.get_or_init(|| delimiter_close_indices(tokens)),
+                        previous_significant == i64::from(b'='),
+                        end_pos,
+                    );
                     if let Some(error) = error {
-                        if reference_error.as_ref().is_none_or(|previous| error.pos < previous.pos) {
+                        if reference_error.as_ref().is_none_or(|previous| {
+                            error.diagnostic.pos < previous.diagnostic.pos
+                        }) {
                             reference_error = Some(error);
                         }
                     }

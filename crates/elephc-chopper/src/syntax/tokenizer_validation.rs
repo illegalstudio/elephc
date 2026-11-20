@@ -288,6 +288,13 @@ pub struct ValidationFeedback {
     pub warnings: Vec<ValidationWarning>,
 }
 
+/// A reference diagnostic found before its marker is removed from the parser view.
+struct ReferenceError {
+    diagnostic: ValidationError,
+    /// A non-call `readonly` keyword can cause an artificial parser error here.
+    readonly_pos: Option<usize>,
+}
+
 /// Validates PHP source and returns identifier feedback or the first PHP-style parse error.
 pub fn validate<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationFeedback {
     crate::syntax::parser::with_tokenizer_validation(|| validate_in_scope(source, tokens))
@@ -319,10 +326,6 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
     // Precheck errors are only authoritative when they happen before the main parser's
     // failure: `echo ;` followed by `${1+}` must report the earlier `echo` error.
     let (view, map, reference_error) = parser_view(source, tokens, source.len());
-    let precheck = match (precheck, reference_error) {
-        (Some(precheck), Some(reference)) if precheck.pos < reference.pos => Some(precheck),
-        (precheck, reference) => reference.or(precheck),
-    };
     let view_tokens = match crate::syntax::lexer::tokenize(&view) {
         Ok(tokens) => tokens,
         Err(error) => {
@@ -335,7 +338,10 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
             };
             return ValidationFeedback {
                 names: Vec::new(),
-                error: Some(earlier_error(source, precheck, view_error)),
+                error: prefer_reference_error(
+                    Some(earlier_error(source, precheck, view_error)),
+                    reference_error,
+                ),
                 warnings: encoding_warnings,
             };
         }
@@ -343,7 +349,7 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
     let (result, names) = crate::syntax::parser::parse_with_tokenizer_feedback(&view_tokens);
     match result {
         Ok(_) => {
-            if let Some(precheck) = precheck {
+            if let Some(precheck) = prefer_reference_error(precheck, reference_error) {
                 return ValidationFeedback {
                     names: Vec::new(),
                     error: Some(precheck),
@@ -374,10 +380,27 @@ fn validate_in_scope<T: SourceToken>(source: &[u8], tokens: &[T]) -> ValidationF
                 .unwrap_or(mapped);
             ValidationFeedback {
                 names: Vec::new(),
-                error: Some(earlier_error(source, precheck, error)),
+                error: prefer_reference_error(
+                    Some(earlier_error(source, precheck, error)),
+                    reference_error,
+                ),
                 warnings: encoding_warnings,
             }
         },
+    }
+}
+
+/// Preserves parser errors inside a reference base while refining a rejected `readonly` name.
+fn prefer_reference_error(
+    error: Option<ValidationError>,
+    reference: Option<ReferenceError>,
+) -> Option<ValidationError> {
+    match reference {
+        Some(reference) if error.as_ref().is_none_or(|error| {
+            reference.diagnostic.pos <= error.pos
+                || (!error.lexical && reference.readonly_pos == Some(error.pos))
+        }) => Some(reference.diagnostic),
+        _ => error,
     }
 }
 
