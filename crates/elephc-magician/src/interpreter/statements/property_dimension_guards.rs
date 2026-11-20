@@ -326,3 +326,19 @@ pub(super) fn type_label(ty: &EvalParameterType, owner: &str, context: &ElephcEv
     }
     Ok(label)
 }
+
+/// Recognizes an initialized physical property whose read cannot invoke a getter or magic handler.
+pub(in crate::interpreter) fn supports_source_guard(object: RuntimeCellHandle, property: &str,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let Some(slot) = slot(object, property, context, values)? else { return Ok(false); };
+    if let Ok(identity) = values.object_identity(object) {
+        if let Some((owner, declared)) = context.dynamic_object_class(identity)
+            .and_then(|class| eval_dynamic_property_for_access(class.name(), property, context)) {
+            let storage = eval_instance_property_storage_name(&owner, &declared);
+            return Ok(context.dynamic_property_is_initialized(identity, &storage));
+        }
+    }
+    eval_with_native_property_storage_scope(&slot.owner, property, context, values,
+        |values| values.property_is_initialized(object, property))
+}

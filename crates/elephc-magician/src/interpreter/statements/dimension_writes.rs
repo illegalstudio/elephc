@@ -113,6 +113,11 @@ fn resolve(
 ) -> Result<ResolvedValue, EvalStatus> {
     let source;
     let current = match plan {
+        PreparedWriteReceiver::Guarded(plan, expr) => {
+            let mut resolved = resolve(*plan, parents, owners, mode, dimension_container, context, scope, values)?;
+            resolved.source = mixed_guards::projection_source(expr, context, scope).as_ref().map(crate::eval_ir::generic_type).or(resolved.source);
+            return Ok(resolved);
+        }
         PreparedWriteReceiver::Late(EvalExpr::LoadVar(name)) => {
             let current = match visible_scope_cell(context, scope, name) {
                 Some(cell) => values.retain(cell)?,

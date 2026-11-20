@@ -157,12 +157,21 @@ struct LocalArgumentSource {
     source: crate::source_snapshot::SourceSnapshot,
 }
 
+/// Stable roots whose lifetime is provided by the activation or its class registry.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum GuardRoot { Variable(String), Static(String) }
+
+/// Distinct physical property and semantic array-key projections.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum GuardSelector { Property(String), Index(crate::context::EvalArrayReferenceKey) }
+
 /// Materialized activation scope passed opaquely across the eval ABI.
 pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
     local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     inferred_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     local_source_views: HashMap<String, LocalSourceView>,
+    projection_source_views: HashMap<(GuardRoot, GuardSelector), LocalSourceView>,
     local_argument_sources: HashMap<String, LocalArgumentSource>,
     array_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_storage_types: HashMap<String, crate::eval_ir::EvalParameterType>,
@@ -183,6 +192,7 @@ impl ElephcEvalScope {
             local_types: HashMap::new(),
             inferred_local_types: HashMap::new(),
             local_source_views: HashMap::new(),
+            projection_source_views: HashMap::new(),
             local_argument_sources: HashMap::new(),
             array_local_types: HashMap::new(),
             native_storage_types: HashMap::new(),
@@ -644,6 +654,7 @@ impl ElephcEvalScope {
         self.inferred_local_types.clear();
         self.array_local_types.clear();
         self.local_source_views.clear();
+        self.projection_source_views.clear();
         self.local_argument_sources.clear();
         self.native_binding_types.clear();
         self.aot_visible_names.clear();
@@ -701,3 +712,33 @@ impl Default for ElephcEvalScope {
 
 #[cfg(test)]
 mod tests;
+
+impl ElephcEvalScope {
+    /// Identifies the lifetime of a projection root without retaining its PHP value.
+    pub(crate) fn guard_root_generation(&self, root: &GuardRoot) -> Option<u64> {
+        match root {
+            GuardRoot::Variable(name) => self.entry(name).filter(|entry| entry.flags().is_visible()).map(|entry| entry.generation()),
+            GuardRoot::Static(_) => Some(0),
+        }
+    }
+
+    /// Publishes a predicate observation only on the same root generation observed before evaluation.
+    pub(crate) fn record_projection_source(&mut self, root: GuardRoot, selector: GuardSelector,
+        generation: u64, epoch: u64, ty: crate::eval_ir::EvalParameterType,
+    ) {
+        if self.guard_root_generation(&root) == Some(generation) {
+            self.projection_source_views.insert((root, selector), LocalSourceView {
+                generation, write_epoch: epoch, ty, predicate_guard: true,
+            });
+        }
+    }
+
+    /// Gives reached predicates precedence while root replacement and possible effects retire them.
+    pub(crate) fn projection_source(&self, root: &GuardRoot, selector: &GuardSelector,
+        context: &crate::context::ElephcEvalContext,
+    ) -> Option<&crate::eval_ir::EvalParameterType> {
+        let view = self.projection_source_views.get(&(root.clone(), selector.clone()))?;
+        (self.guard_root_generation(root) == Some(view.generation) && view.write_epoch == context.source_view_epoch())
+            .then_some(&view.ty)
+    }
+}

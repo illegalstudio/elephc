@@ -183,3 +183,5 @@ mod strict_nested_array_origins;
 mod strict_pending_member_consumers;
 
 mod strict_write_source_domains;
+
+mod strict_pending_admission_surfaces;

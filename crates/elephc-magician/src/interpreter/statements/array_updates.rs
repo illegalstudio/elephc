@@ -92,7 +92,10 @@ pub(in crate::interpreter) fn eval_release_value(
 ) -> Result<(), EvalStatus> {
     let destructor = values.final_object_identity_for_release(value).and_then(|identity| {
         match identity {
-            Some(identity) => eval_dynamic_destructor_for_release(identity, value, context, values),
+            Some(identity) => {
+                context.invalidate_member_source_views();
+                eval_dynamic_destructor_for_release(identity, value, context, values)
+            },
             None => Ok(()),
         }
     });

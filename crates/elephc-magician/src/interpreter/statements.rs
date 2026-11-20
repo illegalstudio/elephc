@@ -60,6 +60,7 @@ mod static_property_access;
 mod trait_declarations;
 
 use super::*;
+pub(in crate::interpreter) use property_dimension_guards::supports_source_guard;
 pub(in crate::interpreter) use property_reference_owners::{
     eval_property_reference_for_access, eval_static_property_reference_after_read,
 };

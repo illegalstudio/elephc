@@ -279,6 +279,7 @@ pub(in crate::interpreter) fn eval_condition(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    let projection = mixed_guards::prepare(expr, context, scope, values)?;
     let (value,source)=if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
         mixed_eval::evaluate(expr,context,scope,values)?
     } else {(eval_owned_expr(expr,context,scope,values)?,None)};
@@ -288,6 +289,7 @@ pub(in crate::interpreter) fn eval_condition(
     let released = eval_release_value(context, values, value);
     let result = result.and_then(|result| released.map(|()| result))?;
     mixed_guards::record(expr, result, context, scope);
+    mixed_guards::record_projection(projection, result, context, scope);
     Ok(result)
 }
 

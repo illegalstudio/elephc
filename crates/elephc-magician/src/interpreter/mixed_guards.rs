@@ -11,6 +11,8 @@
 use super::*;
 use elephc_generics::Type;
 use crate::eval_ir::{generic_type, parameter_type};
+mod places;
+pub(super) use places::{prepare, record as record_projection, source as projection_source};
 
 /// Records the observed branch fact while retaining unrelated producer obligations.
 pub(super) fn record(condition: &EvalExpr, truthy: bool,
@@ -20,24 +22,8 @@ pub(super) fn record(condition: &EvalExpr, truthy: bool,
     if let EvalExpr::Unary { op: EvalUnaryOp::LogicalNot, expr } = condition {
         record(expr, !truthy, context, scope); return;
     }
-    let (name, fallback, args) = match condition {
-        EvalExpr::Call { name, args } => (name, None, args),
-        EvalExpr::NamespacedCall { name, fallback_name, args } => (name, Some(fallback_name.as_str()), args),
-        _ => return,
-    };
-    if args.len() != 1 { return; }
-    let Some(contract) = local_binding_origins::selected_call_builtin(name, fallback, context) else { return; };
-    let EvalExpr::LoadVar(name) = args[0].value() else { return; };
-    let target = match contract.name {
-        "is_int" | "is_integer" | "is_long" => Type::atom("int"),
-        "is_float" | "is_double" | "is_real" => Type::atom("float"),
-        "is_bool" => Type::atom("bool"), "is_string" => Type::atom("string"),
-        "is_array" => Type::atom("array"), "is_object" => Type::atom("object"),
-        "is_null" => Type::atom("null"), "is_callable" => Type::atom("callable"),
-        "is_iterable" => Type::atom("iterable"),
-        "is_resource" => Type::atom(elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC),
-        _ => return,
-    };
+    let Some((argument, target)) = predicate(condition, context) else { return; };
+    let EvalExpr::LoadVar(name) = argument else { return; };
     let source = if truthy { Some(target) } else {
         local_binding_origins::source_view(&EvalExpr::LoadVar(name.clone()), context, scope)
             .as_ref().and_then(|source| exclude(generic_type(source), &target))
@@ -57,4 +43,26 @@ fn exclude(source: Type, target: &Type) -> Option<Type> {
         Type::Nullable(inner) => exclude(Type::Union(vec![*inner, Type::atom("null")]), target),
         _ => None,
     }
+}
+
+/// Selects only reached catalog predicates, respecting namespace fallback and user shadowing.
+fn predicate<'a>(condition: &'a EvalExpr, context: &ElephcEvalContext) -> Option<(&'a EvalExpr, Type)> {
+    let (name, fallback, args) = match condition {
+        EvalExpr::Call { name, args } => (name, None, args),
+        EvalExpr::NamespacedCall { name, fallback_name, args } => (name, Some(fallback_name.as_str()), args),
+        _ => return None,
+    };
+    if args.len() != 1 { return None; }
+    let Some(contract) = local_binding_origins::selected_call_builtin(name, fallback, context) else { return None; };
+    let target = match contract.name {
+        "is_int" | "is_integer" | "is_long" => Type::atom("int"),
+        "is_float" | "is_double" | "is_real" => Type::atom("float"),
+        "is_bool" => Type::atom("bool"), "is_string" => Type::atom("string"),
+        "is_array" => Type::atom("array"), "is_object" => Type::atom("object"),
+        "is_null" => Type::atom("null"), "is_callable" => Type::atom("callable"),
+        "is_iterable" => Type::atom("iterable"),
+        "is_resource" => Type::atom(elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC),
+        _ => return None,
+    };
+    Some((args[0].value(), target))
 }

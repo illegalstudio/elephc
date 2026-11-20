@@ -526,6 +526,7 @@ impl ElephcEvalContext {
         identity: u64,
         storage_property_name: &str,
     ) {
+        self.invalidate_member_source_views();
         self.dynamic_initialized_properties
             .remove(&(identity, storage_property_name.to_string()));
         self.dynamic_property_array_types.remove(&(identity, storage_property_name.to_string()));

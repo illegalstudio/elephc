@@ -39,6 +39,13 @@ impl ElephcEvalContext {
     /// Stamps a source snapshot after its expression effects have finished.
     pub(crate) fn source_view_epoch(&self) -> u64 { SOURCE_VIEW_EPOCH.load(Ordering::Relaxed) }
 
+    /// Retires projection facts before an operation can mutate physical members or execute user code.
+    pub(crate) fn invalidate_member_source_views(&mut self) {
+        if self.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+            self.source_view_epoch = next_source_view_epoch();
+        }
+    }
+
     /// Tests only writes to this source, so unrelated reference stores preserve its alternatives.
     pub(crate) fn source_view_is_current(&self, cell: RuntimeCellHandle, epoch: u64) -> bool {
         self.source_view_writes.get(&(cell.as_ptr() as usize))

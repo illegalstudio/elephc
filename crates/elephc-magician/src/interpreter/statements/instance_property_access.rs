@@ -268,6 +268,7 @@ fn set_property_with_source(object: RuntimeCellHandle, property_name: &str, valu
     source: MemberWriteSource<'_>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     validate_property_write_receiver(object, property_name, "assign", context, values)?;
+    context.invalidate_member_source_views();
     let Ok(identity) = values.object_identity(object) else {
         return values.property_set(object, property_name, value);
     };
@@ -742,6 +743,7 @@ pub(super) fn eval_property_reference_bind_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    context.invalidate_member_source_views();
     let identity = values.object_identity(object)?;
     let class = context
         .dynamic_object_class(identity)

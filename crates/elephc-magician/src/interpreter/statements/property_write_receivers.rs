@@ -14,6 +14,7 @@ use super::property_dimension_writes::DimensionProperty;
 
 /// A receiver traversal with computed operands captured before the assignment RHS.
 pub(super) enum PreparedWriteReceiver<'a> {
+    Guarded(Box<Self>, &'a EvalExpr),
     Late(&'a EvalExpr),
     Value(RuntimeCellHandle, Option<elephc_generics::Type>),
     Static { class: String, property: String },
@@ -34,7 +35,7 @@ pub(super) fn prepare_property_write_receiver<'a>(
     expr: &'a EvalExpr, owners: &mut Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<PreparedWriteReceiver<'a>, EvalStatus> {
-    Ok(match expr {
+    let plan = match expr {
         EvalExpr::LoadVar(_) | EvalExpr::StaticPropertyGet { .. } => PreparedWriteReceiver::Late(expr),
         EvalExpr::DynamicStaticPropertyGet { class_name, property } => {
             let class = eval_owned_expr(class_name, context, scope, values)?;
@@ -66,7 +67,11 @@ pub(super) fn prepare_property_write_receiver<'a>(
             owners.push(value);
             PreparedWriteReceiver::Value(value, source)
         }
-    })
+    };
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+        && matches!(expr, EvalExpr::PropertyGet { .. } | EvalExpr::StaticPropertyGet { .. } | EvalExpr::ArrayGet { .. }) {
+        Ok(PreparedWriteReceiver::Guarded(Box::new(plan), expr))
+    } else { Ok(plan) }
 }
 
 /// Fetches unset properties for write while keeping every dimension hop non-creating and quiet.
@@ -111,6 +116,11 @@ fn finish_receiver(
     unset: bool, as_object: bool,
 ) -> Result<(RuntimeCellHandle, Option<elephc_generics::Type>), EvalStatus> {
     let (value, source) = match plan {
+        PreparedWriteReceiver::Guarded(plan, expr) => {
+            let (value, source) = finish_receiver(*plan, owners, context, scope, values, unset, as_object)?;
+            let source = mixed_guards::projection_source(expr, context, scope).as_ref().map(crate::eval_ir::generic_type).or(source);
+            return Ok((value, source));
+        }
         PreparedWriteReceiver::Late(expr) => return evaluate_receiver_source(expr, context, scope, values),
         PreparedWriteReceiver::Value(value, source) => return values.retain(value).map(|value| (value, source)),
         PreparedWriteReceiver::Static { class, property } => {

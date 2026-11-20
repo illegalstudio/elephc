@@ -427,6 +427,7 @@ impl ElephcEvalContext {
 
     /// Pushes an eval-executed function name for magic-constant resolution.
     pub fn push_function(&mut self, name: impl Into<String>) {
+        self.invalidate_member_source_views();
         self.function_stack.push(name.into());
     }
 

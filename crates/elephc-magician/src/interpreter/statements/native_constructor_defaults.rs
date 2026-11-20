@@ -75,6 +75,7 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
         values,
     )?;
     let result = with_runtime_owners(&bound_args, || {
+        context.invalidate_member_source_views();
         let result = if let Some(scope) = bridge_scope.as_deref() {
             eval_with_native_bridge_scope(scope, context, values, |values| {
                 values.construct_object(object, native_bound_arg_values(&bound_args))

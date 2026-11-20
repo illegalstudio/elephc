@@ -157,6 +157,22 @@ pub(in crate::interpreter) fn eval_preflight_property_reference_source(
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) && property.property_type().is_some() {
+        let value = match visible_scope_cell(context, scope, source) {
+            Some(value) => value,
+            None => {
+                let value = values.null()?;
+                for previous in set_owned_scope_cell(context, scope, source.to_string(), value, values)? {
+                    eval_release_value(context, values, previous)?;
+                }
+                value
+            }
+        };
+        let expression = EvalExpr::LoadVar(source.to_string());
+        let packet = local_binding_origins::argument_source(&expression, context, scope).or_else(||
+            local_binding_origins::source_view(&expression, context, scope).map(|ty| ArgumentSource::capture(ty, context)));
+        MemberWriteSource::Evaluated(packet.as_ref()).validate(property.property_type(), owner, owner, value, context, values)?;
+    }
     if context.current_function().is_some() || scope.reference_target(source).is_some()
         || !property.property_type().is_some_and(|ty| eval_nonnull_object_boundary(ty)
             || context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)

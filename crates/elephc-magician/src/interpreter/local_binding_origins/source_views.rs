@@ -46,7 +46,9 @@ pub(in crate::interpreter) fn source_view(expr: &EvalExpr,
 ) -> Option<EvalParameterType> {
     if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
         && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { return None; }
+    if let Some(ty) = mixed_guards::projection_source(expr, context, scope) { return Some(ty); }
     match expr {
+        EvalExpr::LoadVar(name) if name == "GLOBALS" && scope.entry(name).is_none() => Some(parameter_type(&Type::atom("array"))),
         EvalExpr::LoadVar(name) if name == "this"
             && scope.entry(name).is_some_and(|entry| entry.flags().is_visible()) => {
             context.current_called_class_scope().filter(|name| !name.is_empty())

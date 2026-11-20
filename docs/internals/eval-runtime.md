@@ -1086,3 +1086,11 @@ open rather than acquiring a storage-derived key/element constraint. Native
 instance/static field contents are checked before storage publication and their
 physical declarations feed the shared element-write planner. The compact legacy
 registration grammar remains accepted for existing producers.
+
+Mixed catalog predicates can narrow stable physical properties and literal
+integer/string array projections. Facts belong to the activation's root binding,
+not a global value-handle proof map. Root generations and observation epochs
+retire them after replacements, member effects, calls or shared writes. Getter,
+magic and ArrayAccess results remain separate values and require their own local
+narrowing. Prepared mutable receivers consult reached facts after RHS effects.
+Member reference binds validate the original source before hidden alias setup.

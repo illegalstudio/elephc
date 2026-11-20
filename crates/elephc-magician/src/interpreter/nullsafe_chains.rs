@@ -62,13 +62,15 @@ pub(super) fn evaluate_with_source(
         let result=match expr {
             EvalExpr::PropertyGet {property,..}|EvalExpr::NullsafePropertyGet {property,..}=> {
                 source_types::receiver(expr,source.as_ref(),nullsafe,quiet,context,values)?;
-                let source=source_types::property(object,property,context,values)?;
+                let source=mixed_guards::projection_source(expr,context,scope).as_ref().map(crate::eval_ir::generic_type)
+                    .or(source_types::property(object,property,context,values)?);
                 property_value(object,property,quiet,context,values).map(|value|(value,source))
             }
             EvalExpr::DynamicPropertyGet {property,..}|EvalExpr::NullsafeDynamicPropertyGet {property,..}=> {
                 let property=eval_dynamic_member_name(property,context,scope,values)?;
                 source_types::receiver(expr,source.as_ref(),nullsafe,quiet,context,values)?;
-                let source=source_types::property(object,&property,context,values)?;
+                let source=mixed_guards::projection_source(expr,context,scope).as_ref().map(crate::eval_ir::generic_type)
+                    .or(source_types::property(object,&property,context,values)?);
                 property_value(object,&property,quiet,context,values).map(|value|(value,source))
             }
             EvalExpr::ArrayGet {index,..}=> {
@@ -79,7 +81,8 @@ pub(super) fn evaluate_with_source(
                     if quiet {eval_array_get_quiet_result(object,index,context,values)}
                     else {eval_array_get_result(object,index,context,values)});
                 finish_eval_argument_values(result,[index],context,values)
-                    .map(|value|(value,source.as_ref().and_then(local_binding_origins::declared_offset_result)))
+                    .map(|value|(value,mixed_guards::projection_source(expr,context,scope).as_ref().map(crate::eval_ir::generic_type)
+                        .or_else(||source.as_ref().and_then(local_binding_origins::declared_offset_result))))
             }
             EvalExpr::MethodCall {method,args,..}|EvalExpr::NullsafeMethodCall {method,args,..}=> {
                 source_types::receiver(expr,source.as_ref(),nullsafe,quiet,context,values)?;

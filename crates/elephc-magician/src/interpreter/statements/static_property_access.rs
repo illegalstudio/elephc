@@ -575,6 +575,7 @@ pub(super) fn eval_static_property_reference_bind_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    context.invalidate_member_source_views();
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
     if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
         if !property.is_static() {
@@ -826,6 +827,7 @@ pub(in crate::interpreter) fn eval_array_static_property_set_result(class: &str,
 fn set_static_property_with_source(class_name: &str, property_name: &str, value: RuntimeCellHandle,
     source: MemberWriteSource<'_>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    context.invalidate_member_source_views();
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
     if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
         if !property.is_static() {
