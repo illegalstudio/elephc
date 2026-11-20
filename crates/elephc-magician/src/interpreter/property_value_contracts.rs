@@ -157,7 +157,8 @@ pub(in crate::interpreter) fn eval_preflight_property_reference_source(
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) && property.property_type().is_some() {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        let Some(declared) = property.property_type() else { return Ok(()); };
         let value = match visible_scope_cell(context, scope, source) {
             Some(value) => value,
             None => {
@@ -168,10 +169,12 @@ pub(in crate::interpreter) fn eval_preflight_property_reference_source(
                 value
             }
         };
-        let expression = EvalExpr::LoadVar(source.to_string());
-        let packet = local_binding_origins::argument_source(&expression, context, scope).or_else(||
-            local_binding_origins::source_view(&expression, context, scope).map(|ty| ArgumentSource::capture(ty, context)));
-        MemberWriteSource::Evaluated(packet.as_ref()).validate(property.property_type(), owner, owner, value, context, values)?;
+        if !eval_declared_value_type_accepts_exact(declared, Some(owner), Some(owner), value, context, values)? {
+            let expression = EvalExpr::LoadVar(source.to_string());
+            let packet = local_binding_origins::argument_source(&expression, context, scope).or_else(||
+                local_binding_origins::source_view(&expression, context, scope).map(|ty| ArgumentSource::capture(ty, context)));
+            MemberWriteSource::Evaluated(packet.as_ref()).validate(Some(declared), owner, owner, value, context, values)?;
+        }
     }
     if context.current_function().is_some() || scope.reference_target(source).is_some()
         || !property.property_type().is_some_and(|ty| eval_nonnull_object_boundary(ty)
