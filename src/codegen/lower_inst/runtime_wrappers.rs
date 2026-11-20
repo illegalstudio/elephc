@@ -139,12 +139,18 @@ fn emit_runtime_callable_invoker_named(
         sig,
     );
     // A user callable (the descriptors that report a PHP return status) checks boxed arguments
-    // bound to its declared scalar parameters like a direct call does. The verdict depends only
-    // on the signature and that flag, both of which key the invoker cache.
-    let scalar_guards = invoker_scalar_guards(ctx, sig, php_return_status, guard_callee);
+    // bound to its declared scalar parameters like a direct call does. The methods of the
+    // internal `ext/uri` prelude classes are exempt, as their direct calls are: PHP coerces a
+    // `null` there with a deprecation. Whether the invoker checks keys its cache entry.
+    let internal_callee = current_class.is_some_and(crate::uri_prelude::is_internal_uri_class);
+    let scalar_guards = invoker_scalar_guards(
+        ctx, sig, php_return_status && !internal_callee, guard_callee,
+    );
+    let scalar_guarded = scalar_guards.is_some();
     let guard_callee = scalar_guards.as_ref().and_then(|guards| guards.callee.clone());
     if let Some(label) = ctx.shared.runtime_callable_invoker(
-        sig, captures, owns_string_return, php_return_status, &defaults, guard_callee.as_deref(),
+        sig, captures, owns_string_return, php_return_status, &defaults, scalar_guarded,
+        guard_callee.as_deref(),
     ) {
         return label;
     }
@@ -167,7 +173,7 @@ fn emit_runtime_callable_invoker_named(
     ctx.emitter.end_out_of_line(scope);
     ctx.shared
         .cache_runtime_callable_invoker(
-            sig, captures, owns_string_return, php_return_status, &defaults,
+            sig, captures, owns_string_return, php_return_status, &defaults, scalar_guarded,
             guard_callee.as_deref(), &label,
         );
     label
