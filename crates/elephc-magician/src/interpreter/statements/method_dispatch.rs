@@ -44,6 +44,9 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         context,
         values,
     )?;
+    if let Some(result) = eval_reflection_evaluating_getter_result(object, identity, method_name, context, values)? {
+        return Ok(result);
+    }
     if let Some(target) = context.closure_object_target(identity).cloned() {
         if let Some(result) =
             eval_closure_object_method_result(target, method_name, evaluated_args.clone(), context, values)?

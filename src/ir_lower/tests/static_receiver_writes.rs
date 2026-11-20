@@ -85,7 +85,6 @@ class Both implements Store, Named {
     public function name(): string { return 'N'; }
 }
 class InterfaceHolder { public static ?Store $value = null; }
-function writeInterface(): void { InterfaceHolder::$value->x = replace(); }
 function dispatch(): void {
     $value = InterfaceHolder::$value;
     if ($value !== null) {
@@ -140,7 +139,7 @@ C::$nullable->items[] = 3;
             "{target}: {name} must preserve its outer owner through the getter");
     }
     for name in ["write", "writeNested", "writeChild", "writeNull", "writeStaticNested", "writeStaticAppend",
-        "writeStaticElement", "writeStaticCompound", "writeStaticNestedElement", "writeInterface", "writeCompoundNull",
+        "writeStaticElement", "writeStaticCompound", "writeStaticNestedElement", "writeCompoundNull",
         "writeBareStaticCall", "writeDynamicHop", "writeDynamicHopCompound"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let rhs = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::Call).unwrap();
@@ -173,16 +172,11 @@ C::$nullable->items[] = 3;
         assert_eq!(function.instructions.iter().filter(|inst|
             inst.op == crate::ir::Op::DynamicPropGet).count(), 1, "{target}: {name} fetches its dynamic hop once");
     }
-    for name in ["writeInterface", "writeCompoundNull"] {
-        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+    {
+        let function = module.functions.iter().find(|function| function.name == "writeCompoundNull").unwrap();
         let guard = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::IsNull).unwrap();
-        if name == "writeInterface" {
-            assert!(!function.instructions.iter().any(|inst| inst.op == crate::ir::Op::MixedUnbox),
-                "{target}: interfaces retain boxed dispatch after the null guard");
-        } else {
-            let read = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PropGet).unwrap();
-            assert!(guard < read, "{target}: null is rejected before the compound property read");
-        }
+        let read = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PropGet).unwrap();
+        assert!(guard < read, "{target}: null is rejected before the compound property read");
     }
     for name in ["writeHook", "writeHookIndexed", "writeHookDynamic", "writeHookResult",
         "writeHookArrayCompound", "writeHookChildCompound", "writeHookNestedCompound", "writeStaticHookResult",

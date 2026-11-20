@@ -52,6 +52,17 @@ pub(super) fn for_write(
     super::expr::unpin_in_flight_owners(ctx, pins, span);
 }
 
+/// Checks a declared array property's key without fetching its value or repeating a getter.
+pub(super) fn for_declared_array_write(
+    ctx: &mut LoweringContext<'_, '_>, owner: LoweredValue, key: LoweredValue,
+    value: LoweredValue, previous: &[super::expr::PinnedInFlightOwner], span: Span,
+) {
+    if !needs_check(ctx, key) { return; }
+    let pins = super::expr::protect_additional_pending_operands(ctx, &[owner, key, value], previous, span);
+    conversion_boundaries::array_key(ctx, key, span);
+    super::expr::unpin_in_flight_owners(ctx, pins, span);
+}
+
 /// Checks operands whose caller already published every independent exceptional owner.
 pub(super) fn for_prepared_write(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, key: LoweredValue, span: Span,

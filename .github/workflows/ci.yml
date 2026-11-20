@@ -41,6 +41,7 @@ env:
     -p elephc-bcmath
     -p elephc-gmp
     -p elephc-random
+    -p elephc-uri
     -p elephc-mbstring
     -p elephc-iconv
     -p elephc-phar
@@ -48,6 +49,7 @@ env:
     -p elephc-image
     -p elephc-pcntl
     -p elephc-xml
+    -p elephc-tidy
     -p elephc-fileinfo
     -p elephc-tokenizer
     -p elephc-magician
@@ -925,7 +927,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Cross-run cache keyed on the committed lock plus the recipe sources that
@@ -995,7 +997,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Cross-run cache keyed on the committed lock plus the recipe sources that
@@ -1065,7 +1067,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Cross-run cache keyed on the committed lock plus the recipe sources that
@@ -1401,6 +1403,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Cache managed native gmp
+        # The corpus test is `#[ignore]` so only this dedicated job runs it. Reuse the
+        # same managed libgmp cache as the other Linux x86_64 test jobs; a warm run
+        # skips the from-source GMP build entirely.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/gmp
+            ~/.cache/elephc/native/sources
+          key: gmp-native-linux-x86_64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-linux-x86_64-
+
       - name: Ensure GMP configure dependency
         # The image contract includes m4; provisioning belongs to its build.
         run: command -v m4
@@ -1435,7 +1450,7 @@ jobs:
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
         run: |
           bash scripts/ci/run_prebuilt_tests.sh \
-            'binary(=codegen_tests) and test(test_gmp_php_src_phpt_corpus)' --run-ignored only --nocapture
+            'binary(/^codegen_tests_/) and test(test_gmp_php_src_phpt_corpus)' --run-ignored only --nocapture
 
       - name: Audit consumer compilation
         if: always()
@@ -1499,6 +1514,63 @@ jobs:
         if: always()
         uses: ./.github/actions/assert-consumer-builds
 
+  tidy-ios-compile-link:
+    name: Tidy iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: [plan, build-archive-macos-aarch64, build-ios]
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    env:
+      ELEPHC_CI_PREBUILT_COMPILER: "1"
+      ELEPHC_CI_PREBUILT_IOS_BRIDGES: "1"
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v7
+      - name: Restore the shared macOS compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: macos-aarch64
+          kind: compiler
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
+
+      - name: Restore shared iOS bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: ${{ matrix.elephc_target }}
+          kind: ios
+          attempt: ${{ fromJSON(needs.build-ios.outputs.artifact-attempts)[matrix.elephc_target] }}
+
+      - name: Cache managed native libtidy for iOS
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ runner.temp }}/elephc-native/artifacts/libtidy
+            ${{ runner.temp }}/elephc-native/sources
+          key: libtidy-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/tidy/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libtidy.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+
+      - name: Build and link tidy with the managed libtidy
+        env:
+          ELEPHC_NATIVE_CACHE: ${{ runner.temp }}/elephc-native
+        run: |
+          bash scripts/ci/test_ios_tidy_link.sh \
+            "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
   tokenizer-ios-compile-link:
     name: Tokenizer iOS Compile & Link (${{ matrix.elephc_target }})
     needs: [plan, build-archive-macos-aarch64, build-ios]
@@ -1541,14 +1613,60 @@ jobs:
             "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
             "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
 
-  # Eval integration tests compile, link, and run full programs while exercising
-  # eval/magician paths, so keep them out of the ordinary codegen shards. Run each
-  # deterministic shard in one libtest process so runtime-object and bridge caches
-  # survive between cases, with two workers preserving bounded parallelism.
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
+
+  uri-ios-compile-link:
+    name: URI iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: [plan, build-archive-macos-aarch64, build-ios]
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    env:
+      ELEPHC_CI_PREBUILT_COMPILER: "1"
+      ELEPHC_CI_PREBUILT_IOS_BRIDGES: "1"
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v7
+      - name: Restore the shared macOS compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: macos-aarch64
+          kind: compiler
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
+
+      - name: Restore shared iOS bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: ${{ matrix.elephc_target }}
+          kind: ios
+          attempt: ${{ fromJSON(needs.build-ios.outputs.artifact-attempts)[matrix.elephc_target] }}
+      - name: Compile and link the URI bridge
+        run: |
+          bash scripts/ci/test_ios_uri_link.sh \
+            "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
 
       - name: Audit consumer compilation
         if: always()
         uses: ./.github/actions/assert-consumer-builds
+
+  # Eval integration tests compile, link, and run full programs while exercising
+  # eval/magician paths, so keep them out of the ordinary codegen shards. Run each
+  # deterministic shard in one libtest process so runtime-object and bridge caches
+  # survive between cases, with two workers preserving bounded parallelism.
 
   eval-codegen-tests-macos-aarch64:
     name: Eval Codegen Tests (macos-aarch64 ${{ matrix.shard }}/16)
@@ -1897,9 +2015,9 @@ jobs:
       - name: Run focused native, eval and argument regressions
         shell: elephc-ci-shell {0}
         run: |
-          bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(test_tokenizer_)'
-          bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(=codegen::lfc::lfc_and_php_only_eval_calls_do_not_leak_profiles)'
-          bash scripts/ci/run_prebuilt_tests.sh 'binary(=error_tests) and test(tokenizer_)'
+          bash scripts/ci/run_prebuilt_tests.sh 'binary(/^codegen_tests_/) and test(test_tokenizer_)'
+          bash scripts/ci/run_prebuilt_tests.sh 'binary(/^codegen_tests_/) and test(=codegen::lfc::lfc_and_php_only_eval_calls_do_not_leak_profiles)'
+          bash scripts/ci/run_prebuilt_tests.sh 'binary_id(elephc::integration) and test(/^error_tests::/) and test(tokenizer_)'
           bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=ir_lower::tests::corpus::lowers_tokenizer_example_on_every_target)'
           bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=autoload::prelude_probe::tests::probe_detects_tokenizer_in_autoloaded_classes)'
           bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=ir_lower::tests::string_offset_lifetime::string_offset_lifetime_stabilizes_views_on_all_targets)'
@@ -1983,7 +2101,7 @@ jobs:
       # per-contract assertions — name sets, signature shapes, eval coverage — to
       # the thirty-four `curl_*` surfaces instead of counting them and moving on.
       - name: Cross-backend parity with the curl surface published
-        run: bash scripts/ci/run_prebuilt_tests.sh 'binary(=builtin_parity_tests)'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'binary_id(elephc::integration) and test(/^builtin_parity_tests::/)'
 
       # The compiler-side half: `builtins::parity_tests` compares every
       # prelude-provided contract with the PHP declaration its injected prelude
@@ -2051,6 +2169,7 @@ jobs:
 
       - name: Check benchmark tooling and generated reports
         run: |
+          bash benchmark/tests/test_web_bash.sh
           python3 -B -m unittest discover -s benchmark/tests -v
           python3 -B benchmark/report.py
           git diff --exit-code -- benchmark/assets
@@ -2090,7 +2209,9 @@ jobs:
       - fileinfo-ios-compile-link
       - tokenizer-ios-compile-link
       - gmp-ios-compile-link
+      - tidy-ios-compile-link
       - gmp-phpt-corpus
+      - uri-ios-compile-link
       - eval-codegen-tests-macos-aarch64
       - eval-codegen-tests-linux-x86_64
       - eval-codegen-tests-linux-aarch64
@@ -2149,7 +2270,7 @@ jobs:
           extended_tier="non-codegen-tests-macos-aarch64 cli-tests-macos-aarch64
             web-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
             curl-native-macos-aarch64 curl-codegen-tests-macos-aarch64
-            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link gmp-ios-compile-link"
+            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link gmp-ios-compile-link tidy-ios-compile-link uri-ios-compile-link"
           in_list() { case " $(echo $2) " in *" $1 "*) return 0 ;; esac; return 1; }
           echo "tiers: run=$RUN_TIER extended=$EXTENDED_TIER"
           status=0

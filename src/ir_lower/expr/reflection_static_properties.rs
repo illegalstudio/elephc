@@ -73,22 +73,31 @@ pub(super) fn lower_reflection_class_get_static_property_value(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let (property, default) = reflection_class_get_static_property_value_args(args, ctx.semantic_profile)?;
-    if let Some((declaring_class, property_ty)) =
-        reflection_class_static_property_target(ctx, class_name, &property)
-    {
-        if default.is_none() {
-            return Some(lower_reflection_static_property_get_by_class_name(
-                ctx,
-                &declaring_class,
-                &property,
-                property_ty,
-                expr,
-            ));
-        }
+    let target = reflection_class_static_property_target(ctx, class_name, &property);
+    if target.is_some() && default.is_some() {
+        // The generic call evaluates the default and then initializes the reflected class.
         return None;
     }
+    // php-src evaluates the arguments, then initializes the reflected class, then reads the
+    // property or reports it missing.
+    let default = default.map(|default| lower_expr(ctx, &default));
+    if let Some(error) = crate::ir_lower::property_default_errors::for_class(ctx, class_name, expr.span) {
+        if let Some(default) = default {
+            crate::ir_lower::ownership::release_if_owned(ctx, default, Some(expr.span));
+        }
+        return Some(error);
+    }
+    if let Some((declaring_class, property_ty)) = target {
+        return Some(lower_reflection_static_property_get_by_class_name(
+            ctx,
+            &declaring_class,
+            &property,
+            property_ty,
+            expr,
+        ));
+    }
     Some(match default {
-        Some(default) => lower_expr(ctx, &default),
+        Some(default) => default,
         None => lower_reflection_class_missing_static_property(ctx, class_name, &property, expr),
     })
 }
@@ -104,6 +113,11 @@ pub(super) fn lower_reflection_class_set_static_property_value(
     let (declaring_class, property_ty) =
         reflection_class_static_property_target(ctx, class_name, &property)?;
     let value = lower_expr(ctx, &value);
+    // php-src initializes the reflected class after evaluating the arguments.
+    if let Some(error) = crate::ir_lower::property_default_errors::for_class(ctx, class_name, expr.span) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+        return Some(error);
+    }
     // PHP null or a packed record address bound for a pointer slot becomes the stored word.
     let value = ctx.retype_packed_address_for_pointer_sink(value, &property_ty, Some(expr.span));
     store_static_property_with_argument_retirement(

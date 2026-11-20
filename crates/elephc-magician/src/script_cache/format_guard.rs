@@ -107,10 +107,12 @@ mod tests {
     /// BUMPED TO 27: SimpleXML property updates coexist with native variable increment statements.
     /// BUMPED TO 28: function metadata carries a skipped bytecode cache. The source guard
     /// requires a new identity even though the serialized field layout is unchanged.
-    /// BUMPED TO 29: checked literals, profile-aware segments and semantic cache headers.
-    /// BUMPED TO 30: parsed programs retain their semantic normalization provenance.
-    /// BUMPED TO 31: interpolation retains explicit formatting casts and prefix tokens.
-    const RECORDED_FINGERPRINT: u64 = 14787256250629008100;
+    /// BUMPED TO 29: `EvalStmt::Goto` and `EvalStmt::Label`, plus `EvalParseError::InvalidJump`.
+    /// BUMPED TO 31: eval callables and generic templates record their defining
+    /// `strict_types` mode, which changes the serialized payload.
+    /// BUMPED TO 32: strict_types declarations must precede every other eval statement.
+    /// BUMPED TO 33: strict semantic profiles and source terms coexist with main's callable and jump layouts.
+    const RECORDED_FINGERPRINT: u64 = 3526544258761415661;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

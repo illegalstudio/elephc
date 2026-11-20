@@ -36,7 +36,7 @@ Local agent runs should stay focused. By default, run only the build checks and 
 
 ```bash
 cargo test test_fizzbuzz                     # run a focused test by name
-cargo test --test codegen_tests test_name    # run a focused end-to-end codegen test
+cargo test --test codegen_tests_core test_name  # run a focused end-to-end codegen test (pick the codegen_tests_<domain> binary)
 cargo nextest run --profile ci test_name     # run a focused nextest test with per-test timeout
 cargo test                                  # full local suite; only when explicitly requested/necessary
 cargo test -- --include-ignored             # ignored tests; only when relevant or requested
@@ -63,7 +63,7 @@ Some tests are marked `#[ignore]` because they require external libraries (e.g.,
 The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. CI runs sharded executable codegen tests on `macos-aarch64`, `linux-x86_64`, and `linux-aarch64`, and covers `ios-arm64` and `ios-sim-arm64` through target-specific compile and emitter tests. Pull Requests run the Linux matrix, the core live database suites and the macOS build; the macOS test matrix, the iOS links and the optional-driver live database suites run in the merge queue, or on the PR with the `ci:macos` / `ci:pdo-live` labels (CONTRIBUTING.md § "CI tiers and the merge queue"). Local implementation work should optimize for fast, relevant signal:
 
 1. **While developing a feature**: run only the tests for that feature or regression (`cargo test test_my_feature`).
-2. **Scope to a single test binary**: prefer `cargo test --test codegen_tests <filter>` over a bare `cargo test <filter>`. A bare filter rebuilds and links all six test binaries every cycle (~2.5s of wasted link time); `--test <binary>` links only the one you need. Most codegen work lives in `codegen_tests`.
+2. **Scope to a single test binary**: prefer `cargo test --test codegen_tests_<domain> <filter>` over a bare `cargo test <filter>`. A bare filter rebuilds and links all eight test binaries (plus the library's unit-test harness) every cycle; `--test <binary>` builds only the one you need. Codegen tests live in six `codegen_tests_*` binaries by domain (`core`, `data`, `oop`, `runtime`, `ext`, `eval`); the root file of each (`tests/codegen_tests_<domain>.rs`) lists the `tests/codegen/` modules it mounts.
 3. **For target-sensitive changes**: run the smallest relevant macOS/Linux focused tests locally when they materially reduce risk; otherwise let CI provide complete target coverage.
 4. **For broad infrastructure changes**: validate the edited workflow/config directly (YAML parse, `cargo metadata`, `nextest` config checks, etc.) instead of running unrelated Rust suites.
 5. **PHP cross-check**: opt in narrowly with `ELEPHC_PHP_CHECK=1 cargo test <filter>` when PHP equivalence is the question.
@@ -84,10 +84,13 @@ For docs-only, workflow-only, or configuration-only changes, replace Rust test r
 
 | File | What it tests | How |
 |---|---|---|
-| `tests/lexer_tests.rs` | Tokenization | Asserts token sequences from source strings |
-| `tests/parser_tests.rs` | AST construction | Asserts AST node structure and operator precedence |
-| `tests/codegen_tests.rs`, `tests/codegen/` | Full pipeline (end-to-end) | Compiles PHP → binary, runs it, asserts stdout |
-| `tests/error_tests.rs`, `tests/error_tests/` | Error reporting | Asserts that invalid programs produce the right error messages |
+| `tests/codegen_tests_*.rs`, `tests/codegen/` | Full pipeline (end-to-end), six binaries by domain | Compiles PHP → binary, runs it, asserts stdout |
+| `tests/lexer_tests.rs` (in `integration`) | Tokenization | Asserts token sequences from source strings |
+| `tests/parser_tests.rs` (in `integration`) | AST construction | Asserts AST node structure and operator precedence |
+| `tests/error_tests.rs`, `tests/error_tests/` (in `integration`) | Error reporting | Asserts that invalid programs produce the right error messages |
+| `tests/integration.rs` | Every other `tests/*.rs` suite, one module each | `cargo test --test integration <suite>::` runs one suite |
+
+`Cargo.toml` sets `autotests = false`, so a new `tests/*.rs` file must be registered: add a `#[path]` module to `tests/integration.rs` (the default), or a `[[test]]` target for a large suite that deserves its own binary. Each extra binary is rebuilt and relinked after every library edit. The `every_suite_file_is_registered` test in `tests/integration.rs` fails when a file is in neither place, or is mounted under a name other than its file stem (CI selects suites by that `<stem>::` prefix).
 
 ### Test coverage requirements
 
@@ -117,7 +120,7 @@ A fixture that contains an `eval()` whose source is known only at runtime (the `
 ## Architecture
 
 ```
-PHP source → Lexer → Parser → Magic constants → Conditional compilation → Resolver
+PHP source → Lexer → Parser → Magic constants → Conditional compilation → goto lowering → Resolver
 → NameResolver → Constant folding → Type Checker / warnings → AST optimizer passes
 → EIR lowering / validation → EIR optimization passes → EIR codegen → runtime cache
 → assembler/linker → binary
@@ -143,6 +146,7 @@ by EIR lowering and `src/codegen/`.
 | `src/parser/` | `parse()` | Tokens → `Program` (Vec of Stmt). Pratt parser for expressions |
 | `src/magic_constants/`, `src/magic_constants.rs` | `substitute_file_and_scope_constants()` | Lowers PHP magic constants before resolver/name-resolver/optimizer passes |
 | `src/conditional.rs` | `apply()` | Applies compiler `ifdef` conditional branches |
+| `src/goto_lowering.rs`, `src/goto_lowering/` | `lower_program()` | Validates each file's `goto` jumps and rewrites them into dispatch loops (`while` + `continue N`) before any pass that reads control flow; no `StmtKind::Goto` survives it |
 | `src/resolver/` | `resolve()` | Resolves `include`/`require`, discovers declarations, and tracks include-loaded function variants. Runs before namespace/name canonicalization |
 | `src/name_resolver/` | `resolve()` | Applies namespace/use rules, rewrites references to canonical fully-qualified names, handles PHP-style builtin fallback, and flattens namespace-only AST nodes before type checking |
 | `src/types/` | `check()` | Type checking, returns `CheckResult` with `TypeEnv`, function/class/interface/enum/FFI metadata, warnings, required libraries, and the internal `Mixed` type for heterogeneous assoc-array values |
@@ -187,11 +191,11 @@ bridge.
 
 `--with-<crate>` force-enables a bridge regardless of detection. It force-links
 the staticlib (whole-archived so it is not dead-stripped) and, for crates whose
-PHP surface comes from a prelude (`pdo`, `tz`, `image`, `xml`), force-injects that
-prelude so the API is declared even when usage was not detected. The flag name is
+PHP surface comes from a prelude (`pdo`, `tz`, `image`, `xml`, `tidy`, `uri`), force-injects
+that prelude so the API is declared even when usage was not detected. The flag name is
 the bridge's `flag_name` (`crate_name` minus the `elephc-` prefix): `--with-pdo`,
 `--with-tls`, `--with-crypto`, `--with-iconv`, `--with-phar`, `--with-tz`,
-`--with-image`, `--with-curl`, `--with-xml`.
+`--with-image`, `--with-curl`, `--with-xml`, `--with-tidy`, `--with-uri`.
 `--with-web` is an alias for `--web` (the full server mode, which owns the program
 entry point). An unknown `--with-<name>` is a hard CLI error listing the valid
 crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
@@ -231,11 +235,11 @@ for libxml2's encoding handlers through the entry's
 has no catalog dependencies, and a missing package fails closed with the
 `elephc native add libxml2` recovery, never a `-lxml2`.
 
-`gmp`, `fileinfo` (`libmagic`) and `openssl` (`openssl-crypto`) follow the same
-shape. Every bridge-to-package pairing lives only in `BRIDGE_NATIVE_PACKAGES`,
-whose order is the final link order; `--print-capabilities` reports each pairing
-as a `native:<package>` field, and the release probe adds exactly those packages,
-so a new pairing needs no edit in `scripts/verify-release-artifact.sh`.
+`gmp`, `fileinfo` (`libmagic`), `openssl` (`openssl-crypto`) and `tidy`
+(`libtidy`) follow the same shape. Every bridge-to-package pairing lives only in
+`BRIDGE_NATIVE_PACKAGES`, whose order is the final link order; `--print-capabilities`
+reports each pairing as a `native:<package>` field, and the release probe adds exactly
+those packages, so a new pairing needs no edit in `scripts/verify-release-artifact.sh`.
 
 ### Codegen layout
 

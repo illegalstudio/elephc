@@ -32,9 +32,16 @@ fn walk_class_heritage<P: Pass>(
     pass: &P,
     span: Span,
 ) -> (Option<Box<GenericDecl>>, Option<Name>, Vec<Name>) {
-    let Some(generics) = generics else {
-        return (None, extends, implements);
-    };
+    // A declaration with no generic half still NAMES its parents, and a bare generic parent
+    // (`class Model implements Arrayable` where `Arrayable` is a PHPDoc template) must reach the
+    // pass like any other mention, or it survives as the stripped template's name.
+    let generics = generics.unwrap_or_else(|| {
+        Box::new(GenericDecl {
+            type_params: Vec::new(),
+            extends_args: Vec::new(),
+            interface_args: Vec::new(),
+        })
+    });
     let GenericDecl {
         type_params,
         extends_args,
@@ -63,9 +70,14 @@ fn walk_interface_heritage<P: Pass>(
     pass: &P,
     span: Span,
 ) -> (Option<Box<GenericDecl>>, Vec<Name>) {
-    let Some(generics) = generics else {
-        return (None, extends);
-    };
+    // See `walk_class_heritage`: a bare generic parent must reach the pass too.
+    let generics = generics.unwrap_or_else(|| {
+        Box::new(GenericDecl {
+            type_params: Vec::new(),
+            extends_args: Vec::new(),
+            interface_args: Vec::new(),
+        })
+    });
     let GenericDecl {
         type_params,
         extends_args: _,
@@ -93,6 +105,25 @@ pub(super) fn walk_type_params<P: Pass>(
         .map(|param| crate::parser::ast::TypeParam {
             bound: param.bound.map(|ty| pass.transform_value_type(ty, span)),
             default: param.default.map(|ty| pass.transform_type(ty, span)),
+            native_hint: param.native_hint.map(|hint| crate::parser::ast::NativeHint {
+                ty: pass.transform_value_type(hint.ty, span),
+                params: hint
+                    .params
+                    .into_iter()
+                    .map(|(name, ty)| (name, pass.transform_value_type(ty, span)))
+                    .collect(),
+                return_type: hint.return_type.map(|ty| pass.transform_value_type(ty, span)),
+                member_returns: hint
+                    .member_returns
+                    .into_iter()
+                    .map(|(method, ty)| (method, pass.transform_value_type(ty, span)))
+                    .collect(),
+                member_params: hint
+                    .member_params
+                    .into_iter()
+                    .map(|(method, param, ty)| (method, param, pass.transform_value_type(ty, span)))
+                    .collect(),
+            }),
             ..param
         })
         .collect()
@@ -344,18 +375,13 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             body,
         } => {
             pass.enter_function(&name);
+            let exported = pass.marks_export(&attributes);
             let new_params = params
                 .into_iter()
-                .map(|(n, t, default, by_ref)| {
-                    (
-                        n,
-                        t.map(|ty| pass.transform_value_type(ty, span)),
-                        default.map(|d| walk_expr(d, pass)),
-                        by_ref,
-                    )
-                })
+                .map(|param| super::walk_param(param, pass, span, exported))
                 .collect();
-            let new_body = walk_program(body, pass);
+            let walked_body = walk_program(body, pass);
+            let new_body = pass.transform_scope_body(walked_body);
             // Transformed BEFORE leaving the scope. A struct literal's fields are evaluated
             // after the statements above it, so writing these inline below `leave_function`
             // handed them to the pass with the ENCLOSING scope active — the one type position
@@ -390,8 +416,11 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         constants,
         } => {
             pass.enter_class(&name);
+            pass.observe_class_heritage(extends.as_ref(), &implements);
+            pass.enter_heritage();
             let (generics, extends, implements) =
                 walk_class_heritage(generics, extends, implements, pass, span);
+            pass.leave_heritage();
             let trait_uses = walk_trait_uses(trait_uses, pass, span);
             let new_properties = properties
                 .into_iter()
@@ -472,7 +501,9 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             pass.enter_class(&name);
             // An interface has no single parent, so every inherited name — and every type
             // argument on one — lives in the `extends` list.
+            pass.enter_heritage();
             let (generics, extends) = walk_interface_heritage(generics, extends, pass, span);
+            pass.leave_heritage();
             let stmt = StmtKind::InterfaceDecl {
                 name,
                 generics,
@@ -568,9 +599,14 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             required,
         },
         // Statements with no Expr children or only simple data:
+        StmtKind::UseDecl { imports } => {
+            pass.observe_use_decl(&imports);
+            StmtKind::UseDecl { imports }
+        }
         other @ (StmtKind::Break(_)
         | StmtKind::Continue(_)
-        | StmtKind::UseDecl { .. }
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Global { .. }
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }

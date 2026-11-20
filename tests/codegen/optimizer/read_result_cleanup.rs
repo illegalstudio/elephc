@@ -2,7 +2,7 @@
 //! Verifies inline container/property read cleanup with EIR optimization enabled and disabled.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::read_result_cleanup`.
+//! - `cargo test --test codegen_tests_core optimizer::read_result_cleanup`.
 //!
 //! Key details:
 //! - Scalar consumers and independent builtin results must balance read stabilizations.

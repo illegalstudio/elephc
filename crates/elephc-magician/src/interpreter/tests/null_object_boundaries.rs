@@ -22,7 +22,7 @@ fn typed_named_variadic_binding_avoids_positional_hash_scans() {
         name: Some(format!("arg{index}")), value: object, ref_target: None,
     }).collect();
     let bound = bind_evaluated_method_args_with_ref_mode(
-        "typedNamedTail", &["nodes".into()],
+        "typedNamedTail", "typedNamedTail", &["nodes".into()],
         &[Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Object], false))],
         &[None], &[false], &[true], args, EvalByRefBindingMode::RequireTarget,
         &mut context, &mut values,

@@ -192,7 +192,7 @@ pub(super) fn walk_stmt(stmt: &Stmt, visitor: &mut impl AstVisitor) {
                 walk_stmts(body, visitor);
             }
         }
-        StmtKind::Break(_) | StmtKind::Continue(_) => {}
+        StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Goto(_) | StmtKind::GotoLabel(_) => {}
         StmtKind::ExprStmt(expr) => walk_expr(expr, visitor),
         StmtKind::NamespaceDecl { name: _ } => {}
         StmtKind::NamespaceBlock { name: _, body } => walk_stmts(body, visitor),

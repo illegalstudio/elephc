@@ -193,6 +193,12 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::InitializedGetter { method, property } => {
             let _ = write!(out, " initialized_getter[{},{}]", method.as_raw(), property.as_raw());
         }
+        Immediate::ReflectionConstruction { uses_runtime_arg_container } => {
+            let _ = write!(out, " reflection_construction[arguments={uses_runtime_arg_container}]");
+        }
+        Immediate::DeclaredCallableNames => {
+            let _ = write!(out, " declared_callable_names");
+        }
         Immediate::Data(id) => {
             let _ = write!(out, " data[{}]", id.as_raw());
         }
@@ -211,6 +217,20 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::EvalBindingCopy { source, destination, owner } => {
             let _ = write!(out, " source[{}] destination[{}] owner[{}]",
                 source.as_raw(), destination.as_raw(), owner.as_raw());
+        }
+        Immediate::PropertyRefCell {
+            first,
+            second,
+            suffix_and_type,
+        } => {
+            let _ = write!(
+                out,
+                " property_ref[{},{}] data[{}] type_code={}",
+                first.as_raw(),
+                second.as_raw(),
+                *suffix_and_type & ((1 << 28) - 1),
+                *suffix_and_type >> 28
+            );
         }
         Immediate::GlobalName(id) => {
             let value = data

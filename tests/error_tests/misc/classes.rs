@@ -492,6 +492,29 @@ fn test_error_constructor_promotion_readonly_by_reference() {
     );
 }
 
+/// Verifies a promoted parameter with a `null` default on a non-nullable type is refused as
+/// php-src refuses it, while explicitly nullable and `mixed` promoted parameters stay valid.
+#[test]
+fn test_error_constructor_promotion_null_default_on_non_nullable_type() {
+    expect_error(
+        "<?php class Box { public function __construct(public string $label = null) {} }",
+        "Cannot use null as default value for parameter $label of type string",
+    );
+    expect_no_error(
+        "<?php class Box { public function __construct(public ?string $a = null, public mixed $b = null, public int|null $c = null) {} } new Box();",
+    );
+}
+
+/// Verifies a promoted intersection-typed parameter with a `null` default is refused with
+/// php-src's message, like any other promoted type that rejects null.
+#[test]
+fn test_error_constructor_promotion_null_default_on_intersection_type() {
+    expect_error(
+        "<?php interface A {} interface B {} class P { public function __construct(public A&B $x = null) {} }",
+        "Cannot use null as default value for parameter $x of type A&B",
+    );
+}
+
 /// Verifies the error diagnostic for readonly class constructor promotion by reference.
 #[test]
 fn test_error_readonly_class_constructor_promotion_by_reference() {
@@ -1496,22 +1519,18 @@ fn test_error_array_element_write_to_a_scope_dynamic_property() {
     );
 }
 
-/// Verifies a `readonly` class refuses to CREATE the dynamic property a strict ancestor's private
-/// name resolves to, instead of storing one.
+/// Verifies a `readonly` class COMPILES the write a strict ancestor's private name resolves to.
 ///
 /// A `readonly` class carries php's no-dynamic-properties flag, so php answers this write with
-/// `Cannot create dynamic property ROChild::$p`, not with a creation. The scope-dynamic arm
-/// answers before the whole visibility and readonly ladder runs, so without its own check the arm
-/// would have created storage php forbids, and the reservation would have charged every instance
-/// a hash that no legal write can ever fill.
+/// `Cannot create dynamic property ROChild::$p`; the throw is a runtime `Error`, not a compile
+/// error. `tests/codegen/objects/property_access/mutations.rs` pins the thrown message.
 #[test]
-fn test_error_dynamic_property_creation_on_a_readonly_class() {
-    expect_error(
+fn test_readonly_class_compiles_dynamic_property_creation_for_a_runtime_error() {
+    expect_no_error(
         "<?php readonly class ROBase { private string $p; \
          public function __construct() { $this->p = 'base'; } } \
          readonly class ROChild extends ROBase {} \
          $c = new ROChild(); $c->p = 'x';",
-        "Cannot create dynamic property ROChild::$p",
     );
 }
 

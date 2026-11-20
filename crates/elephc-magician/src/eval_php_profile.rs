@@ -7,7 +7,9 @@
 //! - `crate::ffi::context::__elephc_eval_set_php_version_id` (generated code sets
 //!   the profile before every runtime eval dispatch).
 //! - `crate::interpreter::constant_eval` (`PHP_VERSION`, `PHP_VERSION_ID`,
-//!   `PHP_MINOR_VERSION`).
+//!   `PHP_MINOR_VERSION`, and the profile gate of deprecated constant reads).
+//! - `crate::interpreter::statements::static_property_access` (deprecated class
+//!   constant reads).
 //! - `crate::interpreter::builtins::network_env` (`phpversion()` and the four
 //!   opcache builtins whose directive set is profile-gated).
 //!

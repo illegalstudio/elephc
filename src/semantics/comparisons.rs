@@ -62,6 +62,7 @@ fn identity_kind_mask(ty: &PhpType) -> u16 {
         PhpType::Array(_) | PhpType::AssocArray { .. } => 32,
         PhpType::Object(_) | PhpType::Callable => 64, PhpType::Resource(_) => 128,
         PhpType::Packed(_) | PhpType::Pointer(_) => 256, PhpType::Buffer(_) => 512,
+        PhpType::DeclaredCallable => 8 | 32 | 64,
         PhpType::Iterable => 32 | 64, PhpType::Mixed | PhpType::Never => 1023,
         PhpType::TaggedScalar => 1 | 16,
         PhpType::Union(members) => members.iter().fold(0, |mask, member| mask | identity_kind_mask(member)),

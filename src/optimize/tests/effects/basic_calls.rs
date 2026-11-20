@@ -10,6 +10,23 @@
 
 use super::*;
 
+/// Discarded NaN or dynamic string casts retain warning callbacks and catchable throws.
+#[test]
+fn test_nan_string_cast_effects_preserve_callbacks() {
+    for operand in [Expr::new(ExprKind::FloatLiteral(f64::NAN), Span::dummy()), Expr::var("value")] {
+        let cast = Expr::new(ExprKind::Cast {
+            target: CastType::String, expr: Box::new(operand),
+        }, Span::dummy());
+        let effect = expr_effect(&cast);
+        assert!(effect.has_side_effects && effect.may_throw && effect.writes_globals);
+    }
+    let finite = Expr::new(ExprKind::Cast {
+        target: CastType::String,
+        expr: Box::new(Expr::new(ExprKind::FloatLiteral(1.5), Span::dummy())),
+    }, Span::dummy());
+    assert!(!expr_is_observable(&finite));
+}
+
 /// Dynamic spreads retain validation and callback effects; known array literals keep their child effects.
 #[test]
 fn test_effect_analysis_keeps_dynamic_array_spread_observable() {

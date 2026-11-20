@@ -107,7 +107,7 @@ fn strict_numeric_aggregate_domains_native_number_contracts_on_all_targets() {
     let source = "<?php function typedGmpSum(array<GMP> $items): mixed { return array_sum($items); } echo typedGmpSum([gmp_init('2')]);";
     let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
     let mut inventory = crate::optimize::reachability::PreludeInventory::new();
-    let program = crate::core_prelude::inject_if_used(program, &mut inventory);
+    let program = crate::core_prelude::inject_if_used(program, false, false, &mut inventory);
     let program = crate::gmp_prelude::inject_if_used(program, false, &mut inventory);
     let program = crate::name_resolver::resolve(program).unwrap();
     let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Arithmetic, true)

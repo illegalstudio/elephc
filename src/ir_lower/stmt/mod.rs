@@ -149,6 +149,7 @@ pub(in crate::ir_lower) use string_offset_writes::{
     lower_string_offset_write, StringOffsetWriteResult,
 };
 pub(crate) use property_array_writes::lower_property_array_assign_with_diagnosed_key;
+pub(crate) use property_array_writes::reject_null_receiver_before_element_read;
 pub(crate) use buffer_element_updates::{guard_property_expression_update, lower_buffer_expression_update, BufferExpressionUpdate};
 pub(crate) use static_property_writes::lower_static_property_array_assign_with_diagnosed_key;
 pub(crate) use nested_array_writes::lower_nested_array_assign_after_read;
@@ -314,6 +315,18 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         }
         StmtKind::Break(level) => lower_break(ctx, *level),
         StmtKind::Continue(level) => lower_continue(ctx, *level),
+        // `crate::goto_lowering` rewrites every jump into structured control flow before the
+        // frontend runs. EIR lowering keeps per-local facts along structured joins only, so a
+        // jump that arrives here is refused rather than lowered as a bare branch.
+        StmtKind::Goto(_) => {
+            crate::ir_lower::diagnostics::refuse(
+                stmt.span,
+                "Internal compiler error: 'goto' reached EIR lowering without being lowered",
+            );
+            ctx.builder.terminate(Terminator::Unreachable);
+        }
+        // A label that survives belongs to a file without any `goto`: it emits nothing.
+        StmtKind::GotoLabel(_) => {}
         StmtKind::ExprStmt(expr) => {
             let boundary = super::scoped_writes::begin_expression(ctx, expr);
             let value = lower_expr(ctx, expr);
@@ -325,12 +338,20 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::NamespaceDecl { name: _ } => lower_noop(ctx, stmt.span),
         StmtKind::NamespaceBlock { name: _, body } => lower_block(ctx, body),
         StmtKind::UseDecl { imports: _ } => lower_noop(ctx, stmt.span),
+        // Reaching a class statement evaluates the defaults of any property that compatibly
+        // redeclares a trait property, as php-src's compatibility check does. A class hoisted
+        // out of an included file does so at its class-binding mark, an anonymous class at its
+        // first `new`.
+        StmtKind::ClassDecl { name, .. } | StmtKind::TraitDecl { name, .. } => {
+            if !crate::ir_lower::initializer_reads::is_bound_elsewhere(name) {
+                crate::ir_lower::property_default_errors::emit_class_statement_deprecations(ctx, name, stmt.span);
+            }
+            lower_noop(ctx, stmt.span);
+        }
         StmtKind::FunctionDecl { .. }
-        | StmtKind::ClassDecl { .. }
         | StmtKind::EnumDecl { .. }
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::InterfaceDecl { .. }
-        | StmtKind::TraitDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => lower_noop(ctx, stmt.span),
@@ -381,7 +402,7 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
 }
 
 /// Returns whether a local array slot can be converted at the current program point.
-fn local_slot_is_convertible_here(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+pub(in crate::ir_lower) fn local_slot_is_convertible_here(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
     repr_fixpoint::local_slot_kind_is_convertible(ctx, name)
         && ctx
             .local_slots

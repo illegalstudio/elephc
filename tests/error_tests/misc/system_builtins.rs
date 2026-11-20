@@ -728,6 +728,49 @@ fn test_error_preg_split_no_args() {
     );
 }
 
+expect_builtin_arity_error!(
+    test_error_preg_last_error_wrong_args,
+    "<?php preg_last_error(1);",
+    "preg_last_error() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_preg_last_error_msg_wrong_args,
+    "<?php preg_last_error_msg(1);",
+    "preg_last_error_msg() takes no arguments"
+);
+
+/// `preg_grep()` takes a pattern, an array and optional flags: fewer than two or more than
+/// three arguments is rejected, as php's `ArgumentCountError` does at runtime.
+#[test]
+fn test_error_preg_grep_wrong_args() {
+    for source in [
+        "<?php preg_grep();",
+        r#"<?php preg_grep("/a/");"#,
+        r#"<?php preg_grep("/a/", [], 0, 1);"#,
+    ] {
+        expect_error(source, "Function 'preg_grep' expects 2 to 3 arguments");
+    }
+}
+
+/// `preg_grep()` parameters keep their declared types: php throws `TypeError` for an array
+/// pattern, a string subject list and non-numeric flags.
+#[test]
+fn test_error_preg_grep_wrong_types() {
+    expect_error(
+        r#"<?php preg_grep([], []);"#,
+        "Function 'preg_grep' parameter $pattern expects string",
+    );
+    expect_error(
+        r#"<?php preg_grep("/a/", "x");"#,
+        "Function 'preg_grep' parameter $array expects array<mixed>, got string",
+    );
+    expect_error(
+        r#"<?php preg_grep("/a/", [], "x");"#,
+        "Function 'preg_grep' parameter $flags expects int, got string",
+    );
+}
+
 // -- Hex literal errors --
 
 /// Verifies that concatenating an undefined constant with a string path inside `require` produces a

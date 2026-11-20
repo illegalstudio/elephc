@@ -791,3 +791,25 @@ echo $s, $is[0], $a[1], $h["k"], "\n";
         out.stderr
     );
 }
+
+/// Regression test for #2283: a trailing comma after a multi-line condition list
+/// (`'task', 'round', => …`), after a single condition (`'c', => …`) and after `default`
+/// (`default, => …`) compiles and dispatches every arm, as PHP 8 does.
+#[test]
+fn test_match_arm_condition_list_trailing_comma() {
+    let out = compile_and_run(
+        r#"<?php
+function shape(string $s): string {
+    return match ($s) {
+        'task',
+        'round',
+            => 'rect',
+        'c', => 'circle',
+        default, => 'none',
+    };
+}
+echo shape('task'), '|', shape('round'), '|', shape('c'), '|', shape('z');
+"#,
+    );
+    assert_eq!(out, "rect|rect|circle|none");
+}

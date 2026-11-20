@@ -29,7 +29,7 @@ pub(crate) fn php_type_spec(php_type: &PhpType, allow_return_atoms: bool) -> Opt
         PhpType::Iterable => Some("iterable".to_string()),
         PhpType::Mixed => Some("mixed".to_string()),
         PhpType::Array(_) | PhpType::AssocArray { .. } => Some("array".to_string()),
-        PhpType::Callable => Some("callable".to_string()),
+        PhpType::Callable | PhpType::DeclaredCallable => Some("callable".to_string()),
         PhpType::Resource(_) => Some(elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC.to_string()),
         PhpType::Object(name) if name.is_empty() => Some("object".to_string()),
         PhpType::Object(name) => Some(name.clone()),

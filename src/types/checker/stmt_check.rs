@@ -175,6 +175,16 @@ impl Checker {
                 self.record_loop_control_exit(*levels, true, env);
                 Ok(())
             }
+            // The checker reads control flow from the statement tree and has no way to type a
+            // jump. `crate::goto_lowering` rewrites every `goto` of a parsed file before this
+            // pass, so one that arrives here came through a path that skipped it.
+            StmtKind::Goto(_) => Err(CompileError::new(
+                stmt.span,
+                "Internal compiler error: 'goto' reached the type checker without being lowered",
+            )),
+            // A label that survives lowering belongs to a file without any `goto`: nothing can
+            // jump to it, so it is an inert statement.
+            StmtKind::GotoLabel(_) => Ok(()),
             StmtKind::ExprStmt(expr) => {
                 // The one position an `unset(...)` may end a local binding from. elephc's parser
                 // accepts `unset` as an expression (PHP's grammar does not), so the kill has to
@@ -198,6 +208,9 @@ impl Checker {
                     let returned = self.infer_type_with_assignment_effects(e, env)?;
                     self.confirm_promotable_return(e, env);
                     self.record_return_boundary_exception_flow(&returned, env);
+                    if self.current_return_declares_callable {
+                        self.record_declared_callable_literal_name(e, env);
+                    }
                     // Record the type as observed HERE, in flow order, so the later
                     // flow-insensitive return-coverage pass does not apply a narrowing that
                     // only holds further down the body to this return. See

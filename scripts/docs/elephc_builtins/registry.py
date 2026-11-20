@@ -36,6 +36,7 @@ AREAS: list[str] = [
     "Web",
     "Image",
     "XML",
+    "Tidy",
 ]
 
 
@@ -84,6 +85,9 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     # builtin `xml_parse_into_struct`; both PHP modules share one docs area and the
     # narrative page docs/php/xml.md.
     "xml": ("XML", "XML"),
+    # `Area::Tidy`: the 24 `tidy_*` prelude functions and the `tidy`/`tidyNode`
+    # classes, on a pinned static libtidy 5.8.0 from the native catalog.
+    "tidy": ("Tidy", "Tidy"),
     # `ext/random` procedural functions declared by the random prelude.
     "random": ("Math", "Random"),
 }
@@ -280,8 +284,15 @@ REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
     "class_get_attributes": ("Class", "Attributes"),
     "ctype_alnum": ("Type", "Ctype"),
     "ctype_alpha": ("Type", "Ctype"),
+    "ctype_cntrl": ("Type", "Ctype"),
     "ctype_digit": ("Type", "Ctype"),
+    "ctype_graph": ("Type", "Ctype"),
+    "ctype_lower": ("Type", "Ctype"),
+    "ctype_print": ("Type", "Ctype"),
+    "ctype_punct": ("Type", "Ctype"),
     "ctype_space": ("Type", "Ctype"),
+    "ctype_upper": ("Type", "Ctype"),
+    "ctype_xdigit": ("Type", "Ctype"),
     "get_called_class": ("Class", "Class"),
     "get_class_methods": ("Class", "Class"),
     "get_class_vars": ("Class", "Class"),
@@ -296,6 +307,9 @@ REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
     "json_validate": ("JSON", "JSON"),
     "mb_ereg_match": ("Regex", "Regex"),
     "method_exists": ("Class", "Class"),
+    "preg_grep": ("Regex", "Regex"),
+    "preg_last_error": ("Regex", "Regex"),
+    "preg_last_error_msg": ("Regex", "Regex"),
     "preg_match": ("Regex", "Regex"),
     "preg_match_all": ("Regex", "Regex"),
     "preg_replace": ("Regex", "Regex"),
@@ -442,10 +456,17 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'curl_share_setopt': ['CurlShareHandle', 'int', 'mixed'],
     'curl_unescape': ['CurlHandle', 'string'],
     'curl_upkeep': ['CurlHandle'],
-    'ctype_alnum': ['string'],
-    'ctype_alpha': ['string'],
-    'ctype_digit': ['string'],
-    'ctype_space': ['string'],
+    'ctype_alnum': ['mixed'],
+    'ctype_alpha': ['mixed'],
+    'ctype_cntrl': ['mixed'],
+    'ctype_digit': ['mixed'],
+    'ctype_graph': ['mixed'],
+    'ctype_lower': ['mixed'],
+    'ctype_print': ['mixed'],
+    'ctype_punct': ['mixed'],
+    'ctype_space': ['mixed'],
+    'ctype_upper': ['mixed'],
+    'ctype_xdigit': ['mixed'],
     'current': ['array'],
     'date': ['string', 'int'],
     'date_default_timezone_set': ['string'],

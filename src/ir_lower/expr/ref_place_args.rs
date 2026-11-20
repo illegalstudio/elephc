@@ -119,7 +119,7 @@ pub(super) fn rewrite_typed_property_ref_args(
     sig: &FunctionSig,
     args: &[Expr],
 ) -> Option<RefPlaceRewrite> {
-    rewrite_property_ref_args(ctx, sig, args, false)
+    rewrite_property_ref_args(ctx, sig, args, true)
 }
 
 /// Keeps eligible source-function property references live instead of detaching their value.
@@ -200,6 +200,10 @@ fn rewrite_property_ref_args(
             continue;
         }
         let place = stabilize_place(ctx, place_arg);
+        let property_place = matches!(
+            place.kind,
+            ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+        );
         let value_type = static_place_type(ctx, &place)
             .map(normalize_value_php_type)
             .unwrap_or(PhpType::Mixed);
@@ -218,14 +222,34 @@ fn rewrite_property_ref_args(
             || matches!(
                 value_type.codegen_repr(),
                 PhpType::Object(_) | PhpType::Mixed
-            );
+            )
+            || (matches!(
+                expected_ty.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_)
+            ) && !container_element);
+        let place_label = property_place_label(ctx, place_arg);
         // A variadic collector transports reference markers in a boxed array, so its property
-        // places always travel as boxed Mixed cells. Fixed scalar/string/array slots are passed
-        // by address and must stay unboxed; fixed object/mixed slots need the same boxed cell.
-        let temp_type = if variadic_tail { PhpType::Mixed } else { value_type.clone() };
+        // places always travel as boxed Mixed cells. A `mixed`/union parameter boxes the
+        // property too: the callee's ABI cell is Mixed, and the write-back narrows it back to
+        // the declared property type. Fixed object/mixed slots need the same boxed cell.
+        // Fixed scalar/string/array property slots keep their raw payload and are promoted into
+        // a managed cell carrying the typed-reference acceptance rule instead. Typed array
+        // elements keep their own container write-back path.
+        let temp_type = if promoted { PhpType::Mixed } else { value_type.clone() };
         let temp = ctx.declare_synthetic_php_local(temp_type.clone());
         if promoted {
             ctx.promote_local_mixed_ref_cell(&temp, Some(place_arg.span));
+        } else if property_place {
+            if let Some(type_code) =
+                crate::types::param_binding::property_ref_type_code(&value_type)
+            {
+                let suffix = format!(
+                    " to reference held by property {} of type {}",
+                    place_label,
+                    crate::types::diagnostic_names::php_type_name(&value_type),
+                );
+                ctx.promote_local_property_ref_cell(&temp, &suffix, type_code, Some(place_arg.span));
+            }
         }
         // The snapshot and the hidden reference value are taken at THIS argument's source
         // position, not while planning the call: `g(noise(), $box->n)` must observe the
@@ -266,7 +290,7 @@ fn rewrite_property_ref_args(
         };
         plans.push(RefPlacePlan {
             index,
-            place_label: property_place_label(ctx, place_arg),
+            place_label,
             place,
             temp,
             temp_type: value_type,
@@ -1187,7 +1211,7 @@ fn place_object_class_name(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Opti
 /// `static_place_type` already resolved, and that resolver matches exactly the variants below.
 /// An unmatched shape is returned unchanged, which is the conservative identity — it cannot be
 /// reached without emitting IR for a place this module then refuses to write back.
-fn stabilize_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr) -> Expr {
+pub(super) fn stabilize_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr) -> Expr {
     match &place.kind {
         ExprKind::PropertyAccess { object, property } => {
             let object = stabilize_place(ctx, object);
@@ -1222,6 +1246,36 @@ fn stabilize_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr) -> Expr {
         }
         _ => place.clone(),
     }
+}
+
+/// Stabilizes a property place for a by-reference argument.
+///
+/// A variable receiver can be reassigned by a later argument (`f($box->p, $box = $other)`),
+/// but PHP binds the property of the object that was there when the first argument was
+/// evaluated. Capture that object in a hidden local so the deferred guard and the write-back
+/// keep addressing it instead of the replacement.
+pub(super) fn stabilize_property_receiver_place(
+    ctx: &mut LoweringContext<'_, '_>,
+    place: &Expr,
+) -> Expr {
+    let place = stabilize_place(ctx, place);
+    let ExprKind::PropertyAccess { object, property } = &place.kind else {
+        return place;
+    };
+    if !matches!(object.kind, ExprKind::Variable(_)) {
+        return place;
+    }
+    let value = lower_expr(ctx, object);
+    let value_type = ctx.builder.value_php_type(value.value);
+    let temp = ctx.declare_synthetic_php_local(value_type.clone());
+    ctx.store_local(&temp, value, value_type, Some(object.span));
+    Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(Expr::new(ExprKind::Variable(temp), object.span)),
+            property: property.clone(),
+        },
+        place.span,
+    )
 }
 
 /// Evaluates a container index once when re-evaluating it could repeat a side effect.

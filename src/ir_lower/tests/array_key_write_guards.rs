@@ -38,8 +38,8 @@ fn array_key_write_guards_native_preserve_order_and_owners() {
                 let output = super::native_module::run(&module);
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 assert!(output.status.success(), "keys={keys} opt={optimize} mode={mode:?}: {:?}; {stderr}", output.status);
-                let expected = if keys { "KVE1:2:3:1|KVE1:2:3:1|KVE1:2:3:1|VE1:2|KVEarray|KVENULL|KVWstring|KVDE|" }
-                    else { "KVW9:2:3:1|KVW1:9:3:1|KVW1:2:9:1|VW1:9|KVWarray|KVWarray|KVWstring|KVWD|" };
+                let expected = if keys { "KVE1:2:3:1|KVE1:2:3:1|KVE1:2:3:1|VE1:2|KVEarray|KVENULL|KVEboolean|KVWstring|KVDE|GKVE1|" }
+                    else { "KVW9:2:3:1|KVW1:9:3:1|KVW1:2:9:1|VW1:9|KVWarray|KVWarray|KVWarray|KVWstring|KVWD|GKVW1|" };
                 assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{stderr}");
                 assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
             }

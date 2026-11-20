@@ -17,7 +17,7 @@ fn lower(target: Target, strict: bool, optimize: bool, mode: SourceMode) -> crat
     let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, strict);
     let mut program = crate::parser::parse_with_mode(&crate::lexer::tokenize(SOURCE).unwrap(), mode).unwrap();
     let mut inventory = crate::optimize::reachability::PreludeInventory::new();
-    program = crate::core_prelude::inject_if_used(program, &mut inventory);
+    program = crate::core_prelude::inject_if_used(program, false, false, &mut inventory);
     program = crate::object_cast_prelude::inject_with_semantics(program, &mut inventory, profile).unwrap();
     program = crate::name_resolver::resolve(program).unwrap();
     let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();

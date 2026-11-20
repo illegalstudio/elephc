@@ -121,10 +121,7 @@ pub(super) fn stable_payload_types(
             // A promotion allocates from the owner slot only when the target can still be raw.
             // Once every incoming path already stores a cell, it is idempotent and must not
             // conflict with a narrower payload ABI established by an external binding.
-            (
-                Op::PromoteLocalRefCell,
-                Some(Immediate::LocalSlotPair { .. }),
-            ) => (!definite_ref_cell_slots_before_inst
+            (Op::PromoteLocalRefCell, _) => (!definite_ref_cell_slots_before_inst
                 .contains(&(InstId::from_raw(index as u32), slot)))
                 .then(|| function.locals.get(slot.as_raw() as usize).map(|local| local.php_type.clone()))
                 .flatten(),

@@ -28,7 +28,7 @@ pub(crate) fn emit_phpext_exports(
     );
     let error = data.add_string(b"elephc PHP extension runtime failure");
     emit_error_helpers(emitter, target);
-    lifecycle::emit(emitter, target, heap_debug, startup, (&error.0, error.1));
+    lifecycle::emit(emitter, target, heap_debug, startup, (&error.0, error.1), None);
     emit_object_retain(emitter);
     for export in exports { emit_export(emitter, export, heap_debug); }
 }

@@ -94,6 +94,8 @@ impl Rewriter {
             // Statements with no expression and no nested body.
             StmtKind::Break(_)
             | StmtKind::Continue(_)
+            | StmtKind::Goto(_)
+            | StmtKind::GotoLabel(_)
             | StmtKind::IncludeOnceMark { .. }
             | StmtKind::NamespaceDecl { .. }
             | StmtKind::UseDecl { .. }

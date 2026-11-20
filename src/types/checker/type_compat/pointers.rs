@@ -172,10 +172,24 @@ impl Checker {
             crate::parser::ast::TypeExpr::Never => Ok(PhpType::Never),
             crate::parser::ast::TypeExpr::Iterable => Ok(PhpType::Iterable),
             crate::parser::ast::TypeExpr::Array(inner) => {
-                Ok(PhpType::Array(Box::new(self.resolve_type_expr(inner, span)?)))
+                Ok(PhpType::Array(Box::new(self.resolve_type_expr(inner, span)?.as_container_element())))
             }
             crate::parser::ast::TypeExpr::AssocArray { key, value } => {
-                let key_ty = self.resolve_type_expr(key, span)?;
+                let key_ty = match self.resolve_type_expr(key, span)? {
+                    // `array-key` (`int|string`) is PHP's own key domain, and an OBJECT key can
+                    // only come from a substituted PHPDoc template (`Collection<TValue, TKey>`
+                    // on `flip()`): php-src never stores either as a typed key. Both are read
+                    // as the mixed key storage that holds any int or string key.
+                    PhpType::Union(members)
+                        if members
+                            .iter()
+                            .all(|m| matches!(m, PhpType::Int | PhpType::Str)) =>
+                    {
+                        PhpType::Mixed
+                    }
+                    PhpType::Object(_) => PhpType::Mixed,
+                    other => other,
+                };
                 if !matches!(key_ty, PhpType::Int | PhpType::Str | PhpType::Mixed) {
                     return Err(CompileError::new(
                         span,
@@ -187,7 +201,7 @@ impl Checker {
                 }
                 Ok(PhpType::AssocArray {
                     key: Box::new(key_ty),
-                    value: Box::new(self.resolve_type_expr(value, span)?),
+                    value: Box::new(self.resolve_type_expr(value, span)?.as_container_element()),
                 })
             }
             crate::parser::ast::TypeExpr::Nullable(inner) => {
@@ -243,7 +257,7 @@ impl Checker {
                 match name_str.to_ascii_lowercase().as_str() {
                     "string" => Ok(PhpType::Str),
                     "mixed" => Ok(PhpType::Mixed),
-                    "callable" => Ok(PhpType::Callable),
+                    "callable" => Ok(PhpType::DeclaredCallable),
                     "closure" => Ok(PhpType::Callable),
                     "object" => Ok(PhpType::Object(String::new())),
                     "void" | "null" => Ok(PhpType::Void),

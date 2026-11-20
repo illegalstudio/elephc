@@ -375,6 +375,40 @@ pub(crate) fn program_declares(program: &[Stmt], target: &str) -> bool {
     program.iter().any(|stmt| stmt_declares(stmt, target))
 }
 
+/// Returns whether the program declares its own GLOBAL `target` function, ignoring a
+/// same-named function declared inside a namespace.
+///
+/// [`program_declares`] compares bare names, which is what a prelude needs when it cannot
+/// tell `App\f()` from `\f()` before name resolution. A prelude that provides a global PHP
+/// function must still be injected next to a namespaced homonym: that one never collides with
+/// the global declaration, and a global or unqualified fallback call still needs it.
+pub(crate) fn program_declares_global(program: &[Stmt], target: &str) -> bool {
+    body_declares_global(program, true, target)
+}
+
+/// Walks one statement list whose statements start in the global namespace when `global`,
+/// following `namespace X;` statements, which move every statement after them into `X`.
+fn body_declares_global(body: &[Stmt], mut global: bool, target: &str) -> bool {
+    for stmt in body {
+        let found = match &stmt.kind {
+            StmtKind::FunctionDecl { name, .. } => global && name.eq_ignore_ascii_case(target),
+            StmtKind::NamespaceDecl { name } => {
+                global = name.is_none();
+                false
+            }
+            StmtKind::NamespaceBlock { name, body } => body_declares_global(body, name.is_none(), target),
+            // An included file starts back in the global namespace.
+            StmtKind::IncludeOnceGuard { body, .. } => body_declares_global(body, true, target),
+            StmtKind::Synthetic(body) => body_declares_global(body, global, target),
+            _ => false,
+        };
+        if found {
+            return true;
+        }
+    }
+    false
+}
+
 /// Returns the span of the program's own declaration of `target`, if it has one.
 ///
 /// [`program_declares`] answers the question a prelude that lets the USER definition win needs;
@@ -719,6 +753,8 @@ fn stmt_refs(stmt: &Stmt, target: Symbol<'_>) -> Option<Span> {
         StmtKind::RefAssign { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
@@ -1031,6 +1067,20 @@ enum DeclarationOwner {
         let program = parse(r#"<?php function opcache_reset(): bool { return true; }"#);
         assert!(program_declares(&program, RESET));
         assert!(!program_declares(&program, GET_CONFIGURATION));
+    }
+
+    /// Only a global declaration counts for `program_declares_global`: a function declared in
+    /// a braced or a statement-form namespace is a different function.
+    #[test]
+    fn global_declaration_ignores_namespaced_homonyms() {
+        let braced = parse(r#"<?php namespace App { function preg_grep() {} } namespace { preg_grep('/a/', []); }"#);
+        assert!(program_declares(&braced, "preg_grep"));
+        assert!(!program_declares_global(&braced, "preg_grep"));
+        let statement = parse("<?php\nnamespace App;\nfunction preg_grep() {}\n");
+        assert!(!program_declares_global(&statement, "preg_grep"));
+        let global_block = parse(r#"<?php namespace App { } namespace { function preg_grep() {} }"#);
+        assert!(program_declares_global(&global_block, "preg_grep"));
+        assert!(program_declares_global(&parse(r#"<?php function PREG_GREP() {}"#), "preg_grep"));
     }
 
     /// A program that only calls it does not count as declaring it.

@@ -116,7 +116,6 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_range(emitter);
     arrays::emit_shuffle(emitter);
     arrays::emit_mt_uniform(emitter);
-    arrays::emit_array_rand(emitter);
     arrays::emit_array_fill(emitter);
     arrays::emit_array_fill_assoc(emitter);
     arrays::emit_array_fill_refcounted(emitter);
@@ -217,6 +216,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_mixed_reference(emitter);
     arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);
+    arrays::emit_mixed_reuse_int_cell(emitter);
     arrays::emit_mixed_from_owned_string(emitter);
     arrays::emit_mixed_cast_array(emitter);
     arrays::emit_mixed_abs(emitter);
@@ -306,6 +306,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_min_max_mixed(emitter);
     arrays::emit_min_max_str(emitter);
     arrays::emit_min_max_hash(emitter);
+    arrays::emit_mixed_min_max(emitter);
     objects::emit_obj_enum_kind(emitter);
     objects::emit_obj_enum_name_offset(emitter);
     objects::emit_obj_enum_case_name(emitter);

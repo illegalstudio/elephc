@@ -746,3 +746,85 @@ var_dump($child->make(), $child->name());
 "#);
     assert_eq!(out, "NULL\nstring(5) \"child\"\n");
 }
+
+/// A covariant return may name a class the name-ordered class-build walk has not reached yet:
+/// `BDef::make(): ZEnumNode` overrides `ADef::make(): Node` before `ZEnumNode` is built, both
+/// for a subclass of the parent's return class and for a class implementing the parent's
+/// return interface through an ancestor.
+#[test]
+fn test_covariant_return_to_a_class_built_later() {
+    let out = compile_and_run(
+        r#"<?php
+namespace N;
+interface Node {}
+interface Scalar extends Node {}
+class Variable implements Scalar {}
+class ZEnumNode extends Variable {}
+class ADef { public function make(): Node { return new Variable(); } public function get(): Node { return $this->make(); } }
+class BDef extends ADef { public function make(): ZEnumNode { return new ZEnumNode(); } }
+class CDef extends ADef { public function make(): Scalar { return new ZEnumNode(); } }
+class ScalarDef { protected function make(): Variable { return new Variable(); } public function get(): Variable { return $this->make(); } }
+class EnumDef extends ScalarDef { protected function make(): ZEnumNode { return new ZEnumNode(); } }
+echo get_class((new BDef())->get()), "|", get_class((new CDef())->get()), "|", get_class((new EnumDef())->get());
+"#,
+    );
+    assert_eq!(out, "N\\ZEnumNode|N\\ZEnumNode|N\\ZEnumNode");
+}
+
+/// Enums are built after every class, so a covariant return to an enum implementing the
+/// parent's (or interface's) return interface is related through the enum's declaration.
+#[test]
+fn test_covariant_return_to_an_enum_implementing_the_interface() {
+    let out = compile_and_run(
+        r#"<?php
+namespace T;
+interface TokenType { public function label(): string; }
+interface Pattern { public function getTokenType(): TokenType; }
+enum TokenTypeEnum: string implements TokenType { case KEYWORD = 'keyword'; public function label(): string { return $this->value; } }
+final class ApacheCloseTagPattern implements Pattern { public function getTokenType(): TokenTypeEnum { return TokenTypeEnum::KEYWORD; } }
+abstract class Base { abstract public function kind(): TokenType; }
+final class Child extends Base { public function kind(): TokenTypeEnum { return TokenTypeEnum::KEYWORD; } }
+echo (new ApacheCloseTagPattern())->getTokenType()->label(), "|", (new Child())->kind()->label();
+"#,
+    );
+    assert_eq!(out, "keyword|keyword");
+}
+
+/// Every enum implicitly implements `UnitEnum` (and a backed one `BackedEnum`), which its
+/// declaration does not spell: a class method may still narrow `UnitEnum`/`?UnitEnum`/
+/// `BackedEnum` to an enum, which is only built after every class.
+#[test]
+fn test_covariant_return_to_an_enum_through_its_implicit_enum_interface() {
+    let out = compile_and_run(
+        r#"<?php
+enum Kind: string { case A = 'a'; }
+abstract class Backed { abstract public function make(): BackedEnum; }
+class BackedKind extends Backed { public function make(): Kind { return Kind::A; } }
+abstract class Unit { abstract public function make(): ?UnitEnum; }
+class UnitKind extends Unit { public function make(): ?Kind { return Kind::A; } }
+echo (new BackedKind())->make()->value, "|", (new UnitKind())->make()->name;
+"#,
+    );
+    assert_eq!(out, "a|A");
+}
+
+/// An `iterable` return may be narrowed to a class the name-ordered class-build walk has not
+/// reached yet: one implementing `IteratorAggregate` through a user interface, and one that is
+/// `Iterator` through its built `ArrayIterator` parent.
+#[test]
+fn test_covariant_iterable_return_to_a_class_built_later() {
+    let out = compile_and_run(
+        r#"<?php
+interface Items extends IteratorAggregate {}
+class ZItems implements Items { public function getIterator(): Iterator { return new ArrayIterator([1, 2]); } }
+class ZList extends ArrayIterator {}
+class AFactory { public function make(): iterable { return [0]; } }
+class BFactory extends AFactory { public function make(): ZItems { return new ZItems(); } }
+class CFactory extends AFactory { public function make(): ZList { return new ZList([3]); } }
+foreach ((new BFactory())->make() as $v) { echo $v; }
+echo "|";
+foreach ((new CFactory())->make() as $v) { echo $v; }
+"#,
+    );
+    assert_eq!(out, "12|3");
+}

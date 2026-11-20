@@ -181,6 +181,21 @@ pub enum ThrowAccessKind {
         /// Method name without the trailing parentheses (e.g. `secret`).
         method: String,
     },
+    /// A private/protected constructor call from an inaccessible scope.
+    PrivateConstructor {
+        /// Visibility label (`private` or `protected`).
+        visibility: String,
+        /// Class declaring the constructor (e.g. `C`).
+        class_name: String,
+    },
+    /// A call to a method PHP does not expose to user code even though the class declares
+    /// a compiler-owned implementation of it (the internal URI classes' destructor).
+    UndefinedMethod {
+        /// Class holding the method (e.g. `Uri\\Rfc3986\\Uri`).
+        class_name: String,
+        /// Method name without the trailing parentheses (e.g. `__destruct`).
+        method: String,
+    },
     /// A readonly write requiring a runtime initialization check.
     ReadonlyProperty {
         /// Class holding the property (e.g. `Box`).
@@ -194,6 +209,25 @@ pub enum ThrowAccessKind {
     ReflectionReadOnlyProperty {
         /// Property name without the leading `$`.
         property: String,
+    },
+    /// A property argument whose declared storage cannot satisfy a typed by-reference
+    /// parameter. PHP raises the call-site `TypeError` before the callee body runs; lowering
+    /// reports this exact message and skips the callee.
+    ReferenceArgumentType {
+        /// The complete diagnostic prefix through `must be of type T, `; lowering appends
+        /// the property's CURRENT runtime type and ` given`.
+        prefix: String,
+        /// The declared parameter type the property's current value must satisfy.
+        expected: PhpType,
+        /// Whether a current value could satisfy the parameter. A union/mixed property needs
+        /// the runtime guard; a concrete disjoint type throws unconditionally.
+        conditional: bool,
+        /// Whether the place is an UNTYPED property. PHP weakly coerces its current value to
+        /// a declared scalar by-reference parameter; a declared property (including `mixed`)
+        /// is checked without coercion.
+        coerces_weakly: bool,
+        /// The declared property type's PHP name, used by the unconditional path.
+        given: String,
     },
 }
 
@@ -215,6 +249,13 @@ pub struct ArrayPushPropertyPlan {
 pub struct CheckResult {
     /// Effective semantic guarantees consumed by lowering and code generation.
     pub semantic_profile: elephc_semantics::SemanticProfile,
+    /// Default expressions php-src evaluates when execution reaches a class or trait statement
+    /// whose properties compatibly redeclare a used trait's, keyed by class or trait name. A
+    /// trait has no `ClassInfo`, so lowering reads its entry here.
+    pub trait_collision_defaults: HashMap<String, Vec<crate::types::TraitCollisionDefault>>,
+    /// How each user class-like is bound (compile time or at its statement) and where its
+    /// trait-imported properties come from.
+    pub class_binding: crate::types::ClassBindingFacts,
     /// Every instantiation a call site asked for, as (template name, type arguments).
     ///
     /// The pipeline splices one declaration per entry into the program and re-checks, because
@@ -245,6 +286,10 @@ pub struct CheckResult {
     pub function_attribute_names: HashMap<String, Vec<String>>,
     pub function_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Function names written as string literals where a declared `callable` keeps the
+    /// string. Runtime string dispatch must reach each of them, including builtins it would
+    /// not resolve from an arbitrary runtime name.
+    pub declared_callable_names: std::collections::BTreeSet<String>,
     /// Proven return-to-parameter storage aliases for source-declared callables.
     pub(crate) return_alias_summaries: ReturnAliasSummaries,
     #[allow(dead_code)]
@@ -261,8 +306,11 @@ pub struct CheckResult {
     pub required_libraries: Vec<String>,
     pub warnings: Vec<CompileWarning>,
     /// Statically-decided access violations lowered to runtime exception throws,
-    /// keyed by the source span of the offending call/assignment.
-    pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
+    /// keyed by the owning body scope and the source span of the offending
+    /// call/assignment. The scope half is `current_loop_storage_scope`; a trait body is
+    /// checked once per using class, so its spans alone cannot identify which class's
+    /// property/method the site resolved against.
+    pub throw_access_sites: HashMap<(String, Span), ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls, keyed by call span.
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Closure literals whose checked source bodies contain yield, keyed by source identity.

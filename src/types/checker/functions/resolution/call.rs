@@ -178,15 +178,17 @@ impl Checker {
             }
             let mut effective_sig =
                 Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
+            let tidy_validation = self.tidy_strict_adapter_signature(Some(name), None, None, &effective_sig);
+            let validation_sig = tidy_validation.as_ref().unwrap_or(&effective_sig);
             let plan = self.plan_named_call_args(
-                &effective_sig,
+                validation_sig,
                 args,
                 span,
                 &format!("Function '{}'", name),
                 caller_env,
             )?;
             self.validate_callable_spread_elements(
-                &effective_sig,
+                validation_sig,
                 args,
                 &plan,
                 caller_env,
@@ -226,10 +228,12 @@ impl Checker {
                 effective_sig =
                     Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
             }
+            let tidy_validation = self.tidy_strict_adapter_signature(Some(name), None, None, &effective_sig);
+            let validation_sig = tidy_validation.as_ref().unwrap_or(&effective_sig);
             return self.check_normalized_resolved_function_call(
                 name,
                 &sig,
-                &effective_sig,
+                validation_sig,
                 &normalized_args,
                 &defaults,
                 &descriptor_projections,
@@ -377,9 +381,20 @@ impl Checker {
             }
         }
 
+        // Spreads and named arguments decide which parameter a spread element binds, so a
+        // possible callable literal anywhere in the planned arguments is recorded.
+        let call_declares_callable = decl
+            .param_types
+            .iter()
+            .flatten()
+            .chain(decl.variadic_type.iter())
+            .any(crate::parser::ast::TypeExpr::declares_callable);
         let mut param_types = Vec::new();
         let mut arg_idx = 0;
         for arg in args {
+            if call_declares_callable {
+                self.record_static_callable_literals(arg);
+            }
             let ty = self.infer_type(arg, caller_env)?;
             if let ExprKind::Spread(_) = &arg.kind {
                 for i in arg_idx..decl.params.len() {
@@ -478,16 +493,39 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
+                    let lvalue = self.is_by_ref_argument_lvalue(arg, caller_env)?;
                     let property_place = match declared_ty.as_ref() {
                         Some(expected_ty) => {
-                            self.by_ref_property_place(arg, expected_ty, caller_env)?
+                            (matches!(
+                                arg.kind,
+                                ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }
+                            ) && self.property_ref_argument_supported(
+                                arg,
+                                expected_ty,
+                                caller_env,
+                            )?)
+                                || self.by_ref_property_place(arg, expected_ty, caller_env)?
                         }
-                        None if crate::types::checked_property_references(self.semantic_profile) => {
-                            self.by_ref_property_place(arg, &PhpType::Mixed, caller_env)?
+                        // An undeclared by-reference parameter is PHP `mixed`: a property place
+                        // must bind its live cell, which `property_ref_argument_supported`
+                        // records (and widens) for an untyped slot.
+                        None => {
+                            (matches!(
+                                arg.kind,
+                                ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }
+                            ) && self.property_ref_argument_supported(
+                                arg,
+                                &crate::types::PhpType::Mixed,
+                                caller_env,
+                            )?)
+                                || self.by_ref_property_place(
+                                    arg,
+                                    &crate::types::PhpType::Mixed,
+                                    caller_env,
+                                )?
                         }
-                        None => false,
                     };
-                    if !property_place && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    if !property_place && !lvalue {
                         return Err(CompileError::new(
                             arg.span,
                             &format!(
@@ -511,12 +549,18 @@ impl Checker {
                             .callable_array_param_target(arg, caller_env)?
                             .is_some();
                     if supplied_reference {
+                        let layout_contract = crate::types::is_written_reference_array_param(
+                            &decl.ref_params,
+                            &decl.param_types,
+                            arg_idx,
+                        );
                         self.require_boxed_by_ref_storage(
                             &declared_ty,
                             &ty,
                             arg,
                             caller_env,
                             can_widen_by_ref_local,
+                            layout_contract,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
                         self.record_boxed_reference_output(
@@ -525,6 +569,16 @@ impl Checker {
                             &ty,
                             span,
                             caller_env,
+                            layout_contract,
+                        )?;
+                    }
+                    if !supplied_reference {
+                        // A by-value list is rebuilt as the declared hash; refuse what cannot be.
+                        self.require_packed_argument_hash_storage(
+                            &declared_ty,
+                            &ty,
+                            arg.span,
+                            &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
                     }
                     if !proven_callable_array {
@@ -536,10 +590,19 @@ impl Checker {
                             &format!("Function '{}' parameter ${}", name, param_name),
                             Some((name, decl.params[arg_idx].as_str())),
                             supplied_reference,
+                            arg_idx + 1,
                         )?;
                     }
-                    let specialized_ty =
-                        Self::specialize_generic_array_param_hint(&declared_ty, &ty);
+                    // A written by-reference array type is a storage contract, not a hint.
+                    let specialized_ty = if Self::is_written_reference_array_param(
+                        &decl.ref_params,
+                        &decl.param_types,
+                        arg_idx,
+                    ) {
+                        declared_ty.clone()
+                    } else {
+                        Self::specialize_generic_array_param_hint(&declared_ty, &ty)
+                    };
                     param_types.push((decl.params[arg_idx].clone(), specialized_ty));
                     arg_idx += 1;
                     continue;
@@ -564,6 +627,7 @@ impl Checker {
                         arg,
                         caller_env,
                         can_widen_by_ref_local,
+                        false,
                         &format!("Function '{}' parameter ${}", name, param_name),
                     )?;
                     self.record_boxed_reference_output(
@@ -572,6 +636,7 @@ impl Checker {
                         &ty,
                         span,
                         caller_env,
+                        false,
                     )?;
                 }
                 param_types.push((decl.params[arg_idx].clone(), storage_ty));
@@ -601,12 +666,29 @@ impl Checker {
                         decl.span,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
                     )?;
+                    self.require_declared_callable_variadic_arg(
+                        &elem_ty,
+                        &ty,
+                        arg,
+                        caller_env,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                        decl.variadic_by_ref,
+                    )?;
                     self.require_compatible_arg_type(
                         &elem_ty,
                         &ty,
                         arg.span,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
                     )?;
+                    if !decl.variadic_by_ref {
+                        // A collected list is rebuilt as the element hash, or refused.
+                        self.require_packed_argument_hash_storage(
+                            &elem_ty,
+                            &ty,
+                            arg.span,
+                            &format!("Function '{}' variadic parameter ${}", name, vname),
+                        )?;
+                    }
                     // PHP applies `strict_types` to a variadic element exactly like a regular
                     // declared parameter, so the strict rejection runs here too; the coercive
                     // widenings `require_compatible_arg_type` allows are unchanged otherwise.

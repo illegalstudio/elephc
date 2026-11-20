@@ -20,6 +20,7 @@ use crate::codegen_support::try_handlers::{
 };
 use crate::exports::{is_string_return_signature, ExportedFunction, ELEPHC_ABI_VERSION};
 
+mod apm;
 mod boundary;
 mod owned_string;
 mod lifecycle;
@@ -82,6 +83,7 @@ pub(crate) fn emit_cdylib_exports(
     exports: &[&ExportedFunction],
     heap_debug: bool,
     startup: Option<&str>,
+    apm: Option<LibraryApm>,
 ) {
     reserve_boundary_data(data);
     let (invalid_ptr, invalid_len) = data.add_string(b"invalid string export arguments");
@@ -90,6 +92,25 @@ pub(crate) fn emit_cdylib_exports(
 
     emit_error_helpers(emitter, target);
     for export in exports {
+        // Under `--with-apm` the public symbol is a trampoline counting the
+        // call, in front of the ordinary wrapper under another name.
+        let renamed;
+        let export: &ExportedFunction = if apm.is_some() {
+            let inner_name = format!("{}{}", apm::INNER_PREFIX, export.c_name);
+            let stack_words = apm::stack_words(emitter, export);
+            apm::emit_trampoline(
+                emitter,
+                data,
+                &target.extern_symbol(&export.c_name),
+                &target.extern_symbol(&inner_name),
+                &export.c_name,
+                stack_words,
+            );
+            renamed = ExportedFunction { c_name: inner_name, ..ExportedFunction::clone(export) };
+            &renamed
+        } else {
+            *export
+        };
         if is_string_return_signature(&export.source_sig) {
             owned_string::emit_owned_string_export(
                 emitter,
@@ -112,7 +133,15 @@ pub(crate) fn emit_cdylib_exports(
             );
         }
     }
-    lifecycle::emit(emitter, target, heap_debug, startup, (&runtime_ptr, runtime_len));
+    lifecycle::emit(emitter, target, heap_debug, startup, (&runtime_ptr, runtime_len), apm);
+}
+
+/// Transaction monitoring in a library (`--with-apm`): `elephc_init` starts
+/// it, and every export call is counted.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LibraryApm {
+    /// Whether an `--apm-collector` address is embedded to send the counts to.
+    pub(crate) collector: bool,
 }
 
 /// Runs optional non-PHP initialization after host inputs are saved and before installing the PHP handler.
@@ -487,7 +516,7 @@ mod tests {
         let mut emitter = Emitter::new_cdylib(target);
         let mut data = DataSection::new();
         let export = string_export();
-        emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
+        emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None, None);
         let asm = emitter.output();
         assert!(asm.contains("_roundtrip:"));
         assert!(asm.contains("bl __setjmp"));
@@ -525,7 +554,7 @@ mod tests {
             let mut emitter = Emitter::new_cdylib(target);
             let mut data = DataSection::new();
             let export = string_export();
-            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None, None);
             let asm = emitter.output();
 
             assert!(
@@ -556,7 +585,7 @@ mod tests {
             let mut emitter = Emitter::new_cdylib(target);
             let mut data = DataSection::new();
             let export = string_export();
-            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None, None);
             let asm = emitter.output();
             let init_label = format!("{}:", target.extern_symbol("elephc_init"));
             let shutdown_label = format!("{}:", target.extern_symbol("elephc_shutdown"));
@@ -584,7 +613,7 @@ mod tests {
         let mut emitter = Emitter::new_cdylib(target);
         let mut data = DataSection::new();
         let export = string_export();
-        emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
+        emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None, None);
         let asm = emitter.output();
         assert!(asm.contains("roundtrip:"));
         assert!(asm.contains("call _setjmp"));
@@ -617,7 +646,7 @@ mod tests {
             let mut data = DataSection::new();
             let export = string_export();
             emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false,
-                Some("__rt_mbstring_startup_status"));
+                Some("__rt_mbstring_startup_status"), None);
             let asm = emitter.output();
             let lazy_init = asm.find("__rt_stack_limit_init").unwrap();
             let configure = asm.find("__rt_mbstring_startup_status").unwrap();
@@ -676,7 +705,7 @@ mod tests {
             let mut data = DataSection::new();
             let mut export = string_export();
             add_internal_collector(&mut export);
-            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None);
+            emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None, None);
             let asm = emitter.output();
             let public_label = if matches!(target.platform, Platform::MacOS) {
                 "_roundtrip:"
@@ -713,5 +742,63 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Under `--with-apm` the public symbol counts the call around the
+    /// renamed wrapper on every target; `elephc_init` starts monitoring and
+    /// `elephc_shutdown` sends the last counts.
+    #[test]
+    fn apm_exports_count_calls_around_the_wrapper_on_all_targets() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            let mut data = DataSection::new();
+            let export = string_export();
+            emit_cdylib_exports(
+                &mut emitter,
+                &mut data,
+                target,
+                &[&export],
+                false,
+                None,
+                Some(LibraryApm { collector: true }),
+            );
+            let asm = emitter.output();
+            let public = format!("{}:", target.extern_symbol(&export.c_name));
+            let inner = target.extern_symbol(&format!("{}{}", apm::INNER_PREFIX, export.c_name));
+            let body = &asm[asm.find(&public).expect("the public symbol")..];
+            let begin = body.find(&target.extern_symbol("elephc_probe_txn_begin")).expect("opens the transaction");
+            let call = body.find(&inner).expect("calls the wrapper");
+            let end = body.find(&target.extern_symbol("elephc_probe_txn_end")).expect("closes the transaction");
+            assert!(begin < call && call < end, "{target:?}: begin, wrapper, end:\n{body}");
+            assert!(asm.contains(&format!("{inner}:")), "{target:?}: the wrapper keeps its body under its new name");
+            assert!(asm.contains(&target.extern_symbol("elephc_probe_apm_init")), "{target:?}: elephc_init starts it");
+            // With counting on at once: a library has no `--apm` to pass (review).
+            let init = &asm[asm.find(&format!("{}:", target.extern_symbol("elephc_init"))).unwrap()..];
+            let call = init.find(&target.extern_symbol("elephc_probe_apm_init")).unwrap();
+            let enable = match target.arch {
+                Arch::AArch64 => "mov x2, #1",
+                Arch::X86_64 => "mov rdx, 1",
+            };
+            assert!(init[..call].contains(enable), "{target:?}: elephc_init enables counting:\n{}", &init[..call]);
+            assert!(asm.contains(&target.extern_symbol("elephc_probe_apm_shutdown")), "{target:?}: elephc_shutdown sends and stops the sending thread");
+        }
+    }
+
+    /// Without `--with-apm` the export is the wrapper itself, as before.
+    #[test]
+    fn exports_without_apm_have_no_trampoline() {
+        let target = Target::new(Platform::Linux, Arch::X86_64);
+        let mut emitter = Emitter::new_cdylib(target);
+        let mut data = DataSection::new();
+        let export = string_export();
+        emit_cdylib_exports(&mut emitter, &mut data, target, &[&export], false, None, None);
+        let asm = emitter.output();
+        assert!(!asm.contains(apm::INNER_PREFIX) && !asm.contains("elephc_probe_txn_begin"));
     }
 }

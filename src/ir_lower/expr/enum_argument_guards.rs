@@ -120,7 +120,7 @@ pub(super) fn accepts_type(ty: &PhpType, value: &Expr, span: Span) -> Option<Exp
             value: Box::new(value.clone()),
             target: InstanceOfTarget::Name(Name::unqualified("Traversable")),
         }, span)),
-        PhpType::Callable => predicate("is_callable"),
+        PhpType::Callable | PhpType::DeclaredCallable => predicate("is_callable"),
         PhpType::Array(_) | PhpType::AssocArray { .. } => predicate("is_array"),
         PhpType::Object(class) if class.is_empty() || class.eq_ignore_ascii_case("object") =>
             predicate("is_object"),
@@ -145,7 +145,7 @@ fn predicate(name: &str, value: &Expr, span: Span) -> Expr {
 }
 
 /// Produces PHP's diagnostic type names instead of gettype's historical aliases.
-fn runtime_type(value: &Expr, expected: &PhpType, span: Span) -> Expr {
+pub(super) fn runtime_type(value: &Expr, expected: &PhpType, span: Span) -> Expr {
     runtime_type_with_bool_literals(value, contains_false(expected), span)
 }
 
@@ -208,6 +208,74 @@ pub(super) fn concat(left: Expr, right: Expr, span: Span) -> Expr {
     }, span)
 }
 
+/// Re-checks every by-reference property write performed by the call that just returned.
+///
+/// `mark` is the guard-list length captured before the call's arguments were lowered, so only
+/// guards produced by this call are drained. The property is untouched while the callee runs
+/// (it receives a boxed temporary); a refused value therefore needs no restoration, and the
+/// `TypeError` is thrown before the write-back.
+pub(super) fn drain_reference_property_guards(
+    ctx: &mut LoweringContext<'_, '_>,
+    mark: usize,
+    span: Span,
+) {
+    if ctx.reference_property_guards.len() <= mark {
+        return;
+    }
+    let guards: Vec<_> = ctx.reference_property_guards.drain(mark..).collect();
+    for guard in guards {
+        let temp_expr = Expr::new(ExprKind::Variable(guard.temp.clone()), span);
+        let Some(declared) = guard.declared.clone() else {
+            super::assignments::lower_non_local_assignment_write(
+                ctx, &guard.place, &temp_expr, guard.place.span,
+            );
+            continue;
+        };
+        let accepted = if crate::source::current_strict_types() {
+            crate::types::param_binding::runtime_strict_param_acceptance(&declared, &temp_expr)
+        } else {
+            accepts_type(&declared, &temp_expr, span)
+        };
+        let Some(predicate) = accepted else {
+            super::assignments::lower_non_local_assignment_write(
+                ctx, &guard.place, &temp_expr, guard.place.span,
+            );
+            continue;
+        };
+        let condition = lower_expr(ctx, &predicate);
+        let ok = ctx.builder.create_named_block("ref_property.write.ok", Vec::new());
+        let bad = ctx.builder.create_named_block("ref_property.write.bad", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: condition.value,
+            then_target: ok,
+            then_args: Vec::new(),
+            else_target: bad,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(bad);
+        let type_name = diagnostic_type(&declared);
+        let value_type = runtime_type(&temp_expr, &declared, span);
+        let suffix = format!(
+            " to reference held by property {}::${} of type {}",
+            guard.class_name, guard.property, type_name
+        );
+        let message = concat(
+            Expr::new(ExprKind::StringLiteral("Cannot assign ".to_string()), span),
+            concat(
+                value_type,
+                Expr::new(ExprKind::StringLiteral(suffix), span),
+                span,
+            ),
+            span,
+        );
+        throw_message(ctx, "TypeError", message, span);
+        ctx.builder.position_at_end(ok);
+        super::assignments::lower_non_local_assignment_write(
+            ctx, &guard.place, &temp_expr, guard.place.span,
+        );
+    }
+}
+
 /// Raises a catchable exception while the caller's argument owners remain published.
 pub(super) fn throw_message(
     ctx: &mut LoweringContext<'_, '_>, class: &str, message: Expr, span: Span,
@@ -230,6 +298,113 @@ pub(crate) fn reference_parameter_needs_entry_guard(ty: &PhpType) -> bool {
                 PhpType::Void | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
             )
     }))
+}
+
+/// Checks every element a `callable ...$name` variadic (or `?callable ...$name`, `callable|false
+/// ...$name`) collected, on entry to the callee, raising php's `f(): Argument #N must be of type
+/// T, U given` `TypeError` for the first element the declared element type does not accept.
+/// `first_position` is the 1-based argument number of the first element.
+pub(crate) fn guard_declared_callable_variadic_entry(
+    ctx: &mut LoweringContext<'_, '_>,
+    function: &str,
+    first_position: usize,
+    name: &str,
+    element_type: &PhpType,
+) {
+    let span = Span::synthetic();
+    let key = ctx.declare_hidden_temp(PhpType::Mixed);
+    let value = ctx.declare_hidden_temp(PhpType::Mixed);
+    let number = ctx.declare_hidden_temp(PhpType::Int);
+    let variable = |local: &str| Expr::new(ExprKind::Variable(local.to_string()), span);
+    let literal = |text: String| Expr::new(ExprKind::StringLiteral(text), span);
+    let element = variable(&value);
+    // Positional entries are numbered from the variadic's position; a named entry (string key)
+    // reports the next positional number and does not consume one, as PHP does.
+    crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::assign(
+        &number,
+        Expr::new(ExprKind::IntLiteral(first_position as i64), span),
+    ));
+    let argument = variable(&number);
+    let message = concat(
+        literal(format!("{function}(): Argument #")),
+        concat(argument, concat(
+            literal(format!(" must be of type {}, ", diagnostic_type(element_type))),
+            concat(runtime_debug_type(&element, span), literal(" given".to_string()), span),
+            span,
+        ), span),
+        span,
+    );
+    let exception = Expr::new(ExprKind::NewObject {
+        class_name: Name::unqualified("TypeError"),
+        args: vec![message],
+    }, span);
+    let accepted = accepts_type(element_type, &element, span)
+        .unwrap_or_else(|| predicate("is_callable", &element, span));
+    let check = Stmt::new(StmtKind::If {
+        condition: Expr::new(ExprKind::Not(Box::new(accepted)), span),
+        then_body: vec![Stmt::new(StmtKind::Throw(exception), span)],
+        elseif_clauses: Vec::new(),
+        else_body: None,
+    }, span);
+    let advance = Stmt::new(StmtKind::If {
+        condition: predicate("is_int", &variable(&key), span),
+        then_body: vec![Stmt::assign(&number, Expr::new(ExprKind::BinaryOp {
+            left: Box::new(variable(&number)),
+            op: BinOp::Add,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
+        }, span))],
+        elseif_clauses: Vec::new(),
+        else_body: None,
+    }, span);
+    let guard = Stmt::new(StmtKind::Foreach {
+        array: variable(name),
+        key_var: Some(key),
+        value_var: value,
+        value_by_ref: false,
+        body: vec![check, advance],
+    }, span);
+    crate::ir_lower::stmt::lower_stmt(ctx, &guard);
+}
+
+/// Checks a value returned through a declared `callable` (or a union with `callable`) before
+/// it leaves the function, raising php's `f(): Return value must be of type T, U returned`
+/// `TypeError`. The value keeps its owner; the check reads a retained copy in a hidden temp.
+/// An owning temporary (a property read, a call result) is pinned across the check, so the
+/// throw releases it; the ok path retires the pin without a release and the caller keeps it.
+pub(crate) fn guard_declared_callable_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    function: &str,
+    value: LoweredValue,
+    return_type: &PhpType,
+    span: Span,
+) {
+    let value_type = ctx.builder.value_php_type(value.value);
+    let temp = ctx.declare_hidden_temp(value_type.clone());
+    let copy = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    store_value_into_temp(ctx, &temp, value_type, copy, span);
+    let returned = Expr::new(ExprKind::Variable(temp), span);
+    let Some(accepted) = accepts_type(return_type, &returned, span) else { return; };
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
+    let accepted = lower_expr(ctx, &accepted);
+    let ok = ctx.builder.create_named_block("callable.return.ok", Vec::new());
+    let bad = ctx.builder.create_named_block("callable.return.bad", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: accepted.value, then_target: ok, then_args: Vec::new(),
+        else_target: bad, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(bad);
+    let literal = |text: String| Expr::new(ExprKind::StringLiteral(text), span);
+    let message = concat(
+        literal(format!(
+            "{function}(): Return value must be of type {}, ",
+            diagnostic_type(return_type)
+        )),
+        concat(runtime_debug_type(&returned, span), literal(" returned".to_string()), span),
+        span,
+    );
+    throw_message(ctx, "TypeError", message, span);
+    ctx.builder.position_at_end(ok);
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
 }
 
 /// Checks a by-reference parameter's value against its declared union on entry to the callee,

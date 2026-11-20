@@ -4,7 +4,7 @@
 //! escaping that need no live row.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the test harness.
+//! - `cargo test --test codegen_tests_ext` through the test harness.
 //!
 //! Key details:
 //! - Live query/fetch fixtures live in `mysqli_mysql.rs` and are `#[ignore]`d
@@ -13,6 +13,25 @@
 //!   `mysqli` but not `PDO`, and a PDO-only program must not grow `mysqli`.
 
 use crate::support::*;
+
+/// `mysqli_poll()` forwards its own `array &$reject` parameter to `mysqli::poll()`'s. A plain
+/// `array` hint is no layout contract, so a typed list (`[1, 2]`) binds through both and is
+/// left intact when the call throws before writing. Expected output is php 8.5's.
+#[test]
+fn test_mysqli_poll_binds_typed_lists_through_plain_array_reference_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+$read = null;
+$error = null;
+$ids = [1, 2];
+try { mysqli_poll($read, $error, $ids, 0); } catch (ValueError $e) { echo $e->getMessage(), "|"; }
+$more = [3];
+try { mysqli_poll($read, $error, $more, 0, 5); } catch (ValueError $e) { echo $e->getMessage(), "|"; }
+echo count($ids), count($more), "|", $ids[1], $more[0];
+"#,
+    );
+    assert_eq!(out, "No stream arrays were passed|No stream arrays were passed|21|23");
+}
 
 /// A bare `MYSQLI_*` constant is enough to inject the surface (issue: a config
 /// array or helper that only forwards the constant must not fail with
@@ -732,5 +751,25 @@ echo $db->connect_errno, "|", $link === false ? "false" : "link";
     assert_eq!(
         out,
         "W:mysqli::__construct(): (HY000/2002):8|W:mysqli_connect(): (HY000/2002):9|2002|false"
+    );
+}
+
+/// The `MYSQLI_*` constants php-src deprecates raise `E_DEPRECATED` with its message and
+/// version on each read (`MYSQLI_NO_DATA` since 8.1, `MYSQLI_IS_MARIADB` since 8.2,
+/// `MYSQLI_REFRESH_*` since 8.4), and still yield their values.
+#[test]
+fn test_mysqli_deprecated_constant_reads() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", $message, " @", $line, "\n";
+    return true;
+});
+echo MYSQLI_NO_DATA, ",", MYSQLI_IS_MARIADB ? "t" : "f", ",", MYSQLI_REFRESH_GRANT, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "[8192] Constant MYSQLI_NO_DATA is deprecated since 8.1, as it was unused @6\n100,[8192] Constant MYSQLI_IS_MARIADB is deprecated since 8.2, as it is always false @6\nf,[8192] Constant MYSQLI_REFRESH_GRANT is deprecated since 8.4, as mysqli_refresh() is deprecated @6\n1\n"
     );
 }

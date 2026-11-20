@@ -21,6 +21,8 @@ pub(super) enum EvalControl {
     Throw(RuntimeCellHandle),
     Break,
     Continue,
+    /// A `goto` on its way to the statement list that holds its label.
+    Goto(String),
 }
 
 /// Final result of executing a parsed eval program.

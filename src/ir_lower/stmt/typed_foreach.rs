@@ -165,22 +165,27 @@ pub(in crate::ir_lower) fn coerce_typed_assign_value(
     match target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
         target @ PhpType::AssocArray { .. } if matches!(source_ty, PhpType::Array(_)) => {
-            // `ArrayToHash` consumes its input owner. An assignment from a borrowed local must
-            // preserve that local's indexed owner while producing the independent hash stored in
-            // the associative destination; a fresh expression already supplies the owned input.
-            let source = if ctx.value_is_owning_temporary(value) {
-                value
-            } else {
-                crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
-            };
-            ctx.emit_value(
+            // `ArrayToHash` consumes its input owner. An assignment from a local must preserve
+            // that local's indexed owner while producing the independent hash stored in the
+            // associative destination, so the source always lends the conversion a reference of
+            // its own. Skipping that for an "owning temporary" was wrong for a plain local read,
+            // which answers yes to that question while the slot still holds the only reference:
+            // `$hashProperty = $list;` handed the local's owner to the conversion and left
+            // `$list` empty. A real temporary is released like any other consumed operand.
+            let source =
+                crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+            let converted = ctx.emit_value(
                 Op::ArrayToHash,
                 vec![source.value],
                 None,
                 target,
                 Op::ArrayToHash.default_effects(),
                 Some(span),
-            )
+            );
+            if ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            }
+            converted
         }
         target @ (PhpType::Callable | PhpType::Object(_)) if source_ty == PhpType::Mixed => {
             // The backend retains the extracted payload, so this value owns a lease of its own.
@@ -452,8 +457,11 @@ fn lower_foreach_selected(
         iterator_cleanup: by_ref_origin.map(|_| (iterator_state, array.span)),
         receiver_pin,
     });
+    // Only a source that is statically a PHP array reads its key without user code.
+    let array_source = matches!(source_php_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        || source_php_ty.is_php_array();
     super::foreach_bindings::bind_current(
-        ctx, iterator, &source_ty, key_var, value_var, value_by_ref, array.span,
+        ctx, iterator, &source_ty, key_var, value_var, value_by_ref, array_source, array.span,
     );
     lower_block(ctx, body);
     ctx.loop_stack.pop();

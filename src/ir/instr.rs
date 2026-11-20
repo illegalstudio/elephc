@@ -268,6 +268,13 @@ pub enum Immediate {
     /// `ArraySet` whose integer key would skip a slot (or is negative) promotes the array to a
     /// hash instead of zero-filling the gap, as PHP does.
     PromotableArray,
+    /// Marks `DynamicObjectNewMixed` as `ReflectionClass::newInstance()` rather than
+    /// `new $class`, so constructor refusals raise `ReflectionException` instead of `Error`.
+    ReflectionConstruction { uses_runtime_arg_container: bool },
+    /// Marks `NormalizeCallable` on a value declared `callable`: a runtime name it resolves is
+    /// limited to user functions, static methods and the builtin names written as literals at
+    /// declared callables (`Module::declared_callable_names`).
+    DeclaredCallableNames,
     Data(DataId),
     /// Data-pool reference carrying the complete source policy of its physical call site.
     ProfiledData {
@@ -280,6 +287,17 @@ pub enum Immediate {
     LocalSlotPair {
         first: LocalSlotId,
         second: LocalSlotId,
+    },
+    /// A hidden property-reference cell plus its typed-reference diagnostic metadata.
+    ///
+    /// `first` is the promoted temporary, `second` its managed-cell owner, and
+    /// `suffix_and_type` packs the 28-bit static diagnostic suffix below the four-bit
+    /// acceptance code selected by the property's declared type. The packing keeps this
+    /// immediate at three words so `Instruction` stays within its stack budget.
+    PropertyRefCell {
+        first: LocalSlotId,
+        second: LocalSlotId,
+        suffix_and_type: u32,
     },
     GlobalName(DataId),
     /// Static scope name plus the first producer's inferred binding contract.
@@ -357,6 +375,45 @@ pub enum Immediate {
     IterStart(IterStartMetadata),
 }
 
+impl Immediate {
+    /// Builds the packed immediate for a typed-property reference promotion.
+    pub fn property_ref_cell(
+        first: LocalSlotId,
+        second: LocalSlotId,
+        suffix: DataId,
+        type_code: u8,
+    ) -> Self {
+        debug_assert!(type_code < 16, "typed-property acceptance code must fit four bits");
+        debug_assert!(suffix.as_raw() < (1 << 28), "property diagnostic data id exceeds 28 bits");
+        Immediate::PropertyRefCell {
+            first,
+            second,
+            suffix_and_type: suffix.as_raw() | (u32::from(type_code) << 28),
+        }
+    }
+
+    /// Returns the slot pair, diagnostic suffix and acceptance code of a property promotion.
+    pub(crate) fn property_ref_cell_parts(
+        &self,
+    ) -> Option<(LocalSlotId, LocalSlotId, DataId, u8)> {
+        let Immediate::PropertyRefCell {
+            first,
+            second,
+            suffix_and_type,
+        } = self
+        else {
+            return None;
+        };
+        Some((
+            *first,
+            *second,
+            DataId::from_raw(*suffix_and_type & ((1 << 28) - 1)),
+            (*suffix_and_type >> 28) as u8,
+        ))
+    }
+}
+
+/// Value-semantic metadata for `Op::IterStart`.
 /// Value-semantic metadata for `Op::IterStart`.
 ///
 /// `state` is the addressable local that owns the iterator's cursor and private relocation
@@ -528,6 +585,71 @@ impl CheckedNumericChainImmediate {
     /// Returns the ordered operations evaluated by the fused chain.
     pub fn operations(&self) -> &[MixedNumericOp] {
         &self.operations
+    }
+}
+
+/// Direction and tie policy of one `Op::MixedMinMax` selection over its operands.
+///
+/// php-src selects in one of two modes. While every argument so far is an `int` or a `float`
+/// (and no integer that a double cannot represent has met a float) it compares numbers
+/// directly; the first other argument switches the rest of the call to the generic
+/// `zend_compare`, which reports every unordered (`NAN`) comparison as "greater".
+///
+/// The pair rules are the two-argument forms, `a >= b ? a : b` for `max()` and
+/// `a < b ? a : b` for `min()`: a two-argument `min()` returns its right operand on a tie,
+/// and an unordered numeric pair returns the right operand. The fold rules cover three or
+/// more arguments in one instruction: a later argument replaces the running result only on
+/// a strict win, and an unordered numeric comparison keeps the earlier argument. In generic
+/// mode an unordered comparison instead keeps the left operand of a two-argument `max()`
+/// and replaces the running result of a longer `max()`; `min()` is the same in both modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(i64)]
+pub enum MinMaxRule {
+    /// Two-argument `max()`: the left operand wins when `left >= right`.
+    MaxPair = 0,
+    /// `max()` of three or more operands: a later operand wins only when it is greater.
+    MaxFold = 1,
+    /// Two-argument `min()`: the left operand wins only when `left < right`.
+    MinPair = 2,
+    /// `min()` of three or more operands: a later operand wins only when it is smaller.
+    MinFold = 3,
+}
+
+impl MinMaxRule {
+    /// Decodes the `I64` immediate of an `Op::MixedMinMax` instruction.
+    pub const fn from_immediate(value: i64) -> Option<Self> {
+        match value {
+            0 => Some(Self::MaxPair),
+            1 => Some(Self::MaxFold),
+            2 => Some(Self::MinPair),
+            3 => Some(Self::MinFold),
+            _ => None,
+        }
+    }
+
+    /// Returns the `I64` immediate that encodes this rule.
+    pub const fn immediate(self) -> i64 {
+        self as i64
+    }
+
+    /// Returns true for the two-argument rules, false for the three-or-more-argument rules.
+    pub const fn is_pair(self) -> bool {
+        matches!(self, Self::MaxPair | Self::MinPair)
+    }
+
+    /// Returns true when an instruction with this rule may carry `operands` operands.
+    pub const fn accepts_operand_count(self, operands: usize) -> bool {
+        if self.is_pair() { operands == 2 } else { operands >= 3 }
+    }
+
+    /// Returns the rule of a `min()`/`max()` call with `operands` arguments.
+    pub const fn for_call(want_max: bool, operands: usize) -> Self {
+        match (want_max, operands == 2) {
+            (true, true) => Self::MaxPair,
+            (true, false) => Self::MaxFold,
+            (false, true) => Self::MinPair,
+            (false, false) => Self::MinFold,
+        }
     }
 }
 
@@ -784,6 +906,21 @@ pub enum CoreBuiltinOp {
     BuiltinDeprecated = 18,
     /// Reads the nearest source call site through compiler-generated diagnostic frames.
     DiagnosticCallerLine = 19,
+    /// Stores the constructing file's `strict_types` state for the next constructor call.
+    PublishCallStrictness = 20,
+    /// Reads the `strict_types` state published by the nearest constructor call site.
+    CallStrictTypes = 21,
+    /// Reads the file published by the nearest real PHP call site.
+    ///
+    /// Prelude code has synthetic spans, so it cannot bake the user call site's file; this
+    /// reads the value `prepare_call_site` published before entering the prelude frame.
+    DiagnosticCallerFile = 22,
+    /// Reports whether a once-per-site runtime notice has not fired yet, marking it as fired.
+    ///
+    /// The flag is module-private storage keyed by the instruction's span, not a PHP global:
+    /// a synthetic `MT_RAND_PHP` constant-expression read uses it to match php-src's
+    /// first-evaluation-only deprecation.
+    DeprecatedOnceBegin = 23,
 }
 
 impl CoreBuiltinOp {
@@ -808,7 +945,11 @@ impl CoreBuiltinOp {
             | Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
             | Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated
-            | Self::DiagnosticCallerLine => BuiltinResultOwnership::NonHeap,
+            | Self::DiagnosticCallerLine
+            | Self::PublishCallStrictness
+            | Self::CallStrictTypes
+            | Self::DiagnosticCallerFile
+            | Self::DeprecatedOnceBegin => BuiltinResultOwnership::NonHeap,
         }
     }
 
@@ -840,6 +981,10 @@ impl CoreBuiltinOp {
             17 => Some(Self::BuiltinWarning),
             18 => Some(Self::BuiltinDeprecated),
             19 => Some(Self::DiagnosticCallerLine),
+            20 => Some(Self::PublishCallStrictness),
+            21 => Some(Self::CallStrictTypes),
+            22 => Some(Self::DiagnosticCallerFile),
+            23 => Some(Self::DeprecatedOnceBegin),
             _ => None,
         }
     }
@@ -862,7 +1007,11 @@ impl CoreBuiltinOp {
             | Self::GetIncludedFiles
             | Self::GetErrorHandler
             | Self::GetExceptionHandler
-            | Self::DiagnosticCallerLine => 0,
+            | Self::DiagnosticCallerLine
+            | Self::CallStrictTypes
+            | Self::DiagnosticCallerFile
+            | Self::DeprecatedOnceBegin => 0,
+            Self::PublishCallStrictness => 1,
             Self::GetDefinedFunctions => 1,
         }
     }
@@ -874,6 +1023,11 @@ impl CoreBuiltinOp {
             Self::DiagnosticCallerLine => Effects::from_bits_retain(
                 E::READS_GLOBAL.bits() | E::READS_HEAP.bits(),
             ),
+            Self::PublishCallStrictness => E::WRITES_GLOBAL,
+            Self::CallStrictTypes | Self::DiagnosticCallerFile => E::READS_GLOBAL,
+            Self::DeprecatedOnceBegin => {
+                Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::WRITES_GLOBAL.bits())
+            }
             Self::GetDefinedConstants
             | Self::GetDefinedFunctions
             | Self::GetDefinedVars
@@ -1048,6 +1202,15 @@ pub enum Op {
     FPow,
     FNeg,
     MixedNumericBinop,
+    /// Selects the PHP `min()`/`max()` of its operands and returns the winner as an owned
+    /// Mixed value.
+    ///
+    /// Operands are raw `int`/`float` scalars or boxed Mixed cells, which are only read. The
+    /// `I64` immediate is a [`MinMaxRule`] discriminant fixing the direction and the tie/NaN
+    /// policy. The result never shares a cell with an operand: it is a copy of the winner in
+    /// an owned heap cell or, for a number that is only read, in a frame cell. A retained
+    /// operand cell would change when the operand's variable is written through a reference.
+    MixedMinMax,
     StrIncDec,
     ICmp,
     FCmp,
@@ -1218,6 +1381,7 @@ pub enum Op {
     /// Reinterprets one runtime callable descriptor as an opaque bridge pointer.
     CallablePtr,
     /// Normalizes any supported PHP callable form into an owned descriptor.
+    /// Bool selects scoped factory validation: true throws Error, false throws TypeError.
     NormalizeCallable,
     /// Returns the address of one compiler-emitted PDO callback adapter.
     PdoAdapterAddr,
@@ -1293,6 +1457,11 @@ pub enum Op {
     /// Immediate: `PropertyFetchMode`, php's read-vs-probe distinction; absent means `Read`.
     DynamicPropGet,
     DynamicPropSet,
+    /// Raises PHP's call-site `TypeError` for a property argument whose declared storage cannot
+    /// satisfy a typed by-reference parameter. Immediate: data id of the complete message.
+    /// The runtime unwinder transfers control, so the callee call emitted after this in the
+    /// same EIR block is unreachable but still well-formed.
+    ReferenceArgumentTypeError,
     NullsafePropGet,
     NullsafeMethodCall,
     /// Rejects an abstract instance target before evaluating call arguments.
@@ -1454,6 +1623,9 @@ pub enum Op {
     GeneratorReturn,
     IncludeOnceMark,
     IncludeOnceGuard,
+    /// Reads a program-wide once flag (the `.comm` symbol named by its data immediate) without
+    /// setting it: `true` once an `IncludeOnceGuard` or `IncludeOnceMark` on it has run.
+    IncludeOnceTest,
     FunctionVariantMark,
     FunctionVariantDispatch,
     Acquire,
@@ -1600,8 +1772,11 @@ impl Op {
             | TryPushHandler
             | TryPopHandler => E::WRITES_GLOBAL,
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
-            IToStr | FToStr | ResourceToStr | StrConcat | StrInterpolate
-            | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
+            IncludeOnceTest => E::READS_GLOBAL,
+            IToStr | ResourceToStr | StrConcat | StrInterpolate
+            | VarDump | PrintR => E::ALLOC_CONCAT,
+            // NaN diagnostics and Mixed conversion callbacks may enter PHP handlers.
+            FToStr | MixedCastString => E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_THROW,
             StrCharAt => E::ALLOC_CONCAT | E::MAY_WARN,
             StrAppend => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
@@ -1620,10 +1795,12 @@ impl Op {
             // Stores one raw int into preallocated spare capacity and advances the header length.
             ArrayPushReserved => E::WRITES_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
-            | FirstClassCallableNew | CallableValueNew | CallableArrayNew | NormalizeCallable | BufferNew
+            | FirstClassCallableNew | CallableValueNew | CallableArrayNew | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
             }
+            NormalizeCallable => E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
+                | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
             ClosureNew => E::READS_LOCAL | E::WRITES_LOCAL
                 | E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
                 | E::WRITES_GLOBAL | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
@@ -1735,6 +1912,7 @@ impl Op {
             // `TypeError` for a value a declared slot refuses, which is `MAY_THROW`. Advertising
             // `DynamicPropSet` as a bare heap write let the optimizer reorder or drop a store
             // that now diagnoses and can unwind.
+            ReferenceArgumentTypeError => E::all(),
             PropSet | DynamicPropSet => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_FATAL
                 | E::REFCOUNT_OP,
@@ -1777,6 +1955,10 @@ impl Op {
             // concat scratch while building the carried result, and always allocates the
             // boxed Mixed cell the new value is returned in.
             StrIncDec => E::READS_HEAP | E::ALLOC_CONCAT | E::ALLOC_HEAP | E::MAY_DEOPT,
+            // Reads the operand cells, compares non-numeric ones through `__rt_php_compare`
+            // (which saves and restores the concat cursor around any number-to-string leg)
+            // and boxes a copy of the winner, retaining a string, array or object payload.
+            MixedMinMax => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_DEOPT,
             IterCurrentValueRef | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
@@ -1999,6 +2181,7 @@ impl Op {
             FPow => "fpow",
             FNeg => "fneg",
             MixedNumericBinop => "mixed_numeric_binop",
+            MixedMinMax => "mixed_min_max",
             StrIncDec => "str_inc_dec",
             ICmp => "icmp",
             FCmp => "fcmp",
@@ -2128,6 +2311,7 @@ impl Op {
             AcquireRefCell => "acquire_ref_cell",
             DynamicPropGet => "dynamic_prop_get",
             DynamicPropSet => "dynamic_prop_set",
+            ReferenceArgumentTypeError => "reference_argument_type_error",
             DynamicPropUnset => "dynamic_prop_unset",
             NullsafePropGet => "nullsafe_prop_get",
             NullsafeMethodCall => "nullsafe_method_call",
@@ -2226,6 +2410,7 @@ impl Op {
             GeneratorReturn => "generator_return",
             IncludeOnceMark => "include_once_mark",
             IncludeOnceGuard => "include_once_guard",
+            IncludeOnceTest => "include_once_test",
             FunctionVariantMark => "function_variant_mark",
             FunctionVariantDispatch => "function_variant_dispatch",
             Acquire => "acquire",

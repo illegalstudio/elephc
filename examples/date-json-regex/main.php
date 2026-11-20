@@ -108,3 +108,12 @@ while ($i < count($parts)) {
     echo "  " . $parts[$i] . "\n";
     $i = $i + 1;
 }
+
+// Filter an array and check the last regex error
+$files = ["a" => "notes.txt", "b" => "photo.png", "c" => "todo.txt"];
+$texts = preg_grep("/\\.txt$/", $files);
+echo "Text files: " . implode(", ", $texts) . "\n";
+echo "Other files: " . implode(", ", preg_grep("/\\.txt$/", $files, PREG_GREP_INVERT)) . "\n";
+if (preg_match("/./u", "\xff") === false) {
+    echo "Regex error: " . preg_last_error_msg() . "\n";
+}

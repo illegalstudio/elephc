@@ -821,6 +821,13 @@ Traits may declare abstract hooked property contracts. A concrete class using th
 ## Property access
 `->` for properties and methods.
 
+Writing through a receiver that is `null` at run time throws a catchable `Error`, as in PHP,
+including a receiver whose static type is a class, such as a missing element of an
+`array<Node>`: `$nodes[5]->count = 2` reports `Attempt to assign property "count" on null`,
+and an element write or append (`$nodes[5]->items[] = 1`) reports `Attempt to modify property
+"items" on null`. Reading the missing element still emits PHP's `Undefined array key` warning
+first, where PHP fetches it for write silently.
+
 ### Dynamic property access
 
 The property name can be computed at runtime with the `$obj->{$expr}` syntax,
@@ -840,6 +847,36 @@ echo $p->{$field};        // 1
 $p->{$field} = 9;
 echo $p->x;               // 9
 ```
+
+### Undeclared property writes
+
+An assignment to a name the class does not declare is accepted. PHP 8.5 creates the
+property and reports `Deprecated: Creation of dynamic property C::$p is deprecated`;
+elephc stores the value in the class's per-instance property hash and emits the same
+notice when the write creates the entry. The name then participates in reads,
+`isset()`, `unset()`, clone/copy, property enumeration, and `var_dump()` / `print_r()` /
+`var_export()` exactly like an `#[\AllowDynamicProperties]` property. A stored entry wins
+over `__isset()` and `__get()`: `isset($object->name)` answers from the entry, including a
+stored `null` (which answers `false`), and only a name the hash does not hold reaches the
+accessor. A class that declares `__get()` but no `__isset()` therefore still reports a
+stored name as set, and never calls `__get()` for a probe.
+
+```php
+<?php
+class Box { public int $x = 1; }
+$b = new Box();
+$b->y = 3;                // Deprecated: Creation of dynamic property Box::$y is deprecated
+echo $b->y;               // 3
+var_dump(isset($b->y));   // true
+unset($b->y);
+var_dump(isset($b->y));   // false
+```
+
+A `readonly` class carries PHP's no-dynamic-properties flag: the write still compiles,
+but it throws `Error: Cannot create dynamic property C::$p` at runtime and creates
+nothing. The same applies to php-src's internal readonly classes, including
+`Uri\Rfc3986\Uri` and `Uri\WhatWg\Url`. A class marked `#[\AllowDynamicProperties]`
+creates the property without the deprecation notice.
 
 ## Enums
 ```php
@@ -1308,6 +1345,9 @@ Supported syntax:
 - **`#[\Override]`** (PHP 8.3) — the type checker verifies that the marked method actually overrides a method declared in a parent class or implemented interface (transitively). A typo in the method name or a missing parent method becomes a compile-time error: `<class>::<method>() has #[\Override] attribute, but no matching parent method was found`. Both the unqualified `#[Override]` and fully-qualified `#[\Override]` forms are recognized.
 - **`#[\Deprecated]`** / **`#[\Deprecated("reason")]`** (PHP 8.4) — calls to the marked function, method, or static method emit a compile warning: `Call to deprecated function: name() — reason`. The reason argument (if a string literal) is appended to the message.
 - **`#[\AllowDynamicProperties]`** (PHP 8.2) — instances of the marked class accept assignment of undeclared properties at runtime. Each instance carries a per-object hashtable side-table allocated by the constructor (~296 bytes); the type checker accepts undeclared reads as `mixed`. The hashtable is freed automatically with the object.
+  `property_exists()` reports declared slots only: a name created dynamically on an instance
+  is visible to `isset()`, reads, and `unset()`, but `property_exists($object, "name")`
+  answers `false` (PHP answers `true` for an object target and `false` for a class string).
 
 Built-in attributes follow PHP class-name resolution. In a namespace, `#[Deprecated]` means `#[CurrentNamespace\Deprecated]`; use `#[\Deprecated]` or an import alias such as `use Deprecated as Old; #[Old]` to target the global built-in attribute.
 
@@ -1378,7 +1418,7 @@ foreach (class_get_attributes('Greeter') as $attr) {
 
 User subclasses of the supported Reflection owner classes use ordinary object allocation, so their property defaults, reference cells, dynamic properties, and constructors remain active. A custom constructor must call `parent::__construct()` as its first action and pass the built-in constructor's leading parameters unchanged and in order. Elephc rejects other constructor shapes because it cannot prove that the metadata populated before the user constructor matches the arguments eventually forwarded to PHP's Reflection owner.
 
-The public `name` and `class` metadata properties are populated in both AOT and eval-created Reflection objects. As in PHP, assigning directly to one raises `ReflectionException`; compound writes and `unset()` retain their distinct behavior and are not treated as language-level `readonly` operations. Reference binding to native Reflection properties inside eval is not yet supported.
+The public `name` and `class` metadata properties are populated in both AOT and eval-created Reflection objects. As in PHP, assigning directly to one raises `ReflectionException`; compound writes and `unset()` retain their distinct behavior and are not treated as language-level `readonly` operations. Compiled code can bind references to the public metadata mirrors of eval-created reflectors; these object-owned cells preserve the private reflection metadata. Binding a reference to a native Reflection property from inside eval remains unsupported.
 
 Reflection is also available for class members:
 

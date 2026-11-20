@@ -30,7 +30,7 @@ pub(super) fn lower_property_assign(
         return;
     }
     // Readonly errors depend on runtime initialization, after receiver and RHS effects.
-    let readonly_write = ctx.throw_access_sites.get(&span).and_then(|info| {
+    let readonly_write = ctx.throw_access_site(span).and_then(|info| {
         if let ThrowAccessKind::ReadonlyProperty { class_name, property, initialization_error } = &info.kind {
             Some((class_name.clone(), format!("Cannot modify readonly property {}::${}", class_name, property),
                 initialization_error.clone()))
@@ -38,7 +38,7 @@ pub(super) fn lower_property_assign(
             None
         }
     });
-    let reflection_write = ctx.throw_access_sites.get(&span).and_then(|info| {
+    let reflection_write = ctx.throw_access_site(span).and_then(|info| {
         if let ThrowAccessKind::ReflectionReadOnlyProperty { property: blocked } = &info.kind {
             (blocked == property).then(|| blocked.clone())
         } else {
@@ -364,7 +364,7 @@ pub(super) fn lower_synthetic_readonly_coalesce(
         return false;
     };
     if object_name != name || read_object != object || read_property != property
-        || !ctx.throw_access_sites.get(&write.span).is_some_and(|info| {
+        || !ctx.throw_access_site(write.span).is_some_and(|info| {
             matches!(info.kind, ThrowAccessKind::ReadonlyProperty { .. })
         })
     {

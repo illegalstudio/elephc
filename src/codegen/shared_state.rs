@@ -68,6 +68,12 @@ pub(crate) struct SharedCodegenState {
     /// `--probe`: the embedded symbol table `(data label, entry count)` main's
     /// prologue hands to `elephc_probe_init`. `None` unless the probe is enabled.
     pub(super) probe_table: Option<(String, usize)>,
+    /// `--with-apm` without `--with-monitoring`: the probe counts transactions
+    /// and carries no sampler, so main's prologue calls `elephc_probe_apm_init`.
+    pub(crate) apm_only: bool,
+    /// `--apm-collector`: the collector's address is embedded at
+    /// `frame::APM_COLLECTOR_SYMBOL` for the APM init to read.
+    pub(crate) apm_collector: bool,
     /// Counted functions as `(display name, counter symbol)`, in emission order. Main's
     /// epilogue renders the exit dump from this list — main is emitted last, so the
     /// registry is complete by then.

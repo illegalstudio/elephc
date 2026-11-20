@@ -2,7 +2,7 @@
 //! Exercises the real cached REPL host through the public compiler command.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests codegen::repl` on supported desktop hosts.
+//! - `cargo test --test codegen_tests_core codegen::repl` on supported desktop hosts.
 //!
 //! Key details:
 //! - Each fixture owns its project and cache and removes both even after an assertion fails.
@@ -212,7 +212,7 @@ fn test_repl_recovers_nested_failures() {
     ), &["--heap-debug"]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "int(0)\nint(1)\nint(42)\nint(2)\ncaughtalive");
-    assert_eq!(String::from_utf8_lossy(&output.stderr), "Error: eval() runtime failed\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "Error: Undefined constant \"das\"\n");
 }
 
 /// Includes, magic directory constants, and project configuration use the launch directory.

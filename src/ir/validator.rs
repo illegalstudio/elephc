@@ -811,7 +811,7 @@ fn validate_instruction_immediate(
         ConstI64 => require_immediate(inst_id, inst, "i64", |imm| matches!(imm, Imm::I64(_))),
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
-        ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
+        ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard | IncludeOnceTest
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
         | LoadPropRefCellChecked
         | LoadStaticPropertyRefCell
@@ -861,7 +861,10 @@ fn validate_instruction_immediate(
         BindRefCellPtr => require_immediate(inst_id, inst, "reference alias slot or alias/owner pair", |imm| {
             matches!(imm, Imm::LocalSlot(_) | Imm::LocalSlotPair { .. })
         }),
-        PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
+        PromoteLocalRefCell => require_immediate(inst_id, inst, "local slot pair", |imm| {
+            matches!(imm, Imm::LocalSlotPair { .. } | Imm::PropertyRefCell { .. })
+        }),
+        AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
         GlobalBindingPresent | UnsetGlobal | LoadGlobalRefCell | EvalScopeGet | EvalScopeContains | EvalScopeBindingType | EvalScopeEndBinding => require_immediate(inst_id, inst, "global name", |imm| {
@@ -897,6 +900,11 @@ fn validate_instruction_immediate(
                         .all(|op| op.supports_checked_chain()))
             })
         }
+        // A pair rule selects between exactly two operands, a fold rule among three or more.
+        MixedMinMax => require_immediate(inst_id, inst, "min/max rule for its operand count", |imm| {
+            matches!(imm, Imm::I64(rule) if crate::ir::MinMaxRule::from_immediate(*rule)
+                .is_some_and(|rule| rule.accepts_operand_count(inst.operands.len())))
+        }),
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
             matches!(imm, Imm::I64(1) | Imm::I64(-1) | Imm::NumericUpdate { .. })
         }),
@@ -1030,7 +1038,7 @@ fn validate_opcode_rules(
         | CallableArrayNew | GeneratorNew | InvokerRefArg
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
-        | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
+        | IncludeOnceGuard | IncludeOnceTest | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
         | EvalClassExists | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect
         | Nop => {
             check_count(inst_id, inst, 0, "0")
@@ -1132,6 +1140,10 @@ fn validate_opcode_rules(
             check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Mixed), "boxed Mixed")
         }
         MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
+        // Each operand is a raw int/float scalar or a boxed Mixed cell; the backend dispatches
+        // on the operand's EIR type. The rule immediate pins the exact arity (two for a pair
+        // rule, three or more for a fold rule).
+        MixedMinMax => check_count_at_least(inst_id, inst, 2, "at least 2"),
         // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
         // the arity is pinned here; the backend dispatches on the operand's EIR type.
         StrIncDec if !inst.arithmetic_policy().is_permissive() => check_unary_any(function, inst_id, inst,

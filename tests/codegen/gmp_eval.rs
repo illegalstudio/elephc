@@ -138,3 +138,71 @@ gmp_add(): Argument #1 ($num1) must be of type GMP|string|int, EvalOperand given
 done\n"
     );
 }
+
+/// Verifies eval GMP calls follow the fragment's `declare(strict_types=...)` mode.
+#[test]
+fn test_gmp_eval_strict_types_follows_the_fragment() {
+    if crate::support::skip_without_gmp_native("test_gmp_eval_strict_types_follows_the_fragment") {
+        return;
+    }
+    let source = r#"<?php
+$strict = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+declare(strict_types=1);
+try { gmp_add(gmp_init(5), null); } catch (TypeError $e) { echo "strict:", str_starts_with($e->getMessage(), 'gmp_add(): Argument #2 ($num2) must be of type GMP|string|int, null given') ? "1" : "0", "\n"; }
+__ELEPHC_EVAL__ : '';
+eval($strict);
+$weak = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+error_reporting(0);
+echo gmp_strval(gmp_add(gmp_init(5), null)), "\n";
+__ELEPHC_EVAL__ : '';
+eval($weak);
+"#;
+    let out = compile_and_run_capture_merged_with_gmp(source);
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert!(out.stdout.contains("strict:1"), "{}", out.stdout);
+    assert!(out.stdout.contains("\n5\n"), "{}", out.stdout);
+}
+
+/// Verifies the nine GMP constants and the managed libgmp version are visible inside eval.
+#[test]
+fn test_gmp_eval_exposes_constants_and_version() {
+    if crate::support::skip_without_gmp_native("test_gmp_eval_exposes_constants_and_version") {
+        return;
+    }
+    let source = r#"<?php
+$code = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+var_dump(GMP_ROUND_ZERO, GMP_MSW_FIRST, GMP_VERSION);
+var_dump(GMP_VERSION === "6.3.0");
+__ELEPHC_EVAL__ : '';
+eval($code);
+"#;
+    let out = compile_and_run_capture_merged_with_gmp(source);
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "int(0)\nint(1)\nstring(5) \"6.3.0\"\nbool(true)\n");
+}
+
+/// Verifies a GMP call inside a function saved by a weak eval fragment stays weak when a strict
+/// fragment calls that function, while the strict fragment's own direct call is rejected.
+#[test]
+fn test_gmp_eval_saved_function_keeps_defining_strict_mode() {
+    if crate::support::skip_without_gmp_native(
+        "test_gmp_eval_saved_function_keeps_defining_strict_mode",
+    ) {
+        return;
+    }
+    let source = r#"<?php
+$weak = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+function gmpWeakRounding() { return gmp_strval(gmp_div_q(10, 3, "0")); }
+__ELEPHC_EVAL__ : '';
+eval($weak);
+$strict = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+declare(strict_types=1);
+echo gmpWeakRounding(), "\n";
+try { gmp_div_q(10, 3, "0"); echo "bad\n"; } catch (TypeError $e) { echo "strict-rejected\n"; }
+__ELEPHC_EVAL__ : '';
+eval($strict);
+"#;
+    let out = compile_and_run_capture_merged_with_gmp(source);
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "3\nstrict-rejected\n");
+}

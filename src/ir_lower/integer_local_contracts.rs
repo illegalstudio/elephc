@@ -70,7 +70,7 @@ pub(super) fn conditional_declarations(body: &[Stmt]) -> HashSet<String> {
             | StmtKind::ArrayAssign { .. } | StmtKind::NestedArrayAssign { .. }
             | StmtKind::ArrayPush { .. } | StmtKind::Include { .. }
             | StmtKind::IncludeOnceMark { .. } | StmtKind::Throw(_) | StmtKind::Break(_)
-            | StmtKind::Continue(_) | StmtKind::ExprStmt(_) | StmtKind::NamespaceDecl { .. }
+            | StmtKind::Continue(_) | StmtKind::Goto(_) | StmtKind::GotoLabel(_) | StmtKind::ExprStmt(_) | StmtKind::NamespaceDecl { .. }
             | StmtKind::UseDecl { .. } | StmtKind::FunctionDecl { .. }
             | StmtKind::FunctionVariantGroup { .. } | StmtKind::FunctionVariantMark { .. }
             | StmtKind::Return(_) | StmtKind::ConstDecl { .. } | StmtKind::ListUnpack { .. }

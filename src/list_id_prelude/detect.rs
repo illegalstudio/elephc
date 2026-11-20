@@ -284,6 +284,8 @@ fn stmt_refs_listid(stmt: &Stmt) -> bool {
         StmtKind::RefAssign { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }

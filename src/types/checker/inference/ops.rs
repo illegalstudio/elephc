@@ -589,6 +589,11 @@ impl Checker {
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return =
             matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
+        let prev_return_declares_callable = std::mem::replace(
+            &mut self.current_return_declares_callable,
+            matches!(&expr.kind, ExprKind::Closure { return_type: Some(declared), .. }
+                if crate::types::checker::type_expr_declares_callable(declared)),
+        );
         let previous_loop_storage_scope = self.current_loop_storage_scope.clone();
         let loop_storage_scope = crate::types::nested_loop_storage_scope(
             &previous_loop_storage_scope,
@@ -637,6 +642,7 @@ impl Checker {
         self.end_promotable_walk(&closure_scope);
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
+        self.current_return_declares_callable = prev_return_declares_callable;
         self.closure_depth -= 1;
         body_result?;
         self.resolve_closure_return_type(body, return_type, expr.span, &closure_sig.env)?;
@@ -660,7 +666,7 @@ impl Checker {
             CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
         })?;
         self.require_mixed_callable_type(&var_ty, expr.span)?;
-        if var_ty != PhpType::Callable {
+        if !var_ty.is_callable_like() {
             if matches!(var_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
                 // A boxed array read can carry any runtime callable shape.
                 // The callee is only known at runtime, but PHP rejects
@@ -902,7 +908,7 @@ impl Checker {
         }
         let nullable_callable =
             Self::is_nullable_callable_from_nullsafe_chain(callee, &callee_ty);
-        if callee_ty != PhpType::Callable && !nullable_callable {
+        if !callee_ty.is_callable_like() && !nullable_callable {
             return Err(CompileError::new(
                 expr.span,
                 &format!(
@@ -1439,7 +1445,7 @@ impl Checker {
 
         // The RHS must be a callable.
         let callable_ty = self.infer_type(callable, env)?;
-        if callable_ty != PhpType::Callable {
+        if !callable_ty.is_callable_like() {
             return Err(CompileError::new(
                 expr.span,
                 &format!(
@@ -1640,7 +1646,7 @@ impl Checker {
         let PhpType::Union(members) = callee_ty else {
             return false;
         };
-        members.iter().any(|member| *member == PhpType::Callable)
+        members.iter().any(PhpType::is_callable_like)
             && members.iter().any(|member| *member == PhpType::Void)
             && expr_contains_nullsafe_member(callee)
     }

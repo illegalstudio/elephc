@@ -1,0 +1,230 @@
+/* Transactions view (monitor --apm). Inserted into the call-graph page only
+   when --apm is given; everything is scoped under #apm or the mode switch so the
+   profile views are untouched. It is drawn with the page's own components and
+   tokens: segmented controls filled with the accent, uppercase muted labels,
+   the function list's mini bars, the Checks panel's pass/fail tags.
+
+   The charts use one hue, the page's magenta accent, as an ordinal ramp
+   (validated with the dataviz palette checks against the panel surfaces,
+   #ffffff light and #201b16 dark): latency p50 → p95 → p99 and errors
+   4xx → 5xx read as increasing severity, a single series takes the accent. In
+   the dark the ramp runs the other way (lighter is louder), and the single
+   series steps just inside the dark lightness band. */
+#apm {
+  --apm-one: #ff0070;
+  --lat-p50: #f77fae; --lat-p95: #ff0070; --lat-p99: #a3004a;
+  --err-4xx: #f77fae; --err-5xx: #ff0070;
+  --pass: #30a46c; --fail: #e5484d; --live: #2ec26a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) #apm {
+    --apm-one: #fa3a83;
+    --lat-p50: #b8215f; --lat-p95: #fa3a83; --lat-p99: #ffa3c6;
+    --err-4xx: #b8215f; --err-5xx: #fa3a83;
+  }
+}
+:root[data-theme="dark"] #apm {
+  --apm-one: #fa3a83;
+  --lat-p50: #b8215f; --lat-p95: #fa3a83; --lat-p99: #ffa3c6;
+  --err-4xx: #b8215f; --err-5xx: #fa3a83;
+}
+
+/* The mode switch is the page's view switcher: one segmented control. */
+#apm-modes { display: inline-flex; align-items: center; gap: 2px; padding: 2px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
+#apm-modes button { border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  padding: .26rem .6rem; border-radius: 6px; font-size: .78rem; white-space: nowrap; }
+#apm-modes button:hover:not([aria-pressed="true"]) { background: var(--hover); color: var(--ink); }
+#apm-modes button[aria-pressed="true"] { background: var(--accent); color: #fff8f4; font-weight: 640; }
+
+#apm { position: absolute; inset: 3.1rem 0 0 0; overflow: hidden; display: none; background: var(--bg);
+  font-size: .85rem; line-height: 1.45; z-index: 5; --apm-side-w: 15rem; }
+body.apm-on #apm { display: block; }
+/* The sections sidebar is the Functions list's: same surface, head and rows,
+   a row per section with its headline figure, the one in view selected. */
+#apm .apm-side { position: absolute; left: 0; top: 0; bottom: 0; width: var(--apm-side-w); overflow-y: auto;
+  background: var(--panel); border-right: 1px solid var(--border); }
+#apm .apm-side .side-head { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem;
+  padding: .6rem .85rem; border-bottom: 1px solid var(--border); }
+#apm .apm-side .side-head .t { font-size: .85rem; font-weight: 650; color: var(--ink); }
+#apm .apm-side .side-head .sort { font-size: .7rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+#apm #apm-nav { display: flex; flex-direction: column; gap: 1px; padding: .3rem; }
+#apm .navrow { display: grid; grid-template-columns: 1fr auto; gap: .55rem; align-items: center; width: 100%;
+  text-align: left; font: inherit; color: inherit; background: transparent; cursor: pointer;
+  padding: .45rem .55rem; border-radius: 8px; border: 1px solid transparent; }
+#apm .navrow:hover { background: var(--hover); }
+#apm .navrow.sel { background: var(--sel); border-color: var(--accent); }
+#apm .navrow[hidden] { display: none; }
+#apm .navrow .nm { min-width: 0; }
+#apm .navrow .n { display: block; font-size: .82rem; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#apm .navrow .m2 { display: block; font-size: .68rem; color: var(--muted); font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+#apm .navrow .pv { font-size: .82rem; font-weight: 650; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+#apm .navrow .pv.fail { color: #fff8f4; background: var(--fail); border-radius: 4px; padding: .02rem .35rem; font-size: .72rem; }
+#apm .navrow .pv.pass { color: var(--pass); }
+#apm .apm-main { position: absolute; top: 0; right: 0; bottom: 0; left: var(--apm-side-w); overflow: auto; }
+#apm .sec { scroll-margin-top: .75rem; margin-bottom: .75rem; }
+#apm .sec[hidden] { display: none; }
+#apm .sec-title { display: flex; align-items: baseline; gap: .6rem; margin: 1.1rem 0 .55rem; font-size: .68rem; font-weight: 700;
+  color: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
+#apm .sec-title .sec-note { font-weight: 400; text-transform: none; letter-spacing: 0; font-size: .74rem; }
+body.apm-on #sidebar, body.apm-on #dragger, body.apm-on #stage, body.apm-on #nav,
+body.apm-on #legend, body.apm-on #viewbar, body.apm-on #metricbar, body.apm-on #search,
+body.apm-on #apm-capture, body.apm-on header .meta { display: none !important; }
+#apm .wrap { max-width: 1280px; margin: 0 auto; padding: 1rem 1rem 2.5rem; }
+
+/* Status line and range selector. */
+#apm .bar { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; margin-bottom: .9rem; }
+#apm .status { display: inline-flex; align-items: center; gap: .4rem; color: var(--muted); font-size: .78rem; }
+#apm .status b { font-weight: 600; color: var(--ink); }
+#apm .status i { width: 8px; height: 8px; border-radius: 50%; background: #b8a99f; }
+#apm .status.live i { background: var(--live); box-shadow: 0 0 0 3px rgba(46,194,106,.22); }
+#apm .status.down i { background: var(--fail); box-shadow: 0 0 0 3px rgba(229,72,77,.2); }
+#apm .grow { flex: 1; }
+#apm .ranges { display: inline-flex; align-items: center; gap: 2px; padding: 2px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
+#apm .ranges button { border: 0; background: transparent; color: var(--muted); cursor: pointer;
+  padding: .26rem .55rem; border-radius: 6px; font-size: .78rem; font-variant-numeric: tabular-nums; }
+#apm .ranges button:hover:not([aria-pressed="true"]) { background: var(--hover); color: var(--ink); }
+#apm .ranges button[aria-pressed="true"] { background: var(--accent); color: #fff8f4; font-weight: 640; }
+#apm .filter { display: flex; align-items: center; gap: .55rem; font-size: .78rem; color: var(--muted); }
+#apm .filter[hidden] { display: none; }
+#apm .filter code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; color: var(--ink);
+  background: var(--panel); border: 1px solid var(--border); padding: .1rem .45rem; border-radius: 6px; }
+#apm .filter button { padding: .2rem .5rem; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--ink); font-size: .76rem; cursor: pointer; }
+#apm .filter button:hover { border-color: var(--accent); }
+#apm h2 .reset { margin-left: auto; padding: .2rem .55rem; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--muted); font-size: .74rem; font-weight: 500; cursor: pointer; }
+#apm h2 .reset:hover { border-color: var(--accent); color: var(--ink); }
+#apm h2 .reset.confirm { border-color: var(--fail); color: var(--fail); }
+#apm h2 .reset:disabled { opacity: .6; cursor: progress; }
+#apm .kinds { display: flex; flex-wrap: wrap; gap: .35rem; padding: .55rem 1rem 0; }
+#apm .kinds[hidden] { display: none; }
+#apm .kinds button { padding: .2rem .65rem; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg); color: var(--muted); font-size: .76rem; cursor: pointer; }
+#apm .kinds button:hover { border-color: var(--accent); color: var(--ink); }
+#apm .kinds button[aria-pressed="true"] { border-color: var(--accent); color: var(--ink); font-weight: 600; }
+#apm .banner { display: none; margin-bottom: .9rem; padding: .5rem .75rem; border-radius: 8px;
+  border: 1px solid var(--fail); background: var(--panel); font-size: .82rem; }
+#apm .banner.on { display: block; }
+#apm .banner b { color: var(--fail); }
+
+/* Budgets: the Checks panel — a filled pass/fail tag, the rule in monospace
+   with what it means, the value measured over the alert window. */
+#apm .budgets { padding: .1rem 0 .2rem; }
+/* One column per part of the rule, aligned row to row: state, metric, route,
+   budget, the value now, since when. */
+#apm .krow { display: grid; grid-template-columns: 4.6rem 9rem minmax(10rem, 1fr) 7rem 7rem 9.5rem;
+  column-gap: 1.25rem; align-items: baseline; padding: .55rem .85rem; border-bottom: 1px solid var(--border); }
+#apm .krow:last-child { border-bottom: 0; }
+#apm .krow.khead { padding-top: .45rem; padding-bottom: .45rem; font-size: .68rem; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em; }
+#apm .krow.khead span:nth-child(n+4) { text-align: right; }
+#apm .kmetric { font-size: .8rem; color: var(--muted); white-space: nowrap; }
+#apm .kroute { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; color: var(--ink);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#apm .kbudget { font-size: .8rem; color: var(--muted); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#apm .krow .kval, #apm .krow .ksince { text-align: right; }
+@media (max-width: 1100px) {
+  #apm .krow { grid-template-columns: 4.6rem minmax(8rem, 1fr) 6rem 6.5rem; }
+  #apm .krow .kmetric, #apm .krow .ksince, #apm .krow.khead span:nth-child(2), #apm .krow.khead span:nth-child(6) { display: none; }
+}
+#apm .kt { font-size: .62rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; border-radius: 4px;
+  padding: .08rem .35rem; text-align: center; color: #fff8f4; background: var(--pass); }
+#apm .krow.firing .kt { background: var(--fail); }
+#apm .krow.idle .kt { background: var(--muted); }
+#apm .kval { font-variant-numeric: tabular-nums; font-size: .82rem; font-weight: 650; white-space: nowrap; }
+#apm .krow.firing .kval { color: var(--fail); }
+#apm .ksince { font-variant-numeric: tabular-nums; font-size: .74rem; color: var(--muted); white-space: nowrap; }
+#apm .knone { color: var(--muted); font-size: .8rem; padding: .55rem .85rem; }
+#apm .knone code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; color: var(--ink); }
+
+/* Panels: the sidebar's surface, border and radius. */
+#apm .tile, #apm .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+#apm .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; margin-bottom: .75rem; }
+#apm .tile { padding: .7rem .85rem .75rem; }
+#apm .tile .label { font-size: .68rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+#apm .tile .value { font-size: 1.6rem; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+  margin-top: .15rem; line-height: 1.2; }
+#apm .tile .sub { font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: .1rem; }
+#apm .charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin-bottom: .75rem; }
+#apm .charts.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#apm .sec > .charts:last-child { margin-bottom: 0; }
+#apm .card { padding: 0 0 .4rem; position: relative; min-width: 0; }
+/* Card heads read like the sidebar's: title left, unit as the uppercase note. */
+#apm .card h2 { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem;
+  margin: 0; padding: .6rem .85rem; font-size: .85rem; font-weight: 650; color: var(--ink);
+  border-bottom: 1px solid var(--border); }
+#apm .card .unit { font-weight: 600; font-size: .68rem; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .05em; margin-left: auto; }
+#apm .charts .card { padding-bottom: .3rem; }
+#apm .key { display: flex; gap: .75rem; font-size: .72rem; color: var(--muted); margin: .45rem .85rem .1rem; min-height: 1.05rem; }
+#apm .key span { display: inline-flex; align-items: center; gap: .3rem; }
+#apm .key i { width: 12px; height: 2px; border-radius: 1px; display: inline-block; }
+#apm .plot { height: 190px; position: relative; margin: 0 .6rem 0 .35rem; }
+#apm .plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
+#apm .plot .axis { fill: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+#apm .plot .grid { stroke: var(--border); stroke-width: 1; }
+#apm .plot .baseline { stroke: var(--line); stroke-width: 1; }
+#apm .plot .direct { font-size: 10.5px; fill: var(--muted); }
+#apm .plot .cross { stroke: var(--edge); stroke-width: 1; stroke-dasharray: 3 3; }
+#apm .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: .78rem; }
+/* The hover card is the call graph's tooltip. */
+#apm .ptip { position: absolute; pointer-events: none; z-index: 2; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: .45rem .6rem; font-size: .76rem; box-shadow: 0 6px 24px rgba(0,0,0,.18);
+  white-space: nowrap; display: none; }
+#apm .ptip .t { color: var(--muted); margin-bottom: .15rem; font-variant-numeric: tabular-nums; }
+#apm .ptip .row { display: flex; align-items: center; gap: .4rem; font-variant-numeric: tabular-nums; color: var(--ink); }
+#apm .ptip .row i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+#apm .ptip .row span { color: var(--muted); }
+
+/* Tables: the SQL panel's header, the function list's rows and bars. */
+#apm .table-card { padding: 0; overflow: hidden; }
+#apm .table-wrap { overflow-x: auto; }
+#apm table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+#apm th, #apm td { padding: .45rem .7rem; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border); }
+#apm th:first-child, #apm td:first-child { text-align: left; padding-left: .85rem; }
+#apm th { font-size: .68rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
+  cursor: pointer; user-select: none; background: var(--panel); }
+#apm th:hover { color: var(--ink); }
+#apm th[aria-sort="descending"], #apm th[aria-sort="ascending"] { color: var(--ink); }
+#apm th[aria-sort="descending"]::after { content: " ↓"; color: var(--accent); }
+#apm th[aria-sort="ascending"]::after { content: " ↑"; color: var(--accent); }
+#apm td { font-size: .82rem; color: var(--ink); }
+#apm tbody tr { cursor: pointer; }
+#apm tbody tr:hover { background: var(--hover); }
+#apm tbody tr.selected { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
+#apm tbody tr.fixed { cursor: default; }
+#apm tbody tr.fixed:hover { background: transparent; }
+#apm tbody tr:last-child td { border-bottom: 0; }
+#apm tfoot td { font-weight: 650; border-top: 1px solid var(--border); border-bottom: 0; color: var(--muted); }
+#apm tfoot td:first-child { color: var(--ink); }
+#apm td.route { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; max-width: 420px;
+  overflow: hidden; text-overflow: ellipsis; }
+#apm .share { display: inline-flex; align-items: center; gap: .55rem; justify-content: flex-end; font-weight: 650; }
+#apm .share .mini { display: block; height: 4px; width: 4rem; border-radius: 2px; background: var(--line); overflow: hidden; }
+#apm .share .mini > i { display: block; height: 100%; background: var(--accent); min-width: 1px; }
+#apm .err { color: var(--fail); font-weight: 650; }
+#apm .note { margin-top: .9rem; font-size: .74rem; color: var(--muted); }
+#apm #apm-traces td a { color: var(--accent); text-decoration: none; font-weight: 600; font-size: .78rem; }
+#apm #apm-traces td a:hover { text-decoration: underline; }
+#apm #apm-traces td.hint { text-align: left; color: var(--muted); white-space: normal; }
+#apm #apm-traces td.hint code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; color: var(--ink); }
+
+/* The capture prompt over the Profile view. */
+#apm-capture a { color: var(--accent); font-weight: 600; text-decoration: none; }
+#apm-capture { position: absolute; top: calc(3.1rem + .75rem); left: calc(var(--sidebar-w) + 1rem); z-index: 6; display: none;
+  align-items: center; gap: .6rem; background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: .5rem .6rem; font-size: .82rem; color: var(--muted); box-shadow: 0 6px 24px rgba(20,14,10,.12); }
+#apm-capture.show { display: inline-flex; }
+#apm-capture.center { top: 40%; left: calc(var(--sidebar-w) + (100% - var(--sidebar-w)) / 2); transform: translate(-50%, -50%);
+  padding: 1rem 1.1rem; }
+#apm-capture button { border: 0; border-radius: 6px; padding: .35rem .7rem; cursor: pointer; font-size: .82rem;
+  background: var(--accent); color: #fff8f4; font-weight: 640; }
+#apm-capture button:disabled { opacity: .6; cursor: progress; }
+@media (max-width: 1000px) { #apm .charts, #apm .charts.two { grid-template-columns: 1fr; } }
+/* Narrow: the sections list gives its width back to the content. */
+@media (max-width: 760px) { #apm .apm-side { display: none; } #apm .apm-main { left: 0; } }
+@media (max-width: 700px) { #apm .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -12,7 +12,7 @@ use super::*;
 
 /// Emits ABI version, lifecycle, last-status, last-error, and owned-buffer release exports.
 pub(super) fn emit(emitter: &mut Emitter, target: Target, heap_debug: bool,
-    startup: Option<&str>, runtime_error: (&str, usize)) {
+    startup: Option<&str>, runtime_error: (&str, usize), apm: Option<LibraryApm>) {
     emitter.blank();
     emitter.comment("cdylib ABI version");
     emitter.label_global(&target.extern_symbol("elephc_abi_version"));
@@ -35,6 +35,13 @@ pub(super) fn emit(emitter: &mut Emitter, target: Target, heap_debug: bool,
         emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
         if lifecycle == "elephc_init" {
             crate::codegen::stack_guard::emit_stack_limit_init_call(emitter);
+            // `--with-apm`: the counters, and the I/O slots that charge a
+            // call's queries to it. Once, however often the host calls this.
+            if let Some(apm) = apm {
+                crate::codegen_support::apm_init::emit_apm_init_call(emitter, apm.collector, true);
+                crate::codegen_support::apm_init::emit_event_active_slot(emitter);
+                crate::codegen_support::apm_init::emit_probe_io_slots(emitter);
+            }
             if heap_debug {
                 abi::emit_enable_heap_debug_flag(emitter);
             }
@@ -62,6 +69,16 @@ pub(super) fn emit(emitter: &mut Emitter, target: Target, heap_debug: bool,
                 emitter.instruction(&failure);                                  // return recoverable runtime failure to the host initializer
                 emitter.label("L_cdylib_init_return");
             }
+            abi::emit_frame_restore(emitter, 16);
+        }
+        // `--with-apm`: a library has no exit of its own, so its shutdown
+        // sends what it counted since its last periodic send, and stops the
+        // thread that sends.
+        if lifecycle == "elephc_shutdown" && apm.is_some_and(|apm| apm.collector) {
+            abi::emit_frame_prologue(emitter, 16);
+            // The last counts, then the sending thread stopped and joined:
+            // the host may unload the library once this returns (review).
+            abi::emit_call_label(emitter, &target.extern_symbol("elephc_probe_apm_shutdown"));
             abi::emit_frame_restore(emitter, 16);
         }
         emitter.instruction("ret");                                             // return to the current C-ABI caller

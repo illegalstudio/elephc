@@ -222,11 +222,14 @@ fn execute_program_in_return_scope(context: &mut ElephcEvalContext, program: &Ev
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
     validate_program_semantics(context, program, values)?;
+    let previous_strict_types = context.strict_types();
+    context.set_strict_types(program.strict_types());
     let executed = match bytecode::try_execute(context, program, scope, values) {
         Ok(Some(control)) => Ok(control),
         Ok(None) => execute_program_statements(program, context, scope, values),
         Err(status) => Err(status),
     };
+    context.set_strict_types(previous_strict_types);
     match executed {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
         Ok(EvalControl::Return(result)) => {
@@ -237,13 +240,25 @@ fn execute_program_in_return_scope(context: &mut ElephcEvalContext, program: &Ev
             let result = if result.is_borrowed() { values.retain(result)? } else { result };
             Ok(EvalOutcome::Throwable(result))
         }
-        Ok(EvalControl::Break | EvalControl::Continue) => Err(EvalStatus::UnsupportedConstruct),
+        Ok(EvalControl::Break | EvalControl::Continue | EvalControl::Goto(_)) => {
+            Err(EvalStatus::UnsupportedConstruct)
+        }
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()
             .map(EvalOutcome::Throwable)
             .ok_or(EvalStatus::UncaughtThrowable),
         Err(status) => Err(status),
     }
+}
+
+/// Clears the eval `preg_last_error()` code at a `--web` request boundary.
+///
+/// A worker serves every request on one reused thread, so an error recorded by one request's
+/// eval would otherwise be the next request's `preg_last_error()` before it ran any regex.
+/// Once the regex provider registered it, the code is the compiled `_preg_last_error`, which
+/// the generated request reset also clears; this covers the thread-local fallback slot.
+pub(crate) fn reset_request_regex_state() {
+    builtins::eval_preg_set_last_error(0);
 }
 
 /// Returns the current interpreter availability status for the ABI stub.

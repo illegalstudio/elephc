@@ -20,7 +20,7 @@ fn program() -> (crate::parser::ast::Program, crate::optimize::reachability::Pre
 pub(super) fn prepare(source: &str) -> (crate::parser::ast::Program, crate::optimize::reachability::PreludeInventory) {
     let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
     let mut inventory = crate::optimize::reachability::PreludeInventory::new();
-    let program = crate::core_prelude::inject_if_used(program, &mut inventory);
+    let program = crate::core_prelude::inject_if_used(program, false, false, &mut inventory);
     let program = crate::gmp_prelude::inject_if_used(program, false, &mut inventory);
     let program = crate::xml_prelude::inject_if_used(program, false, &mut inventory);
     let program = crate::dom_html_prelude::inject_if_used(program, false, &mut inventory);

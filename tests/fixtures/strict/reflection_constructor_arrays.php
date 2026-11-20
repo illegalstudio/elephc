@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 class ConstructorArrayTarget {
     public function __construct(int $value = 7) { echo 'K', $value, '|'; }
 }
@@ -6,6 +7,8 @@ class ConstructorArrayOther {
     public function __construct(int $value = 5) { echo 'W', $value, '|'; }
 }
 $reflection = new ReflectionClass('ConstructorArrayTarget');
+$reflection->newInstance(value: '12');
+$reflection->newInstanceArgs(['value' => '13']);
 try { $reflection->newInstanceArgs(new ArrayIterator([8])); }
 catch (TypeError $error) { echo 'T|'; unset($error); }
 $reflection->newInstanceArgs();

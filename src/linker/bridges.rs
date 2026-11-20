@@ -152,7 +152,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
     },
     BridgeStaticlib {
         lib_name: "elephc_gmp",
-        env_var: "ELEPHC_GMP_LIB_DIR",
+        env_var: "ELEPHC_GMP_BRIDGE_DIR",
         crate_name: "elephc-gmp",
         flag_name: "gmp",
         whole_archive: false,
@@ -176,6 +176,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
         // The random bridge implements PHP's always-compiled `random` extension.
         php_extensions: &["random"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_uri",
+        env_var: "ELEPHC_URI_LIB_DIR",
+        crate_name: "elephc-uri",
+        flag_name: "uri",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The uri bridge implements PHP 8.5's always-compiled `uri` extension.
+        php_extensions: &["uri"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -324,6 +337,22 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         // The libxml2-backed XML bridge implements PHP's `xml` (SAX parser) and
         // `xmlwriter` extensions; both surfaces are declared by the same injected prelude.
         php_extensions: &["xml", "xmlwriter", "SimpleXML"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_tidy",
+        env_var: "ELEPHC_TIDY_LIB_DIR",
+        crate_name: "elephc-tidy",
+        flag_name: "tidy",
+        whole_archive: false,
+        apple_frameworks: &[],
+        // The bridge's parser IS libtidy (the managed `libtidy` catalog package,
+        // spliced in by `src/pipeline/backend.rs` whenever this bridge is planned).
+        // libtidy is plain C and needs neither a framework nor iconv.
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The libtidy-backed bridge implements PHP's `tidy` extension.
+        php_extensions: &["tidy"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -1655,6 +1684,38 @@ mod tests {
                 bridge.flag_name,
                 bridge.lib_name
             );
+        }
+    }
+
+    /// Every bridge cross-built by `ci-build-ios.yml` must also be published in its
+    /// artifact file list; a bridge can compile successfully and still be missing from
+    /// every restored iOS link job.
+    #[test]
+    fn every_ios_bridge_build_is_published_in_the_artifact() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let rel = ".github/workflows/ci-build-ios.yml";
+        let body = std::fs::read_to_string(root.join(rel)).expect("read ci-build-ios workflow");
+        let build_start = body
+            .find("cargo build --locked --target \"$triple\"")
+            .unwrap_or_else(|| panic!("{rel} has no cross-target bridge build"));
+        let build_tail = &body[build_start..];
+        let build_end = build_tail
+            .find("echo \"triple=")
+            .unwrap_or_else(|| panic!("{rel} bridge build has no closing echo"));
+        let build = &build_tail[..build_end];
+        let files_start = body
+            .find("files: |")
+            .unwrap_or_else(|| panic!("{rel} has no iOS artifact file list"));
+        let files = &body[files_start..];
+        for bridge in BRIDGES {
+            if build.contains(&format!("-p {}", bridge.crate_name)) {
+                let archive = format!("lib{}.a", bridge.lib_name);
+                assert!(
+                    files.contains(&archive),
+                    "{rel} builds {} but never publishes `{archive}`",
+                    bridge.crate_name
+                );
+            }
         }
     }
 

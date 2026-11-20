@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Existing false-parent helpers preserve warning order and chained callback exceptions.
-//! - Ordinary array-key guards inspect the selected parent after autovivification.
+//! - Strict key-kind guards run before a null or false parent can be materialized.
 //! - Non-boolean parents keep the normal string, ArrayAccess and array dispatch.
 
 use super::*;
@@ -17,6 +17,7 @@ pub(super) fn lower(
     key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
     if !super::nested_write_guards::guard_scalar_write_parent(ctx, parent, span) { return; }
+    crate::ir_lower::array_key_guards::for_prepared_write(ctx, parent, key, span);
     if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {
         store(ctx, parent, key, value, span, key_already_diagnosed);
         return;
@@ -60,6 +61,5 @@ fn store(
 ) {
     super::static_false_parent::normalize_null_for_write(ctx, parent, span);
     crate::ir_lower::array_key_guards::reject_invalid_kind(ctx, parent, key, span);
-    crate::ir_lower::array_key_guards::for_prepared_write(ctx, parent, key, span);
     super::string_offset_writes::lower_boxed_set(ctx, parent, key, value, span, key_already_diagnosed);
 }

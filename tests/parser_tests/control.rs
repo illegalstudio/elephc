@@ -414,11 +414,85 @@ fn test_alternative_syntax_malformed_forms_are_rejected() {
     assert!(parse_fails("<?php for ($i = 0; $i < 1; $i++): echo 1; endfor"));
 }
 
-// --- goto (unsupported) ---
+// --- goto ---
 
-/// Verifies `goto` and its target label are rejected at parse time rather than silently ignored.
+/// Verifies `goto name;` and `name:` parse into their own statements, in source order.
 #[test]
-fn test_goto_and_labels_are_rejected() {
-    assert!(parse_fails("<?php goto done; done: echo 1;"));
-    assert!(parse_fails("<?php done: echo 1;"));
+fn test_goto_and_label_statements() {
+    let stmts = parse_source("<?php goto done; echo 1; done: echo 2;");
+    assert_eq!(stmts.len(), 4);
+    assert_eq!(stmts[0].kind, StmtKind::Goto("done".into()));
+    assert_eq!(stmts[2].kind, StmtKind::GotoLabel("done".into()));
+}
+
+/// Verifies the keyword is case-insensitive while the label keeps the spelling it was written
+/// with: PHP label names are case-sensitive.
+#[test]
+fn test_goto_keyword_case_and_label_spelling() {
+    let stmts = parse_source("<?php GoTo Done; Done:");
+    assert_eq!(stmts[0].kind, StmtKind::Goto("Done".into()));
+    assert_eq!(stmts[1].kind, StmtKind::GotoLabel("Done".into()));
+}
+
+/// Verifies a label may be named like a type: PHP reserves those words as class names, not as
+/// keywords.
+#[test]
+fn test_goto_label_named_like_a_type() {
+    for name in ["int", "string", "mixed", "bool", "float", "void", "iterable", "object", "never"] {
+        let stmts = parse_source(&format!("<?php goto {name}; {name}: echo 1;"));
+        assert_eq!(stmts[0].kind, StmtKind::Goto(name.into()), "{name}");
+        assert_eq!(stmts[1].kind, StmtKind::GotoLabel(name.into()), "{name}");
+    }
+}
+
+/// Verifies a label can end a block and a `goto` can be the body of a braceless `if`.
+#[test]
+fn test_goto_nested_positions() {
+    let stmts = parse_source("<?php function f() { if (true) goto end; echo 1; end: }");
+    let StmtKind::FunctionDecl { body, .. } = &stmts[0].kind else {
+        panic!("expected a function declaration, got {:?}", stmts[0].kind);
+    };
+    let StmtKind::If { then_body, .. } = &body[0].kind else {
+        panic!("expected an if statement, got {:?}", body[0].kind);
+    };
+    assert_eq!(then_body[0].kind, StmtKind::Goto("end".into()));
+    assert_eq!(body[2].kind, StmtKind::GotoLabel("end".into()));
+}
+
+/// Verifies a label is not confused with the other `name` `:` positions: a ternary, a static
+/// call, a `case`, and an alternative-syntax `else:`.
+#[test]
+fn test_goto_label_is_not_confused_with_other_colons() {
+    let has_label = |src: &str| {
+        /// Returns whether these statements, or the bodies nested in them, hold a jump label.
+        fn any(stmts: &[Stmt]) -> bool {
+            stmts.iter().any(|stmt| match &stmt.kind {
+                StmtKind::GotoLabel(_) => true,
+                StmtKind::If { then_body, else_body, .. } => {
+                    any(then_body) || else_body.as_deref().is_some_and(any)
+                }
+                StmtKind::Switch { cases, default, .. } => {
+                    cases.iter().any(|(_, body)| any(body)) || default.as_deref().is_some_and(any)
+                }
+                _ => false,
+            })
+        }
+        any(&parse_source(src))
+    };
+    assert!(!has_label("<?php $a = $argc ? A : B;"));
+    assert!(!has_label("<?php Foo::bar();"));
+    assert!(!has_label("<?php switch ($argc) { case A: echo 1; break; default: echo 2; }"));
+    assert!(!has_label("<?php if ($argc): echo 1; else: echo 2; endif;"));
+    assert!(has_label("<?php switch ($argc) { case 1: again: echo 1; }"));
+}
+
+/// Verifies `goto` requires a plain label name and a terminating semicolon, as PHP's grammar
+/// does: the target is never an expression.
+#[test]
+fn test_goto_malformed_forms_are_rejected() {
+    assert!(parse_fails("<?php goto;"));
+    assert!(parse_fails("<?php goto 1;"));
+    assert!(parse_fails("<?php goto $label;"));
+    assert!(parse_fails("<?php goto done"));
+    assert!(parse_fails("<?php goto a b;"));
 }

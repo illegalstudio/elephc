@@ -19,14 +19,19 @@ pub(super) fn reflection_parameter_default_value(
     if let Some(value) = reflection_deferred_default_value(default) {
         return Ok(Some(value));
     }
-    if let Some(helper) = ctx.module.functions.iter().chain(ctx.module.closures.iter())
-        .find(|function| (function.lexical_class.is_none() && current_class.is_empty()
+    let helper_for_default = |function: &&crate::ir::Function| (function.lexical_class.is_none() && current_class.is_empty()
             || function.lexical_class.as_deref().is_some_and(|scope|
             scope == current_class || current_info.is_some_and(|info|
                 info.method_impl_classes.values().chain(info.static_method_impl_classes.values())
                     .any(|owner| owner == scope))))
             && function.callable_default.as_ref()
-                .is_some_and(|value| value.same_value_producer(default)))
+                .is_some_and(|value| value.same_value_producer(default));
+    // A default that reads a deprecated constant has a reflection twin, which reports on every
+    // call at the caller's line instead of consuming the parameter's own once flags.
+    let helpers = || ctx.module.functions.iter().chain(ctx.module.closures.iter()).filter(helper_for_default);
+    if let Some(helper) = helpers()
+        .find(|function| crate::ir_lower::is_reflection_default_helper(&function.name))
+        .or_else(|| helpers().next())
     {
         return Ok(Some(ReflectionParameterDefaultValue::EirHelper(helper.name.clone())));
     }
@@ -269,9 +274,19 @@ pub(super) fn reflection_parameter_type_metadata(
     ty: &PhpType,
 ) -> Option<ReflectionParameterTypeMetadata> {
     if *ty == PhpType::Mixed {
-        if let Some(TypeExpr::Named(name)) = type_expr {
-            if name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("object") {
-                return reflection_declared_type_metadata(type_expr.expect("declared object type"));
+        if let Some(type_expr) = type_expr {
+            // A widened `mixed` ABI slot can still carry the source declaration in
+            // `param_type_exprs`; reflection must report the declared syntax, not the
+            // storage representation. A genuine `mixed` annotation falls through.
+            let declared_mixed = matches!(
+                type_expr,
+                TypeExpr::Named(name)
+                    if name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("mixed")
+            );
+            if !declared_mixed {
+                if let Some(metadata) = reflection_declared_type_metadata(type_expr) {
+                    return Some(metadata);
+                }
             }
         }
     }
@@ -377,7 +392,9 @@ pub(super) fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionN
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             Some(reflection_builtin_named_type("array", false))
         }
-        PhpType::Callable => Some(reflection_builtin_named_type("callable", false)),
+        PhpType::Callable | PhpType::DeclaredCallable => {
+            Some(reflection_builtin_named_type("callable", false))
+        }
         PhpType::Object(name) if name.is_empty() => {
             Some(reflection_builtin_named_type("object", false))
         }

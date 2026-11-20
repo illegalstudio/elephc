@@ -210,9 +210,11 @@ fn stack_numeric_rejects_shared_destination() {
 }
 
 /// Unknown consumers, cloning, child-bearing assignments and conditional local identities fail closed.
+///
+/// `echo` is not on this list: it is a reviewed payload observation (`min_max_tests`).
 #[test]
 fn stack_numeric_rejects_unknown_consumers_and_writers() {
-    for op in [Op::MixedClone, Op::MixedBox, Op::EchoValue, Op::VarDump] {
+    for op in [Op::MixedClone, Op::MixedBox, Op::VarDump] {
         let (mut function, result) = fixture(false, false);
         let term = function.blocks[0].terminator.take().unwrap();
         let mut builder = Builder::new(&mut function);

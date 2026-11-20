@@ -50,6 +50,7 @@ pub(super) fn number_scalar_binding_signature(
 pub(in crate::interpreter) fn bind_native_callable_bound_args_with_mode(
     signature: Option<NativeCallableSignature>,
     mut args: Vec<EvaluatedCallArg>,
+    callee: Option<&str>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -58,7 +59,7 @@ pub(in crate::interpreter) fn bind_native_callable_bound_args_with_mode(
     // containers allocated by this binder belong to the native activation.
     for arg in &mut args { arg.value = arg.value.borrowed(); }
     let Some(signature) = signature else {
-        return positional_evaluated_bound_args(None, args, by_ref_mode, context, values);
+        return positional_evaluated_bound_args(None, args, callee, by_ref_mode, context, values);
     };
     if !signature.bridge_supported() {
         return Err(EvalStatus::RuntimeFatal);
@@ -66,9 +67,9 @@ pub(in crate::interpreter) fn bind_native_callable_bound_args_with_mode(
     if signature.has_explicit_shape()
         || signature.param_names().len() == signature.param_count()
     {
-        bind_native_signature_args(&signature, args, by_ref_mode, context, values)
+        bind_native_signature_args(&signature, args, callee, by_ref_mode, context, values)
     } else {
-        positional_evaluated_bound_args(Some(&signature), args, by_ref_mode, context, values)
+        positional_evaluated_bound_args(Some(&signature), args, callee, by_ref_mode, context, values)
     }
 }
 
@@ -76,6 +77,7 @@ pub(in crate::interpreter) fn bind_native_callable_bound_args_with_mode(
 pub(super) fn positional_evaluated_bound_args(
     signature: Option<&NativeCallableSignature>,
     args: Vec<EvaluatedCallArg>,
+    callee: Option<&str>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -105,7 +107,7 @@ pub(super) fn positional_evaluated_bound_args(
         })
         .collect::<Result<Vec<_>, _>>()?;
     if let Some(signature) = signature {
-        return finish_native_argument_binding(signature, bound_args, by_ref_mode, context, values);
+        return finish_native_argument_binding(signature, bound_args, callee, by_ref_mode, context, values);
     }
     Ok(bound_args)
 }
@@ -250,6 +252,7 @@ fn stage_hidden_collector_count(
 pub(super) fn bind_native_signature_args(
     signature: &NativeCallableSignature,
     args: Vec<EvaluatedCallArg>,
+    callee: Option<&str>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -357,7 +360,7 @@ pub(super) fn bind_native_signature_args(
         let _ = release_native_bound_args(&bound_args, context, values);
         return Err(status);
     }
-    finish_native_argument_binding(signature, bound_args, by_ref_mode, context, values)
+    finish_native_argument_binding(signature, bound_args, callee, by_ref_mode, context, values)
 }
 
 /// Calls one compiler-emitted, zero-argument helper that returns an owned boxed Mixed default.
@@ -408,11 +411,12 @@ mod compiled_default_tests {
 fn finish_native_argument_binding(
     signature: &NativeCallableSignature,
     mut args: Vec<BoundMethodArg>,
+    callee: Option<&str>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<BoundMethodArg>, EvalStatus> {
-    let bound = apply_native_callable_bound_arg_types(signature, &mut args, context, values)
+    let bound = apply_native_callable_bound_arg_types(signature, &mut args, callee, context, values)
         .and_then(|()| copy_native_call_user_func_by_value_ref_args(signature, &mut args, by_ref_mode, values))
         .and_then(|()| promote_native_mixed_reference_temporaries(signature, &mut args, context, values));
     if let Err(status) = bound {
@@ -447,6 +451,7 @@ fn promote_native_mixed_reference_temporaries(
 pub(super) fn apply_native_callable_bound_arg_types(
     signature: &NativeCallableSignature,
     bound_args: &mut [BoundMethodArg],
+    callee: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -455,12 +460,35 @@ pub(super) fn apply_native_callable_bound_arg_types(
             continue;
         };
         if signature.param_variadic(position) {
-            apply_native_callable_variadic_arg_type(param_type, bound_arg, context, values)?;
+            apply_native_callable_variadic_arg_type(
+                callee,
+                position,
+                param_type,
+                bound_arg,
+                context,
+                values,
+            )?;
         } else {
             let original = bound_arg.value;
             mixed_source_proofs::require_argument_with_target(param_type, bound_arg.source_type.as_ref(), original,
                 bound_arg.ref_target.as_ref(),context,values)?;
-            bound_arg.value = eval_method_parameter_value(param_type, original, context, values)?;
+            let coerced = match callee {
+                Some(callee) => eval_method_parameter_value_or_throw(
+                    callee,
+                    position + 1,
+                    signature
+                        .param_names()
+                        .get(position)
+                        .filter(|name| !name.is_empty())
+                        .map(String::as_str),
+                    param_type,
+                    original,
+                    context,
+                    values,
+                )?,
+                None => eval_method_parameter_value(param_type, original, context, values)?,
+            };
+            bound_arg.value = coerced;
             if bound_arg.value != original { release_expr_result(original, context, values)?; }
         }
     }
@@ -469,14 +497,16 @@ pub(super) fn apply_native_callable_bound_arg_types(
 
 /// Applies one registered native variadic parameter type to each collected argument.
 pub(super) fn apply_native_callable_variadic_arg_type(
+    callee: Option<&str>,
+    variadic_index: usize,
     param_type: &EvalParameterType,
     bound_arg: &mut BoundMethodArg,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let len = values.array_len(bound_arg.value)?;
-    for position in 0..len {
-        let key = values.array_iter_key(bound_arg.value, position)?;
+    for element in 0..len {
+        let key = values.array_iter_key(bound_arg.value, element)?;
         let updated = (|| {
             let original = values.array_get(bound_arg.value, key)?;
             let checked = (|| {
@@ -489,7 +519,19 @@ pub(super) fn apply_native_callable_variadic_arg_type(
                     }
                 }
                 mixed_source_proofs::require_argument_with_target(param_type,source.as_ref(),original,target,context,values)?;
-                eval_method_parameter_value(param_type, original, context, values)
+                // PHP omits the parameter name from a variadic argument TypeError.
+                match callee {
+                Some(callee) => eval_method_parameter_value_or_throw(
+                    callee,
+                    variadic_index + 1 + element,
+                    None,
+                    param_type,
+                    original,
+                    context,
+                    values,
+                ),
+                None => eval_method_parameter_value(param_type, original, context, values),
+                }
             })();
             let coerced = checked;
             let inserted = coerced.and_then(|value| {

@@ -131,11 +131,13 @@ pub(super) fn lower_strict_eq(
         return store_if_result(ctx, inst);
     }
     // A packed record address (a buffer element or a nested record read) is a raw pointer word
-    // like a `ptr<T>`, so both compare by address identity in either combination.
+    // like a `ptr<T>`, so both compare by address identity in either combination. A closure is
+    // its descriptor pointer, the same word `__rt_mixed_strict_eq` compares for a boxed closure.
     if matches!(
         (&lhs_ty, &rhs_ty),
         (PhpType::Object(_), PhpType::Object(_))
             | (PhpType::Iterable, PhpType::Iterable)
+            | (PhpType::Callable, PhpType::Callable)
             | (
                 PhpType::Pointer(_) | PhpType::Packed(_),
                 PhpType::Pointer(_) | PhpType::Packed(_)
@@ -829,7 +831,7 @@ fn emit_numeric_string_loose_eq(
 }
 
 /// Converts the current string result register pair to PHP truthiness in the integer result register.
-fn emit_string_truthiness_to_result(ctx: &mut FunctionContext<'_>) {
+pub(in crate::codegen::lower_inst) fn emit_string_truthiness_to_result(ctx: &mut FunctionContext<'_>) {
     let falsy_label = ctx.next_label("str_falsy");
     let truthy_label = ctx.next_label("str_truthy");
     let done_label = ctx.next_label("str_truth_done");

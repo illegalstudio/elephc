@@ -429,7 +429,7 @@ pub(super) fn emit_mixed_tag_membership(
 }
 
 /// Emits an integer nonzero check into the canonical integer result register.
-pub(super) fn emit_int_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
+pub(in crate::codegen::lower_inst) fn emit_int_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #0");                              // compare the integer truthiness operand against zero
@@ -452,7 +452,7 @@ pub(super) fn emit_int_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
 ///
 /// Under `--php-version 8.5` the coercion is also REPORTED, so a NAN probe runs first; see
 /// `emit_nan_bool_coercion_probe`.
-pub(super) fn emit_float_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
+pub(in crate::codegen::lower_inst) fn emit_float_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
     emit_nan_bool_coercion_probe(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -498,6 +498,17 @@ pub(super) fn emit_nan_bool_coercion_probe(ctx: &mut FunctionContext<'_>) {
     }
     let skip_label = ctx.next_label("nan_bool_warn_skip");
     crate::codegen_support::runtime::emit_nan_bool_coercion_probe(ctx.emitter, &skip_label);
+}
+
+/// Emits PHP 8.5's `unexpected NAN value was coerced to string` probe ahead of a float's
+/// `__rt_ftoa`, with the float already in `d0` / `xmm0`. Like the bool probe it emits nothing
+/// on pre-8.5 profiles and warns once per conversion reached.
+pub(super) fn emit_nan_string_coercion_probe(ctx: &mut FunctionContext<'_>) {
+    if !crate::codegen_support::runtime::nan_bool_coercion_warning_enabled() {
+        return;
+    }
+    let skip_label = ctx.next_label("nan_string_warn_skip");
+    crate::codegen_support::runtime::emit_nan_string_coercion_probe(ctx.emitter, &skip_label);
 }
 
 /// Emits PHP string truthiness, where `""` and `"0"` are false.

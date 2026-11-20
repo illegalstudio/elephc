@@ -78,39 +78,6 @@ fn test_nested_spread_literal_merges_type_in_linear_time() {
     );
 }
 
-/// Direct scalar property references need writeback support distinct from nested array origins.
-#[test]
-fn test_error_by_ref_argument_rejects_direct_property_storage() {
-    for source in [
-        "<?php function setv(mixed &$value): void {} class Box { public iterable $value = []; } $box = new Box(); setv($box->value);",
-        "<?php function setv(mixed &$value): void {} class Box { public static iterable $value = []; } setv(Box::$value);",
-    ] {
-        expect_error(source, "must be passed a variable");
-    }
-}
-
-/// Method by-reference parameters reject property storage the rewrite cannot narrow back.
-///
-/// Union and callable properties need a runtime type dispatch the current write-back does not
-/// provide; they keep their pre-existing rejection instead of silently passing a copy.
-#[test]
-fn test_error_method_by_ref_argument_rejects_unsupported_property_storage() {
-    for source in [
-        "<?php class Sink { public function setv(mixed &$value): void {} } class Box { public iterable $value = []; } $sink = new Sink(); $box = new Box(); $sink->setv($box->value);",
-    ] {
-        expect_error(source, "must be passed a variable");
-    }
-}
-
-/// A by-reference variadic cannot bind an array property through the scalar place rewrite.
-#[test]
-fn test_error_variadic_by_ref_argument_rejects_array_property_storage() {
-    expect_error(
-        "<?php function collect(&...$refs): void {} class Box { public array $items = [1]; } $box = new Box(); collect($box->items);",
-        "cannot bind an array property by reference",
-    );
-}
-
 /// Mixed property storage cannot provide the declared array slot needed by nested ref writeback.
 #[test]
 fn test_error_by_ref_argument_rejects_nested_mixed_property_storage() {
@@ -124,6 +91,19 @@ fn test_error_by_ref_argument_rejects_nested_mixed_property_storage() {
     }
 }
 
+/// A static `iterable` property passed directly to a by-reference parameter keeps the
+/// "must be passed a variable" refusal. Instance properties take the copy-in/copy-out path
+/// covered by `codegen::references::test_by_reference_untyped_property_widens_storage`.
+#[test]
+fn test_error_by_ref_argument_rejects_static_iterable_property_storage() {
+    // Instance properties use the boxed-temporary write-back; a static `iterable` slot
+    // cannot provide the declared array storage that write-back needs.
+    expect_error(
+        "<?php function setv(mixed &$value): void {} class Box { public static iterable $value = []; } setv(Box::$value);",
+        "must be passed a variable",
+    );
+}
+
 /// Builds the non-null PHP array contract without assuming indexed or associative storage.
 fn declared_array_contract() -> PhpType {
     PhpType::Union(vec![
@@ -132,8 +112,7 @@ fn declared_array_contract() -> PhpType {
     ])
 }
 
-/// Verifies that `??=` with no right-hand side expression produces an "Unexpected token" error.
-/// Input: `$x ??=;` — the semicolon terminates the expression with no RHS.
+/// Verifies `??=` without a right-hand expression reports the parser's unexpected-token error.
 #[test]
 fn test_error_null_coalesce_assignment_missing_rhs() {
     expect_error("<?php $x ??=;", "Unexpected token");
@@ -960,6 +939,98 @@ class Config {
 }
 "#,
         "Property Config::$level default expects Level, got string",
+    );
+}
+
+/// The declared-ancestry fallback that lets a covariant return name a class built later does
+/// not relate unrelated classes: the override is still rejected.
+#[test]
+fn test_error_override_return_to_unrelated_later_class() {
+    expect_error(
+        r#"<?php
+class Scalar {}
+class ADef { protected function make(): Scalar { return new Scalar(); } }
+class BDef extends ADef { protected function make(): ZUnrelated { return new ZUnrelated(); } }
+class ZUnrelated {}
+"#,
+        "Cannot override method BDef::make with incompatible return type ZUnrelated (parent returns Scalar)",
+    );
+}
+
+/// A pure enum implements `UnitEnum` but not `BackedEnum`: its declared ancestry must not
+/// relate it to `BackedEnum` while class schemas are built.
+#[test]
+fn test_error_override_return_pure_enum_for_backed_enum() {
+    expect_error(
+        r#"<?php
+enum Kind { case A; }
+abstract class Base { abstract public function make(): BackedEnum; }
+class Child extends Base { public function make(): Kind { return Kind::A; } }
+"#,
+        "Cannot override method Child::make with incompatible return type Kind (parent returns BackedEnum)",
+    );
+}
+
+/// The declared-ancestry fallback for `iterable` returns does not accept a later class that
+/// implements neither `Iterator` nor `IteratorAggregate`.
+#[test]
+fn test_error_override_iterable_return_to_unrelated_later_class() {
+    expect_error(
+        r#"<?php
+class ZPlain {}
+class AFactory { public function make(): iterable { return []; } }
+class BFactory extends AFactory { public function make(): ZPlain { return new ZPlain(); } }
+"#,
+        "Cannot override method BFactory::make with incompatible return type ZPlain (parent returns iterable)",
+    );
+}
+
+/// A deferred `->value` default is still checked once enum cases exist: a string-backed case's
+/// value is a string, so an `int` property rejects it.
+#[test]
+fn test_error_enum_case_value_default_type_mismatch() {
+    expect_error(
+        r#"<?php
+enum Keymap: string {
+    case Linux = 'linux';
+}
+class Settings {
+    public int $keymap = Keymap::Linux->value;
+}
+"#,
+        "Property Settings::$keymap default expects int, got string",
+    );
+}
+
+/// A pure enum case has no `->value`: the deferred default reports the missing property rather
+/// than the syntactic guess's misleading `got int`.
+#[test]
+fn test_error_pure_enum_case_value_default() {
+    expect_error(
+        r#"<?php
+enum Mode {
+    case Fast;
+}
+class Settings {
+    public function __construct(public string $mode = Mode::Fast->value) {}
+}
+"#,
+        "Undefined property: Mode::value",
+    );
+}
+
+/// A deferred enum-case read whose object holds a lazy branch keeps the syntactic fallback: PHP
+/// never evaluates the untaken `W::Missing`, so the property and method defaults type-check.
+#[test]
+fn test_enum_case_value_default_with_untaken_missing_case() {
+    expect_no_error(
+        r#"<?php
+enum W: int { case A = 7; }
+class C {
+    public int $p = (W::A ? W::A : W::Missing)->value;
+    public function m(int $x = (W::A ? W::A : W::Missing)->value): int { return $x; }
+}
+"#,
     );
 }
 
@@ -3384,7 +3455,7 @@ fn test_concatenation_evidence_does_not_survive_a_disqualifying_write() {
 /// that the checker really marked each one.
 #[test]
 fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
-    for source in crate::locals_retype_fixtures::MIXED_STORAGE_FIXTURES.iter().copied() {
+    for source in super::locals_retype_fixtures::MIXED_STORAGE_FIXTURES.iter().copied() {
         let result = check_source_full(source)
             .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));
         assert!(
@@ -3436,7 +3507,7 @@ fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
 ///   entry here.
 #[test]
 fn test_every_lowering_fixture_takes_the_retype_path() {
-    for &source in crate::locals_retype_fixtures::RETYPE_FIXTURES {
+    for &source in super::locals_retype_fixtures::RETYPE_FIXTURES {
         let result = check_source_full(source)
             .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));
         assert!(
@@ -3471,7 +3542,7 @@ fn test_every_lowering_fixture_takes_the_retype_path() {
 /// honest about still taking the boxed path.
 #[test]
 fn test_the_capture_only_lowering_fixture_is_marked_silently() {
-    let source = crate::locals_retype_fixtures::SILENT_MIXED_CAPTURE;
+    let source = super::locals_retype_fixtures::SILENT_MIXED_CAPTURE;
     let result = check_source_full(source).expect("fixture must type-check");
     assert!(
         result.mixed_storage_local_names().contains("m"),

@@ -322,9 +322,14 @@ pub(super) fn needs_parameter_guards(
         } else { ty.clone() };
         let object_reference_guard = signature.ref_params.get(index).copied().unwrap_or(false)
             && matches!(declared.codegen_repr(), PhpType::Object(_));
+        // A declared `callable` (alone, in a union, or as a variadic element) checks the value
+        // PHP binds at the call, so a generator must raise its `TypeError` before returning.
+        let callable_guard = declared.declares_callable()
+            || matches!(&declared, PhpType::Array(element) if element.declares_callable());
         (nullability && signature.variadic.as_ref() == Some(name)
             && crate::semantics::nullability::non_null_contract(&declared))
             || object_reference_guard
+            || callable_guard
             || crate::types::builtin_classes::native_object_sink_needs_null_guard(&declared, classes, interfaces)
             || (has_relative_class(&declared)
                 && classes.keys().any(|class| crate::types::builtin_classes::has_native_dimensions(class, classes)))

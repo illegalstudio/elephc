@@ -24,7 +24,7 @@ pub(super) fn parameter_active(ctx: &LoweringContext<'_, '_>, destination: &PhpT
     active(ctx, destination)
         || (semantic_guards::source_feature_enabled(ctx, StrictFeature::Nullability)
             && (crate::semantics::conversions::scalar_contract(destination).is_some()
-                || matches!(destination, PhpType::Callable | PhpType::Object(_)))
+                || matches!(destination, PhpType::Callable | PhpType::DeclaredCallable | PhpType::Object(_)))
             && crate::semantics::nullability::non_null_contract(destination))
 }
 

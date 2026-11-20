@@ -79,8 +79,10 @@ mod raw_offset_keys;
 mod string_offset_lifetime;
 mod string_offset_writes;
 mod arrays;
+mod object_literal_storage;
 mod unset_collection;
 mod typed_element_refs;
+mod list_hash_param_binding;
 mod array_edge_guards;
 mod sparse_key_writes;
 mod assoc_push;
@@ -293,12 +295,27 @@ fn try_lower_source_at_for_target_with_reachability(
     );
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // Mirrors `pipeline::compile`: the URI surface is declared before the core prelude.
+    let ast = crate::uri_prelude::inject_if_used_for_version(
+        ast,
+        false,
+        crate::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
+    );
+    let ast = crate::core_prelude::inject_if_used(ast, false, false, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::tidy_prelude::inject_if_used(
+        ast,
+        false,
+        "",
+        "",
+        false,
+        &mut prelude_inventory,
+    );
     let ast = crate::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -307,6 +324,7 @@ fn try_lower_source_at_for_target_with_reachability(
         crate::php_version::PhpVersion::default(),
         &mut prelude_inventory,
     );
+    let ast = crate::pcre_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
     let (ast, _) = crate::autoload::run_collecting_included_with_defines(
         ast,
@@ -815,6 +833,7 @@ mod reflection_guarded_properties;
 
 mod constructor_string_owners;
 mod reflection_constructor_arrays;
+mod declared_callable_profiles;
 mod array_key_foreach_guards;
 mod array_key_write_guards;
 mod array_access_write_kinds;

@@ -275,7 +275,7 @@ fn emit_object_unpack_type_error(ctx: &mut FunctionContext<'_>) {
 /// The first concat can outgrow the shared scratch buffer, so its result is persisted and kept
 /// as an explicit owner across the second concat. The complete result is parked while that
 /// intermediate owner is released, then persisted for transfer into the Throwable object.
-fn emit_dynamic_message(ctx: &mut FunctionContext<'_>, prefix: &[u8], suffix: &[u8]) {
+pub(super) fn emit_dynamic_message(ctx: &mut FunctionContext<'_>, prefix: &[u8], suffix: &[u8]) {
     let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
     let (right_ptr, right_len) = match ctx.emitter.target.arch {
         Arch::AArch64 => ("x3", "x4"),

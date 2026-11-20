@@ -8,7 +8,7 @@
 //! Key details:
 //! - Merge and validation rules must report conflicts early because downstream class metadata is treated as canonical.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -111,6 +111,8 @@ pub(super) fn merge_methods(
         if local_keys.contains(&key) {
             continue;
         }
+        // `resolve_trait_uses` already merged duplicate imports (requirements included), so a
+        // repeat here is a flattening bug, reported as the duplicate it is.
         if !seen_imported.insert(key.clone()) {
             return Err(CompileError::new(
                 span,
@@ -137,21 +139,84 @@ pub(super) fn merge_imported_method_set(
     span: Span,
     owner_label: &str,
 ) -> Result<(), CompileError> {
-    let mut seen: HashSet<(String, bool)> = existing
+    let mut seen: HashMap<(String, bool), usize> = existing
         .iter()
-        .map(|method| (php_symbol_key(&method.name), method.is_static))
+        .enumerate()
+        .map(|(index, method)| ((php_symbol_key(&method.name), method.is_static), index))
         .collect();
     for method in incoming {
         let key = (php_symbol_key(&method.name), method.is_static);
-        if !seen.insert(key) {
-            return Err(CompileError::new(
-                span,
-                &format!("{} imports duplicate trait method '{}'", owner_label, method.name),
-            ));
+        if let Some(&index) = seen.get(&key) {
+            merge_duplicate_imported_method(&mut existing[index], method, span, owner_label)?;
+            continue;
         }
+        seen.insert(key, existing.len());
         existing.push(method);
     }
     Ok(())
+}
+
+/// Resolves a second imported method with the key of `existing`, as PHP does: an abstract trait
+/// method is a requirement, not a definition, so it never conflicts. A concrete method replaces
+/// an abstract one (`use NeedsInvalidate, ProvidesInvalidate;`), and a second abstract one adds
+/// nothing, each once `check_trait_requirement` accepts the pair. Only two concrete methods
+/// conflict.
+fn merge_duplicate_imported_method(
+    existing: &mut ClassMethod,
+    incoming: ClassMethod,
+    span: Span,
+    owner_label: &str,
+) -> Result<(), CompileError> {
+    if incoming.is_abstract {
+        return check_trait_requirement(&incoming, existing, span, owner_label);
+    }
+    if existing.is_abstract {
+        check_trait_requirement(existing, &incoming, span, owner_label)?;
+        *existing = incoming;
+        return Ok(());
+    }
+    Err(CompileError::new(
+        span,
+        &format!("{} imports duplicate trait method '{}'", owner_label, incoming.name),
+    ))
+}
+
+/// Checks that `other`, another trait's method of the same name and kind, may stand for the
+/// abstract trait method `required`: a concrete method that implements it, or a second abstract
+/// declaration of it.
+///
+/// PHP checks that pair like an override (`Declaration of B::foo() must be compatible with
+/// A::foo()`). Until trait flattening runs that check, only an identical signature is accepted
+/// here: the same parameter types, by-reference flags, optionality and variadic, and the same
+/// return type and by-reference return. Visibility is not compared, as PHP does not compare it.
+/// Anything else is rejected, as it was before abstract trait methods merged at all.
+pub(super) fn check_trait_requirement(
+    required: &ClassMethod,
+    other: &ClassMethod,
+    span: Span,
+    owner_label: &str,
+) -> Result<(), CompileError> {
+    let same_params = required.params.len() == other.params.len()
+        && required.params.iter().zip(&other.params).all(|(left, right)| {
+            left.1 == right.1 && left.3 == right.3 && left.2.is_some() == right.2.is_some()
+        });
+    let same_signature = same_params
+        && required.variadic.is_some() == other.variadic.is_some()
+        && required.variadic_by_ref == other.variadic_by_ref
+        && required.variadic_type == other.variadic_type
+        && required.return_type == other.return_type
+        && required.by_ref_return == other.by_ref_return;
+    if same_signature {
+        return Ok(());
+    }
+    Err(CompileError::new(
+        span,
+        &format!(
+            "{} imports trait method '{}' with a signature that differs from the abstract trait \
+             method it implements; only an identical signature is supported",
+            owner_label, other.name
+        ),
+    ))
 }
 
 /// Merges imported trait constants with constants declared directly by a class or trait.

@@ -58,6 +58,9 @@ pub enum EvalParseError {
     IntegerLiteralOverflow,
     /// Loose equality syntax is forbidden by the selected semantic profile.
     StrictComparisonSyntax,
+    /// A `goto` PHP refuses when it compiles the fragment: an undefined or duplicate label, a
+    /// jump into a loop or a `switch`, or a jump into or out of a `finally` block.
+    InvalidJump,
 }
 
 impl EvalParseError {
@@ -75,7 +78,8 @@ impl EvalParseError {
             | Self::UnterminatedString
             | Self::UnterminatedComment
             | Self::ExpectedVariable
-            | Self::ExpectedSemicolon => EvalStatus::ParseError,
+            | Self::ExpectedSemicolon
+            | Self::InvalidJump => EvalStatus::ParseError,
         }
     }
 }

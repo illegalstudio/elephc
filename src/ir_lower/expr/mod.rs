@@ -38,12 +38,14 @@ mod initialization_properties;
 mod initialization_dynamic_properties;
 mod producer_values;
 mod checked_cast;
+mod dynamic_callable_factory;
 mod array_merge_values;
 use array_merge_values::lower_array_value_for_merge;
 mod nullsafe_chain;
 mod ref_place_args;
 mod prepared_builtin_refs;
 mod boxed_user_sort;
+pub(crate) mod declared_callables;
 mod scalar_literals;
 mod local_values;
 use local_values::lower_local_value;
@@ -115,6 +117,8 @@ mod variadic_args;
 mod call_return_types;
 mod indexed_array_literals;
 pub(in crate::ir_lower) use indexed_array_literals::box_tagged_scalar_element;
+mod object_element_join;
+pub(crate) use object_element_join::{merge_ir_literal_element_type, object_class_is_a};
 mod array_cast_source;
 mod assoc_array_literals;
 mod match_expr;
@@ -214,6 +218,11 @@ use weak_string_unions::*;
 use builtin_special_args::*;
 use call_arg_coercion::*;
 pub(crate) use call_arg_coercion::coerce_scalar_arg_to_param_storage;
+pub(crate) use constants::{
+    constant_deprecations_suppressed, emit_constant_deprecation,
+    emit_constant_deprecation_with_line, emit_mt_rand_php_deprecation,
+    with_constant_deprecations_suppressed,
+};
 use positional_spreads::*;
 use packed_builtin_args::*;
 use named_args::*;
@@ -269,7 +278,10 @@ pub(crate) use call_operand_owners::{
     PinnedInFlightOwner,
 };
 pub(crate) use property_access::singular_object_class;
-pub(crate) use enum_argument_guards::{guard_reference_parameter_entry, reference_parameter_needs_entry_guard};
+pub(crate) use enum_argument_guards::{
+    guard_declared_callable_return, guard_declared_callable_variadic_entry,
+    guard_reference_parameter_entry, reference_parameter_needs_entry_guard,
+};
 pub(crate) use property_access::class_extends_class;
 pub(crate) use property_access::packed_receiver_class;
 pub(crate) use property_access::extern_receiver_class;

@@ -17,6 +17,41 @@ pub(super) fn lower_new_object(
     expr: &Expr,
 ) -> LoweredValue {
     let object_type = PhpType::Object(class_name.as_str().to_string());
+    let constructor_throw_site = ctx.throw_access_site(expr.span).cloned();
+    if let Some(info) = constructor_throw_site {
+        if let crate::types::ThrowAccessKind::PrivateConstructor {
+            visibility,
+            class_name: declaring_class,
+        } = &info.kind
+        {
+            // The throw-site map is keyed by span. `lower_throw_access_error_expr_as`
+            // builds a synthetic `new Error(...)` at that same span, which would find
+            // this entry and recurse forever. Only the class whose constructor owner is
+            // the recorded declaring class is the real construction; `Error` is not.
+            let owner = crate::types::constructor_owner(
+                ctx.classes,
+                class_name.as_str().trim_start_matches('\\'),
+            )
+            .map(|(owner, _)| owner);
+            if owner == Some(declaring_class.as_str()) {
+                let scope = ctx
+                    .current_class
+                    .as_deref()
+                    .map(|class| format!("from scope {class}"))
+                    .unwrap_or_else(|| "from global scope".to_string());
+                let message = format!(
+                    "Call to {} {}::__construct() {scope}",
+                    visibility, declaring_class
+                );
+                return crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+                    ctx,
+                    &message,
+                    expr.span,
+                    object_type,
+                );
+            }
+        }
+    }
     if let Some(error) = crate::ir_lower::property_default_errors::for_class_as(
         ctx,
         class_name.as_str(),
@@ -67,7 +102,12 @@ pub(super) fn lower_new_object(
         &php_type,
         expr.span,
     );
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
+    ctx.call_argument_evaluation_scopes
+        .last_mut()
+        .expect("call argument scope")
+        .live_property_reference_arguments = !args.iter().any(is_spread_arg);
     let previous_description = ctx
         .call_description
         .replace(format!("{}::__construct", class_name.as_str()));
@@ -80,6 +120,12 @@ pub(super) fn lower_new_object(
     let mut operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
     ctx.call_description = previous_description;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+    // Publish AFTER argument evaluation: a nested construction executed by an argument
+    // (possibly from an included weak file) must not leave its own strictness behind for
+    // this constructor to read.
+    if is_mt19937_class(ctx, class_name.as_str()) {
+        publish_call_strictness(ctx, expr.span);
+    }
     let roots = root_user_call_operands(
         ctx,
         &mut operands,
@@ -99,6 +145,11 @@ pub(super) fn lower_new_object(
         Some(expr.span),
     );
     stage_call_result(ctx, result_staging.as_ref(), object, expr.span);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &operands,
@@ -113,6 +164,100 @@ pub(super) fn lower_new_object(
         super::ref_place_args::finish_ref_place_rewrite(ctx, rewrite, expr.span);
     }
     take_prepublished_call_result(ctx, result_staging, object, expr.span)
+}
+
+/// Returns whether a resolved class name is `Random\Engine\Mt19937` or inherits from it.
+///
+/// A subclass keeps the injected constructor, so constructing it must publish the call
+/// site's strictness exactly like a direct `Mt19937` construction.
+fn is_mt19937_class(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    let mut current = Some(class_name.trim_start_matches('\\').to_string());
+    while let Some(name) = current {
+        if php_symbol_key(&name) == "random\\engine\\mt19937" {
+            return true;
+        }
+        current = ctx.classes.get(&name).and_then(|info| info.parent.clone());
+    }
+    false
+}
+
+/// Publishes the constructing file's `strict_types` state for the next constructor call.
+///
+/// A prelude constructor cannot read the call site's source profile from PHP, so every site
+/// that may construct `Random\Engine\Mt19937` stores it in the runtime slot the injected
+/// `__elephc_call_strict_types()` builtin reads. Fixed construction publishes for that class
+/// and its subclasses; dynamic construction publishes unconditionally because the class is
+/// only known at run time.
+pub(super) fn publish_call_strictness(ctx: &mut LoweringContext<'_, '_>, span: Span) {
+    publish_call_strictness_value(ctx, span, crate::source::current_strict_types());
+}
+
+/// Publishes the caller's strictness before an explicit `__construct` method call.
+///
+/// `new` sites publish through the construction lowerers; an explicit
+/// `$engine->__construct(...)` or `parent::__construct(...)` is an ordinary method call
+/// and must publish the same per-file state before the injected constructor reads it.
+pub(super) fn publish_constructor_call_strictness(
+    ctx: &mut LoweringContext<'_, '_>,
+    method: &str,
+    span: Span,
+) {
+    // Compiler-generated constructor dispatch thunks (dynamic `new` planning) carry no
+    // source profile; publishing there would overwrite the user's call site with weak mode.
+    if span.is_from_source() && php_symbol_key(method) == "__construct" {
+        // A reflected invocation coerces its arguments regardless of the calling file's
+        // `strict_types` mode, so it must publish weak typing instead of suppressing the
+        // publication (the slot would otherwise keep the previous construction site's value).
+        // Only the dispatched call itself matches; constructors nested in its forwarded
+        // arguments keep the calling file's mode.
+        let reflected = ctx.reflected_invoke_call_span == Some(span);
+        let strict = !reflected && crate::source::current_strict_types();
+        publish_call_strictness_value(ctx, span, strict);
+    }
+}
+
+/// Publishes the caller's strictness before an explicit `Mt19937::__construct` static call.
+///
+/// A synthesized reflection-subclass constructor must keep its forwarding
+/// `parent::__construct(...)` as the first action, so only a static receiver that actually
+/// names `Random\Engine\Mt19937` (or inherits it) publishes here; an unrelated parent call
+/// must not insert an instruction ahead of the forwarding invariant.
+pub(super) fn publish_static_constructor_call_strictness(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+    span: Span,
+) {
+    if !span.is_from_source() || php_symbol_key(method) != "__construct" {
+        return;
+    }
+    let Some(class_name) = super::static_method_calls::static_receiver_class_name(ctx, receiver)
+    else {
+        return;
+    };
+    if is_mt19937_class(ctx, &class_name) {
+        let reflected = ctx.reflected_invoke_call_span == Some(span);
+        let strict = !reflected && crate::source::current_strict_types();
+        publish_call_strictness_value(ctx, span, strict);
+    }
+}
+
+/// Publishes an explicit `strict_types` value for the next constructor call.
+pub(super) fn publish_call_strictness_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    span: Span,
+    strict_types: bool,
+) {
+    let strict = ctx.builder.emit_const_bool(strict_types);
+    ctx.emit_void(
+        Op::CoreBuiltin,
+        vec![strict],
+        Some(Immediate::I64(
+            crate::ir::CoreBuiltinOp::PublishCallStrictness.as_i64(),
+        )),
+        crate::ir::CoreBuiltinOp::PublishCallStrictness.effects(),
+        Some(span),
+    );
 }
 
 /// Emits fixed-class object construction and releases owned constructor argument temporaries.
@@ -456,6 +601,21 @@ pub(super) fn lower_new_dynamic_generic(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    lower_new_dynamic_generic_with_caller(ctx, name_value, args, expr, false)
+}
+
+/// Preserves Reflection's internal caller mode while sharing dynamic argument planning and ownership.
+pub(super) fn lower_new_dynamic_generic_for_reflection(
+    ctx: &mut LoweringContext<'_, '_>, name_value: LoweredValue, args: &[Expr], expr: &Expr,
+) -> LoweredValue {
+    lower_new_dynamic_generic_with_caller(ctx, name_value, args, expr, true)
+}
+
+/// Shares named/spread construction while retaining the selected PHP caller mode.
+fn lower_new_dynamic_generic_with_caller(
+    ctx: &mut LoweringContext<'_, '_>, name_value: LoweredValue, args: &[Expr], expr: &Expr,
+    reflection: bool,
+) -> LoweredValue {
     let mut operands = vec![name_value.value];
     let uses_runtime_arg_container =
         args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args, ctx.semantic_profile);
@@ -482,10 +642,15 @@ pub(super) fn lower_new_dynamic_generic(
         operands.extend(positional.iter().copied());
         None
     };
+    // Arguments are fully evaluated above; a nested construction cannot overwrite the
+    // published strictness before this constructor runs.
+    if reflection { publish_call_strictness_value(ctx, expr.span, false); }
+    else { publish_call_strictness(ctx, expr.span); }
     let result = ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
-        uses_runtime_arg_container.then_some(Immediate::Bool(true)),
+        if reflection { Some(Immediate::ReflectionConstruction { uses_runtime_arg_container }) }
+        else { uses_runtime_arg_container.then_some(Immediate::Bool(true)) },
         PhpType::Mixed,
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),
@@ -527,6 +692,7 @@ pub(super) fn lower_new_dynamic_object(
     }
     let mut operands = vec![class_name.value];
     operands.extend(lower_args(ctx, args));
+    publish_call_strictness(ctx, expr.span);
     let name = format!("{}|{}", fallback_class.as_str(), required_parent.as_str());
     let data = ctx.intern_class_name(&name);
     ctx.emit_value(

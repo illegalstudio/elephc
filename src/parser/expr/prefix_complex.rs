@@ -63,6 +63,10 @@ pub(super) fn parse_match_expr(
     while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
         if tokens[*pos].0 == Token::Default {
             *pos += 1;
+            // PHP allows the same trailing comma after `default` as after a condition list.
+            if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::Comma) {
+                *pos += 1;
+            }
             if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleArrow {
                 return Err(CompileError::new(span, "Expected '=>' after 'default'"));
             }
@@ -77,10 +81,9 @@ pub(super) fn parse_match_expr(
             loop {
                 patterns.push(parse_expr(tokens, pos)?);
                 if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
-                    let saved = *pos;
                     *pos += 1;
+                    // A trailing comma closes the condition list: `'a', 'b', => …`.
                     if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
-                        *pos = saved;
                         break;
                     }
                 } else {
@@ -186,6 +189,10 @@ pub(super) fn parse_closure(
                     ));
                 }
                 *pos += 1;
+                // A trailing comma closes the list: `use ($a, $b,)` (PHP 8.0+).
+                if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::RParen) {
+                    break;
+                }
             }
             let is_ref = if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::Ampersand) {
                 *pos += 1;
@@ -208,6 +215,13 @@ pub(super) fn parse_closure(
                     ))
                 }
             }
+        }
+        // PHP's grammar requires at least one capture: `use ()` is a syntax error.
+        if captures.is_empty() {
+            return Err(CompileError::new(
+                span,
+                "Expected variable in use() capture list",
+            ));
         }
         if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
             return Err(CompileError::new(

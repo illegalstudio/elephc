@@ -28,7 +28,7 @@ pub(super) fn lower_reflection_class_new_instance(
     let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
     let pins = pin_in_flight_owners(ctx, &[class_name.value], expr.span);
     // Dynamic construction owns signature binding, including one variadic collection.
-    let result = lower_new_dynamic_generic(ctx, class_name, &args, expr);
+    let result = object_construction::lower_new_dynamic_generic_for_reflection(ctx, class_name, &args, expr);
     unpin_in_flight_owners(ctx, pins, expr.span);
     if ctx.value_is_owning_temporary(class_name) {
         crate::ir_lower::ownership::release_if_owned(ctx, class_name, Some(expr.span));
@@ -60,12 +60,40 @@ pub(super) fn lower_reflection_class_new_instance_args(
 /// Lowers `ReflectionClass::newInstanceWithoutConstructor()` to constructorless allocation.
 pub(super) fn lower_reflection_class_new_instance_without_constructor(
     ctx: &mut LoweringContext<'_, '_>,
+    object_expr: Option<&Expr>,
     object: LoweredValue,
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
     if !args.is_empty() {
         return lower_reflection_class_new_instance_without_constructor_unsupported(ctx, expr);
+    }
+    if let Some(class_name) = object_expr.and_then(|object| reflection_class_reflected_class(ctx, object)) {
+        if is_final_internal_class(&class_name) {
+            let message = format!(
+                "Class {} is an internal class marked as final that cannot be instantiated without invoking its constructor",
+                class_name.trim_start_matches('\\')
+            );
+            let exception = Expr::new(
+                ExprKind::NewObject {
+                    class_name: Name::unqualified("ReflectionException"),
+                    args: vec![Expr::new(ExprKind::StringLiteral(message), expr.span)],
+                },
+                expr.span,
+            );
+            let placeholder = lower_null(ctx, expr);
+            let exception = lower_expr(ctx, &exception);
+            ctx.builder.terminate(Terminator::Throw {
+                value: exception.value,
+            });
+            // A value-context call still lowers the surrounding expression. Continue in an
+            // unreachable block so the caller has a well-formed insertion point.
+            let unreachable = ctx
+                .builder
+                .create_named_block("reflection_without_constructor_unreachable", Vec::new());
+            ctx.builder.position_at_end(unreachable);
+            return placeholder;
+        }
     }
     let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
     let pins = pin_in_flight_owners(ctx, &[class_name.value], expr.span);
@@ -82,6 +110,14 @@ pub(super) fn lower_reflection_class_new_instance_without_constructor(
         crate::ir_lower::ownership::release_if_owned(ctx, class_name, Some(expr.span));
     }
     result
+}
+
+/// Returns whether `class_name` is one of the contract's internal-final classes.
+fn is_final_internal_class(class_name: &str) -> bool {
+    let key = php_symbol_key(class_name.trim_start_matches('\\'));
+    elephc_builtin_contract::INTERNAL_FINAL_CLASSES
+        .iter()
+        .any(|name| php_symbol_key(name) == key)
 }
 
 /// Lowers live static-property value access for statically-known `ReflectionClass` calls.

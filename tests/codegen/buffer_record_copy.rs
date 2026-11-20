@@ -2,7 +2,7 @@
 //! Regression coverage for whole-record packed buffer element assignment.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests buffer_record_copy`.
+//! - `cargo test --test codegen_tests_runtime buffer_record_copy`.
 //!
 //! Key details:
 //! - Checks byte copies, generic growth, evaluation order, bounds and handle liveness.

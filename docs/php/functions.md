@@ -35,7 +35,7 @@ function repeat(string $label, int $count): string {
 - Function, method, constructor, closure, and arrow-function parameter hints are checked
 - Function, method, closure, and arrow-function return type hints are checked
 - Arguments are bound to declared scalar parameters using PHP's default (coercive) rules where elephc can reproduce them exactly — `takesString(42)` passes `"42"`, `takesInt(5.0)` passes `5`. Conversions PHP decides at run time with a `Deprecated:` notice or a `TypeError` are compile errors instead. A file that opens with `declare(strict_types=1)` switches to PHP's strict binding, where only an exact type match and the `int`→`float` widening are accepted; see [Types → Parameter type coercion](./types.md#parameter-type-coercion) and [Types → Strict types](./types.md#strict-types) for the full tables
-- A `callable` parameter accepts a compile-time-constant callable string (`"strtoupper"`, `"Formatter::wrap"`) as well as closures and first-class callables; see [Types → Callable strings](./types.md#callable-strings)
+- A `callable` parameter keeps the value it receives (a function or `"Class::method"` name, a callable array, an invokable object or a Closure) and checks on entry that it is callable; see [Types → Callable strings](./types.md#callable-strings)
 - Variadic parameters may carry a type hint (`function f(int ...$xs)`), including on methods, closures, and arrow functions; every argument collected into the variadic is checked against the declared element type, just like a regular typed parameter. An untyped variadic accepts heterogeneous arguments.
 - Non-`void` declared return types must return a value on every reachable path; `throw`, `exit()`/`die()`, and infinite loops count as non-returning paths
 - Bare `return;` is valid only for `void` returns; use `return null;` for nullable return types
@@ -314,6 +314,24 @@ $squared = array_map(fn(int $n): int => $n * $n, $nums);
 
 ## First-class callable syntax
 
+A callable value can be converted to a `Closure` with `$callback(...)`, including
+callable parameters, array elements such as `$callbacks[0](...)`, and returned
+callables such as `factory()(...)`. The expression is evaluated once when the
+closure is created; invocation happens later. Existing captures and bound
+receivers remain available through the returned closure. Private and protected method
+callables use the class scope where the closure is created; the returned closure can
+then be invoked outside that scope.
+
+```php
+function wrap(callable $method): Closure {
+    return $method(...);
+}
+
+$callback = fn(int $value): int => $value * 2;
+$wrapped = wrap($callback);
+echo $wrapped(21); // 42
+```
+
 ```php
 <?php
 $triple = triple(...);
@@ -355,6 +373,50 @@ var_dump(call_user_func($callback, "probe", 9));   // string(5) "probe"
 
 A body that computes its own result keeps its inferred type (`function add($a, $b) { return $a
 + $b; }` still returns `int`), and a declared return type always wins.
+
+### `Closure::fromCallable()`
+
+`Closure::fromCallable($callback)` converts any callable value to a `Closure`, like
+`$callback(...)`. It accepts an existing closure or arrow function, a function name, a
+`"Class::method"` string, an `[$object, "method"]` or `[ClassName::class, "method"]` array
+and an invokable object. The argument may be a literal, a variable or a `callable`
+parameter. Passing a `Closure` returns that same closure (`===`); every other conversion
+creates a new closure, so two conversions of the same name are not identical. A value that
+is not callable throws a catchable `TypeError`. Private and protected methods are resolved from
+the class scope where the factory is called.
+
+The result owns its target: an array or method callable keeps its receiver alive, and a
+closure keeps its captured variables. This makes a nullable `Closure` property the usual
+way to keep a callback for later and to release it again:
+
+```php
+<?php
+final class Timer {
+    private ?Closure $callback;
+
+    public function __construct(callable $callback) {
+        $this->callback = Closure::fromCallable($callback);
+    }
+
+    public function fire(): void {
+        $callback = $this->callback;
+        if ($callback !== null) {
+            $callback();
+        }
+    }
+
+    public function cancel(): void {
+        $this->callback = null; // releases the receiver or the captured variables
+    }
+}
+
+$timer = new Timer(function (): void { echo "called\n"; });
+$timer->fire();   // called
+$timer->cancel();
+$timer->fire();   // nothing: the callback is gone
+```
+
+`examples/timers/main.php` builds a small timer queue on this pattern.
 
 ## Global variables
 
@@ -443,11 +505,21 @@ exactly as PHP's shared reference is. The same rewrite accepts scalar, string, a
 `mixed`, union, and nullable properties, static properties, static methods, and free
 functions.
 
-The same property places also bind to by-reference **variadics**, except array properties:
-the variadic collector needs the container payload repacked, so `collect($box->items)` is
-rejected and asks for a local variable instead. Properties whose declared type needs a runtime
-type dispatch the rewrite does not implement (`iterable`, pointers, buffers) still report
-`must be passed a variable`. The write-back runs after the call
+A property reference whose declared type has a single raw storage shape (`int`, `float`,
+`bool`, `false`, `string`, or `array<T>`) also carries the property's declared type into the
+callee's hidden cell. When the callee writes a wider runtime value that the property cannot
+accept — for example `function w(int &$x, mixed $v) { $x = $v; }` called with an arbitrary
+string — the write raises PHP's reference-form `TypeError` before coercion
+(`Cannot assign string to reference held by property C::$n of type int`). Valid weak property
+writes (numeric strings, bools, and in-range floats) still convert normally. The write-back
+itself remains copy-in/copy-out for object, `mixed`, union (including bare `array`), and
+nullable properties.
+
+The same property places also bind to by-reference **variadics**, including array
+properties: the variadic collector transports the boxed container, and the write-back
+repacks the mutated payload into the declared property slot. Properties whose declared type
+needs a runtime type dispatch the rewrite does not implement (`iterable`, pointers, buffers)
+still report `must be passed a variable`. The write-back runs after the call
 returns; if the callee throws after mutating the reference, the property keeps its previous
 value (PHP would already have applied the mutation).
 
@@ -480,6 +552,11 @@ Known gaps against PHP for these nullable by-reference parameters:
   ("requires a variable with mixed/union/nullable storage when passed by reference").
 - A `?Item` property passed to `?Item &$item` is rejected at compile time with the same
   message. An `array`-typed property given `null` raises PHP's `TypeError`, as in PHP.
+- Passing the same property twice to two by-reference parameters (`f($box->n, $box->n)`)
+  shares one live cell when the property storage can be addressed that way, as in PHP. For a
+  declared property that needs the copy-in/copy-out temporary, each argument gets its own
+  snapshot, so the second argument sees the value read at its source position rather than the
+  first callee write.
 
 An element of a **typed array** can be passed to a wider by-reference parameter such as
 `mixed &$slot`. For a plain local (`array<int, int> $ids`), the array's entries are widened
@@ -521,6 +598,59 @@ pointers, or a hash (at any indexed nesting depth) whose own values are arrays, 
 pointers, cannot be validated that way, so passing it to a wider by-reference parameter is
 rejected at compile time; declare the
 parameter with the element's exact type instead.
+
+### Lists passed to `array<K, V>` parameters
+
+A list (`[4, 5]`, or a variable holding one) is a valid value for a declared keyed-array
+parameter such as `array<int, int> $map`, even though a list is stored as a packed vector and
+the parameter as a hash table.
+
+**By value**, the argument is rebuilt as an independent hash for the callee, in functions,
+methods, constructors (promoted properties included), closures, default values and variadic
+collectors. The caller's list is not changed. The elements must have the parameter's value
+storage, or the parameter's values must be `mixed`; anything else (an `int` list for
+`array<int, float>`, a list of lists for `array<int, array<int, int>>`) is rejected at compile
+time with `the element storage differs`.
+
+**By reference**, the callee writes a hash through the caller's own variable, so the variable
+itself becomes that keyed array before the call, exactly as `unset($list[$k])` turns a list
+into one, and stays one afterwards:
+
+```php
+<?php
+function put(array<int, int> &$map, int $key): void { $map[$key] = 7; }
+function run(): void
+{
+    $ids = [4, 5];
+    put($ids, 9);
+    echo count($ids), " ", $ids[9]; // 3 7
+}
+run();
+```
+
+A list first bound this way inside a loop is converted once, at the loop entry. One variable
+may fill two reference slots of the same call; both then name the converted variable.
+
+Only an ordinary local can change representation in place. A variable declared as a list
+(`array<int> $ids`), a property, an array element, a `global` or `static` variable, a variable
+with a `&` alias, and a variable an earlier `mixed &` slot of the same call is boxing are
+rejected at compile time (`a by-reference parameter uses the caller's own storage, and this
+list cannot be converted to the parameter's layout there`). Declare the variable with the
+parameter's type, or declare the parameter as the list or as plain `array`.
+
+A written `array<mixed> &$items` parameter follows the same rule: it is a storage contract (a
+list of boxed values), not a hint that is specialized per caller. A typed list local
+(`[4, 5]`, a list of objects, of strings) bound to it has its elements boxed in place before
+the call and reads back whatever the callee stored; a variable declared `array<int>` or a
+typed list property is rejected with the diagnostic above. Plain `array &$items` accepts every
+array without any of this.
+
+Calls made through a callable (`call_user_func()`, a callable array, a first-class callable
+chosen at run time) pass their arguments boxed, and a boxed list is rebuilt as the hash the
+`array<K, V>` parameter expects in the same way.
+
+Assigning a list to a typed keyed-array property, static property or declared local converts a
+copy in the same way and leaves the source list as it was.
 
 ## References to array elements
 
@@ -576,6 +706,44 @@ $items = &$bag->items;
 $items[] = "apple";
 echo implode(", ", $bag->items); // apple
 ```
+
+An untyped property binds its live reference cell when it is passed to a by-reference
+parameter, so another view of the object sees the callee's write while the call is still
+running. A declared scalar property (and declared `mixed`/union storage whose representation
+cannot share the cell) instead uses a boxed copy-in temporary and writes the value back after
+the call. The declared property type is enforced on that write-back, so an incompatible value
+raises PHP's `Cannot assign … to reference held by property …` `TypeError` and the property
+keeps its previous value:
+
+```php
+<?php
+class Box { public string $text = "old"; }
+function replace(mixed &$slot) { $slot = ["not", "text"]; }
+$box = new Box();
+try {
+    replace($box->text);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+echo $box->text; // old
+```
+
+A concretely typed parameter is supported for any property whose storage can be read into
+the call and written back, even when the declared type is not statically compatible with the
+parameter: the property's CURRENT value is checked at the call boundary. A compatible value,
+such as an `int|string` property holding an `int` passed to `int &$slot`, reaches the callee
+and is written back. An incompatible value (a `string` property, or the `string` member of a
+union) raises PHP's call-site `f(): Argument #N ($x) must be of type T, U given`
+`TypeError` before the callee body runs, and the property keeps its previous value. Array
+elements of untyped properties are widened and promoted the same way, so
+`bump($box->items[0])` writes through to the property array.
+
+An **untyped** property is PHP's ordinary writable zval rather than a declared type: in weak
+mode its current value is coerced to the parameter (a numeric string to `int`, an `int` to
+`string`, and so on), the callee mutates the converted temporary, and the result is written
+back. A value the weak predicate refuses raises the same call-site `TypeError` and leaves the
+property unchanged. `declare(strict_types=1)` performs no conversion, and a declared `mixed`
+property is not coercible either: both keep the strict current-value check.
 
 Aliasing works for any declared property type, including `string` and `float`. Reassigning
 an array alias to a differently-typed literal keeps the property readable, because the new

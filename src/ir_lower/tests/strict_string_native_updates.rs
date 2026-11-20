@@ -19,7 +19,7 @@ fn verify_native_string_updates(name: &str) {
     for mode in [SourceMode::Php, SourceMode::Internal] {
         let mut program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), mode).unwrap();
         let mut inventory = crate::optimize::reachability::PreludeInventory::new();
-        program = crate::core_prelude::inject_if_used(program, &mut inventory);
+        program = crate::core_prelude::inject_if_used(program, false, false, &mut inventory);
         program = crate::xml_prelude::inject_if_used(program, false, &mut inventory);
         program = crate::dom_html_prelude::inject_if_used(program, false, &mut inventory);
         program = crate::object_cast_prelude::inject_if_used(program, &mut inventory).unwrap();

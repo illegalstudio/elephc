@@ -78,7 +78,7 @@ fn strict_mixed_native_sources_method_binders_require_logical_inputs() {
             assert!(signature.set_param_type(0,EvalParameterType::new(vec![EvalParameterTypeVariant::Int],false)));
             if variadic {assert!(signature.set_variadic_index(0));}
             let argument=native_source_argument(value,name,source,&context);
-            let result=bind_native_callable_bound_args_with_mode(Some(signature),vec![argument],
+            let result=bind_native_callable_bound_args_with_mode(Some(signature),vec![argument],None,
                 EvalByRefBindingMode::RequireTarget,&mut context,&mut values);
             let rejected=source=="mixed";
             if rejected {assert!(matches!(result,Err(EvalStatus::UncaughtThrowable)),"variadic={variadic}, name={name:?}");}
@@ -111,7 +111,7 @@ fn strict_mixed_native_sources_defaults_retain_formal_contracts() {
         assert!(signature.set_param_name(0,"value"));
         assert!(signature.set_param_type(0,EvalParameterType::new(vec![EvalParameterTypeVariant::Int],false)));
         assert!(signature.set_param_default(0,NativeCallableDefault::Int(7)));
-        let bound=bind_native_callable_bound_args_with_mode(Some(signature),Vec::new(),
+        let bound=bind_native_callable_bound_args_with_mode(Some(signature),Vec::new(),None,
             EvalByRefBindingMode::RequireTarget,&mut context,&mut values).unwrap();
         assert_eq!(values.get(bound[0].value),FakeValue::Int(7));
         release_native_bound_args(&bound,&mut context,&mut values).unwrap();
@@ -135,7 +135,7 @@ fn strict_mixed_native_sources_check_canonical_reference_stamps() {
             assert!(signature.set_param_name(0,"value"));
             assert!(signature.set_param_type(0,EvalParameterType::new(vec![EvalParameterTypeVariant::Int],false)));
             assert!(signature.set_param_by_ref(0,true));
-            let result=bind_native_callable_bound_args_with_mode(Some(signature),vec![argument],
+            let result=bind_native_callable_bound_args_with_mode(Some(signature),vec![argument],None,
                 EvalByRefBindingMode::RequireTarget,&mut context,&mut values);
             assert!(matches!(result,Err(EvalStatus::UncaughtThrowable)));
         } else {

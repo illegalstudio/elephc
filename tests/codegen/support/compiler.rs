@@ -389,9 +389,13 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     elephc::codegen::set_null_repr(null_repr);
     let frontend_phase = fixture_phase_timing("frontend");
     elephc::codegen::set_compile_profile(php_version, false);
+    let synthetic_main = dir.join("test.php");
+    // Mirrors `pipeline::compile`: the entry file uses source ID 0. Registering it makes the
+    // harness cover published diagnostic files (and their canonicalization) for main-file call
+    // sites, which otherwise fall back to `_script_source_file`.
+    elephc::span::Span::register_source_path(0, synthetic_main.display().to_string());
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let synthetic_main = dir.join("test.php");
     // `__FILE__` must name a readable file: some fixtures (the GMP division tests)
     // open it with fopen() to obtain a real resource handle. The CLI pipeline always
     // has the source on disk; the in-process fixture pipeline must mirror that.
@@ -403,6 +407,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // values, so the surface looked tested while nothing exercised it.
     let ast = elephc::docblock::apply(ast, source);
     let ast = elephc::conditional::apply(ast, defines);
+    // Also mirrors `source::finalize_physical_program`: `goto` is lowered per physical file,
+    // right after conditional compilation and before include resolution.
+    let ast = elephc::goto_lowering::lower_program(ast, &synthetic_main.display().to_string())
+        .expect("goto lowering failed");
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
@@ -441,7 +449,15 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved =
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
-    let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::uri_prelude::inject_if_used_for_version(
+        resolved, false, php_version, &mut prelude_inventory,
+    );
+    let resolved = elephc::core_prelude::inject_if_used(
+        resolved,
+        false,
+        false,
+        &mut prelude_inventory,
+    );
     let resolved = elephc::bcmath_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let force_gmp = FORCE_GMP_PRELUDE.with(|flag| flag.replace(false));
     let resolved = elephc::gmp_prelude::inject_if_used(resolved, force_gmp, &mut prelude_inventory);
@@ -449,10 +465,33 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let ini_overrides = elephc::codegen_support::ini_overrides();
+    let tidy_value = |name: &str| {
+        ini_overrides
+            .iter()
+            .rev()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map_or("", |(_, value)| value.as_str())
+            .to_string()
+    };
+    let tidy_default_config = tidy_value("tidy.default_config");
+    let tidy_open_basedir = tidy_value("open_basedir");
+    let tidy_clean_output = elephc::codegen_support::ini_bool(&tidy_value("tidy.clean_output"));
+    let resolved = elephc::tidy_prelude::inject_if_used(
+        resolved,
+        tidy_clean_output,
+        &tidy_default_config,
+        &tidy_open_basedir,
+        tidy_clean_output,
+        &mut prelude_inventory,
+    );
     let resolved = elephc::fileinfo_prelude::inject_if_used_for_version(
         resolved, false, php_version, &mut prelude_inventory,
     );
+    let locale_used = elephc::locale_prelude::program_uses_locale(&resolved);
+    let resolved = elephc::locale_prelude::inject_if_used(resolved, locale_used, target().platform);
     let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::pcre_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::dom_html_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
@@ -479,6 +518,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
             elephc::types::check_with_target_and_bounds(program, target(), bounds)
         })
         .expect("type check failed");
+    // Mirrors `pipeline::compile`: the URI prelude keeps a wider internal `mixed` contract
+    // for nullable/runtime-checked parameters, while reflection reports php-src's declared
+    // `?Uri\...` types.
+    elephc::uri_prelude::apply_reflection_signatures(&mut check_result);
     set_fixture_linked_extensions(&check_result.required_libraries);
     let optimized =
         elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
@@ -858,7 +901,18 @@ pub(crate) fn compile_and_run_with_counters(source: &str) -> ProgramOutput {
 // capturing stdout and stderr from the resulting binary. Cleans up the temp directory.
 /// Provides the Compile and run capture helper used by the compiler module.
 pub(crate) fn compile_and_run_capture(source: &str) -> ProgramOutput {
-    compile_and_run_capture_with_optional_regex(source, false)
+    compile_and_run_capture_with_optional_regex(source, 8_388_608, false)
+}
+
+/// Compiles and captures a fixture with an explicit heap capacity.
+///
+/// Used by the PHPT matrix for `--INI-- memory_limit` fixtures: the heap capacity is the
+/// compile-time limit the fixture asks for, and the capture keeps the fatal on stderr.
+pub(crate) fn compile_and_run_capture_with_heap_size(
+    source: &str,
+    heap_size: usize,
+) -> ProgramOutput {
+    compile_and_run_capture_with_optional_regex(source, heap_size, false)
 }
 
 /// Compiles and runs a fixture with stderr merged onto stdout, preserving write order.
@@ -902,13 +956,30 @@ pub(crate) fn compile_and_run_capture_merged_with_heap(
 
 /// Compiles and runs a fixture with the same explicit regex capability as `--with-regex`.
 pub(crate) fn compile_and_run_capture_with_regex(source: &str) -> ProgramOutput {
-    compile_and_run_capture_with_optional_regex(source, true)
+    compile_and_run_capture_with_optional_regex(source, 8_388_608, true)
+}
+
+/// Compiles and runs a heap-debug fixture with `--with-regex`, so eval'd code reaches the
+/// regex provider while the leak summary still covers its allocations.
+pub(crate) fn compile_and_run_with_heap_debug_and_regex(source: &str) -> ProgramOutput {
+    compile_and_run_capture_with_regex_options(source, 8_388_608, true, true)
 }
 
 /// Compiles and captures one fixture while optionally enabling managed regex support.
 fn compile_and_run_capture_with_optional_regex(
     source: &str,
+    heap_size: usize,
     with_regex: bool,
+) -> ProgramOutput {
+    compile_and_run_capture_with_regex_options(source, heap_size, with_regex, false)
+}
+
+/// Compiles and captures one fixture with the given heap capacity, regex and heap-debug options.
+fn compile_and_run_capture_with_regex_options(
+    source: &str,
+    heap_size: usize,
+    with_regex: bool,
+    heap_debug: bool,
 ) -> ProgramOutput {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -918,7 +989,7 @@ fn compile_and_run_capture_with_optional_regex(
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options_and_regex(
-            source, &dir, 8_388_608, false, false, false, with_regex,
+            source, &dir, heap_size, false, false, heap_debug, with_regex,
         );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture(
@@ -1254,6 +1325,46 @@ pub(crate) fn compile_and_run_with_env(
         &default_link_paths(),
         &[],
         env,
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
+/// Compiles and runs a fixture for `php_version` with `--with-regex`, so eval'd regex calls
+/// reach the provider under that version profile.
+pub(crate) fn compile_and_run_with_regex_and_php_version(
+    source: &str,
+    php_version: elephc::php_version::PhpVersion,
+) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_test_regex_php_version_{}_{:?}_{}",
+        pid, tid, id
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let (user_asm, runtime_asm, requirements) =
+        compile_source_to_asm_with_defines_repr_regex_and_php_version(
+            source,
+            &dir,
+            &HashSet::new(),
+            8_388_608,
+            false,
+            false,
+            false,
+            default_null_repr(),
+            true,
+            php_version,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &requirements,
+        &default_link_paths(),
+        &[],
     );
     let _ = fs::remove_dir_all(&dir);
     output

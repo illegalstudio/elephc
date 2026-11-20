@@ -69,6 +69,28 @@ impl Checker {
         if expected == actual {
             return true;
         }
+        // `int|callable` and other unions with a coercible scalar keep the descriptor-typed
+        // callable member, exactly as `Checker::types_compatible` judges them.
+        if let PhpType::Union(members) = expected {
+            if PhpType::callable_union_needs_descriptor(members) {
+                let members = members
+                    .iter()
+                    .map(|member| match member {
+                        PhpType::DeclaredCallable => PhpType::Callable,
+                        other => other.clone(),
+                    })
+                    .collect();
+                return self.type_accepts(&PhpType::Union(members), actual);
+            }
+        }
+        // A declared `callable` keeps any value PHP could call, and a descriptor-typed slot
+        // takes one by materializing its descriptor (see `Checker::types_compatible`).
+        if matches!(expected, PhpType::DeclaredCallable | PhpType::Callable)
+            && (actual.is_callable_like() || *expected == PhpType::DeclaredCallable)
+            && Self::types_compatible(expected, actual)
+        {
+            return true;
+        }
         // The arithmetic union is decided by the arms below, not here: this per-member rule asks
         // whether `int` accepts `float`, which is false, so it would refuse `int|float` at every
         // position — including the `int` parameters the preludes pass a loop counter to.
@@ -464,6 +486,24 @@ impl Checker {
                         | crate::parser::ast::TypeExpr::AssocArray { .. }
                 ))
             )
+    }
+
+    /// Whether parameter `index` is passed by reference and carries a WRITTEN array type
+    /// (`array<T>` or `array<K, V>`).
+    ///
+    /// Such a parameter is a storage contract in both directions: the callee reads and writes
+    /// the caller's variable with exactly that layout. Call-site specialization must leave it
+    /// alone. Sharpening `array<mixed> &$a` to the first caller's `array<int>` compiled a callee
+    /// that widened the caller's list behind its back, and joining `array<int, int> &$m` with a
+    /// list argument widened the parameter to `mixed`, which then refused the very call that
+    /// caused it. By-value parameters keep the join: it is what protects a body compiled for
+    /// raw slots from a later boxed argument.
+    pub(crate) fn is_written_reference_array_param(
+        ref_params: &[bool],
+        param_type_exprs: &[Option<crate::parser::ast::TypeExpr>],
+        index: usize,
+    ) -> bool {
+        crate::types::is_written_reference_array_param(ref_params, param_type_exprs, index)
     }
 
     /// If `declared_ty` is a generic array hint and `actual_ty` is a concrete array or

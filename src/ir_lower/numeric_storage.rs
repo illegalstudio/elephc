@@ -88,7 +88,7 @@ fn numeric_writer(function: &Function, writers: &HashMap<LocalSlotId, Vec<ValueI
         let inst = &function.instructions[inst.as_raw() as usize];
         match inst.op {
             Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow
-                | Op::MixedNumericBinop | Op::StrIncDec => return true,
+                | Op::MixedNumericBinop | Op::MixedMinMax | Op::StrIncDec => return true,
             Op::Acquire | Op::MixedClone | Op::Move | Op::Borrow | Op::EnsureOwned => {
                 pending.extend(inst.operands.first().copied());
             }

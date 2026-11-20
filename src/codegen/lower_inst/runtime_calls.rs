@@ -146,6 +146,9 @@ pub(super) fn lower(
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)
         }
+        RuntimeCallTarget::PositionalImplode => {
+            super::builtins::strings::lower_implode(ctx, inst, "implode")
+        }
         RuntimeCallTarget::Function(target) | RuntimeCallTarget::NumericFunction { target, .. } =>
             super::runtime_functions::lower(ctx, inst, target),
         RuntimeCallTarget::ProfiledFunction { target, .. } => {

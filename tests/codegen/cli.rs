@@ -644,6 +644,43 @@ fn test_cli_with_xml_final_link_requires_managed_libxml2_project() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a final `--with-tidy` link without a project fails closed with the
+/// managed-`libtidy` recovery. The source never names a tidy symbol; the explicit
+/// flag forces `elephc_tidy` into the plan, which must emit the `libtidy` native
+/// requirement and never fall back to a system `-ltidy`.
+#[test]
+fn test_cli_with_tidy_final_link_requires_managed_libtidy_project() {
+    let dir = make_cli_test_dir("elephc_cli_tidy_requires_native");
+    let cache = dir.join("native-cache-must-not-exist");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1;").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-tidy")
+        .arg(&php_path)
+        .env("ELEPHC_NATIVE_CACHE", &cache)
+        .output()
+        .expect("failed to run --with-tidy compilation");
+    assert!(!output.status.success(), "--with-tidy link without a project must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("tidy support requires managed native package libtidy"),
+        "unexpected missing-project diagnostic: {stderr}"
+    );
+    assert!(stderr.contains("project: not found"), "missing project context: {stderr}");
+    assert!(
+        stderr.contains("recovery: cd --") && stderr.contains("elephc native add libtidy"),
+        "missing copy-paste recovery command: {stderr}"
+    );
+    assert!(
+        !stderr.contains("-ltidy") && !stderr.contains("required Elephc bridge"),
+        "the managed-package diagnostic must fire before any link attempt: {stderr}"
+    );
+    assert!(!cache.exists(), "failed compilation must not create the native cache");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--check` stops after type-checking and produces "Checked" output
 /// without emitting any assembly (.s), object (.o), or binary files.
 #[test]
@@ -2415,4 +2452,113 @@ fn test_cli_source_map_keeps_long_included_line_ends() {
     assert_eq!(strlen["php_col"], 70_015);
     assert_eq!(strlen["php_end_col"], 70_025, "the included strlen() lost its end: {strlen}");
     assert_eq!(included, root, "the included line maps differently from the same root line");
+}
+
+/// `monitor <script> --apm` records every run of a script as one transaction,
+/// named by its console command, keeps them in the store, counts a failed run
+/// as an error, and hands the script's own exit code back — the property a
+/// cron line wrapped in `elephc monitor` depends on.
+#[test]
+fn test_cli_monitor_apm_records_script_runs() {
+    let dir = make_cli_test_dir("elephc_cli_monitor_apm_runs");
+    fs::write(
+        dir.join("console.php"),
+        "<?php\n$command = $argv[1] ?? 'list';\nif ($command === 'app:broken') { exit(3); }\necho \"ran $command\\n\";\n",
+    )
+    .expect("failed to write the console fixture");
+    let compile = elephc_cli_command(&dir)
+        .args(["--with-monitoring", "console.php"])
+        .output()
+        .expect("failed to compile the console fixture");
+    assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
+    let store = dir.join("apm-store");
+    let run = |args: &[&str]| {
+        let output = elephc_cli_command(&dir)
+            .args(["monitor", "./console", "--apm", "--store"])
+            .arg(&store)
+            .arg("--")
+            .args(args)
+            .output()
+            .expect("failed to run elephc monitor --apm");
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        (output.status.code(), stdout)
+    };
+
+    // A data argument after the command does not split the transaction.
+    let (code, first) = run(&["app:import", "rows-17.csv"]);
+    assert_eq!(code, Some(0), "{first}");
+    assert!(first.contains("ran app:import"), "the script's output was lost: {first}");
+    assert!(first.contains("this run:") && first.contains("exit 0"), "{first}");
+    assert!(first.contains("CLI console app:import — 1 run"), "{first}");
+    let (_, second) = run(&["app:import", "rows-18.csv"]);
+    assert!(second.contains("CLI console app:import — 2 runs"), "{second}");
+
+    let (code, failed) = run(&["app:broken"]);
+    assert_eq!(code, Some(3), "monitor --apm must hand back the script's exit code: {failed}");
+    assert!(failed.contains("exit 3"), "{failed}");
+    assert!(failed.contains("CLI console app:broken — 1 run"), "{failed}");
+    assert!(failed.contains("100.0%"), "a failed run is counted as failed: {failed}");
+
+    // A budget that fails too does not hide the script's own failure; for a
+    // script that succeeded, the failed budget is the code (review).
+    let budget = |args: &[&str]| {
+        elephc_cli_command(&dir)
+            .args(["monitor", "./console", "--apm", "--assert", "calls:main<=0", "--"])
+            .args(args)
+            .output()
+            .expect("failed to run elephc monitor --apm --assert")
+            .status
+            .code()
+    };
+    assert_eq!(budget(&["app:broken"]), Some(3), "the script's failure wins over the budget's");
+    assert_eq!(budget(&["app:import"]), Some(2), "a script that succeeded reports the failed budget");
+
+    // One line per run, across however many day files the runs straddled
+    // (a run at 23:59:59 UTC and the next at 00:00:01 land in two).
+    let lines: usize = fs::read_dir(&store)
+        .expect("the store exists")
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("apm-"))
+        .map(|entry| fs::read_to_string(entry.path()).expect("a day file is readable").lines().count())
+        .sum();
+    assert_eq!(lines, 3, "one stored window per run");
+    // A wrapped cron run leaves nothing next to the script: the Speedscope
+    // export is written only when --out asks for it (review).
+    assert!(
+        !dir.join("console.speedscope.json").exists(),
+        "--apm wrote a profile nobody asked for, whose failure would have replaced the exit code"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A monitored build publishes the profiler's capture functions to the probe
+/// before `elephc_probe_init` starts the endpoint's thread: an `--exact` ask
+/// answered in between read an empty slot and was told the binary carries no
+/// profiler (review).
+#[test]
+fn test_cli_capture_slots_are_published_before_the_probe_starts() {
+    let dir = make_cli_test_dir("elephc_cli_capture_slots_order");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php\necho 1;\n").unwrap();
+    let output = elephc_cli_command(&dir)
+        .args(["--with-monitoring", "--target", "linux-x86_64", "--emit-asm"])
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit x86_64 assembly");
+    assert!(output.status.success(), "--emit-asm failed: {}", String::from_utf8_lossy(&output.stderr));
+    let asm = fs::read_to_string(dir.join("main.s")).expect("expected target assembly output");
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+    let init = lines
+        .iter()
+        .position(|line| line.starts_with("call elephc_probe_init"))
+        .expect("a monitored build starts the probe");
+    let slots: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.contains("elephc_probe_instr_capture"))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(slots.len(), 4, "the four capture slots are stored:\n{asm}");
+    assert!(slots.iter().all(|slot| *slot < init), "every slot is stored before the probe starts");
+    let _ = fs::remove_dir_all(&dir);
 }

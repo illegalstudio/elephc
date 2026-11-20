@@ -59,7 +59,8 @@ pub(crate) fn value_kind(ty: &PhpType) -> ValueKind {
         PhpType::Int => ValueKind::Integer, PhpType::Float => ValueKind::Float,
         PhpType::Bool | PhpType::False => ValueKind::Boolean, PhpType::Str => ValueKind::String,
         PhpType::Void => ValueKind::Null,
-        PhpType::Mixed | PhpType::Union(_) | PhpType::Never | PhpType::TaggedScalar => ValueKind::Dynamic,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Never | PhpType::TaggedScalar
+            | PhpType::DeclaredCallable => ValueKind::Dynamic,
         _ => ValueKind::NonScalar,
     }
 }

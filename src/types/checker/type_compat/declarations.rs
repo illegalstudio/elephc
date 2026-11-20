@@ -258,6 +258,9 @@ impl Checker {
     /// as an operation on a null-typed value: issue #892 reported
     /// `unsupported EIR backend feature: icmp for PHP type Void`, positionless, from
     /// `$running = null; do { … } while ($running > 0);` around `curl_multi_exec()`.
+    ///
+    /// `layout_contract` says the parameter carries a written array type; rule 4 in the body
+    /// (in-place conversion of a typed list to that layout) applies to no other parameter.
     pub(crate) fn require_boxed_by_ref_storage(
         &mut self,
         expected_ty: &PhpType,
@@ -265,6 +268,7 @@ impl Checker {
         arg: &Expr,
         env: &TypeEnv,
         can_widen_local: bool,
+        layout_contract: bool,
         context: &str,
     ) -> Result<(), CompileError> {
         if matches!(expected_ty.codegen_repr(), PhpType::Mixed | PhpType::Object(_))
@@ -286,8 +290,22 @@ impl Checker {
         let boxed_object_reference = matches!(expected_ty, PhpType::Object(_))
             && storage_ty.codegen_repr() == PhpType::Mixed
             && matches!(arg.kind, ExprKind::Variable(_));
+        // A property whose declared union/mixed storage cannot statically satisfy the parameter
+        // is NOT bound as typed reference storage: `require_bound_param_arg_type` records a
+        // call-boundary guard, and lowering reads the property into a parameter-typed temporary
+        // plus the ordinary write-back. Valid current values (`int|string` holding an int for an
+        // `int &$x`) must be allowed to reach the callee instead of being refused as "mixed
+        // storage".
+        let property_runtime_guard = matches!(arg.kind, ExprKind::PropertyAccess { .. })
+            && crate::types::param_binding::by_ref_property_writeback_supported(expected_ty)
+            && crate::types::param_binding::by_ref_property_writeback_supported(actual_ty)
+            && (matches!(actual_ty, PhpType::Union(_) | PhpType::Mixed)
+                || actual_ty.codegen_repr() != expected_ty.codegen_repr()
+                || !Self::types_compatible(expected_ty, actual_ty)
+                || !self.type_accepts(expected_ty, actual_ty));
         if expected_ty.codegen_repr() != PhpType::Mixed
             && !boxed_object_reference
+            && !property_runtime_guard
             && self.by_ref_argument_uses_mixed_or_hash_storage(&storage_ty, arg, env)?
         {
             return Err(CompileError::new(
@@ -303,6 +321,56 @@ impl Checker {
         // Any other local takes the boxed cell below instead.
         if self.nullable_reference_keeps_concrete_storage(expected_ty, actual_ty, arg) {
             return Ok(());
+        }
+        // Rule 4: a declared container parameter reads and writes the caller's storage with the
+        // layout it declares. A typed list has another layout when the parameter is a hash
+        // (`array<K, V>`) or a list of boxed values (a written `array<mixed>`). `types_compatible`
+        // admits the list (correct for a by-VALUE parameter, which receives a converted copy), so
+        // nothing refused the binding: `function f(array<int, int> &$ids) { $ids[0] = 7; }` given
+        // `$ids = [4, 5]` wrote hash entries into the vector and crashed, and `array<mixed> &$a`
+        // stored boxed cells the caller went on reading as integers.
+        //
+        // An ordinary local can change representation in place, exactly as `unset($a[$k])`
+        // promotes one, and lowering emits that conversion before taking the reference. Storage
+        // other code already reads as a typed list (a declared `array<T>` variable, a parameter
+        // bound by reference, an alias, a global, a static, a property, an element) cannot.
+        //
+        // Only a WRITTEN array type is that contract (`layout_contract`). A plain `array` hint
+        // resolves to the same `array<mixed>` before a call site sharpens it, and is bound
+        // through the boxed reference cell below: `mysqli_poll(..., array &$reject, ...)`
+        // forwards its own parameter to `mysqli::poll()`'s, which no caller could convert.
+        if layout_contract
+            && crate::types::binds_packed_reference_argument(expected_ty, &storage_ty)
+        {
+            // `can_widen_local` was decided before this argument was recorded as an alias root,
+            // so it answers for the FIRST time a call binds the local. A call can be checked
+            // more than once (a loop infers its calls before its body is checked), and by then
+            // the local is an alias root: the conversion that earlier check approved is still
+            // pending and approves this one. A pending output of another layout (an earlier
+            // `mixed &` slot of the same call boxing the local) is a conflict instead.
+            let target =
+                crate::types::packed_reference_argument_storage(expected_ty, &storage_ty);
+            let pending = self.pending_boxed_reference_output(by_ref_storage_place(arg));
+            let approved = match pending {
+                Some(pending) => Some(pending) == target.as_ref(),
+                None => can_widen_local,
+            };
+            let promotable = matches!(by_ref_storage_place(arg).kind, ExprKind::Variable(_))
+                && target.is_some()
+                && approved;
+            if promotable {
+                return Ok(());
+            }
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{} expects {}, got {}: a by-reference parameter uses the caller's own \
+                     storage, and this list cannot be converted to the parameter's layout \
+                     there. Declare the variable with the parameter's type (`{} $v = [...]`), \
+                     or declare the parameter as the list `{}` or as plain `array`",
+                    context, expected_ty, storage_ty, expected_ty, storage_ty
+                ),
+            ));
         }
         // The call lowering boxes PHP array locals before exposing their ref-cell address.
         // This changes storage, not the declared values accepted by the reference parameter.
@@ -328,11 +396,19 @@ impl Checker {
             }
             // `lower_by_ref_array_element_arg_with_signature` widens a local
             // indexed array to Mixed slots before taking the element address.
-            // Only that addressable shape has this conversion, not arbitrary
-            // scalar locals, properties, nested places or tagged nullable slots.
+            // Only an addressable element or property has this conversion, not arbitrary
+            // scalar locals, nested places or tagged nullable slots.
+            let storage_arg = match &arg.kind {
+                ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) => value.as_ref(),
+                _ => arg,
+            };
             if expected_ty.codegen_repr() == PhpType::Mixed
-                && matches!(arg.kind, ExprKind::ArrayAccess { .. })
-                && self.is_by_ref_argument_lvalue(arg, env)?
+                && matches!(
+                    storage_arg.kind,
+                    ExprKind::ArrayAccess { .. } | ExprKind::PropertyAccess { .. }
+                )
+                && (self.is_by_ref_argument_lvalue(storage_arg, env)?
+                    || self.is_addressable_direct_property_place(storage_arg, env)?)
             {
                 return Ok(());
             }
@@ -361,6 +437,7 @@ impl Checker {
             expected_ty.codegen_repr(),
             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
         ) && supports_by_ref_boxed_storage(&storage_ty)
+            && !property_runtime_guard
         {
             return Err(CompileError::new(
                 arg.span,
@@ -404,6 +481,49 @@ impl Checker {
                      declared type; initialize it (for example `= 0`), or declare BOTH the \
                      parameter and the variable nullable (`?int &$p` with `?int $v = null`)",
                     context, expected_ty
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Returns the storage a call still being checked has decided to give the local `arg` names.
+    ///
+    /// Recorded outputs are removed once their call has been applied, so an entry of the current
+    /// scope belongs to a call whose arguments are still being validated, or to a call a loop
+    /// inferred ahead of checking its body.
+    fn pending_boxed_reference_output(&self, arg: &Expr) -> Option<&PhpType> {
+        let ExprKind::Variable(name) = &arg.kind else {
+            return None;
+        };
+        self.boxed_reference_outputs
+            .iter()
+            .filter(|((scope, _), _)| scope == &self.current_loop_storage_scope)
+            .find_map(|(_, outputs)| outputs.get(name))
+    }
+
+    /// Refuses a list argument whose elements cannot be rebuilt as a declared hash parameter's
+    /// values.
+    ///
+    /// A list is a valid value for a declared `array<K, V>` parameter and lowering rebuilds it
+    /// as the hash the callee is compiled for (`crate::types::packed_argument_hash_storage`).
+    /// Element storage that conversion cannot produce is refused: bound unchanged, the callee
+    /// would read one layout as another.
+    pub(crate) fn require_packed_argument_hash_storage(
+        &self,
+        expected_ty: &PhpType,
+        actual_ty: &PhpType,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if crate::types::binds_packed_argument_to_hash(expected_ty, actual_ty)
+            && crate::types::packed_argument_hash_storage(expected_ty, actual_ty).is_none()
+        {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "{} expects {}, got {}; the element storage differs",
+                    context, expected_ty, actual_ty
                 ),
             ));
         }
@@ -549,8 +669,20 @@ impl Checker {
             // untaken branch may hold a lazy Error (`[parent::A]` without a parent), which
             // inference reports eagerly, so a failed inference keeps the syntactic answer.
             _ if crate::types::deferred_defaults::default_value_depends_on_scoped_constant(default_expr) => {
-                self.infer_type(default_expr, &TypeEnv::default())
-                    .unwrap_or_else(|_| self.declaration_default_type(default_expr))
+                match self.infer_type(default_expr, &TypeEnv::default()) {
+                    Ok(ty) => ty,
+                    // `Pure::A->value` reads a case directly, so it has no lazy branch to
+                    // protect: the failed read is the diagnostic, not the syntactic guess's
+                    // misleading "got int". `(E::A ? E::A : E::Missing)->value` keeps the
+                    // fallback, because PHP never evaluates the untaken `E::Missing`.
+                    Err(error) if matches!(
+                        &default_expr.kind,
+                        ExprKind::PropertyAccess { object, .. }
+                        | ExprKind::NullsafePropertyAccess { object, .. }
+                            if matches!(object.kind, ExprKind::ScopedConstantAccess { .. })
+                    ) => return Err(error),
+                    Err(_) => self.declaration_default_type(default_expr),
+                }
             }
             _ => self.declaration_default_type(default_expr),
         };

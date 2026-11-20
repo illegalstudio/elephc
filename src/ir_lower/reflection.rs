@@ -270,7 +270,7 @@ fn collect_builtin_reflection_class_from_type(
         | PhpType::Void
         | PhpType::Never
         | PhpType::Iterable
-        | PhpType::Mixed
+        | PhpType::Mixed | PhpType::DeclaredCallable
         | PhpType::Callable
         | PhpType::Packed(_)
         | PhpType::Pointer(None)
@@ -444,18 +444,37 @@ fn lower_builtin_reflection_class_methods(
         } else {
             &method.body
         };
-        function::lower_class_method(
-            class_name,
-            &method.name,
-            method.is_static,
-            &method.params,
-            method.return_type.as_ref(),
-            body,
-            module,
-            check_result,
-            constants,
-            fiber_return_sigs,
-        );
+        let prologue = super::reflection_deprecations::ReflectionPrologue::for_method(class_name, &method_key);
+        // `getArguments()` and `newInstance()` evaluate the attribute's arguments on every
+        // call, so a deprecated constant among them reports each time (see
+        // `crate::codegen_support::reflection::attr_arg_expr` for the lines).
+        let evaluates_arguments = class_name == "ReflectionAttribute"
+            && matches!(method_key.as_str(), "getarguments" | "newinstance");
+        let mut lower = || super::reflection_deprecations::with_prologue(prologue, || {
+            function::lower_class_method(
+                class_name,
+                &method.name,
+                method.is_static,
+                &method.params,
+                method.return_type.as_ref(),
+                body,
+                module,
+                check_result,
+                constants,
+                fiber_return_sigs,
+            )
+        });
+        if evaluates_arguments {
+            let frame = super::initializer_evaluation::InitializerFrame::top(
+                true,
+                super::initializer_evaluation::LineSource::Caller,
+                None,
+                None,
+            );
+            super::initializer_evaluation::with_frame(frame, lower);
+        } else {
+            lower();
+        }
     }
     for method in module.class_methods.iter_mut().skip(before) {
         method.flags.is_synthetic = true;

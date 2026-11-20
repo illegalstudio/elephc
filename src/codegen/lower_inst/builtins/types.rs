@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
-use crate::codegen::emit_box_current_value_as_mixed;
+use crate::codegen::{emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
@@ -111,7 +111,57 @@ pub(crate) fn lower_settype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     };
     let slot = super::super::local_slot_for_loaded_value(ctx, value)?;
     emit_settype_conversion(ctx, value, &target_ty)?;
-    store_settype_local_result(ctx, slot, &target_ty)?;
+    if ctx.local_stores_ref_cell_pointer(slot) {
+        // The operand is a `load_ref_cell` view, so the slot holds the cell pointer rather than
+        // the value. Storing the converted scalar into the slot would overwrite that pointer.
+        // Publish through the cell instead; the property/parameter temporary is boxed Mixed.
+        let payload = ctx.ref_cell_payload_type(slot)?.codegen_repr();
+        if payload == PhpType::Mixed {
+            if target_ty.codegen_repr() == PhpType::Str {
+                // Integer, float, boolean and scalar-to-string conversions can leave the
+                // bytes in `_concat_buf`, which a later string operation overwrites. A boxed
+                // source conversion reports its ownership in the PHP return flag; persist a
+                // borrowed result, transfer an owned one.
+                let raw = ctx.raw_value_php_type(value)?.codegen_repr();
+                if matches!(raw, PhpType::Mixed | PhpType::Union(_)) {
+                    let owned = ctx.next_label("settype_string_owned");
+                    let boxed = ctx.next_label("settype_string_boxed");
+                    abi::emit_branch_if_php_return_owned(ctx.emitter, &owned);
+                    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+                    abi::emit_jump(ctx.emitter, &boxed);
+                    ctx.emitter.label(&owned);
+                    emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+                    ctx.emitter.label(&boxed);
+                } else {
+                    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+                }
+            } else {
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &target_ty);
+            }
+            crate::codegen::lower_inst::local_stores::publish_current_ref_cell_value(
+                ctx,
+                slot,
+                &PhpType::Mixed,
+                crate::codegen::lower_inst::local_stores::RefCellStorePrevious::Retire,
+            )?;
+        } else if payload == target_ty.codegen_repr() {
+            // The cell already has the requested representation, so the conversion is a no-op
+            // for the caller's storage. Publish the converted value through the cell instead of
+            // rejecting a typed reference parameter (`settype($intRef, "int")`).
+            crate::codegen::lower_inst::local_stores::publish_current_ref_cell_value(
+                ctx,
+                slot,
+                &payload,
+                crate::codegen::lower_inst::local_stores::RefCellStorePrevious::Retire,
+            )?;
+        } else {
+            return Err(CodegenIrError::unsupported(format!(
+                "settype() cannot retype a native reference with {payload:?} payload"
+            )));
+        }
+    } else {
+        store_settype_local_result(ctx, slot, &target_ty)?;
+    }
     emit_bool_result(ctx, true);
     store_if_result(ctx, inst)
 }
@@ -286,6 +336,7 @@ fn emit_settype_string_conversion(ctx: &mut FunctionContext<'_>, value: ValueId)
         }
         PhpType::Float => {
             ctx.load_value_to_result(value)?;
+            crate::codegen::lower_inst::predicates::emit_nan_string_coercion_probe(ctx);
             abi::emit_call_label(ctx.emitter, "__rt_ftoa");
         }
         PhpType::Int => {
@@ -1023,7 +1074,7 @@ fn emit_no_arg_class_name_lookup(ctx: &mut FunctionContext<'_>, name: &str) {
 }
 
 /// Emits dynamic class-name lookup for an object pointer already loaded in the result register.
-fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
+pub(in crate::codegen::lower_inst::builtins) fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     let empty_label = ctx.next_label("get_class_empty");
     let done_label = ctx.next_label("get_class_done");
     if ctx.module.required_runtime_features.eval_bridge {
@@ -1442,6 +1493,16 @@ fn static_relation_holds(
     let object_class = object_class.trim_start_matches('\\');
     let target_class = target_class.trim_start_matches('\\');
     let target_key = php_symbol_key(target_class);
+    if exclude_self && super::class_relations::reflection_hidden_interface(ctx, target_class) {
+        // `Box` names a generic class template, and php-src's `Box` is the one class every
+        // instantiation stands for: `is_subclass_of` holds for a class EXTENDING an
+        // instantiation, never for the instantiation itself.
+        return Ok(lookup_class(ctx, object_class)
+            .and_then(|info| info.parent.clone())
+            .is_some_and(|parent| {
+                class_interfaces_contain(ctx, parent.trim_start_matches('\\'), &target_key)
+            }));
+    }
     if !exclude_self && php_symbol_key(object_class) == target_key {
         return Ok(true);
     }
@@ -1519,6 +1580,10 @@ fn declared_names(ctx: &FunctionContext<'_>, name: &str) -> Result<Vec<String>> 
             "get_declared_traits" => ctx.module.trait_table.names.clone(),
             _ => unreachable!(),
         };
+    }
+    if name == "get_declared_interfaces" {
+        // A class template's marker interface is not an interface php-src would declare.
+        names.retain(|interface| !super::class_relations::reflection_hidden_interface(ctx, interface));
     }
     Ok(names)
 }

@@ -2,7 +2,7 @@
 //! Checks the foreign-callable capability guard at the native eval boundary.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval_escape_guard`.
+//! - `cargo test --test codegen_tests_eval eval_escape_guard`.
 //!
 //! Key details:
 //! - Dynamic fragments exercise Magician with both optimizer settings.

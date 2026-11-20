@@ -13,6 +13,8 @@
 //!   before the pattern, so a missing callback is a TypeError even when the
 //!   pattern is bad. A successful replacement, including the empty string, stays
 //!   a string.
+//! - Matching is interleaved with the callbacks, like php-src: a callback sees the error
+//!   state of the matches before it, never a later match's error.
 
 use super::super::super::*;
 use super::super::*;
@@ -69,7 +71,22 @@ fn eval_preg_replace_callback_result_from_scope(
         let subject = values.string_bytes(subject)?;
         let mut result = Vec::with_capacity(subject.len());
         let mut cursor = 0;
-        for captures in regex.captures_iter(&subject) {
+        let mut matches_iter = regex.captures_iter(&subject);
+        // Matches and callbacks interleave like php-src, so a callback never sees the error of
+        // a later match. Each match runs against a cleared slot so its own failure is told
+        // apart from a nested `preg_*` error a callback recorded; that nested error is put
+        // back afterwards, staying visible without failing this call.
+        let own_error = loop {
+            let nested_error = eval_preg_last_error_code();
+            eval_preg_set_last_error(0);
+            let next = matches_iter.next();
+            let match_error = eval_preg_last_error_code();
+            if match_error == 0 {
+                eval_preg_set_last_error(nested_error);
+            }
+            let Some(captures) = next else {
+                break match_error;
+            };
             let Some(matched) = captures.get(0) else {
                 continue;
             };
@@ -81,6 +98,10 @@ fn eval_preg_replace_callback_result_from_scope(
             let callback_bytes = values.string_bytes(callback_result)?;
             result.extend_from_slice(&callback_bytes);
             cursor = matched.end();
+        };
+        if own_error != 0 {
+            eval_preg_set_last_error(own_error);
+            return values.null();
         }
         result.extend_from_slice(&subject[cursor..]);
         values.string_bytes_value(&result)

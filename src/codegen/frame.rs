@@ -68,12 +68,17 @@ const ITERATOR_STATE_BYTES: usize = 112;
 /// reference never drift.
 pub(super) const WEB_HANDLER_SYMBOL: &str = "_elephc_web_handler";
 
+pub(crate) use crate::codegen_support::apm_init::APM_COLLECTOR_SYMBOL;
+use crate::codegen_support::apm_init::{emit_apm_init_call, emit_event_active_slot, emit_probe_io_slots};
+
 /// Complete fixed frame layout for spill slots, addressable locals, and the
 /// callee-saved registers the register allocator decided to use.
 pub(super) struct FrameLayout {
     pub(super) value_placement: ValuePlacement,
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
+    /// Frame cells a runtime-typed `min()`/`max()` selection fills when a number wins.
+    pub(super) guarded_cell_offsets: HashMap<ValueId, usize>,
     pub(super) numeric_seed_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_local_slots: HashSet<LocalSlotId>,
     /// Numeric locals whose every writer uses physically selected frame storage.
@@ -156,6 +161,11 @@ pub(super) fn layout_for_function(
         offset += 24;
         numeric_seed_offsets.insert(slot, offset);
     }
+    let mut guarded_cell_offsets = HashMap::new();
+    for value in numeric.guarded {
+        offset += 24;
+        guarded_cell_offsets.insert(value, offset);
+    }
     let numeric_frame_only_slots = super::stack_numeric::frame_only_locals(
         function, &numeric.locals, &numeric_cell_offsets, &numeric_seed_offsets,
     );
@@ -235,6 +245,7 @@ pub(super) fn layout_for_function(
         value_placement,
         local_offsets,
         numeric_cell_offsets,
+        guarded_cell_offsets,
         numeric_seed_offsets,
         numeric_local_slots: numeric.locals,
         numeric_frame_only_slots,
@@ -2219,22 +2230,58 @@ fn pop_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
 /// which installs the SIGPROF handler and arms the profiling timer. Inert
 /// unless the probe symbol table was built (i.e. `--probe`).
 fn emit_probe_init(ctx: &mut FunctionContext<'_>) {
-    let Some((table_label, count)) = ctx.shared.probe_table.clone() else {
-        return;
-    };
-    ctx.emitter.comment("probe: install SIGPROF sampler (--probe)");
     let target = ctx.emitter.target;
-    let table_arg = abi::int_arg_reg_name(target, 0);
-    let count_arg = abi::int_arg_reg_name(target, 1);
-    let key_arg = abi::int_arg_reg_name(target, 2);
-    abi::emit_symbol_address(ctx.emitter, table_arg, &table_label);
-    abi::emit_load_int_immediate(ctx.emitter, count_arg, count as i64);
-    let key_symbol = target.extern_symbol("elephc_probe_build_key");
-    abi::emit_symbol_address(ctx.emitter, key_arg, &key_symbol);
-    // `elephc_probe_init` is a `#[no_mangle] extern "C"` Rust symbol in the probe
-    // staticlib; resolve its platform C-ABI mangling like the web bridge entry.
-    let entry = target.extern_symbol("elephc_probe_init");
-    abi::emit_call_label(ctx.emitter, &entry);
+    if let Some((table_label, count)) = ctx.shared.probe_table.clone() {
+        ctx.emitter.comment("probe: install SIGPROF sampler (--probe)");
+        // The instrumentation's half of an exact capture, for the endpoint:
+        // slots, because a `--with-apm` build links the probe without it.
+        // Published before `elephc_probe_init` starts the endpoint's thread:
+        // an `--exact` ask answered in between was told the binary carries no
+        // profiler (review).
+        let scratch = abi::int_arg_reg_name(target, 0);
+        for (index, capture) in [
+            "elephc_instr_capture_arm",
+            "elephc_instr_capture_take",
+            "elephc_instr_capture_cancel",
+            "elephc_instr_capture_blocked_by",
+        ]
+        .iter()
+        .enumerate()
+        {
+            abi::emit_symbol_address(ctx.emitter, scratch, &target.extern_symbol(capture));
+            abi::emit_store_reg_to_symbol(
+                ctx.emitter,
+                scratch,
+                &target.extern_symbol("elephc_probe_instr_capture"),
+                index * 8,
+            );
+        }
+        let table_arg = abi::int_arg_reg_name(target, 0);
+        let count_arg = abi::int_arg_reg_name(target, 1);
+        let key_arg = abi::int_arg_reg_name(target, 2);
+        abi::emit_symbol_address(ctx.emitter, table_arg, &table_label);
+        abi::emit_load_int_immediate(ctx.emitter, count_arg, count as i64);
+        let key_symbol = target.extern_symbol("elephc_probe_build_key");
+        abi::emit_symbol_address(ctx.emitter, key_arg, &key_symbol);
+        // `elephc_probe_init` is a `#[no_mangle] extern "C"` Rust symbol in the probe
+        // staticlib; resolve its platform C-ABI mangling like the web bridge entry.
+        let entry = target.extern_symbol("elephc_probe_init");
+        abi::emit_call_label(ctx.emitter, &entry);
+        // `--apm-collector` with the profiler: the counters go out too.
+        if ctx.shared.apm_collector {
+            emit_apm_init_call(ctx.emitter, true, false);
+        }
+    } else if ctx.shared.apm_only {
+        emit_apm_init_call(ctx.emitter, ctx.shared.apm_collector, false);
+    } else {
+        return;
+    }
+    // A script that sends its counters counts its whole run, as `monitor`
+    // counts a run it launched; the exit hook closes it with the exit status
+    // (review). A `--web` service's run is its lifetime, not a transaction.
+    if ctx.shared.apm_collector && !ctx.web {
+        abi::emit_call_label(ctx.emitter, &target.extern_symbol("elephc_probe_run_begin"));
+    }
     // Publish the route-tagging entry into the core runtime's `_elephc_probe_route_fn`
     // slot so the --web bridge can call it without a dlsym or a compile-time coupling.
     // This reference also keeps `elephc_probe_set_route` from being dead-stripped (it is
@@ -2256,25 +2303,89 @@ fn emit_probe_init(ctx: &mut FunctionContext<'_>) {
         &target.extern_symbol("elephc_probe_verify_fn"),
         0,
     );
-    // Claim the I/O event slots the PDO bridge calls through, so a `--probe`
-    // binary reports exact DB query counts and DB-driver wait per route. Those events are
-    // not sampled — a driver call fires exactly one — and they cost an atomic
-    // increment paid only when a query happens, so unlike per-call
-    // instrumentation this is affordable in production.
-    //
-    // `--instrument` wins when both are linked: it attributes the same events per
-    // FUNCTION through its shadow stack, which strictly refines per-route. Two
-    // writers to one slot would otherwise leave the winner to emission order.
+    // Publish the transaction-monitoring entries (`--apm`): the --web master
+    // enables counting through the first, and every request records its status
+    // and wall time through the second.
+    let apm_enable = target.extern_symbol("elephc_probe_apm_enable");
+    abi::emit_symbol_address(ctx.emitter, scratch, &apm_enable);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_probe_apm_fn"),
+        0,
+    );
+    let note_transaction = target.extern_symbol("elephc_probe_note_transaction");
+    abi::emit_symbol_address(ctx.emitter, scratch, &note_transaction);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_probe_txn_fn"),
+        0,
+    );
+    let reap = target.extern_symbol("elephc_probe_reap");
+    abi::emit_symbol_address(ctx.emitter, scratch, &reap);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_probe_reap_fn"),
+        0,
+    );
+    let settle = target.extern_symbol("elephc_probe_settle_request");
+    abi::emit_symbol_address(ctx.emitter, scratch, &settle);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_probe_settle_fn"),
+        0,
+    );
+    let request_begin = target.extern_symbol("elephc_probe_request_begin");
+    abi::emit_symbol_address(ctx.emitter, scratch, &request_begin);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_probe_begin_fn"),
+        0,
+    );
+    let request_end = target.extern_symbol("elephc_probe_request_end");
+    abi::emit_symbol_address(ctx.emitter, scratch, &request_end);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_probe_end_fn"),
+        0,
+    );
+    let apm_event = target.extern_symbol("elephc_probe_apm_event");
+    abi::emit_symbol_address(ctx.emitter, scratch, &apm_event);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_probe_apm_event_fn"),
+        0,
+    );
+    // Whether the bridges time their database and network calls is asked
+    // through this slot. Installed in every probe build, the combined one
+    // included, because under --apm the answer is yes from boot: a request's
+    // queries are counted per route whether or not a profile is being taken.
+    emit_event_active_slot(ctx.emitter);
     // A marker `monitor` can find by reading the file, before it runs anything.
     // Detection has to work from OUTSIDE the process — the whole point is to tell
     // a user "this binary cannot be monitored, rebuild it" instead of launching
     // it and reporting an empty profile, which reads as "your program is fast".
     // A named global rather than an anonymous string, so nothing strips it and
     // `strings` shows a human why it is there.
-    ctx.data.add_named_symbol(
-        target.extern_symbol("elephc_monitoring_marker"),
-        b"elephc-monitoring-v1 (built with --with-monitoring)\0",
-    );
+    // A `--with-apm` build carries no profiler, so it says what it is instead:
+    // `monitor` must not promise a profile it cannot take.
+    if ctx.shared.apm_only {
+        ctx.data.add_named_symbol(
+            target.extern_symbol("elephc_apm_marker"),
+            b"elephc-apm-v1 (built with --with-apm)\0",
+        );
+    } else {
+        ctx.data.add_named_symbol(
+            target.extern_symbol("elephc_monitoring_marker"),
+            b"elephc-monitoring-v1 (built with --with-monitoring)\0",
+        );
+    }
     // Hand the sampler the address of the allocation counter, so it can attribute
     // allocation deltas to the stack it samples — the same shape as Go's heap
     // profile. A pointer rather than the symbol, so `_gc_allocs` stays a name only
@@ -2287,50 +2398,10 @@ fn emit_probe_init(ctx: &mut FunctionContext<'_>) {
         0,
     );
     if !ctx.shared.instrument.is_on() {
-        // Let bridges ask whether the probe's shared event window is active.
-        // Unlike the exact-capture word, this observes remote asks in workers.
-        let event_active = target.extern_symbol("elephc_probe_event_active");
-        abi::emit_symbol_address(ctx.emitter, scratch, &event_active);
-        abi::emit_store_reg_to_symbol(
-            ctx.emitter,
-            scratch,
-            &target.extern_symbol("elephc_monitor_event_active_fn"),
-            0,
-        );
-        let note_io = target.extern_symbol("elephc_probe_note_io");
-        abi::emit_symbol_address(ctx.emitter, scratch, &note_io);
-        abi::emit_store_reg_to_symbol(
-            ctx.emitter,
-            scratch,
-            &target.extern_symbol("elephc_instr_io_fn"),
-            0,
-        );
-        let note_wait = target.extern_symbol("elephc_probe_note_wait");
-        abi::emit_symbol_address(ctx.emitter, scratch, &note_wait);
-        abi::emit_store_reg_to_symbol(
-            ctx.emitter,
-            scratch,
-            &target.extern_symbol("elephc_instr_wait_fn"),
-            0,
-        );
-        let note_network = target.extern_symbol("elephc_probe_note_network");
-        abi::emit_symbol_address(ctx.emitter, scratch, &note_network);
-        abi::emit_store_reg_to_symbol(
-            ctx.emitter,
-            scratch,
-            &target.extern_symbol("elephc_instr_network_fn"),
-            0,
-        );
-        let note_network_wait = target.extern_symbol("elephc_probe_note_network_wait");
-        abi::emit_symbol_address(ctx.emitter, scratch, &note_network_wait);
-        abi::emit_store_reg_to_symbol(
-            ctx.emitter,
-            scratch,
-            &target.extern_symbol("elephc_instr_network_wait_fn"),
-            0,
-        );
+        emit_probe_io_slots(ctx.emitter);
     }
 }
+
 
 /// Emits the `--probe` exit dump call at main's epilogue: disarms the timer and
 /// writes the folded profile to stderr. Placed like the gc-stats dump.

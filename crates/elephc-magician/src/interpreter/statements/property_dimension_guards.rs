@@ -316,15 +316,7 @@ fn generic_admits_array(ty: &elephc_generics::Type) -> bool {
 
 /// Resolves lexical class names while preserving PHP's nullable shorthand in diagnostics.
 pub(super) fn type_label(ty: &EvalParameterType, owner: &str, context: &ElephcEvalContext) -> Result<String, EvalStatus> {
-    let label = eval_null_boundary_type_label(ty, Some(owner), Some(owner), context)?;
-    if ty.allows_null() && !ty.is_intersection() {
-        let names = label.split('|').map(String::from).collect::<Vec<_>>();
-        if names.len() == 1 {
-            return Ok(elephc_builtin_contract::reflection_format::named_type(&names[0], true));
-        }
-        return Ok(elephc_builtin_contract::reflection_format::union(names, true));
-    }
-    Ok(label)
+    eval_null_boundary_type_label(ty, Some(owner), Some(owner), context)
 }
 
 /// Recognizes an initialized physical property whose read cannot invoke a getter or magic handler.

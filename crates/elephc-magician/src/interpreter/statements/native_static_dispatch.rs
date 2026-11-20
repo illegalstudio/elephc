@@ -278,7 +278,24 @@ pub(in crate::interpreter) fn eval_enum_builtin_static_method_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match eval_enum_static_builtin_name(method_name).ok_or(EvalStatus::RuntimeFatal)? {
+    let method = eval_enum_static_builtin_name(method_name).ok_or(EvalStatus::RuntimeFatal)?;
+    // `from()`/`tryFrom()` initialize the enum (every constant and case value php-src has not
+    // evaluated yet); `cases()` evaluates the case values only.
+    if method == "cases" {
+        let case_names: Vec<String> = context
+            .enum_decl(enum_name)
+            .map(|enum_decl| enum_decl.cases().iter().map(|case| case.name().to_string()).collect())
+            .unwrap_or_default();
+        let holder = context.enum_decl(enum_name).map(|enum_decl| enum_decl.name().to_string());
+        if let Some(holder) = holder {
+            for case_name in case_names {
+                eval_class_constant_first_evaluation(&holder, &case_name, context, values)?;
+            }
+        }
+    } else {
+        eval_raise_enum_initialization_deprecations(enum_name, context, values)?;
+    }
+    match method {
         "cases" => eval_enum_cases_result(enum_name, evaluated_args, context, values),
         "from" => eval_enum_from_result(enum_name, evaluated_args, false, context, values),
         "tryFrom" => eval_enum_from_result(enum_name, evaluated_args, true, context, values),
@@ -290,7 +307,7 @@ pub(in crate::interpreter) fn eval_enum_builtin_static_method_result(
 pub(super) fn eval_enum_cases_result(
     enum_name: &str,
     evaluated_args: Vec<EvaluatedCallArg>,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !evaluated_args.is_empty() {
@@ -307,8 +324,7 @@ pub(super) fn eval_enum_cases_result(
     let mut array = values.array_new(case_names.len())?;
     for (index, case_name) in case_names.iter().enumerate() {
         let key = values.int(index as i64)?;
-        let case = context
-            .enum_case(enum_name, case_name)
+        let case = eval_enum_case_object(enum_name, case_name, context, values)?
             .ok_or(EvalStatus::RuntimeFatal)?;
         array = values.array_set(array, key, case)?;
     }
@@ -336,14 +352,14 @@ pub(super) fn eval_enum_from_result(
     let mut args = bind_evaluated_function_args(&[String::from("value")], evaluated_args)?;
     let value = args.pop().ok_or(EvalStatus::RuntimeFatal)?;
     for case_name in case_names {
+        let case = eval_enum_case_object(enum_name, &case_name, context, values)?
+            .ok_or(EvalStatus::RuntimeFatal)?;
         let case_value = context
             .enum_case_value(enum_name, &case_name)
             .ok_or(EvalStatus::RuntimeFatal)?;
         let equal = values.compare(EvalBinOp::StrictEq, value, case_value)?;
         if values.truthy(equal)? {
-            return context
-                .enum_case(enum_name, &case_name)
-                .ok_or(EvalStatus::RuntimeFatal);
+            return Ok(case);
         }
     }
     if nullable_miss {

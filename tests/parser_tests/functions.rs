@@ -233,6 +233,27 @@ fn test_parse_closure_return_type_after_use() {
     }
 }
 
+/// A trailing comma after the last capture is valid PHP 8.0+, on one line or spread over
+/// several: `use ($a, &$b,)` keeps both captures and the by-reference flag.
+#[test]
+fn test_parse_closure_use_list_trailing_comma() {
+    for source in [
+        "<?php $f = function () use ($a, &$b,): int { return $a + $b; };",
+        "<?php $f = function () use (\n    $a,\n    &$b,\n): int { return $a + $b; };",
+    ] {
+        let stmts = parse_source(source);
+        assert_eq!(stmts.len(), 1, "source: {source}");
+        let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+            panic!("expected Assign, source: {source}");
+        };
+        let ExprKind::Closure { captures, capture_refs, .. } = &value.kind else {
+            panic!("expected Closure, source: {source}");
+        };
+        assert_eq!(captures, &["a".to_string(), "b".to_string()], "source: {source}");
+        assert_eq!(capture_refs, &["b".to_string()], "source: {source}");
+    }
+}
+
 #[test]
 // Verifies that `<?php $g = function(int $n) use (&$g): int { return $g($n - 1); };`
 // parses a closure with by-reference capture `&$g`: name "g", `capture_refs` includes "g".
@@ -984,6 +1005,24 @@ fn test_parse_trailing_comma_in_call_args() {
 }
 
 #[test]
+/// Verifies bare `exit;` and `die;` parse as zero-argument calls, matching PHP's
+/// parenthesis-free language-construct form.
+fn test_parse_bare_exit_and_die() {
+    for keyword in ["exit", "die", "EXIT", "Die"] {
+        let source = format!("<?php {keyword};");
+        let stmts = parse_source(&source);
+        let StmtKind::ExprStmt(expr) = &stmts[0].kind else {
+            panic!("expected ExprStmt for {keyword}");
+        };
+        let ExprKind::FunctionCall { name, args } = &expr.kind else {
+            panic!("expected FunctionCall for {keyword}, got {:?}", expr.kind);
+        };
+        assert!(name.as_str().eq_ignore_ascii_case(keyword));
+        assert!(args.is_empty());
+    }
+}
+
+#[test]
 // Verifies that a trailing comma after the last parameter (PHP 8.0+) is accepted:
 // `<?php function foo($a, $b,) {}` parses to a `FunctionDecl` with two parameters.
 /// Verifies that a trailing comma in a parameter list parses.
@@ -1050,4 +1089,29 @@ fn test_parse_byref_not_intersection() {
         }
         other => panic!("Expected FunctionDecl, got {:?}", other),
     }
+}
+
+/// Dynamic callable syntax uses the existing global Closure conversion path.
+#[test]
+fn test_issue_828_dynamic_first_class_callable_parser() {
+    for source in ["$callback", "$this", "($callback)", "$callbacks[0]", "factory()", "($box->callback)"] {
+        let stmts = parse_source(&format!("<?php $f = {source}(...);"));
+        let StmtKind::Assign { value, .. } = &stmts[0].kind else { panic!("assignment"); };
+        let ExprKind::StaticMethodCall { receiver, method, args } = &value.kind else {
+            panic!("expected callable conversion: {:?}", value.kind);
+        };
+        assert!(matches!(receiver, StaticReceiver::Named(name) if name.kind == elephc::names::NameKind::FullyQualified && name.as_str() == "Closure"));
+        assert_eq!(method, elephc::parser::ast::DYNAMIC_CALLABLE_FACTORY);
+        assert_eq!(args.len(), 1);
+    }
+}
+
+/// A callable placeholder cannot be mixed with arguments or a trailing comma.
+#[test]
+fn test_issue_828_dynamic_first_class_callable_invalid_syntax() {
+    for source in ["$f(...,)", "$f(1, ...)", "($f)(..., 1)", "$a[0](...,)"] {
+        assert!(parse_fails(&format!("<?php {source};")), "{source}");
+    }
+    let stmts = parse_source("<?php $f(...$args);");
+    assert!(matches!(&stmts[0].kind, StmtKind::ExprStmt(Expr { kind: ExprKind::ClosureCall { .. }, .. })));
 }

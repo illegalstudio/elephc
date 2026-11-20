@@ -317,7 +317,7 @@ pub(crate) fn check_iterator_apply_dynamic_callback(
     if callback_ty == PhpType::Str {
         return Ok(());
     }
-    if callback_ty == PhpType::Callable {
+    if callback_ty.is_callable_like() {
         return Ok(());
     }
     if super::callables::runtime_callable_array_type(&callback_ty) {
@@ -349,7 +349,7 @@ pub(crate) fn check_iterator_apply_static_callback(
         Ok(result) => checker.require_boolean_type(&result, callback.span),
         Err(error) if error.message == ITERATOR_APPLY_UNKNOWN_STATIC_CALLBACK_SIG => {
             let callback_ty = checker.infer_type(callback, env)?;
-            if callback_ty != PhpType::Callable && callback_ty != PhpType::Str {
+            if !callback_ty.is_callable_like() && callback_ty != PhpType::Str {
                 return Err(error);
             }
             for arg in callback_args {

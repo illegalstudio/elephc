@@ -1,0 +1,15 @@
+[package]
+name = "elephc-uri"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PHP 8.5 ext/uri engine: RFC 3986 and WHATWG URL parsing behind a stable C ABI"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+idna = "1"
+punycode = "0.4"
+url = "2.5"

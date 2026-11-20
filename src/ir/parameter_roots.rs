@@ -48,6 +48,12 @@ pub(crate) fn borrowed_parameter_roots(function: &Function) -> HashSet<LocalSlot
                 invalid.insert(*first);
                 invalid.insert(*second);
             }
+            Some(Immediate::PropertyRefCell { first, second, .. }) => {
+                unchanged.remove(first);
+                unchanged.remove(second);
+                invalid.insert(*first);
+                invalid.insert(*second);
+            }
             Some(Immediate::IterStart(metadata)) => {
                 for slot in metadata.local_slots() {
                     unchanged.remove(&slot);

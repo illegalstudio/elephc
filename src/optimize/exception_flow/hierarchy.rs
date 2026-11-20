@@ -430,7 +430,7 @@ fn php_type_is_non_destructible(php_type: &PhpType) -> bool {
         | PhpType::TaggedScalar => true,
         PhpType::Union(members) => members.iter().all(php_type_is_non_destructible),
         PhpType::Object(_)
-        | PhpType::Mixed
+        | PhpType::Mixed | PhpType::DeclaredCallable
         | PhpType::Iterable
         | PhpType::Callable
         | PhpType::Array(_)

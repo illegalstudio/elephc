@@ -6,7 +6,7 @@
 //! the unfiltered surface).
 //!
 //! Called from:
-//! - `cargo test --test opcache_ini_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_ini_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated
@@ -38,9 +38,11 @@ static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 const OPCACHE_DIRECTIVE_COUNT: usize = 54;
 
 /// Shared Core and mbstring rows join the existing opcache rows in unfiltered enumeration.
+/// `memory_limit` is the one dynamic Core row, added by the shared `ini_get_all()` wrapper.
 const ALL_DIRECTIVE_COUNT: usize = OPCACHE_DIRECTIVE_COUNT
     + elephc_builtin_contract::mbstring_abi::ini::core::DIRECTIVES.len()
-    + elephc_builtin_contract::mbstring_abi::ini::catalog::DIRECTIVES.len();
+    + elephc_builtin_contract::mbstring_abi::ini::catalog::DIRECTIVES.len()
+    + 1;
 
 /// Creates an isolated temp dir unique across parallel test threads/processes.
 fn make_test_dir(prefix: &str) -> PathBuf {
@@ -71,7 +73,7 @@ fn compile(dir: &Path, source: &str, stem: &str) -> PathBuf {
 
 /// Compiles `source` with the supplied `--ini KEY=VALUE` overrides, returning the executable
 /// path together with the compiler's STDERR — which is where the OPcache quantity diagnostics
-/// land (`crate::main::emit_ini_override_warnings`).
+/// land (`elephc::entry::emit_ini_override_warnings`).
 fn compile_with_ini(
     dir: &Path,
     source: &str,
@@ -83,6 +85,7 @@ fn compile_with_ini(
     let mut cmd = Command::new(elephc_bin());
     managed_pcre2::configure_host_managed_pcre2(&mut cmd, dir);
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     for (key, value) in ini {
         cmd.arg("--ini").arg(format!("{key}={value}"));
@@ -964,6 +967,7 @@ fn jit_prof_threshold_is_an_int_in_the_82_profile() {
         fs::write(&php, &probe).unwrap();
         let output = Command::new(elephc_bin())
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
             .current_dir(&dir)
             .arg("--php-version")
             .arg(version)
@@ -989,6 +993,7 @@ fn jit_prof_threshold_is_an_int_in_the_82_profile() {
         fs::write(&php, &probe).unwrap();
         let output = Command::new(elephc_bin())
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
             .current_dir(&dir)
             .arg("--php-version")
             .arg("8.2")

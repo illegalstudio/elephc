@@ -101,10 +101,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Format 27 combines SimpleXML property updates with native variable increment statements.
 /// Format 28 records bytecode-backed function metadata in the conservative source guard,
 /// even though serde omits the executable cache from the stored payload.
-/// Format 29 adds checked integer tokens, overflow parse errors and semantic profile headers.
-/// Format 30 retains parser profile provenance inside EvalProgram.
-/// Format 31 retains interpolation formatting casts and their lexer prefix tokens.
-pub(crate) const FORMAT_VERSION: u32 = 31;
+/// Format 29 adds `goto` and label statements, and the parse failure for an invalid jump.
+/// Format 31 records each eval function, method, and generic template's defining
+/// `strict_types` mode, which changes the serialized callable layout.
+/// Format 32 rejects a `declare(strict_types=...)` that follows another eval statement.
+/// Format 33 combines strict semantic source metadata with defining strict_types and goto layouts.
+pub(crate) const FORMAT_VERSION: u32 = 33;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

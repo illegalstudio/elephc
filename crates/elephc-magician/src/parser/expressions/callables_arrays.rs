@@ -142,7 +142,8 @@ impl Parser {
             .with_parameter_defaults(parameter_defaults)
             .with_parameter_by_ref_flags(parameter_is_by_ref)
             .with_parameter_variadic_flags(parameter_is_variadic)
-            .with_return_type(return_type);
+            .with_return_type(return_type)
+            .with_strict_types(self.strict_types);
         Ok(EvalExpr::Closure {
             function,
             captures,

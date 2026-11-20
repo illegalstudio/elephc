@@ -112,7 +112,17 @@ impl Checker {
                     return result;
                 }
                 if let Some(value_expr) = info.constants.get(name).cloned() {
-                    if let Some(reason) = info.constant_deprecations.get(name).cloned() {
+                    // A builtin constant php-src deprecates (`Pdo\Pgsql::TRANSACTION_IDLE`) is
+                    // reported at run time with php-src's message, so its prelude attribute
+                    // adds no compile-time warning.
+                    let reported_at_run_time = info.is_internal
+                        && elephc_builtin_contract::class_constant_deprecation(cn, name).is_some();
+                    if let Some(reason) = info
+                        .constant_deprecations
+                        .get(name)
+                        .filter(|_| !reported_at_run_time)
+                        .cloned()
+                    {
                         let message = if reason.is_empty() {
                             format!("Use of deprecated class constant: {}::{}", cn, name)
                         } else {

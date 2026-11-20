@@ -175,6 +175,39 @@ pub(crate) struct CallArgumentEvaluationScope {
     pub live_property_reference_arguments: bool,
     /// Prepared builtin graphs require local aliases for addressable reference operands.
     pub prepared_builtin_reference_arguments: bool,
+    /// Property by-reference parameter checks read at their source position but raised only
+    /// after every argument has evaluated, matching PHP's entry-boundary `TypeError`.
+    pub pending_property_type_guards: Vec<PendingPropertyTypeGuard>,
+}
+
+/// One property by-reference argument check deferred until the complete argument list ran.
+///
+/// PHP evaluates every argument before entering the callee, so `f($box->text, later())`
+/// still runs `later()` before the incompatible property reference raises. A later argument
+/// can also rewrite the very property being passed (`f($box->text, $box->text = 5)`), and PHP
+/// checks the value that is current at the call boundary, not the one read at the argument's
+/// source position. Lowering therefore records the stabilized place and re-reads it when the
+/// call's post-evaluation pass runs; the accepted branch then retires the snapshot.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingPropertyTypeGuard {
+    /// Stabilized property place re-read at the call boundary for the conditional check.
+    pub place: Option<Expr>,
+    /// Complete diagnostic prefix through `must be of type T, `.
+    pub prefix: String,
+    /// Declared parameter type used for the dynamic `given` spelling.
+    pub expected: PhpType,
+    /// Whether the place is an UNTYPED property, whose current value PHP coerces weakly.
+    pub coerces_weakly: bool,
+    /// Boxed property-value snapshot inspected by the conditional check.
+    pub temp: Option<String>,
+    /// The callee's copy-in temporary, refreshed to the same call-boundary value.
+    pub callee_temp: Option<String>,
+    /// Storage representation of `callee_temp`.
+    pub callee_temp_ty: Option<PhpType>,
+    /// Source span for the throw.
+    pub span: Span,
+    /// Static diagnostic for the unconditional refusal.
+    pub unconditional_message: Option<String>,
 }
 
 /// Staging for one `$target = &call()`, recorded while its source expression is lowered.
@@ -191,6 +224,26 @@ pub(crate) struct ReferenceCallContext {
     pub(crate) staged: String,
     /// Whether a selected lowering actually adopted a cell into `staged`.
     pub(crate) adopted: bool,
+}
+
+/// One by-reference property argument awaiting its post-call write-back and type check.
+///
+/// PHP keeps a typed property's declaration when it becomes a reference: a callee that writes
+/// an incompatible value through `&$obj->prop` raises `TypeError` and leaves the property
+/// unchanged. elephc hands the callee a boxed `Mixed` temporary instead (the property's own
+/// slot has a different representation), so the caller records the temporary, the stabilized
+/// property target, and its declared type here and validates plus writes back after the call.
+pub(crate) struct ReferencePropertyGuard {
+    /// Synthetic `Mixed` local handed to the callee in place of the property.
+    pub temp: String,
+    /// Stabilized property target the callee's value is written back to.
+    pub place: Expr,
+    /// Declaring class name, as PHP prints it in the diagnostic.
+    pub class_name: String,
+    /// Property name, as PHP prints it in the diagnostic.
+    pub property: String,
+    /// Declared property type, or `None` for an untyped slot.
+    pub declared: Option<PhpType>,
 }
 
 /// A local bound to a pointer by-reference parameter, with the parameter's declared type.
@@ -338,6 +391,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) expression_depth: usize,
     /// Printed callable description (`Class::method`) for argument `TypeError` messages.
     pub(crate) call_description: Option<String>,
+    /// Call span of the `ReflectionMethod::invoke*()` currently dispatching its target.
+    ///
+    /// Reflection calls run under weak typing in php-src, so an explicitly reflected
+    /// `__construct` must publish weak typing — but only that final call. The span keeps
+    /// ordinary constructor calls nested in the forwarded arguments on the calling file's
+    /// own `strict_types` mode.
+    pub(crate) reflected_invoke_call_span: Option<Span>,
     /// Staging published by the enclosing reference assignment, if one is being lowered.
     ///
     /// `finish_reference_return_call` adopts the transferred lease into that staging immediately
@@ -352,6 +412,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     taken_owned_temp_values: HashSet<ValueId>,
     /// Nested owner ledgers for source-order call argument evaluation.
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
+    /// By-reference property writes awaiting their post-call declared-type check.
+    ///
+    /// Call sites snapshot the length before lowering their arguments and drain the entries
+    /// added afterwards once the call returns. Entries produced by surfaces that never drain
+    /// (a builtin, whose by-reference place lowering already owns the write) stay in the list
+    /// unread, which can only skip a check, never reject a compatible value.
+    pub(crate) reference_property_guards: Vec<ReferencePropertyGuard>,
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
     pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
     /// Native reference places whose raw and canonical mutation arms have already been selected.
@@ -395,8 +462,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// C struct layouts of the declared extern classes, read by `ptr<Class>` field accesses.
     pub extern_classes: &'m HashMap<String, ExternClassInfo>,
     /// Statically-decided access violations lowered to runtime `Error` throws,
-    /// keyed by the source span of the offending call/assignment.
-    pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
+    /// keyed by the owning body scope and the source span of the offending
+    /// call/assignment.
+    pub throw_access_sites: &'m HashMap<(String, Span), ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls in this source module.
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
     /// Source-body generator classification for closure literals.
@@ -624,7 +692,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         declared_trait_properties: &'m HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
         packed_classes: &'m HashMap<String, PackedClassInfo>,
         extern_classes: &'m HashMap<String, ExternClassInfo>,
-        throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
+        throw_access_sites: &'m HashMap<(String, Span), ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
         closure_generator_spans: &'m HashSet<Span>,
         array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
@@ -766,6 +834,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             scoped_write_scopes: Vec::new(),
             taken_owned_temp_values: HashSet::new(),
             call_argument_evaluation_scopes: Vec::new(),
+            reference_property_guards: Vec::new(),
             borrowed_string_call_operands: HashSet::new(),
             live_native_mutation_locals: HashMap::new(),
             string_offset_receivers: Vec::new(),
@@ -797,6 +866,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             int_seed_bindings: HashMap::new(),
             pointer_reference_bindings: Vec::new(),
             call_description: None,
+            reflected_invoke_call_span: None,
             source_path,
             closure_display_names: HashMap::new(),
         }
@@ -1041,9 +1111,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 crate::types::width_type_from_type_expr(inner)
                     .unwrap_or_else(|| self.type_expr_to_php_type_for_value(inner)),
             )),
-            TypeExpr::Array(inner) => {
-                PhpType::Array(Box::new(self.type_expr_to_php_type_for_value(inner)))
-            }
+            TypeExpr::Array(inner) => PhpType::Array(Box::new(
+                self.type_expr_to_php_type_for_value(inner).as_container_element(),
+            )),
             TypeExpr::Nullable(inner) => PhpType::Union(vec![
                 PhpType::Void,
                 self.type_expr_to_php_type_for_value(inner),
@@ -1206,6 +1276,42 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     let owner = info.constant_declaring_interfaces.get(const_name)
                         .map(String::as_str).unwrap_or(name.as_str());
                     return self.constant_value_in_scope(value, owner);
+                }
+                queue.extend(info.parents.iter().cloned());
+            }
+        }
+        None
+    }
+
+    /// Returns the class or interface whose declaration `class_name::const_name` resolves to,
+    /// searching parent classes first and then implemented and parent interfaces, like
+    /// [`Self::scoped_constant_value`].
+    pub(crate) fn scoped_constant_owner(&self, class_name: &str, const_name: &str) -> Option<String> {
+        let mut current = Some(class_name);
+        while let Some(name) = current {
+            let Some(info) = self.classes.get(name) else {
+                break;
+            };
+            if info.constants.contains_key(const_name) {
+                return Some(name.to_string());
+            }
+            current = info.parent.as_deref();
+        }
+        let mut queue = self
+            .classes
+            .get(class_name)
+            .map(|info| info.interfaces.clone())
+            .unwrap_or_default();
+        queue.push(class_name.to_string());
+        let mut visited = HashSet::new();
+        while let Some(name) = queue.pop() {
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            if let Some(info) = self.interfaces.get(&name) {
+                if info.constants.contains_key(const_name) {
+                    let owner = info.constant_declaring_interfaces.get(const_name).unwrap_or(&name);
+                    return Some(owner.clone());
                 }
                 queue.extend(info.parents.iter().cloned());
             }
@@ -1765,6 +1871,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .boxed_reference_promotion_sites
                 .get(&(self.loop_storage_scope.clone(), span))
                 .is_some_and(|names| names.contains(name))
+    }
+
+    /// Returns the frame slot whose Mixed cell a `foreach` key binding may rewrite in place.
+    ///
+    /// Only a plain PHP local stored as one boxed Mixed cell qualifies: the binding is about to
+    /// replace that cell, and the frame is its owner. A reference alias, a global or static
+    /// backing store, an extern global and an eval-scope name are all written through another
+    /// storage path, so their slot must not lend its cell.
+    pub(crate) fn reusable_foreach_key_slot(&self, name: &str) -> Option<LocalSlotId> {
+        if self.is_ref_bound_local(name)
+            || self.local_uses_global_storage(name)
+            || self.extern_global_type(name).is_some()
+            || self.should_store_to_eval_scope(name)
+            || self.append_update_cell_aliases.contains(name)
+        {
+            return None;
+        }
+        let slot = *self.local_slots.get(name)?;
+        let local = self.builder.function().locals.get(slot.as_raw() as usize)?;
+        (local.kind == LocalKind::PhpLocal
+            && local.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed)
+            && local.php_type.codegen_repr() == PhpType::Mixed
+            && self.local_type(name).codegen_repr() == PhpType::Mixed)
+            .then_some(slot)
     }
 
     /// Returns true when a local is currently modeled as a by-reference alias.
@@ -4022,6 +4152,35 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.binding_state_suppressed = suppressed;
     }
 
+    /// Promotes a typed property's copy-in/copy-out temporary, attaching the runtime metadata
+    /// that lets a callee write enforce the property's declared type before coercing.
+    pub(crate) fn promote_local_property_ref_cell(
+        &mut self,
+        name: &str,
+        suffix: &str,
+        type_code: u8,
+        span: Option<Span>,
+    ) {
+        let slot = self.declare_local(name, self.local_type(name));
+        let fallback_ty = self.builder.local_php_type(slot);
+        let owner_slot = self.declare_ref_cell_owner(name, fallback_ty.clone());
+        let suffix = self.intern_string(suffix);
+        let immediate = Immediate::property_ref_cell(slot, owner_slot, suffix, type_code);
+        self.builder.emit_with_effects(
+            Op::PromoteLocalRefCell,
+            Vec::new(),
+            Some(immediate),
+            IrType::Void,
+            fallback_ty,
+            Ownership::NonHeap,
+            Op::PromoteLocalRefCell.default_effects(),
+            span,
+        );
+        self.mark_ref_bound_local(name);
+        self.initialized_slots.insert(slot);
+        self.initialized_slots.insert(owner_slot);
+    }
+
     /// Widens a concrete local to boxed `Mixed` storage, then promotes that storage to a
     /// durable heap reference cell suitable for an escaping by-reference parameter.
     pub(crate) fn promote_local_mixed_ref_cell(&mut self, name: &str, span: Option<Span>) {
@@ -4350,6 +4509,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // `MixedUnbox` stays the borrowed projection its consumers expect.
             return true;
         }
+        if self.builder.value_defining_op(value.value) == Some(Op::NormalizeCallable)
+            && self.builder.value_ownership(value.value) == Ownership::Owned
+        {
+            // A normalized descriptor carries its own lease (a retained selected descriptor
+            // or a freshly built one), released after the call or store that consumes it.
+            return true;
+        }
         if self.value_is_owned_temp_load(value.value) {
             return true;
         }
@@ -4409,6 +4575,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashToMixed
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop
+                    | Op::MixedMinMax
                     | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
@@ -4642,6 +4809,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_defining_op(argument),
             Some(
                 Op::MixedNumericBinop
+                    | Op::MixedMinMax
                     | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
@@ -4965,7 +5133,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ),
             Some(Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::UnaryString(_)
-                | crate::ir::RuntimeCallTarget::StringOffsetSet,
+                | crate::ir::RuntimeCallTarget::StringOffsetSet
+                | crate::ir::RuntimeCallTarget::PositionalImplode,
             )) => true,
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ArrayUnpackToHash)) => true,
             Some(Immediate::Data(name_id) | Immediate::ProfiledData { data: name_id, .. })
@@ -6107,6 +6276,8 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
                         | crate::ir::RuntimeFnId::IsCallable
                         | crate::ir::RuntimeFnId::ObStart
                         | crate::ir::RuntimeFnId::StripTags
+                        | crate::ir::RuntimeFnId::Implode
+                        | crate::ir::RuntimeFnId::Join
                 ) || target.string_callback_operand_index().is_some()
                     || target.uses_mbstring_runtime() =>
             {
@@ -6218,6 +6389,16 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
 }
 
 impl LoweringContext<'_, '_> {
+    /// Returns the statically-decided throw site for `span` in the body currently lowered.
+    ///
+    /// The checker records each site with the scope that resolved it, because a trait body
+    /// is checked once per using class; looking the entry up by span alone would apply the
+    /// last class's decision to every class sharing that body.
+    pub(crate) fn throw_access_site(&self, span: Span) -> Option<&ThrowAccessInfo> {
+        self.throw_access_sites
+            .get(&(self.loop_storage_scope.clone(), span))
+    }
+
     /// Returns the PHP variable an operand addresses, for place markers and every load shape
     /// `load_local` emits, or `None` for any other value (a literal, a call result, a
     /// property read).
@@ -6335,6 +6516,7 @@ pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Imme
         return true;
     }
     match (op, immediate) {
+        (Op::RuntimeCall, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::PositionalImplode))) => true,
         (
             Op::RuntimeCall,
             Some(Immediate::RuntimeCall(
@@ -6350,6 +6532,7 @@ pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Imme
                     | crate::ir::RuntimeFnId::Serialize
                     | crate::ir::RuntimeFnId::Unserialize
                     | crate::ir::RuntimeFnId::Implode
+                    | crate::ir::RuntimeFnId::Join
                     | crate::ir::RuntimeFnId::ArrayFlip
                     | crate::ir::RuntimeFnId::ArraySum
                     | crate::ir::RuntimeFnId::ArrayProduct
@@ -6608,10 +6791,12 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
         TypeExpr::Void => PhpType::Void,
         TypeExpr::Never => PhpType::Never,
         TypeExpr::Iterable => PhpType::Iterable,
-        TypeExpr::Array(inner) => PhpType::Array(Box::new(type_expr_to_php_type(inner))),
+        TypeExpr::Array(inner) => {
+            PhpType::Array(Box::new(type_expr_to_php_type(inner).as_container_element()))
+        }
         TypeExpr::AssocArray { key, value } => PhpType::AssocArray {
             key: Box::new(type_expr_to_php_type(key)),
-            value: Box::new(type_expr_to_php_type(value)),
+            value: Box::new(type_expr_to_php_type(value).as_container_element()),
         },
         TypeExpr::Ptr(name) => {
             PhpType::Pointer(name.as_ref().map(|name| {
@@ -6649,7 +6834,7 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
 fn named_type_expr_to_php_type(name: &str) -> PhpType {
     match name.trim_start_matches('\\').to_ascii_lowercase().as_str() {
         "array" => PhpType::php_array(),
-        "callable" => PhpType::Callable,
+        "callable" => PhpType::DeclaredCallable,
         "closure" => PhpType::Callable,
         "mixed" => PhpType::Mixed,
         "null" | "void" => PhpType::Void,

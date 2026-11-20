@@ -68,10 +68,22 @@ pub(crate) fn emit_runtime_data_fixed(
     target: Target,
     php_version: PhpVersion,
 ) -> String {
+    // A compile-time `--ini memory_limit` lowers the allocator's runtime ceiling below the
+    // reserved heap capacity. The runtime cache key includes the same value, so one cached
+    // object never serves two different limits.
+    let memory_limit = crate::codegen_support::memory_limit_bytes()
+        .map_or(heap_size, |limit| limit.min(heap_size));
     let mut out = String::new();
     out.push_str(".data\n");
     out.push_str(&format!("_native_debug_info_fatal:\n    .ascii {:?}\n", elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL));
-    out.push_str(&comm_directive("_concat_buf", heap_size.max(65_536), target));
+    // The scratch arena is bounded by the same capacity the runtime publishes: a
+    // `--heap-size` above 1 GiB must not reserve a second giant buffer, or the link
+    // exceeds AArch64's 4 GiB ADRP window.
+    out.push_str(&comm_directive(
+        "_concat_buf",
+        super::super::concat_scratch_capacity(heap_size),
+        target,
+    ));
     out.push_str(&comm_directive("_concat_off", 8, target));
     out.push_str(&comm_directive(super::WEB_STREAM_CLOSE_SLOT, 8, target));
     // User boundary code reads this value from its linked runtime, including cached objects.
@@ -450,6 +462,29 @@ pub(crate) fn emit_runtime_data_fixed(
     for (symbol, value) in [("_rt_warning_prefix", "Warning: "), ("_rt_notice_prefix", "Notice: "), ("_rt_deprecated_prefix", "Deprecated: ")] {
         out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{value}\"\n"));
     }
+    // -- ctype deprecation text and its kind-indexed function-name table --
+    for (symbol, value) in [
+        ("_ctype_deprecated_suffix", crate::codegen_support::runtime::strings::ctype::DEPRECATION_SUFFIX),
+        ("_ctype_deprecated_newline", crate::codegen_support::runtime::strings::ctype::NEWLINE),
+        ("_ctype_type_int", crate::codegen_support::runtime::strings::ctype::TYPE_INT),
+        ("_ctype_type_float", crate::codegen_support::runtime::strings::ctype::TYPE_FLOAT),
+        ("_ctype_type_bool", crate::codegen_support::runtime::strings::ctype::TYPE_BOOL),
+        ("_ctype_type_null", crate::codegen_support::runtime::strings::ctype::TYPE_NULL),
+        ("_ctype_type_array", crate::codegen_support::runtime::strings::ctype::TYPE_ARRAY),
+        ("_ctype_type_resource", crate::codegen_support::runtime::strings::ctype::TYPE_RESOURCE),
+        ("_ctype_type_closure", crate::codegen_support::runtime::strings::ctype::TYPE_CLOSURE),
+        ("_ctype_type_unknown", crate::codegen_support::runtime::strings::ctype::TYPE_UNKNOWN),
+    ] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii {value:?}\n"));
+    }
+    for (kind, prefix) in crate::codegen_support::runtime::strings::ctype::PREFIXES.iter().enumerate() {
+        let label = format!("_ctype_prefix_{kind}");
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {prefix:?}\n"));
+    }
+    out.push_str(".p2align 3\n.globl _ctype_deprecated_prefix_table\n_ctype_deprecated_prefix_table:\n");
+    for (kind, prefix) in crate::codegen_support::runtime::strings::ctype::PREFIXES.iter().enumerate() {
+        out.push_str(&format!("    .quad _ctype_prefix_{kind}\n    .quad {}\n", prefix.len()));
+    }
     out.push_str(&comm_directive("_exc_value", 8, target));
     out.push_str(&comm_directive("_fiber_current", 8, target));
     out.push_str(&comm_directive("_magic_set_guard_head", 8, target));
@@ -465,8 +500,11 @@ pub(crate) fn emit_runtime_data_fixed(
     // runs __rt_stack_limit_init keeps the pre-guard behavior. _stack_limit_main remembers
     // the OS-thread floor so __rt_fiber_switch can restore it when control leaves a fiber
     // stack; while a fiber runs, _stack_limit holds that fiber's own floor instead.
-    out.push_str(&comm_directive("_stack_limit", 8, target));
-    out.push_str(&comm_directive("_stack_limit_main", 8, target));
+    // These two are read by every compiled prologue, so keep them in `.data` near the
+    // text: a large `--heap-size` pushes `.comm` far enough that ADRP cannot reach the
+    // end of the common block from `__text` (a 2G heap already crosses the 4G window).
+    out.push_str(".p2align 3\n.globl _stack_limit\n_stack_limit:\n    .quad 0\n");
+    out.push_str(".p2align 3\n.globl _stack_limit_main\n_stack_limit_main:\n    .quad 0\n");
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_closure_bind_fn", 8, target));
     out.push_str(&comm_directive("_elephc_eval_wrap_callback_fn", 8, target));
@@ -491,6 +529,33 @@ pub(crate) fn emit_runtime_data_fixed(
     // elephc_probe_verify_fn: verifies a signed X-Elephc-Query header against the
     // embedded build key, so turning profiling on stays a privileged act.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_verify_fn"), 8, target));
+    // elephc_probe_apm_fn / elephc_probe_txn_fn: filled with elephc_probe_apm_enable
+    // and elephc_probe_note_transaction under --probe. The --web master calls the
+    // first when started with --apm; every request then records its status and
+    // wall time through the second. Zero without the probe, so a server asked for
+    // --apm by a binary that cannot count refuses to start instead of reporting
+    // nothing.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_apm_fn"), 8, target));
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_txn_fn"), 8, target));
+    // elephc_probe_apm_event_fn: filled with elephc_probe_apm_event under
+    // --probe; the exact runtime forwards database and network events through
+    // it, so --apm counts them per route in a combined build.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_apm_event_fn"), 8, target));
+    // elephc_probe_reap_fn: filled with elephc_probe_reap under --probe; the
+    // --web master calls it for every worker it reaps, so a request that died
+    // with its worker is counted as a server error under --apm.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_reap_fn"), 8, target));
+    // elephc_probe_settle_fn: filled with elephc_probe_settle_request under
+    // --probe; an isolated handler child calls it before clearing its route, so
+    // a new route's pending database and network work lands on the row its web
+    // worker counts the request under.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_settle_fn"), 8, target));
+    // elephc_probe_begin_fn / elephc_probe_end_fn: filled with
+    // elephc_probe_request_begin / elephc_probe_request_end under --probe; an
+    // isolated web worker marks each request it waits on as in flight, so the
+    // master counts them as server errors should the web worker itself die.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_begin_fn"), 8, target));
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_end_fn"), 8, target));
     // elephc_instr_throw_fn: filled with elephc_instr_throw under monitoring; the
     // single throw helper calls it so the profiler learns that an exception
     // unwound, and when. Without it the frames an exception passed through could
@@ -724,6 +789,8 @@ pub(crate) fn emit_runtime_data_fixed(
     ));
     out.push_str(&comm_directive("_php_exception_handler_stack", 8, target));
     out.push_str(&comm_directive("_json_last_error", 8, target));
+    out.push_str(&comm_directive("_preg_last_error", 8, target));
+    out.push_str(&comm_directive("_preg_exec_error", 8, target));
     out.push_str(&comm_directive("_json_active_flags", 8, target));
     out.push_str(&comm_directive("_json_active_depth", 8, target));
     out.push_str(&comm_directive("_json_indent_depth", 8, target));
@@ -755,6 +822,29 @@ pub(crate) fn emit_runtime_data_fixed(
     // starting user resources at 5 reproduces reference numbering end to end.
     out.push_str(".globl _resource_id_next\n_resource_id_next:\n    .quad 5\n");
     out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));
+    out.push_str(&format!(
+        ".globl _heap_limit\n_heap_limit:\n    .quad {}\n",
+        memory_limit
+    ));
+    // The startup ceiling is immutable: `ini_set('memory_limit', …)` only moves `_heap_limit`,
+    // and the web request boundary copies this value back so one request cannot cap the next.
+    out.push_str(&format!(
+        ".globl _heap_limit_startup\n_heap_limit_startup:\n    .quad {}\n",
+        memory_limit
+    ));
+    out.push_str(".globl _heap_fail_request\n_heap_fail_request:\n    .quad 0\n");
+    out.push_str(&format!(
+        ".globl _heap_fatal_prefix\n_heap_fatal_prefix:\n    .ascii {:?}\n",
+        super::HEAP_FATAL_PREFIX
+    ));
+    out.push_str(&format!(
+        ".globl _heap_fatal_middle\n_heap_fatal_middle:\n    .ascii {:?}\n",
+        super::HEAP_FATAL_MIDDLE
+    ));
+    out.push_str(&format!(
+        ".globl _heap_fatal_suffix\n_heap_fatal_suffix:\n    .ascii {:?}\n",
+        super::HEAP_FATAL_SUFFIX
+    ));
     out.push_str(".globl _heap_err_msg\n_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
     out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
     out.push_str(".globl _heap_dbg_double_free_msg\n_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
@@ -1284,7 +1374,7 @@ pub(crate) fn emit_runtime_data_fixed(
         out.push_str(&comm_directive(slot, 8, target));
     }
     // _elephc_random_mt_uniform_fn: indirect pointer to elephc_random_mt_uniform, published
-    // only at array_rand()/shuffle() call sites so the shared __rt_mt_uniform trampoline can
+    // only at shuffle() call sites so the shared __rt_mt_uniform trampoline can
     // consume the global Mt19937 state without a program that never shuffles linking the
     // random bridge.
     out.push_str(&comm_directive("_elephc_random_mt_uniform_fn", 8, target));
@@ -1907,12 +1997,26 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _locale_utf8_name\n_locale_utf8_name:\n    .asciz \"C.UTF-8\"\n");
     out.push_str(".globl _locale_env_name\n_locale_env_name:\n    .asciz \"\"\n");
     out.push_str(&system::emit_json_data());
+    out.push_str(&system::emit_preg_error_data());
     out.push_str(&system::emit_date_data());
     out.push_str(&system::emit_strtotime_data());
     out.push_str(&system::emit_pcntl_data());
     out.push_str(&emit_php_uname_data());
 
     out
+}
+
+/// Orders `_callable_builtin_table`: the strict-profile builtins first, then the rest, each
+/// range sorted the way `__rt_strcasecmp` orders names (ASCII-lowercased bytes, then length).
+///
+/// `__rt_is_callable_string` binary-searches each range, so a name resolves in a handful of
+/// comparisons instead of a scan over every builtin; a strict call site searches only the first.
+fn callable_builtin_table_order() -> Vec<&'static str> {
+    let strict_builtins: std::collections::HashSet<&'static str> =
+        supported_builtin_function_names_for_profile(true).into_iter().collect();
+    let mut builtins = all_supported_builtin_function_names();
+    builtins.sort_by_cached_key(|name| (!strict_builtins.contains(name), name.to_ascii_lowercase()));
+    builtins
 }
 
 /// Emit symbol data for all first-class-callable builtin functions.
@@ -1924,9 +2028,7 @@ pub(crate) fn emit_runtime_data_fixed(
 /// routine and callable-invoke paths.
 fn emit_builtin_callable_data(target: Target) -> String {
     let mut out = String::new();
-    let strict_builtins = supported_builtin_function_names_for_profile(true);
-    let mut builtins = all_supported_builtin_function_names();
-    builtins.sort_by_key(|name| !strict_builtins.contains(name));
+    let builtins = callable_builtin_table_order();
     for (idx, name) in builtins.iter().enumerate() {
         out.push_str(&format!(
             ".globl _callable_builtin_name_{0}\n_callable_builtin_name_{0}:\n    .ascii \"{1}\"\n",
@@ -1942,7 +2044,7 @@ fn emit_builtin_callable_data(target: Target) -> String {
     out.push_str(
         ".globl _callable_builtin_strict_count\n_callable_builtin_strict_count:\n",
     );
-    out.push_str(&format!("    .quad {}\n", strict_builtins.len()));
+    out.push_str(&format!("    .quad {}\n", supported_builtin_function_names_for_profile(true).len()));
     out.push_str(&comm_directive("_callable_strict_profile", 8, target));
     out.push_str(".globl _callable_builtin_table\n_callable_builtin_table:\n");
     for (idx, name) in builtins.iter().enumerate() {
@@ -1985,6 +2087,22 @@ fn emit_spl_autoload_extensions_data() -> String {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::{Arch, Platform};
+
+    /// Each range of the builtin callable table is sorted by `__rt_strcasecmp` order, which the
+    /// binary search in `__rt_is_callable_string` relies on, and the strict range comes first.
+    #[test]
+    fn callable_builtin_table_ranges_are_sorted_for_binary_search() {
+        let strict = supported_builtin_function_names_for_profile(true);
+        let order = callable_builtin_table_order();
+        let (head, tail) = order.split_at(strict.len());
+        assert!(head.iter().all(|name| strict.contains(name)));
+        for range in [head, tail] {
+            for pair in range.windows(2) {
+                let key = |name: &str| name.to_ascii_lowercase().into_bytes();
+                assert!(key(pair[0]) < key(pair[1]), "{} must sort before {}", pair[0], pair[1]);
+            }
+        }
+    }
 
     /// Every common symbol carries at least 8-byte alignment, while the heap keeps its
     /// allocator-wide 16-byte granule alignment.
@@ -2047,18 +2165,24 @@ mod tests {
         }
     }
 
-    /// Pins the symbol whose under-alignment broke linux-aarch64 linking, so a future
-    /// hand-written `.comm` for it cannot regress past the sweep above.
+    /// Pins the stack-guard symbols in `.data`, aligned, rather than in `.comm`.
+    ///
+    /// A large `--heap-size` pushes the end of the common block past AArch64's ±4 GiB
+    /// `ADRP` window; every compiled prologue reads `_stack_limit`, so it must stay near
+    /// the text. Under-alignment previously broke linux-aarch64 linking.
     #[test]
-    fn test_stack_limit_is_eight_byte_aligned_on_elf() {
+    fn test_stack_limit_symbols_live_in_aligned_data() {
         let asm = emit_runtime_data_fixed(
             8_388_608,
             Target::new(Platform::Linux, Arch::AArch64),
             PhpVersion::Php85,
         );
 
-        assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
-        assert!(asm.contains(".comm _stack_limit_main, 8, 8\n"));
+        assert!(asm.contains(".p2align 3\n.globl _stack_limit\n_stack_limit:\n    .quad 0\n"));
+        assert!(asm.contains(
+            ".p2align 3\n.globl _stack_limit_main\n_stack_limit_main:\n    .quad 0\n"
+        ));
+        assert!(!asm.contains(".comm _stack_limit,"));
     }
 
     /// Verifies the initial reporting mask follows PHP's version-specific `E_ALL` value.

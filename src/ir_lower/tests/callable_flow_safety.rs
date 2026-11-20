@@ -6,6 +6,8 @@
 //! - `cargo test` through the AST-to-EIR unit test module.
 //!
 //! Key details:
+//! - Fixtures declare `Closure` parameters, which keep the descriptor ABI these tests pin; a
+//!   declared `callable` keeps the PHP value it receives instead (`PhpType::DeclaredCallable`).
 //! - A checker-approved `Callable` parameter operand must already be a descriptor in EIR.
 //! - Descriptor invocations may walk Traversable spreads without direct-call specialization.
 //! - Container cleanup reaches user code only when its stored values can own objects or closures.
@@ -93,7 +95,7 @@ fn matching_branch_callable_arrays_lower_to_descriptors_on_every_target() {
 
     let source = r#"<?php
 class JoinedCallableTarget { public static function hit(): int { return 7; } }
-function consumeJoinedCallable(callable $callback): int { return $callback(); }
+function consumeJoinedCallable(Closure $callback): int { return $callback(); }
 function invokeJoinedCallable(int $choice): int {
     if ($choice > 0) {
         $callback = [JoinedCallableTarget::class, 'hit'];
@@ -150,7 +152,7 @@ fn preexisting_instance_callable_survives_an_untouched_join_on_every_target() {
 
     let source = r#"<?php
 class PrejoinedCallableTarget { public function hit(): int { return 7; } }
-function consumePrejoinedCallable(callable $callback): int { return $callback(); }
+function consumePrejoinedCallable(Closure $callback): int { return $callback(); }
 function invokePrejoinedCallable(int $choice): int {
     $callback = [new PrejoinedCallableTarget(), 'hit'];
     if ($choice > 0) { $marker = 1; } else { $marker = 2; }
@@ -197,7 +199,7 @@ fn callable_descriptor_spreads_lower_callable_operands_on_every_target() {
 
     let source = r#"<?php
 class SpreadDescriptorTarget { public static function hit(): int { return 9; } }
-function consumeSpreadDescriptor(callable $callback): int { return $callback(); }
+function consumeSpreadDescriptor(Closure $callback): int { return $callback(); }
 function invokeSpreadDescriptor(array $callbacks): int {
     return consumeSpreadDescriptor(...$callbacks);
 }
@@ -260,7 +262,7 @@ fn tracked_instance_callable_array_crosses_resolved_function_boundary_on_every_t
 
     let source = r#"<?php
 class ResolvedArrayTarget { public function hit(): int { return 11; } }
-function consumeResolvedArray(callable $callback): int { return $callback(); }
+function consumeResolvedArray(Closure $callback): int { return $callback(); }
 function invokeResolvedArray(): int {
     $callback = [new ResolvedArrayTarget(), 'hit'];
     return consumeResolvedArray($callback);
@@ -375,7 +377,7 @@ function joinDescriptorMarkers(DescriptorMarker $left, DescriptorMarker $right):
     return 'joined';
 }
 function invokeNamedDescriptor(
-    callable $callback,
+    Closure $callback,
     Traversable $values,
     DescriptorMarker $right,
 ): string {

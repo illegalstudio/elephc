@@ -65,6 +65,9 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
     local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
+    /// Frame cells a runtime-typed `min()`/`max()` selection fills when a number wins; any
+    /// other winner is an owned heap cell, so these values keep their generic consumers.
+    pub(super) guarded_cell_offsets: HashMap<ValueId, usize>,
     /// Frame cells owned by proven numeric locals for their raw scalar seed stores.
     pub(super) numeric_seed_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_local_slots: HashSet<LocalSlotId>,
@@ -75,6 +78,9 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) binding_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
     callable_reachability: CallableReachabilityAnalysis,
+    /// Runtime names a declared-`callable` conversion may resolve when provenance is open
+    /// (see `lower_elephc_normalize_callable`); `None` outside such a conversion.
+    pub(super) declared_callable_candidates: Option<Vec<String>>,
     /// Typed EIR adopters identify calls whose result remains a transferred reference cell.
     raw_reference_call_results: HashSet<ValueId>,
     current_inst: Option<InstId>,
@@ -220,6 +226,7 @@ impl<'a> FunctionContext<'a> {
             callee_saved_offsets: layout.callee_saved_offsets,
             local_offsets: layout.local_offsets,
             numeric_cell_offsets: layout.numeric_cell_offsets,
+            guarded_cell_offsets: layout.guarded_cell_offsets,
             numeric_seed_offsets: layout.numeric_seed_offsets,
             numeric_local_slots: layout.numeric_local_slots,
             numeric_frame_only_slots: layout.numeric_frame_only_slots,
@@ -228,6 +235,7 @@ impl<'a> FunctionContext<'a> {
             binding_state_offsets: layout.binding_state_offsets,
             local_analysis: layout.local_analysis,
             callable_reachability,
+            declared_callable_candidates: None,
             raw_reference_call_results: function.instructions.iter()
                 .filter(|inst| inst.op == Op::AdoptRefCellPtr)
                 .filter_map(|inst| inst.operands.first().copied()).collect(),
@@ -422,7 +430,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns the finite runtime callable names proven for one EIR value.
     pub(super) fn runtime_callable_candidates(&self, value: ValueId) -> Option<Vec<String>> {
-        self.callable_reachability.candidates(value)
+        self.callable_reachability
+            .candidates(value)
+            .or_else(|| self.declared_callable_candidates.clone())
     }
 
     /// Returns a function value or a structured backend error.

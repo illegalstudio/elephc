@@ -39,7 +39,7 @@ pub(crate) use native_selections::{
     native_selection_reference_receiver, native_selection_reference_receiver_type,
 };
 pub(crate) use union::{
-    runtime_int_binding_needs_diagnostics, runtime_scalar_param_binding,
+    runtime_int_binding_needs_diagnostics, runtime_reference_param_acceptance, runtime_scalar_param_binding,
     runtime_strict_param_acceptance, runtime_exact_param_acceptance, runtime_weak_int_param_acceptance,
 };
 
@@ -69,6 +69,32 @@ pub(crate) enum ParamBinding {
     ObjectGuard,
     /// No PHP parameter-binding rule applies; the caller keeps its existing diagnostic.
     Rejected,
+}
+
+/// Runtime acceptance classes carried by managed typed-property reference cells.
+///
+/// The codes are shared by EIR lowering, which selects one from the property's declared type,
+/// and the runtime guard, which enforces it before a callee write is coerced into the cell.
+pub(crate) const PROPERTY_REF_TYPE_INT: u8 = 1;
+pub(crate) const PROPERTY_REF_TYPE_STRING: u8 = 2;
+pub(crate) const PROPERTY_REF_TYPE_FLOAT: u8 = 3;
+pub(crate) const PROPERTY_REF_TYPE_BOOL: u8 = 4;
+pub(crate) const PROPERTY_REF_TYPE_FALSE: u8 = 5;
+pub(crate) const PROPERTY_REF_TYPE_ARRAY: u8 = 6;
+
+/// Returns the runtime acceptance class for a property that supports typed-reference writes.
+pub(crate) fn property_ref_type_code(ty: &PhpType) -> Option<u8> {
+    if matches!(ty, PhpType::False) {
+        return Some(PROPERTY_REF_TYPE_FALSE);
+    }
+    Some(match ty.codegen_repr() {
+        PhpType::Int | PhpType::Narrow(_) => PROPERTY_REF_TYPE_INT,
+        PhpType::Str => PROPERTY_REF_TYPE_STRING,
+        PhpType::Float => PROPERTY_REF_TYPE_FLOAT,
+        PhpType::Bool => PROPERTY_REF_TYPE_BOOL,
+        PhpType::Array(_) | PhpType::AssocArray { .. } => PROPERTY_REF_TYPE_ARRAY,
+        _ => return None,
+    })
 }
 
 /// Returns whether a property type can be written back from a boxed by-reference result.

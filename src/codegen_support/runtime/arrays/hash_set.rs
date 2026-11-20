@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
+//! - An ordinary overwrite stores the replacement BEFORE releasing the old value and never
+//!   touches the table afterwards: the release can run a destructor that reads, grows or
+//!   replaces the table, as PHP's own assignment order allows.
 //! - `__rt_hash_set` is the PHP element-assignment entry point. Overwriting an entry that
 //!   carries runtime value tag 11 writes through its managed reference cell: the previous cell
 //!   payload is released and the replacement is published to every alias in the set, so a live
@@ -243,21 +246,20 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_hash_set_release_any");                      // tags 4-7 all release through the uniform dispatcher
     emitter.instruction("b __rt_hash_set_write_value");                         // scalars/bools/floats do not need release before overwrite
 
+    // -- publish the replacement, then release the overwritten payload last --
+    // The release can run a destructor that reads, grows or replaces this very table, so the
+    // entry must already hold the replacement and nothing may touch the table afterwards.
     emitter.label("__rt_hash_set_release_any");
-    emitter.instruction("ldr x0, [x12, #24]");                                  // load the previous heap-backed value pointer from the entry
+    emitter.instruction("ldr x0, [x12, #24]");                                  // keep the previous heap-backed value pointer for the release below
+    emit_publish_replacement_aarch64(emitter);
     emitter.instruction("bl __rt_decref_any");                                  // release the overwritten payload through the uniform dispatcher
-    emitter.instruction("b __rt_hash_set_recompute_entry");                     // recompute the entry address after the release helper
+    emitter.instruction("b __rt_hash_set_done");                                // the entry already holds the replacement
 
     emitter.label("__rt_hash_set_release_callable");
-    emitter.instruction("ldr x0, [x12, #24]");                                  // load the previous callable descriptor pointer from the entry
+    emitter.instruction("ldr x0, [x12, #24]");                                  // keep the previous callable descriptor pointer for the release below
+    emit_publish_replacement_aarch64(emitter);
     emitter.instruction("bl __rt_callable_descriptor_release");                 // release the overwritten callable descriptor
-    emitter.instruction("b __rt_hash_set_recompute_entry");                     // recompute the entry address after the release helper
-
-    emitter.label("__rt_hash_set_recompute_entry");
-    emitter.instruction("ldr x5, [sp, #0]");                                    // reload hash table pointer after helper call
-    emitter.instruction("ldr x9, [sp, #48]");                                   // reload probe index after helper call
-    hash_layout::emit_entry_address(emitter, "x12", "x5", "x9");
-    emitter.instruction("b __rt_hash_set_write_value");                         // ordinary released payloads must not fall into reference-cell write-through
+    emitter.instruction("b __rt_hash_set_done");                                // the entry already holds the replacement
 
     // -- write through a boxed descriptor-invoker marker stored in a Mixed hash entry --
     persistent_references::emit_write(emitter);
@@ -375,12 +377,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_set_done");                                // value_lo, value_hi and value_tag keep describing the cell
 
     emitter.label("__rt_hash_set_write_value");
-    emitter.instruction("ldr x13, [sp, #24]");                                  // load value_lo
-    emitter.instruction("str x13, [x12, #24]");                                 // update value_lo in entry
-    emitter.instruction("ldr x13, [sp, #32]");                                  // load value_hi
-    emitter.instruction("str x13, [x12, #32]");                                 // update value_hi in entry
-    emitter.instruction("ldr x13, [sp, #40]");                                  // load value_tag
-    emitter.instruction("str x13, [x12, #40]");                                 // update value_tag in entry
+    emit_publish_replacement_aarch64(emitter);
 
     // -- tear down stack frame and return --
     emitter.label("__rt_hash_set_done");
@@ -390,6 +387,19 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 
     emit_hash_set_value_aarch64(emitter);
+}
+
+/// Writes the saved replacement payload and tag into the ARM64 entry addressed by `x12`.
+///
+/// Leaves `x0` untouched so an update can carry the overwritten payload across the store and
+/// release it only after the entry holds the replacement.
+fn emit_publish_replacement_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("ldr x13, [sp, #24]");                                  // load value_lo
+    emitter.instruction("str x13, [x12, #24]");                                 // update value_lo in entry
+    emitter.instruction("ldr x13, [sp, #32]");                                  // load value_hi
+    emitter.instruction("str x13, [x12, #32]");                                 // update value_hi in entry
+    emitter.instruction("ldr x13, [sp, #40]");                                  // load value_tag
+    emitter.instruction("str x13, [x12, #40]");                                 // update value_tag in entry
 }
 
 /// Emits the ARM64 `__rt_hash_set_value`, the bucket-replacing sibling of `__rt_hash_set`.
@@ -620,20 +630,22 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_hash_set_release_any_x");                     // arrays, hashes, objects, and boxed mixed values need release
     emitter.instruction("jmp __rt_hash_set_write_value_x");                     // scalar values own no heap payload
 
+    // -- publish the replacement, then release the overwritten payload last --
+    // The release can run a destructor that reads, grows or replaces this very table, so the
+    // entry must already hold the replacement and nothing may touch the table afterwards.
     emitter.label("__rt_hash_set_release_any_x");
-    emitter.instruction("mov rax, QWORD PTR [r12 + 24]");                       // pass the overwritten heap-backed payload to the uniform release dispatcher
-    emitter.instruction("call __rt_decref_any");                                // release the overwritten hash value before storing the replacement
-    emitter.instruction("jmp __rt_hash_set_recompute_entry_x");                 // recompute the entry address after the release helper
+    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // keep the overwritten heap-backed payload for the release below
+    emit_publish_replacement_x86_64(emitter);
+    emitter.instruction("mov rax, r14");                                        // pass the overwritten payload to the uniform release dispatcher
+    emitter.instruction("call __rt_decref_any");                                // release the overwritten hash value after storing the replacement
+    emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the entry already holds the replacement
 
     emitter.label("__rt_hash_set_release_callable_x");
-    emitter.instruction("mov rax, QWORD PTR [r12 + 24]");                       // pass the overwritten callable descriptor to the descriptor release helper
-    emitter.instruction("call __rt_callable_descriptor_release");               // release the overwritten callable descriptor before storing the replacement
-
-    emitter.label("__rt_hash_set_recompute_entry_x");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash-table pointer after the release helper clobbered caller-saved registers
-    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index for entry-address reconstruction
-    hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
-    emitter.instruction("jmp __rt_hash_set_write_value_x");                     // ordinary released payloads must not fall into reference-cell write-through
+    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // keep the overwritten callable descriptor for the release below
+    emit_publish_replacement_x86_64(emitter);
+    emitter.instruction("mov rax, r14");                                        // pass the overwritten descriptor to the descriptor release helper
+    emitter.instruction("call __rt_callable_descriptor_release");               // release the overwritten callable descriptor after storing the replacement
+    emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the entry already holds the replacement
 
     persistent_references::emit_write(emitter);
     emitter.label("__rt_hash_set_invoker_reference_write_x");
@@ -755,12 +767,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // value_lo, value_hi and value_tag keep describing the cell
 
     emitter.label("__rt_hash_set_write_value_x");
-    emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // reload the replacement low payload word for the existing key slot
-    emitter.instruction("mov QWORD PTR [r12 + 24], r13");                       // overwrite the stored low payload word in the existing hash entry
-    emitter.instruction("mov r13, QWORD PTR [rbp - 40]");                       // reload the replacement high payload word for the existing key slot
-    emitter.instruction("mov QWORD PTR [r12 + 32], r13");                       // overwrite the stored high payload word in the existing hash entry
-    emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // reload the replacement runtime value tag for the existing key slot
-    emitter.instruction("mov QWORD PTR [r12 + 40], r13");                       // overwrite the stored runtime value tag in the existing hash entry
+    emit_publish_replacement_x86_64(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged hash-table pointer after an in-place value update
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the update path
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the update path
@@ -770,6 +777,19 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller with the existing hash-table pointer in rax
 
     emit_hash_set_value_linux_x86_64(emitter);
+}
+
+/// Writes the saved replacement payload and tag into the x86_64 entry addressed by `r12`.
+///
+/// Uses only `r13` as scratch so an update can carry the overwritten payload in `r14` across
+/// the store and release it only after the entry holds the replacement.
+fn emit_publish_replacement_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // reload the replacement low payload word for the existing key slot
+    emitter.instruction("mov QWORD PTR [r12 + 24], r13");                       // overwrite the stored low payload word in the existing hash entry
+    emitter.instruction("mov r13, QWORD PTR [rbp - 40]");                       // reload the replacement high payload word for the existing key slot
+    emitter.instruction("mov QWORD PTR [r12 + 32], r13");                       // overwrite the stored high payload word in the existing hash entry
+    emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // reload the replacement runtime value tag for the existing key slot
+    emitter.instruction("mov QWORD PTR [r12 + 40], r13");                       // overwrite the stored runtime value tag in the existing hash entry
 }
 
 /// Emits the x86_64 `__rt_hash_set_value`, mirroring [`emit_hash_set_value_aarch64`].

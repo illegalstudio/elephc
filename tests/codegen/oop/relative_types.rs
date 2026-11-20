@@ -221,35 +221,59 @@ echo $reflected->newInstance()->n;
     assert_eq!(out, "5");
 }
 
-/// The REGRESSION test for `reflection_new_instance::constructor_signature_for_class_name`: a
-/// descendant of a class with a PRIVATE constructor, which is the only shape where the changed
-/// lookup differs from the direct one, because it is the only shape whose own `methods` map
-/// lacks the entry.
-///
-/// Measured both ways on this fixture: with the owner walk it prints `6` (the default is padded
-/// and the ancestor's constructor runs); reading the descendant's own map it prints `0` — no
-/// signature, so no padding and no constructor call at all, leaving the promoted property at
-/// its zero value.
-///
-/// NOTE ON THE SHAPE: php-src rejects this program outright with
-/// `Error: Call to private PrivOwner::__construct()`, because `newInstance()` enforces
-/// constructor visibility and elephc does not yet. That separate gap is what makes the shape
-/// reachable here at all. When it is closed this fixture should become a REJECTION test rather
-/// than being deleted — the lookup it pins is still the one doing the work, and it is what
-/// decides which class's constructor the visibility check will then be asked about.
+/// The REGRESSION test for `reflection_new_instance::constructor_signature_for_class_name`:
+/// Reflection `newInstance()` and `newInstanceArgs()` refuse private and protected
+/// constructors and, unlike a direct `new`, report a `ReflectionException` naming the reflected
+/// class. Reflection has no lexical-scope privilege, so the same refusal applies inside the
+/// declaring class.
 #[test]
-fn test_reflection_new_instance_resolves_an_inherited_private_constructor() {
+fn test_reflection_new_instance_rejects_an_inherited_private_constructor() {
     let out = compile_and_run(
         r#"<?php
 class PrivReflOwner {
     private function __construct(public int $n = 6) {}
+    public static function reflectFromInside(): string {
+        try {
+            (new ReflectionClass('PrivReflChild'))->newInstance();
+            return 'bad';
+        } catch (ReflectionException $error) {
+            return $error->getMessage();
+        }
+    }
 }
 class PrivReflChild extends PrivReflOwner {}
+class ProtReflOwner {
+    protected function __construct() {}
+}
+class ProtReflChild extends ProtReflOwner {}
 $reflected = new ReflectionClass('PrivReflChild');
-echo $reflected->newInstance()->n;
+try {
+    $reflected->newInstance();
+} catch (ReflectionException $error) {
+    echo $error->getMessage(), "\n";
+}
+$reflected = new ReflectionClass('ProtReflChild');
+try {
+    $reflected->newInstance();
+} catch (ReflectionException $error) {
+    echo $error->getMessage(), "\n";
+}
+$reflected = new ReflectionClass('PrivReflChild');
+try {
+    $reflected->newInstanceArgs([]);
+} catch (ReflectionException $error) {
+    echo $error->getMessage(), "\n";
+}
+echo PrivReflOwner::reflectFromInside(), "\n";
 "#,
     );
-    assert_eq!(out, "6");
+    assert_eq!(
+        out,
+        "Access to non-public constructor of class PrivReflChild\n\
+Access to non-public constructor of class ProtReflChild\n\
+Access to non-public constructor of class PrivReflChild\n\
+Access to non-public constructor of class PrivReflChild\n"
+    );
 }
 
 /// An inherited PUBLIC constructor with defaults is unaffected — the owner walk stops at the

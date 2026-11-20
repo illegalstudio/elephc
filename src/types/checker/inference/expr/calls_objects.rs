@@ -171,12 +171,6 @@ impl Checker {
             }
             ExprKind::ConstRef(name) => {
                 let constant_name = name.as_str().trim_start_matches('\\');
-                if constant_name == "MT_RAND_PHP" {
-                    self.warnings.push(crate::errors::CompileWarning::deprecation(
-                        expr.span,
-                        "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937",
-                    ));
-                }
                 if pcntl_int_constants(self.target)
                     .iter()
                     .any(|(constant, _)| *constant == constant_name)
@@ -370,9 +364,17 @@ impl Checker {
                 let object_type = self.infer_type(object, env)?;
                 let object_only = match &object_type {
                     PhpType::Object(_) => true,
+                    // PHP allows `$value::class` through a nullable object type; a null value
+                    // raises the same runtime error `get_class(null)` does, which the lowering
+                    // already reaches. A union with any other non-object member stays refused.
                     PhpType::Union(members) => {
                         !members.is_empty()
-                            && members.iter().all(|member| matches!(member, PhpType::Object(_)))
+                            && members.iter().all(|member| {
+                                matches!(
+                                    member,
+                                    PhpType::Object(_) | PhpType::Void | PhpType::Never
+                                )
+                            })
                     }
                     _ => false,
                 };

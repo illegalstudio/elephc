@@ -25,7 +25,7 @@ pub(crate) fn validate_use(profile: SemanticProfile, source: SourceMode, actual:
 
 /// Examines the logical outer view, leaving mixed container elements for their own consumers.
 fn dynamic_alternatives(ty: &PhpType) -> bool {
-    matches!(ty, PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar)
+    matches!(ty, PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar | PhpType::DeclaredCallable)
 }
 
 /// Applies the same resolved predicate to all alternatives without flattening class information.

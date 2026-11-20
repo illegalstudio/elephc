@@ -50,7 +50,12 @@ pub(super) fn emit_rooted_expr_call(
     let result_staging = prepublish_call_result(ctx, &result_type, span);
     let (callback, callback_owner) = root_owned_call_operand(ctx, callback, span);
     let mut operands = vec![callback.value];
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     operands.extend(lower_args_with_signature(ctx, signature, args));
+    let conversion_roots = root_unpublished_argument_conversions(ctx, &mut operands[1..], span);
+    // `ExprCall` can dispatch a first-class `__construct` callable; publish the invocation
+    // site's `strict_types` after the arguments are evaluated.
+    super::object_construction::publish_call_strictness(ctx, span);
     let call = ctx.emit_value(
         Op::ExprCall,
         operands,
@@ -60,6 +65,14 @@ pub(super) fn emit_rooted_expr_call(
         Some(span),
     );
     stage_call_result(ctx, result_staging.as_ref(), call, span);
+    for slot in conversion_roots.into_iter().rev() {
+        retire_owned_call_operand(ctx, slot, span);
+    }
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        span,
+    );
     if let Some(slot) = callback_owner {
         retire_owned_call_operand(ctx, slot, span);
     }
@@ -557,6 +570,9 @@ pub(super) fn emit_callable_descriptor_invoke(
     // or a separate retain of a prebuilt Mixed box. Root both raw and boxed
     // owners so a throw cannot bypass their EIR retirement.
     let (arg_container, container_owner) = root_owned_call_operand(ctx, arg_container, span);
+    // The descriptor may target a first-class `__construct` callable; php-src binds the
+    // invocation site's `strict_types`, so publish it once the arguments are evaluated.
+    super::object_construction::publish_call_strictness(ctx, span);
     let strict_types = ctx.builder.emit_const_bool(crate::source::current_strict_types());
     let result = emit_descriptor_invoker_value(
         ctx,

@@ -406,6 +406,8 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
         StmtKind::Return(None) => format!("{indent}return;"),
         StmtKind::Break(levels) => format!("{indent}break {levels};"),
         StmtKind::Continue(levels) => format!("{indent}continue {levels};"),
+        StmtKind::Goto(label) => format!("{indent}goto {label};"),
+        StmtKind::GotoLabel(name) => format!("{indent}{name}:"),
         StmtKind::Throw(value) => format!("{indent}throw {};", expression(value)),
         StmtKind::Echo(value) => format!("{indent}echo {};", expression(value)),
         // An assignment evaluated for its EFFECT is written bare. Wrapping it in parentheses
@@ -1267,9 +1269,11 @@ mod tests {
             &crate::version_prelude::version_declarations(
                 &["phpversion", "php_uname", "php_sapi_name"],
                 PhpVersion::Php85,
+                true,
             ),
         );
         round_trip("list_id", &crate::list_id_prelude::list_id_declarations());
+        round_trip("pcre", &crate::pcre_prelude::pcre_declarations());
         for version in PhpVersion::ALL {
             round_trip(
                 "pdo",
@@ -1297,7 +1301,7 @@ mod tests {
             );
             round_trip(
                 "web",
-                &crate::web_prelude::build::web_declarations(version, &[]),
+                &crate::web_prelude::build::web_declarations(version, &[], crate::web_prelude::SuperglobalNeeds::ALL),
             );
         }
         round_trip("web wrapper", &vec![crate::web_prelude::web_wrap_stmt()]);

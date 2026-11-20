@@ -2,7 +2,7 @@
 //! Exercises Core global constants through native code and opaque eval.
 //!
 //! Called from:
-//! - The `codegen_tests` integration test harness.
+//! - The `codegen_tests_data` integration test harness.
 //!
 //! Key details:
 //! - Expected values follow the pinned PHP baseline rather than the compiler catalog.
@@ -135,4 +135,41 @@ echo ":", defined("upload_err_ok") ? "bad" : "case";' . ' // ' . $argc;
 eval($source);
 "#);
     assert_eq!(out, "15:112:8:8:yes:case");
+}
+
+/// `E_STRICT` is deprecated since PHP 8.4: a bare read and `constant("E_STRICT")` each raise
+/// `E_DEPRECATED` with php-src's message at the read's line and still yield 2048.
+#[test]
+fn test_e_strict_read_deprecation() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", $message, " @", $line, "\n";
+    return true;
+});
+echo E_STRICT, "\n";
+echo constant("E_STRICT"), "\n";
+"#,
+    );
+    let notice = "[8192] Constant E_STRICT is deprecated since 8.4, the error level was removed";
+    assert_eq!(out, format!("{notice} @6\n2048\n{notice} @7\n2048\n"));
+}
+
+/// `eval()` reports the deprecated `E_STRICT` and `SUNFUNCS_RET_DOUBLE` reads like compiled code.
+#[test]
+fn test_e_strict_and_sunfuncs_eval_read_deprecations() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo "[", $level, "] ", $message, "\n";
+    return true;
+});
+echo eval('return E_STRICT;'), "\n";
+echo eval('return SUNFUNCS_RET_DOUBLE;'), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "[8192] Constant E_STRICT is deprecated since 8.4, the error level was removed\n2048\n[8192] Constant SUNFUNCS_RET_DOUBLE is deprecated since 8.4, as date_sunrise() and date_sunset() were deprecated in 8.1\n2\n"
+    );
 }

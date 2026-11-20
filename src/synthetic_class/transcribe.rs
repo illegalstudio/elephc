@@ -26,8 +26,8 @@
 //!   (`synthetic_class::unread_params`), so it cannot disagree with what `build()` would do.
 
 use crate::parser::ast::{
-    AttributeGroup, BinOp, CType, CastType, Expr, ExprKind, Program, StaticReceiver, Stmt,
-    StmtKind, TypeExpr, Visibility,
+    AttributeGroup, BinOp, CType, CastType, Expr, ExprKind, Program, StaticReceiver,
+    Stmt, StmtKind, TypeExpr, Visibility,
 };
 use crate::synthetic_class::unread_params;
 
@@ -751,24 +751,39 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             receiver,
             property,
             value,
-        } => format!(
-            "s_static_prop_array_push({}, {}, {})",
-            lit(&static_receiver_name(receiver)),
-            lit(property),
-            expr(value, depth)
-        ),
+        } => match receiver {
+            StaticReceiver::Self_ => format!(
+                "s_self_static_prop_array_push({}, {})",
+                lit(property),
+                expr(value, depth)
+            ),
+            other => format!(
+                "s_static_prop_array_push({}, {}, {})",
+                lit(&static_receiver_name(other)),
+                lit(property),
+                expr(value, depth)
+            ),
+        },
         StmtKind::StaticPropertyArrayAssign {
             receiver,
             property,
             index,
             value,
-        } => format!(
-            "s_static_prop_array_assign({}, {}, {}, {})",
-            lit(&static_receiver_name(receiver)),
-            lit(property),
-            expr(index, depth),
-            expr(value, depth)
-        ),
+        } => match receiver {
+            StaticReceiver::Self_ => format!(
+                "s_self_static_prop_array_assign({}, {}, {})",
+                lit(property),
+                expr(index, depth),
+                expr(value, depth)
+            ),
+            other => format!(
+                "s_static_prop_array_assign({}, {}, {}, {})",
+                lit(&static_receiver_name(other)),
+                lit(property),
+                expr(index, depth),
+                expr(value, depth)
+            ),
+        },
         StmtKind::DoWhile { body, condition } => format!(
             "s_do_while({}, {})",
             stmt_vec(body, depth),
@@ -898,6 +913,45 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             )
         }
         StmtKind::Synthetic(body) => format!("s_synthetic({})", stmt_vec(body, depth)),
+        StmtKind::EnumDecl {
+            name,
+            generics,
+            backing_type,
+            cases,
+            implements,
+            trait_uses,
+            methods,
+            constants,
+        } => {
+            assert!(generics.is_none(), "generic enums are not modelled");
+            assert!(backing_type.is_none(), "backed enums are not modelled");
+            assert!(implements.is_empty(), "enum interfaces are not modelled");
+            assert!(trait_uses.is_empty(), "enum traits are not modelled");
+            assert!(methods.is_empty(), "enum methods are not modelled");
+            assert!(constants.is_empty(), "enum constants are not modelled");
+            let cases = cases
+                .iter()
+                .map(|case| {
+                    assert!(case.value.is_none(), "backed enum cases are not modelled");
+                    assert!(case.attributes.is_empty(), "enum case attributes are not modelled");
+                    format!(
+                        "EnumCaseDecl {{ name: {}.to_string(), value: None, span: Span::dummy(), attributes: Vec::new() }}",
+                        lit(&case.name)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "Stmt::new(StmtKind::EnumDecl {{ name: {}.to_string(), generics: None, backing_type: None, cases: vec![{}], implements: Vec::new(), trait_uses: Vec::new(), methods: Vec::new(), constants: Vec::new() }}, Span::dummy())",
+                lit(name),
+                cases
+            )
+        }
+        StmtKind::NestedArrayAssign { target, value } => format!(
+            "Stmt::new(StmtKind::NestedArrayAssign {{ target: {}, value: {} }}, Span::dummy())",
+            expr(target, depth),
+            expr(value, depth)
+        ),
         other => panic!("transcribe: unmodelled statement {:?}", other),
     }
 }
@@ -930,6 +984,7 @@ fn expr(value: &Expr, depth: usize) -> String {
         ExprKind::Negate(inner) => format!("e_neg({})", expr(inner, depth)),
         ExprKind::Not(inner) => format!("e_not({})", expr(inner, depth)),
         ExprKind::ErrorSuppress(inner) => format!("e_error_suppress({})", expr(inner, depth)),
+        ExprKind::Clone(inner) => format!("e_clone({})", expr(inner, depth)),
         ExprKind::Cast { target, expr: inner } => format!(
             "e_cast(CastType::{}, {})",
             cast_type(target),
@@ -1460,9 +1515,15 @@ class Demo implements Iterator {
     const MODE = 2;
     private int $handle;
     private $target;
+    private static array $items = [];
     public function __construct(int $handle) {
         $this->handle = $handle;
         $this->target = null;
+    }
+    public static function collect(): void {
+        self::$items[] = 1;
+        self::$items[0] = 2;
+        @file_get_contents("missing");
     }
     private function fail(string $message): void {
         if ($this->handle == 2) {
@@ -1517,6 +1578,9 @@ function demo_match($value) {
             "e_null_coalesce",
             "s_for(",
             "s_foreach(",
+            "s_self_static_prop_array_push(",
+            "s_self_static_prop_array_assign(",
+            "e_error_suppress(",
             "e_ternary(",
             "e_match(e_var(\"value\"), vec![(vec![e_int(1), e_int(2)], e_str(\"one\"))], Some(e_match(e_var(\"value\"), vec![], None)))",
             "t_union(vec![TypeExpr::Str, TypeExpr::Bool])",

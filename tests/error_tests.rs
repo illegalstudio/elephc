@@ -2,7 +2,7 @@
 //! Diagnostic test root wiring and shared helpers for compile-time error reporting suites.
 //!
 //! Called from:
-//! - `cargo test` through Rust's test harness.
+//! - `cargo test --test integration error_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Helpers run frontend checks over inline or multi-file PHP fixtures and assert reported diagnostics.
@@ -62,6 +62,9 @@ fn check_source_with_defines_and_options(
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
     let ast = elephc::conditional::apply(ast, &define_set);
+    // Mirrors `source::finalize_physical_program`: `goto` is lowered per physical file.
+    let ast = elephc::goto_lowering::lower_program(ast, "test.php")
+        .map_err(|error| error.message.clone())?;
     let ast = elephc::autoload::collect_aliases(ast).map_err(|error| error.message)?;
     // Mirrors `pipeline::compile`: the hash prelude declares `HashContext` and the
     // `hash_*` context wrappers, and is injected between alias collection and name
@@ -70,7 +73,7 @@ fn check_source_with_defines_and_options(
     // arity diagnostics. Injection is gated on usage, so no other test is affected.
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::core_prelude::inject_if_used(ast, false, false, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -78,6 +81,7 @@ fn check_source_with_defines_and_options(
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::pcre_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     // Mirrors `pipeline::compile`: the object-cast prelude is injected past name resolution,
@@ -108,7 +112,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::autoload::collect_aliases(ast)?;
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::core_prelude::inject_if_used(ast, false, false, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -116,6 +120,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::pcre_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
@@ -316,6 +321,8 @@ mod property_default_scope;
 mod generics_review;
 #[path = "error_tests/typed_object_arrays.rs"]
 mod typed_object_arrays;
+#[path = "error_tests/list_hash_param_binding.rs"]
+mod list_hash_param_binding;
 #[path = "error_tests/extensions.rs"]
 mod extensions;
 #[path = "error_tests/buffer_merges.rs"]

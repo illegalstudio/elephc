@@ -764,7 +764,13 @@ fn collect_type_guarded_block(
     depth: u32,
     facts: &mut Facts,
 ) {
-    let guarded = type_guard_subject(condition);
+    // `instanceof <Template>` does not narrow to the template's member-less marker (see
+    // `Checker::guard_narrowing`), and what it narrows to depends on the local's current type,
+    // which this syntactic scan does not know. Not recognising it costs at most a spurious
+    // warning, never a missing mark.
+    let guarded = type_guard_subject(condition).filter(|(_, target)| {
+        !matches!(target, PhpType::Object(class) if checker.names_generic_template(class))
+    });
     if let Some((name, target)) = &guarded {
         let region = facts.guard_regions.len();
         facts.guard_regions.push(GuardRegion {
@@ -1090,6 +1096,8 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
         | StmtKind::ExternGlobalDecl { .. }
         // Leaves: no sub-statements and no sub-expressions.
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::NamespaceDecl { .. }

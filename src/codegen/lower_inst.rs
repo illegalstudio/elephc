@@ -292,6 +292,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::IShl => arithmetic::lower_int_shift(ctx, &inst, true),
         Op::IShrA => arithmetic::lower_int_shift(ctx, &inst, false),
         Op::MixedNumericBinop => arithmetic::lower_mixed_numeric_binop(ctx, &inst),
+        Op::MixedMinMax => arithmetic::min_max::lower_mixed_min_max(ctx, &inst),
         Op::StrIncDec => strings::lower_str_inc_dec(ctx, &inst),
         Op::FAdd => floats::lower_float_binop(ctx, &inst, "fadd", "addsd"),
         Op::FSub => floats::lower_float_binop(ctx, &inst, "fsub", "subsd"),
@@ -423,6 +424,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::PropSet => objects::lower_prop_set(ctx, &inst),
         Op::PropUnset => objects::lower_prop_unset(ctx, &inst),
         Op::DynamicPropSet => objects::lower_dynamic_prop_set(ctx, &inst),
+        Op::ReferenceArgumentTypeError => {
+            objects::lower_reference_argument_type_error(ctx, &inst)
+        }
         Op::DynamicPropUnset => objects::lower_dynamic_prop_unset_runtime(ctx, &inst),
         Op::InstanceOf => objects::lower_instanceof(ctx, &inst),
         Op::InstanceOfDynamic => objects::lower_instanceof_dynamic(ctx, &inst),
@@ -523,6 +527,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ErrorSuppressEnd => lower_runtime_void_call(ctx, "__rt_diag_pop_suppression"),
         Op::IncludeOnceMark => lower_include_once_mark(ctx, &inst),
         Op::IncludeOnceGuard => lower_include_once_guard(ctx, &inst),
+        Op::IncludeOnceTest => lower_include_once_test(ctx, &inst),
         Op::FunctionVariantDispatch => Ok(()),
         Op::FunctionVariantMark => lower_function_variant_mark(ctx, &inst),
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),

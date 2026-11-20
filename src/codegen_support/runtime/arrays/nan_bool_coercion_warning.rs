@@ -46,13 +46,31 @@ use crate::codegen_support::sentinels::{NULL_SENTINEL, UNINITIALIZED_TYPED_PROPE
 /// captured from PHP 8.5.6 with `php -d xdebug.mode=off`:
 /// `unexpected NAN value was coerced to bool`. elephc does not synthesize the
 /// ` in <file> on line <n>` tail that php-src appends.
-pub const NAN_BOOL_COERCION_MESSAGES: &[(&str, &str)] = &[(
-    "_diag_nan_coerced_bool",
-    "Warning: unexpected NAN value was coerced to bool\n",
-)];
+pub const NAN_BOOL_COERCION_MESSAGES: &[(&str, &str)] = &[
+    ("_diag_nan_coerced_bool", "Warning: unexpected NAN value was coerced to bool\n"),
+    // php-src's matching E_WARNING when a NAN is coerced to string (`(string)`, `echo`, `.`,
+    // interpolation, `strval()`, a string parameter of a builtin), captured from PHP 8.5.10.
+    ("_diag_nan_coerced_string", "Warning: unexpected NAN value was coerced to string\n"),
+];
 
-/// The `.data` symbol holding the NAN-to-bool warning literal.
-const NAN_BOOL_COERCION_SYMBOL: &str = "_diag_nan_coerced_bool";
+/// One NAN coercion diagnostic: the helper's global label and the `.data` symbol of its message.
+#[derive(Clone, Copy)]
+struct NanCoercion {
+    helper: &'static str,
+    symbol: &'static str,
+}
+
+/// The NAN-to-bool coercion warning.
+const NAN_TO_BOOL: NanCoercion = NanCoercion {
+    helper: "__rt_warn_nan_coerced_bool",
+    symbol: "_diag_nan_coerced_bool",
+};
+
+/// The NAN-to-string coercion warning.
+const NAN_TO_STRING: NanCoercion = NanCoercion {
+    helper: "__rt_warn_nan_coerced_string",
+    symbol: "_diag_nan_coerced_string",
+};
 
 /// Returns the byte length of the message stored under `symbol`.
 ///
@@ -96,14 +114,22 @@ pub fn nan_bool_coercion_warning_enabled() -> bool {
 /// incoming float, so the helper can be dropped into any lowering context without disturbing
 /// live values.
 pub fn emit_nan_bool_coercion_warning(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_nan_bool_coercion_warning_x86_64(emitter);
-        return;
+    for coercion in [NAN_TO_BOOL, NAN_TO_STRING] {
+        if emitter.target.arch == Arch::X86_64 {
+            emit_nan_coercion_warning_x86_64(emitter, coercion);
+        } else {
+            emit_nan_coercion_warning_aarch64(emitter, coercion);
+        }
     }
+}
 
+/// AArch64 implementation of one NAN coercion warning helper (see
+/// `emit_nan_bool_coercion_warning` for the ABI).
+fn emit_nan_coercion_warning_aarch64(emitter: &mut Emitter, coercion: NanCoercion) {
+    let done = format!("{}_done", coercion.helper);
     emitter.blank();
-    emitter.comment("--- runtime: nan_bool_coercion_warning ---");
-    emitter.label_global("__rt_warn_nan_coerced_bool");
+    emitter.comment(&format!("--- runtime: {} ---", coercion.helper));
+    emitter.label_global(coercion.helper);
     emitter.instruction("stp x29, x30, [sp, #-64]!");                           // preserve frame linkage across the diagnostic call
     emitter.instruction("mov x29, sp");                                         // establish a stable warning helper frame
     emitter.instruction("stp x0, x1, [sp, #16]");                               // keep the helper clobber-free for arbitrary truthiness call sites
@@ -115,16 +141,16 @@ pub fn emit_nan_bool_coercion_warning(emitter: &mut Emitter) {
     emitter.instruction("fmov x9, d0");                                         // reinterpret the coerced float as raw bits for the sentinel guards
     abi::emit_load_int_immediate(emitter, "x10", NULL_SENTINEL);
     emitter.instruction("cmp x9, x10");                                         // is this a missed read's in-band null rather than a user NAN?
-    emitter.instruction("b.eq __rt_warn_nan_coerced_bool_done");                // php reports Undefined array key for that, never the NAN warning
+    emitter.instruction(&format!("b.eq {done}"));                               // php reports Undefined array key for that, never the NAN warning
     abi::emit_load_int_immediate(emitter, "x10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp x9, x10");                                         // is this an uninitialized typed property rather than a user NAN?
-    emitter.instruction("b.eq __rt_warn_nan_coerced_bool_done");                // php reports a must-not-be-accessed Error for that instead
+    emitter.instruction(&format!("b.eq {done}"));                               // php reports a must-not-be-accessed Error for that instead
 
-    abi::emit_symbol_address(emitter, "x1", NAN_BOOL_COERCION_SYMBOL);
-    emitter.instruction(&format!("mov x2, #{}", message_len(NAN_BOOL_COERCION_SYMBOL))); // pass the complete NAN coercion warning length
+    abi::emit_symbol_address(emitter, "x1", coercion.symbol);
+    emitter.instruction(&format!("mov x2, #{}", message_len(coercion.symbol))); // pass the complete NAN coercion warning length
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the PHP NAN coercion warning
 
-    emitter.label("__rt_warn_nan_coerced_bool_done");
+    emitter.label(&done);
     emitter.instruction("ldr d0, [sp, #56]");                                   // restore the float the caller still has to compare
     emitter.instruction("ldr x10, [sp, #48]");                                  // restore the suppression-depth scratch register
     emitter.instruction("ldp x2, x9, [sp, #32]");                               // restore the diagnostic argument and scratch registers
@@ -142,10 +168,11 @@ pub fn emit_nan_bool_coercion_warning(emitter: &mut Emitter) {
 /// The frame is `push rbp` + `sub rsp, 80`: entry leaves `rsp ≡ 8 (mod 16)`, the push makes it
 /// `≡ 0`, and 80 is a multiple of 16, so `__rt_diag_warning` observes the `rsp ≡ 8 (mod 16)`
 /// that System V requires at a callee's first instruction.
-fn emit_nan_bool_coercion_warning_x86_64(emitter: &mut Emitter) {
+fn emit_nan_coercion_warning_x86_64(emitter: &mut Emitter, coercion: NanCoercion) {
+    let done = format!("{}_done_linux_x86_64", coercion.helper);
     emitter.blank();
-    emitter.comment("--- runtime: nan_bool_coercion_warning ---");
-    emitter.label_global("__rt_warn_nan_coerced_bool");
+    emitter.comment(&format!("--- runtime: {} ---", coercion.helper));
+    emitter.label_global(coercion.helper);
     emitter.instruction("push rbp");                                            // preserve the caller frame and align the diagnostic call
     emitter.instruction("mov rbp, rsp");                                        // establish a stable warning helper frame
     emitter.instruction("sub rsp, 80");                                         // reserve the clobber-free save area, keeping the 16-byte alignment
@@ -162,16 +189,16 @@ fn emit_nan_bool_coercion_warning_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movq rax, xmm0");                                      // reinterpret the coerced float as raw bits for the sentinel guards
     abi::emit_load_int_immediate(emitter, "rcx", NULL_SENTINEL);
     emitter.instruction("cmp rax, rcx");                                        // is this a missed read's in-band null rather than a user NAN?
-    emitter.instruction("je __rt_warn_nan_coerced_bool_done_linux_x86_64");     // php reports Undefined array key for that, never the NAN warning
+    emitter.instruction(&format!("je {done}"));                                 // php reports Undefined array key for that, never the NAN warning
     abi::emit_load_int_immediate(emitter, "rcx", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp rax, rcx");                                        // is this an uninitialized typed property rather than a user NAN?
-    emitter.instruction("je __rt_warn_nan_coerced_bool_done_linux_x86_64");     // php reports a must-not-be-accessed Error for that instead
+    emitter.instruction(&format!("je {done}"));                                 // php reports a must-not-be-accessed Error for that instead
 
-    abi::emit_symbol_address(emitter, "rdi", NAN_BOOL_COERCION_SYMBOL);
-    emitter.instruction(&format!("mov esi, {}", message_len(NAN_BOOL_COERCION_SYMBOL))); // pass the complete NAN coercion warning length
+    abi::emit_symbol_address(emitter, "rdi", coercion.symbol);
+    emitter.instruction(&format!("mov esi, {}", message_len(coercion.symbol))); // pass the complete NAN coercion warning length
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // emit or suppress the PHP NAN coercion warning
 
-    emitter.label("__rt_warn_nan_coerced_bool_done_linux_x86_64");
+    emitter.label(&done);
     emitter.instruction("movsd xmm0, QWORD PTR [rsp+56]");                      // restore the float the caller still has to compare
     emitter.instruction("mov r11, QWORD PTR [rsp+48]");                         // restore the syscall-destroyed r11
     emitter.instruction("mov r10, QWORD PTR [rsp+40]");                         // restore the suppression-depth scratch register
@@ -199,8 +226,15 @@ fn emit_nan_bool_coercion_warning_x86_64(emitter: &mut Emitter) {
 /// architectures' self-compare tests: AArch64 sets `V` on unordered (`b.vc` skips), x86_64 sets
 /// `PF` on unordered (`jnp` skips).
 pub fn emit_nan_bool_coercion_probe(emitter: &mut Emitter, skip_label: &str) {
-    emit_probe(emitter, skip_label, false);
+    emit_probe(emitter, skip_label, false, NAN_TO_BOOL);
 }
+
+/// `emit_nan_bool_coercion_probe` for a NAN coerced to string: guards a call to
+/// `__rt_warn_nan_coerced_string` with the same inline self-compare, ahead of `__rt_ftoa`.
+pub fn emit_nan_string_coercion_probe(emitter: &mut Emitter, skip_label: &str) {
+    emit_probe(emitter, skip_label, false, NAN_TO_STRING);
+}
+
 
 /// `emit_nan_bool_coercion_probe` for a LEAF runtime helper that has not built a frame.
 ///
@@ -210,11 +244,11 @@ pub fn emit_nan_bool_coercion_probe(emitter: &mut Emitter, skip_label: &str) {
 /// `rsp ≡ 8 (mod 16)`, but `call` requires `rsp ≡ 0` at the call instruction). This variant
 /// brackets the call with a 16-byte save that fixes both.
 pub fn emit_nan_bool_coercion_probe_leaf(emitter: &mut Emitter, skip_label: &str) {
-    emit_probe(emitter, skip_label, true);
+    emit_probe(emitter, skip_label, true, NAN_TO_BOOL);
 }
 
 /// Shared body of the two probe entry points; `leaf` requests the link-register/alignment save.
-fn emit_probe(emitter: &mut Emitter, skip_label: &str, leaf: bool) {
+fn emit_probe(emitter: &mut Emitter, skip_label: &str, leaf: bool, coercion: NanCoercion) {
     if !nan_bool_coercion_warning_enabled() {
         return;
     }
@@ -234,7 +268,7 @@ fn emit_probe(emitter: &mut Emitter, skip_label: &str, leaf: bool) {
             }
         }
     }
-    abi::emit_call_label(emitter, "__rt_warn_nan_coerced_bool");                // report PHP 8.5's NAN-to-bool coercion warning
+    abi::emit_call_label(emitter, coercion.helper);                             // report PHP 8.5's NAN coercion warning
     if leaf {
         match emitter.target.arch {
             Arch::AArch64 => {

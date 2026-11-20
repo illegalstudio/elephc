@@ -33,8 +33,30 @@ pub(in crate::optimize) fn fold_params(
 )> {
     params
         .into_iter()
-        .map(|(name, type_expr, default, is_ref)| (name, type_expr, default.map(fold_expr), is_ref))
+        .map(|(name, type_expr, default, is_ref)| (name, type_expr, default.map(fold_parameter_default), is_ref))
         .collect()
+}
+
+thread_local! {
+    /// Set while a parameter default is folded (see [`fold_parameter_default`]).
+    static FOLDING_PARAMETER_DEFAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Folds a parameter default as php-src's `zend_eval_const_expr` does: a conditional whose
+/// condition does not fold keeps its branches as written. Whether a branch was folded decides
+/// whether its value is an interned or immutable literal, which `RECV_INIT` caches, or one
+/// built on each call (`crate::ir_lower::initializer_reads::parameter_default_is_refcounted`).
+fn fold_parameter_default(default: Expr) -> Expr {
+    let previous = FOLDING_PARAMETER_DEFAULT.with(|flag| flag.replace(true));
+    let folded = fold_expr(default);
+    FOLDING_PARAMETER_DEFAULT.with(|flag| flag.set(previous));
+    folded
+}
+
+/// Reports whether a conditional with folded condition `condition` keeps its branches as
+/// written: inside a parameter default, when the condition is not a literal.
+fn keeps_conditional_branches(condition: &Expr) -> bool {
+    FOLDING_PARAMETER_DEFAULT.with(|flag| flag.get()) && super::scalar::scalar_value(condition).is_none()
 }
 
 /// Folds default expressions in a class property declaration.
@@ -162,6 +184,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::Print(inner) => ExprKind::Print(Box::new(fold_expr(*inner))),
         ExprKind::NullCoalesce { value, default } => {
             let value = fold_expr(*value);
+            if keeps_conditional_branches(&value) {
+                return Expr::new(ExprKind::NullCoalesce { value: Box::new(value), default }, span);
+            }
             let default = fold_expr(*default);
             try_fold_null_coalesce(&value, &default).unwrap_or_else(|| ExprKind::NullCoalesce {
                 value: Box::new(value),
@@ -339,6 +364,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             else_expr,
         } => {
             let condition = fold_expr(*condition);
+            if keeps_conditional_branches(&condition) {
+                return Expr::new(ExprKind::Ternary { condition: Box::new(condition), then_expr, else_expr }, span);
+            }
             let then_expr = fold_expr(*then_expr);
             let else_expr = fold_expr(*else_expr);
             try_fold_ternary(&condition, &then_expr, &else_expr).unwrap_or_else(|| {
@@ -351,6 +379,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         }
         ExprKind::ShortTernary { value, default } => {
             let value = fold_expr(*value);
+            if keeps_conditional_branches(&value) {
+                return Expr::new(ExprKind::ShortTernary { value: Box::new(value), default }, span);
+            }
             let default = fold_expr(*default);
             try_fold_short_ternary(&value, &default).unwrap_or_else(|| ExprKind::ShortTernary {
                 value: Box::new(value),

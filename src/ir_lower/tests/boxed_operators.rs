@@ -87,7 +87,7 @@ fn strict_boxed_operator_helpers_preserve_caller_policy_on_all_targets() {
     program.extend(crate::parser::parse_with_mode(&crate::lexer::tokenize(&internal).unwrap(), SourceMode::Internal).unwrap());
     program.extend(crate::parser::parse(&crate::lexer::tokenize("<?php $number = new BcMath\\Number('2');").unwrap()).unwrap());
     let mut inventory = crate::optimize::reachability::PreludeInventory::new();
-    let program = crate::core_prelude::inject_if_used(program, &mut inventory);
+    let program = crate::core_prelude::inject_if_used(program, false, false, &mut inventory);
     let program = crate::bcmath_prelude::inject_if_used(program, false, &mut inventory);
     let program = crate::name_resolver::resolve(program).unwrap();
     for feature in [StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions] {

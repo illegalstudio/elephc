@@ -177,13 +177,16 @@ including ordinary builtin calls, are `UnresolvedCall` gaps. The tree
 walker then runs the whole fragment. Effects, declarations, and scope writes
 still run on every execution; only the executable form is cached.
 
-The staged Mixed guarantee selects the walker before executable-cache lookup,
+The Mixed guarantee selects the walker before executable-cache lookup,
 including calls into functions whose bodies already have bytecode. Its scalar
 consumers carry logical source alternatives and predicate-derived views with
 owned operands. Bytecode values currently carry storage metadata without those
 proofs. The shared selector records the execution mode at both entry paths.
-Mixed remains excluded from public admission while its remaining consumers and
-native source channels are completed.
+
+A program defines its top-level functions before its first statement
+(`define_program_functions` emits their `DefineFn` instructions first), matching
+the early binding the tree walker performs at program entry. A function declared
+inside a block or another function is defined when its instruction is reached.
 
 The cache is keyed by the eval source bytes (64 KiB, 256 entries, including
 gaps) and is separate from the parse cache. A frame records the resume
@@ -609,8 +612,14 @@ PHPDoc inheritance edits match the complete written parent name within the tag's
 Runtime dispatch borrows arguments after their single source-order evaluation, completes bindings,
 checks bounds, and replays a concrete ordinary declaration. Functions and classes enter the normal
 context registries; method specializations are cached by declaring class and concrete method name.
-Eval and included-program entry share strict-PHP checks, CLI-global seeding, and direct
-template hoisting through `execute_program_statements`.
+Eval and included-program entry share strict-PHP checks, CLI-global seeding, direct
+template hoisting, and early binding through `execute_program_statements`.
+Early binding (`statements/early_binding.rs`) declares, before the first statement, the
+top-level functions and the class, interface and trait shapes PHP links at compile time, and
+returns per-statement flags so execution and resumed jumps skip them. Binding evaluates no
+member (constants and defaults are evaluated at their first use), and it is the moment a class
+copies its parent's default table (`eval_record_declaration_snapshot`): program entry for a
+class bound early, its statement for any other.
 Nested statement lists register and validate templates only when execution reaches their
 declaration, preserving return, throw, break, and continue behavior and redeclaration errors.
 Constructor inference omits null and empty arrays using concrete runtime tags, so zero-property

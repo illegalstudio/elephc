@@ -38,7 +38,7 @@ fn try_lower_with_capture(source: &str, target: Target, profile: SemanticProfile
 ) -> Result<crate::ir::Module, crate::ir_lower::LoweringError> {
     let mut program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), mode).unwrap();
     let mut inventory = crate::optimize::reachability::PreludeInventory::new();
-    program = crate::core_prelude::inject_if_used(program, &mut inventory);
+    program = crate::core_prelude::inject_if_used(program, false, false, &mut inventory);
     if capture {
         program = crate::name_resolver::resolve(program).unwrap();
         program = crate::func_args::desugar(program).unwrap();

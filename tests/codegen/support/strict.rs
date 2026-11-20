@@ -144,7 +144,7 @@ impl StrictFixture {
         let mut program = elephc::parser::parse_with_mode(&tokens, source_mode).unwrap();
         if options.bcmath || options.gmp || options.xml || options.eval_bridge {
             let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
-            program = elephc::core_prelude::inject_if_used(program, &mut inventory);
+            program = elephc::core_prelude::inject_if_used(program, false, false, &mut inventory);
             if options.bcmath { program = elephc::bcmath_prelude::inject_if_used(program, false, &mut inventory); }
             if options.gmp { program = elephc::gmp_prelude::inject_if_used(program, false, &mut inventory); }
             if options.xml {

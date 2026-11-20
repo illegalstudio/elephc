@@ -14,7 +14,7 @@ use crate::codegen_support::platform::Target;
 
 use super::catalog::PackageVersion;
 use super::error::{NativeError, NativeErrorKind};
-use super::recipes::{curl, gmp, libmagic, libssh2, libxml2, nghttp2, oniguruma, openssl, openssl_crypto, pcre2, zlib};
+use super::recipes::{curl, gmp, libmagic, libssh2, libtidy, libxml2, nghttp2, oniguruma, openssl, openssl_crypto, pcre2, zlib};
 use super::toolchain::NativeToolchain;
 
 /// Immutable inputs to one trusted package recipe invocation.
@@ -53,13 +53,14 @@ enum BuiltInRecipe {
     Libxml2,
     Gmp,
     Libmagic,
+    Libtidy,
 }
 
 /// Resolves a package and immutable recipe revision to its built-in executor.
 fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
     match (package, revision) {
         ("oniguruma", 3) => Some(BuiltInRecipe::Oniguruma),
-        ("pcre2", 7) => Some(BuiltInRecipe::Pcre2),
+        ("pcre2", 8) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         ("openssl", 1) => Some(BuiltInRecipe::Openssl),
         ("openssl-crypto", 1) => Some(BuiltInRecipe::OpensslCrypto),
@@ -69,6 +70,7 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("libmagic", 1) => Some(BuiltInRecipe::Libmagic),
         ("libxml2", 11) => Some(BuiltInRecipe::Libxml2),
         ("gmp", 2) => Some(BuiltInRecipe::Gmp),
+        ("libtidy", 1) => Some(BuiltInRecipe::Libtidy),
         _ => None,
     }
 }
@@ -88,6 +90,7 @@ impl RecipeRunner for CuratedRecipes {
             Some(BuiltInRecipe::Libmagic) => libmagic::build(request),
             Some(BuiltInRecipe::Libxml2) => libxml2::build(request),
             Some(BuiltInRecipe::Gmp) => gmp::build(request),
+            Some(BuiltInRecipe::Libtidy) => libtidy::build(request),
             None => Err(NativeError::new(
                 NativeErrorKind::Build,
                 format!(
@@ -127,7 +130,8 @@ mod tests {
         assert!(built_in_recipe("pcre2", 4).is_none());
         assert!(built_in_recipe("pcre2", 5).is_none());
         assert!(built_in_recipe("pcre2", 6).is_none());
-        assert!(matches!(built_in_recipe("pcre2", 7), Some(BuiltInRecipe::Pcre2)));
+        assert!(built_in_recipe("pcre2", 7).is_none());
+        assert!(matches!(built_in_recipe("pcre2", 8), Some(BuiltInRecipe::Pcre2)));
     }
 
     /// Verifies the dispatcher recognizes curl and every library it links by exact catalog

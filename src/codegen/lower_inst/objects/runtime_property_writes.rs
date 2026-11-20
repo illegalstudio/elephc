@@ -17,6 +17,18 @@ use super::super::magic_property_guards::{
     emit_magic_set_exception_handler, emit_magic_set_exception_handler_pop,
 };
 
+/// Raises PHP's call-site `TypeError` for a property argument whose storage cannot satisfy a
+/// typed by-reference parameter. The runtime unwinder transfers control, so the callee call
+/// emitted later in the same EIR block is unreachable.
+pub(in crate::codegen::lower_inst) fn lower_reference_argument_type_error(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let message = property_name_immediate(ctx, inst)?.to_string();
+    super::super::exceptions::emit_type_error(ctx, &message);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a declared object property write for statically known object receivers.
 pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
@@ -66,6 +78,14 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
     emit_typed_pointer_receiver_null_check(ctx, object, base_reg)?;
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
+        emit_null_write_receiver_error(
+            ctx,
+            object,
+            base_reg,
+            &format!("Attempt to assign property \"{}\" on null", property),
+        )?;
+    }
     if is_promoted_reference_property_bind(ctx, object, value, &slot)? {
         return emit_reference_property_bind(ctx, value, &slot, base_reg);
     }
@@ -280,6 +300,29 @@ pub(super) fn lower_runtime_object_prop_set(
                         32,
                         inst.span.map_or(0, |span| span.line),
                     )
+                }
+                // A readonly runtime class refuses to create the name; the name itself is
+                // still stacked at offsets 0/8, so append it to php's wording.
+                PropertyRuntimeAction::RefuseRuntimeName { prefix } => {
+                    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
+                    match ctx.emitter.target.arch {
+                        Arch::AArch64 => {
+                            abi::emit_symbol_address(ctx.emitter, "x1", &prefix_label);
+                            abi::emit_load_int_immediate(ctx.emitter, "x2", prefix_len as i64);
+                            abi::emit_load_temporary_stack_slot(ctx.emitter, "x3", 0);
+                            abi::emit_load_temporary_stack_slot(ctx.emitter, "x4", 8);
+                        }
+                        Arch::X86_64 => {
+                            abi::emit_symbol_address(ctx.emitter, "rax", &prefix_label);
+                            abi::emit_load_int_immediate(ctx.emitter, "rdx", prefix_len as i64);
+                            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+                            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+                        }
+                    }
+                    abi::emit_call_label(ctx.emitter, "__rt_concat");
+                    abi::emit_release_temporary_stack(ctx.emitter, 32);
+                    super::super::exceptions::emit_error_from_string_result(ctx);
+                    Ok(())
                 }
                 // A class in this subtree with no hash cannot hold the name at all. php would
                 // store, so the build fails rather than dropping the write in silence.
@@ -522,12 +565,39 @@ fn emit_runtime_name_stacked_write_arm(
                 abi::emit_jump(ctx.emitter, done_label);
                 Ok(())
             }
-            PropertyRuntimeAction::MagicGet => Err(CodegenIrError::invalid_module(
-                "runtime property write resolved to a magic getter",
+            PropertyRuntimeAction::MagicRead { .. } => Err(CodegenIrError::invalid_module(
+                "runtime property write resolved to a value read",
+            )),
+            PropertyRuntimeAction::MagicIsset { .. }
+            | PropertyRuntimeAction::MagicEmpty { .. } => Err(CodegenIrError::invalid_module(
+                "runtime property write resolved to a read probe",
             )),
             PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
                 "property dispatch handed a refusal arm to its action emitter",
             )),
+            // The name this miss arm matched is stacked at offsets 0/8: append it to the
+            // readonly-class wording, release the site's 32-byte block, and throw.
+            PropertyRuntimeAction::RefuseRuntimeName { prefix } => {
+                let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        abi::emit_symbol_address(ctx.emitter, "x1", &prefix_label);
+                        abi::emit_load_int_immediate(ctx.emitter, "x2", prefix_len as i64);
+                        abi::emit_load_temporary_stack_slot(ctx.emitter, "x3", 0);
+                        abi::emit_load_temporary_stack_slot(ctx.emitter, "x4", 8);
+                    }
+                    Arch::X86_64 => {
+                        abi::emit_symbol_address(ctx.emitter, "rax", &prefix_label);
+                        abi::emit_load_int_immediate(ctx.emitter, "rdx", prefix_len as i64);
+                        abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+                        abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+                    }
+                }
+                abi::emit_call_label(ctx.emitter, "__rt_concat");
+                abi::emit_release_temporary_stack(ctx.emitter, 32);
+                super::super::exceptions::emit_error_from_string_result(ctx);
+                Ok(())
+            }
         },
     )
 }
@@ -637,6 +707,10 @@ fn mixed_property_write_candidate(
             }
         }
         PropertyRuntimeAction::Refuse { message } => MixedPropertyWriteAction::Refuse(message),
+        // A boxed receiver keeps its runtime name in a value, not in this ladder's stack
+        // frame, so the miss path owns that message. Let it answer rather than printing a
+        // prefix without the name.
+        PropertyRuntimeAction::RefuseRuntimeName { .. } => return Ok(None),
         PropertyRuntimeAction::DynamicHash { hash_offset, .. } => {
             MixedPropertyWriteAction::DynamicHash {
                 class_name: class_name.to_string(),
@@ -660,7 +734,10 @@ fn mixed_property_write_candidate(
                 message,
             }
         }
-        PropertyRuntimeAction::MagicGet | PropertyRuntimeAction::MagicDeferred => return Ok(None),
+        PropertyRuntimeAction::MagicRead { .. }
+        | PropertyRuntimeAction::MagicDeferred
+        | PropertyRuntimeAction::MagicIsset { .. }
+        | PropertyRuntimeAction::MagicEmpty { .. } => return Ok(None),
     };
     Ok(Some(MixedPropertyWriteCandidate {
         class_id,
@@ -1058,7 +1135,12 @@ fn emit_runtime_magic_set_call(
             )?;
             abi::emit_jump(ctx.emitter, &done_label);
         } else {
-            emit_readonly_runtime_dynamic_property_error(ctx, class_name, 0, staged_stack_bytes);
+            emit_readonly_runtime_dynamic_property_error(
+                ctx,
+                class_name,
+                property_value,
+                staged_stack_bytes,
+            );
         }
 
         ctx.emitter.label(&existing_label);
@@ -1081,7 +1163,7 @@ fn emit_runtime_magic_set_call(
 fn emit_readonly_runtime_dynamic_property_error(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
-    name_stack_offset: usize,
+    property_value: ValueId,
     staged_stack_bytes: usize,
 ) {
     let prefix = format!(
@@ -1093,14 +1175,14 @@ fn emit_readonly_runtime_dynamic_property_error(
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x1", &prefix_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", prefix_len as i64);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x3", name_stack_offset);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x4", name_stack_offset + 8);
+            ctx.load_string_value_to_regs(property_value, "x3", "x4")
+                .expect("runtime property name is a string");
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "rax", &prefix_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", prefix_len as i64);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", name_stack_offset);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", name_stack_offset + 8);
+            ctx.load_string_value_to_regs(property_value, "rdi", "rsi")
+                .expect("runtime property name is a string");
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_concat");
@@ -1808,9 +1890,16 @@ pub(super) fn emit_dynamic_plan_unset(
         // with no hash can never have created one.
         PropertyRuntimeAction::DynamicMissing { .. } => Ok(()),
         // A DIRECT name never reaches this arm: `crate::ir_lower::expr::unset` peels a runtime
-        // class declaring `__unset` off and calls the accessor there. `MagicGet` is a read-only
-        // answer and cannot be built for an unset, but it removes nothing either way.
-        PropertyRuntimeAction::MagicDeferred | PropertyRuntimeAction::MagicGet => Ok(()),
+        // class declaring `__unset` off and calls the accessor there. `MagicGet` and `MagicIsset`
+        // are read-only answers and cannot be built for an unset, but they remove nothing either
+        // way.
+        PropertyRuntimeAction::MagicDeferred
+        | PropertyRuntimeAction::MagicRead { .. }
+        | PropertyRuntimeAction::MagicIsset { .. }
+        | PropertyRuntimeAction::MagicEmpty { .. } => Ok(()),
+        PropertyRuntimeAction::RefuseRuntimeName { .. } => Err(CodegenIrError::invalid_module(
+            "unset() resolved to a runtime-name refusal",
+        )),
         PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
             "property dispatch handed a refusal arm to its action emitter",
         )),
@@ -2121,6 +2210,11 @@ fn emit_mixed_runtime_name_unset_arm(
             abi::emit_release_temporary_stack(ctx.emitter, 32);
             abi::emit_jump(ctx.emitter, done_label);
         }
+        PropertyRuntimeAction::RefuseRuntimeName { .. } => {
+            return Err(CodegenIrError::invalid_module(
+                "unset() resolved to a runtime-name refusal",
+            ))
+        }
         // php refuses the access from this scope, so nothing is removed and nothing is read.
         PropertyRuntimeAction::Refuse { message } => {
             let message = message.clone();
@@ -2138,7 +2232,9 @@ fn emit_mixed_runtime_name_unset_arm(
         // this phase either, and php's accessor removes nothing from storage in any case.
         PropertyRuntimeAction::DynamicMissing { .. }
         | PropertyRuntimeAction::MagicDeferred
-        | PropertyRuntimeAction::MagicGet => {
+        | PropertyRuntimeAction::MagicRead { .. }
+        | PropertyRuntimeAction::MagicIsset { .. }
+        | PropertyRuntimeAction::MagicEmpty { .. } => {
             abi::emit_release_temporary_stack(ctx.emitter, 32);
             abi::emit_jump(ctx.emitter, done_label);
         }

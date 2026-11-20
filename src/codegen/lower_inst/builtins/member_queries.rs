@@ -79,7 +79,14 @@ fn class_like_exists_candidates(ctx: &FunctionContext<'_>, name: &str) -> Vec<St
                     .cloned(),
             );
         }
-        "interface_exists" => candidates.extend(ctx.module.interface_infos.keys().cloned()),
+        // A class template's marker interface is not an interface php-src would report.
+        "interface_exists" => candidates.extend(
+            ctx.module
+                .interface_infos
+                .iter()
+                .filter(|(_, info)| !info.reflection_hidden)
+                .map(|(name, _)| name.clone()),
+        ),
         "trait_exists" => candidates.extend(ctx.module.trait_table.names.iter().cloned()),
         "enum_exists" => candidates.extend(ctx.module.enum_infos.keys().cloned()),
         _ => {}
@@ -176,9 +183,10 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.load_value_to_result(value)?;
             emit_is_callable_pointer_lookup(ctx, "__rt_is_callable_object");
         }
-        PhpType::Mixed | PhpType::Union(_) => {
+        PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Union(_) => {
             ctx.load_value_to_result(value)?;
             emit_is_callable_pointer_lookup(ctx, "__rt_is_callable_mixed");
+            emit_active_eval_frame_is_callable_fallback(ctx, value)?;
         }
         PhpType::Iterable => {
             ctx.load_value_to_result(value)?;
@@ -208,6 +216,46 @@ pub(in crate::codegen::lower_inst) fn emit_is_callable_pointer_lookup(ctx: &mut 
         ctx.emitter.instruction("mov rdi, rax");                                // move pointer-shaped value into helper argument 0
     }
     abi::emit_call_label(ctx.emitter, label);
+}
+
+/// Asks the active eval frame about a boxed value the native `is_callable` lookup rejected.
+///
+/// A function that does not own an eval context can still run under `eval()`: a native
+/// function or method called from evaluated code receives callbacks only eval knows, such as
+/// the name of a function declared inside `eval()`. When the module links eval callable
+/// support, a native miss asks `__elephc_eval_object_context` for the active native frame's
+/// eval context and lets Magician answer, as PHP's `is_callable` sees every declared function.
+/// Outside an eval frame the context is null and the native answer (false) stands.
+fn emit_active_eval_frame_is_callable_fallback(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    if !crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module) {
+        return Ok(());
+    }
+    let target = ctx.emitter.target;
+    let done = ctx.next_label("is_callable_eval_frame_done");
+    let (arg0, arg1) = (abi::int_arg_reg_name(target, 0), abi::int_arg_reg_name(target, 1));
+    let result = abi::int_result_reg(ctx.emitter);
+    // -- a native hit stands; a miss asks the active eval frame, when there is one --
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &done);
+    abi::emit_load_int_immediate(ctx.emitter, arg0, 0);
+    ctx.load_value_to_reg(value, arg1)?;
+    abi::emit_call_label(ctx.emitter, &target.extern_symbol("__elephc_eval_object_context"));
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    abi::emit_reg_move(ctx.emitter, arg0, result);
+    ctx.load_value_to_reg(value, arg1)?;
+    abi::emit_call_label(ctx.emitter, &target.extern_symbol("__elephc_eval_is_callable"));
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp w0, #0");                              // test the 32-bit eval callable verdict
+            ctx.emitter.instruction("cset x0, ne");                             // normalize the verdict to a PHP bool
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test eax, eax");                           // test the 32-bit eval callable verdict
+            ctx.emitter.instruction("setne al");                                // set the low byte when eval recognised the value
+            ctx.emitter.instruction("movzx eax, al");                           // normalize the verdict to a PHP bool
+        }
+    }
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Stores the current `is_callable()` call site's builtin visibility for nested runtime helpers.
@@ -324,6 +372,14 @@ pub(in crate::codegen::lower_inst) fn static_method_exists_on_class_info(
     target_is_object: bool,
 ) -> bool {
     let method_key = php_symbol_key(method_name);
+    // Compiler-owned helpers are never part of the PHP surface, and php-src's internal URI
+    // classes hide their native destructor from `method_exists()` too.
+    let uri_internal = crate::uri_prelude::is_internal_uri_class(resolved_class);
+    if (method_key.starts_with("__elephc_") && uri_internal)
+        || (matches!(method_key.as_str(), "__destruct" | "__clone") && uri_internal)
+    {
+        return false;
+    }
     // A builtin's reviewed surface hides its implementation methods (mysqli's `__destruct`,
     // `__elephc*` helpers) — also when they are inherited by a user subclass.
     let declaring_class = class_info
@@ -413,6 +469,7 @@ pub(in crate::codegen::lower_inst) fn static_property_exists_on_class_info(
 ) -> bool {
     if elephc_builtin_contract::lookup_class(resolved_class)
         .is_some_and(|class| class.property_is_hidden(property_name))
+        || crate::codegen_support::runtime::data::is_uri_opaque_handle(resolved_class, property_name)
     {
         return false;
     }

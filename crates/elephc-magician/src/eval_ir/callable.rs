@@ -54,6 +54,8 @@ pub struct EvalFunction {
     parameter_is_variadic: Vec<bool>,
     return_type: Option<EvalParameterType>,
     body: Vec<EvalStmt>,
+    /// `declare(strict_types=...)` mode of the fragment that declared this function.
+    strict_types: bool,
     /// Compiled body for the positional slice. Absent when the tree walker runs this function.
     #[serde(skip, default)]
     bytecode: Option<Arc<CompiledBody>>,
@@ -72,6 +74,7 @@ impl PartialEq for EvalFunction {
             && self.parameter_is_variadic == other.parameter_is_variadic
             && self.return_type == other.return_type
             && self.body == other.body
+            && self.strict_types == other.strict_types
     }
 }
 
@@ -95,8 +98,20 @@ impl EvalFunction {
             parameter_is_variadic,
             return_type: None,
             body,
+            strict_types: false,
             bytecode: None,
         }
+    }
+
+    /// Returns this function with the declaring fragment's `declare(strict_types=...)` mode.
+    pub const fn with_strict_types(mut self, strict_types: bool) -> Self {
+        self.strict_types = strict_types;
+        self
+    }
+
+    /// Returns the `declare(strict_types=...)` mode of the fragment that declared this function.
+    pub const fn strict_types(&self) -> bool {
+        self.strict_types
     }
 
     /// Returns this function with source-location metadata attached.

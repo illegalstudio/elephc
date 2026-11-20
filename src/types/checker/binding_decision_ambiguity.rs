@@ -330,6 +330,8 @@ fn count_stmt(stmt: &Stmt, tally: &mut Tally) {
         | StmtKind::ExternGlobalDecl { .. }
         // Leaves: no sub-statements and no sub-expressions.
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::Global { vars: _ }
         | StmtKind::IncludeOnceMark { label: _ }

@@ -112,7 +112,7 @@ fn strict_numeric_builtin_pow_native_class_results_follow_operator_contracts() {
     let source = r"<?php function typedNumberPow(): BcMath\Number { return pow(new BcMath\Number('2'), 3.0); }";
     let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
     let mut inventory = crate::optimize::reachability::PreludeInventory::new();
-    let program = crate::core_prelude::inject_if_used(program, &mut inventory);
+    let program = crate::core_prelude::inject_if_used(program, false, false, &mut inventory);
     let program = crate::bcmath_prelude::inject_if_used(program, false, &mut inventory);
     let program = crate::name_resolver::resolve(program).unwrap();
     for feature in [StrictFeature::Arithmetic, StrictFeature::Coercions] {

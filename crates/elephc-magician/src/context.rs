@@ -16,6 +16,8 @@ mod classes_aliases;
 mod classlike_objects;
 mod closure_metadata;
 mod core;
+mod deprecation_notices;
+pub(crate) use deprecation_notices::EvalReflectedParameterDefault;
 mod functions;
 mod generics;
 mod global_registry;
@@ -31,6 +33,7 @@ mod native_function;
 mod native_metadata;
 mod native_signatures;
 mod normalization;
+mod override_lookups;
 pub(crate) mod pcntl_runtime;
 mod reference_metadata;
 mod reflection_registry;
@@ -62,9 +65,9 @@ pub(crate) use return_sources::ReturnSourceContract;
 use core::EvalStaticLocal;
 pub use functions::{EvalNativeGlobalConstant, EvalNativeUserConstant};
 pub(crate) use global_registry::*;
-pub(crate) use reflection_registry::{
-    forget_released_reflection_identity, untrack_reflection_identities_for_context,
-};
+#[cfg(not(test))]
+pub(crate) use reflection_registry::forget_released_reflection_identity;
+pub(crate) use reflection_registry::untrack_reflection_identities_for_context;
 use native_catalog::SharedNative;
 pub use native_defaults::*;
 pub use native_function::*;

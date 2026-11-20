@@ -5,7 +5,8 @@
 //! - DateTime setter construction.
 //!
 //! Key details:
-//! - Immutable paths create fresh instances while carrying timezone and microseconds.
+//! - Immutable paths mutate a clone of `$this`, so the receiver's class, timezone, microseconds
+//!   and any subclass properties carry over to the result.
 
 use super::*;
 
@@ -49,10 +50,10 @@ pub(super) fn mktime_call(parts: [&str; 6]) -> Expr {
 /// Builds the statement tail that publishes a freshly computed timestamp.
 ///
 /// Mutable classes (`DateTime`) assign `$this->timestamp` and return `$this`. Immutable classes
-/// (`DateTimeImmutable`) construct a fresh instance, copy the new timestamp and the timezone name,
-/// and return it — preserving copy-on-modify semantics.
-pub(super) fn result_tail(result_ts: Expr, mutable: bool, class_name: &str) -> Vec<Stmt> {
-    result_tail_micro(result_ts, None, mutable, class_name)
+/// (`DateTimeImmutable`) clone `$this`, store the new timestamp on the clone and return it —
+/// preserving copy-on-modify semantics and the receiver's (possibly subclass) identity.
+pub(super) fn result_tail(result_ts: Expr, mutable: bool) -> Vec<Stmt> {
+    result_tail_micro(result_ts, None, mutable)
 }
 
 /// Like `result_tail`, but with an explicit sub-second value for the result. When
@@ -62,7 +63,6 @@ pub(super) fn result_tail_micro(
     result_ts: Expr,
     result_micro: Option<Expr>,
     mutable: bool,
-    class_name: &str,
 ) -> Vec<Stmt> {
     let micro = result_micro.unwrap_or_else(|| this_property("microsecond"));
     if mutable {
@@ -74,16 +74,7 @@ pub(super) fn result_tail_micro(
     } else {
         let new_var = || Expr::new(ExprKind::Variable("__new".to_string()), dummy());
         vec![
-            Stmt::assign(
-                "__new",
-                Expr::new(
-                    ExprKind::NewObject {
-                        class_name: Name::unqualified(class_name),
-                        args: Vec::new(),
-                    },
-                    dummy(),
-                ),
-            ),
+            Stmt::assign("__new", clone_this()),
             Stmt::new(
                 StmtKind::PropertyAssign {
                     object: Box::new(new_var()),
@@ -92,16 +83,8 @@ pub(super) fn result_tail_micro(
                 },
                 dummy(),
             ),
-            Stmt::new(
-                StmtKind::PropertyAssign {
-                    object: Box::new(new_var()),
-                    property: "timezone_name".to_string(),
-                    value: this_property("timezone_name"),
-                },
-                dummy(),
-            ),
-            // Carry the sub-second component into the fresh immutable instance so it survives
-            // setTimestamp/setTime/setDate/setTimezone/add/sub/modify.
+            // The clone already carries the timezone; the sub-second value is stored explicitly
+            // because add()/sub()/modify()/setTime() recompute it.
             Stmt::new(
                 StmtKind::PropertyAssign {
                     object: Box::new(new_var()),

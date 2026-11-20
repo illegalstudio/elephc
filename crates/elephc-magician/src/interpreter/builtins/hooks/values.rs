@@ -194,6 +194,10 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Xml,
     /// Forwards fileinfo to the compiled host prelude.
     Fileinfo,
+    /// Forwards locale functions to the compiled host prelude.
+    Locale,
+    /// Forwards the tidy surface to the compiled host prelude.
+    Tidy,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches the bridge-backed OpenSSL cipher builtins.
@@ -228,6 +232,12 @@ pub(in crate::interpreter) enum EvalValuesHook {
     PregReplace,
     /// Dispatches `preg_replace_callback(...)`.
     PregReplaceCallback,
+    /// Dispatches `preg_grep(...)`.
+    PregGrep,
+    /// Dispatches `preg_last_error(...)`.
+    PregLastError,
+    /// Dispatches `preg_last_error_msg(...)`.
+    PregLastErrorMsg,
     /// Dispatches `preg_split(...)`.
     PregSplit,
     /// Dispatches `buffer_free(...)`.
@@ -294,7 +304,7 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StringPosition,
     /// Dispatches string search predicate builtins.
     StringSearch,
-    /// Dispatches `explode(...)` and `implode(...)`.
+    /// Dispatches `explode(...)`, `implode(...)` and its `join(...)` alias.
     StringSplitJoin,
     /// Dispatches stream boolean predicate builtins.
     StreamBoolPredicate,
@@ -422,12 +432,8 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::Crc32 => one_arg(evaluated_args, values, eval_crc32_result),
-            Self::Ctype => one_arg(evaluated_args, values, |value, values| match name {
-                "ctype_alnum" => eval_ctype_alnum_result(value, values),
-                "ctype_alpha" => eval_ctype_alpha_result(value, values),
-                "ctype_digit" => eval_ctype_digit_result(value, values),
-                "ctype_space" => eval_ctype_space_result(value, values),
-                _ => Err(EvalStatus::RuntimeFatal),
+            Self::Ctype => one_arg(evaluated_args, values, |value, values| {
+                eval_ctype_named_result(name, value, context, values)
             }),
             Self::Deg2rad => one_arg(evaluated_args, values, eval_deg2rad_result),
             Self::Exp => one_arg(evaluated_args, values, eval_exp_result),
@@ -553,7 +559,9 @@ impl EvalValuesHook {
             }
             Self::Pcntl => eval_pcntl_values_result(name, evaluated_args, context, values),
             Self::Fileinfo => eval_fileinfo_values_result(name, evaluated_args, context, values),
+            Self::Locale => eval_locale_values_result(name, evaluated_args, context, values),
             Self::Xml => eval_xml_values_result(name, evaluated_args, context, values),
+            Self::Tidy => eval_tidy_values_result(name, evaluated_args, context, values),
             Self::NumberFormat => {
                 eval_number_format_declared_values_result(evaluated_args, values)
             }
@@ -596,6 +604,19 @@ impl EvalValuesHook {
                     context,
                     values,
                 )
+            }
+            Self::PregGrep => eval_preg_grep_values_result(evaluated_args, context, values),
+            Self::PregLastError => {
+                if !evaluated_args.is_empty() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                eval_preg_last_error_result(values)
+            }
+            Self::PregLastErrorMsg => {
+                if !evaluated_args.is_empty() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                eval_preg_last_error_msg_result(values)
             }
             Self::PregSplit => eval_preg_split_values_result(evaluated_args, values),
             Self::BufferFree => eval_buffer_free_values_result(evaluated_args, values),
@@ -681,6 +702,7 @@ impl EvalValuesHook {
             Self::StringSplitJoin => match name {
                 "explode" => eval_explode_declared_values_result(evaluated_args, values),
                 "implode" => eval_implode_declared_values_result(evaluated_args, context, values),
+                "join" => eval_join_declared_values_result(evaluated_args, context, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StreamBoolPredicate => one_arg(evaluated_args, values, |stream, values| {

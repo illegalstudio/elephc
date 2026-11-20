@@ -61,6 +61,7 @@ pub(in crate::interpreter) fn execute_switch_stmt(
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+            EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
     }
     Ok(EvalControl::None)
@@ -81,6 +82,7 @@ pub(in crate::interpreter) fn execute_do_while_stmt(
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+            EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
         if !eval_condition(condition, context, scope, values)? {
             break;
@@ -105,6 +107,7 @@ pub(in crate::interpreter) fn execute_for_stmt(
         EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
         EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
         EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+        EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
     }
     loop {
         if let Some(condition) = condition {
@@ -118,6 +121,7 @@ pub(in crate::interpreter) fn execute_for_stmt(
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+            EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
         match execute_statements(update, context, scope, values)? {
             EvalControl::None | EvalControl::Continue => {}
@@ -125,6 +129,7 @@ pub(in crate::interpreter) fn execute_for_stmt(
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+            EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
     }
     Ok(EvalControl::None)
@@ -183,6 +188,7 @@ pub(super) fn execute_foreach_array_stmt(
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+            EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
     }
     Ok(EvalControl::None)
@@ -255,6 +261,7 @@ pub(super) fn execute_foreach_iterator_stmt(
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
             EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
             EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+            EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
         }
     }
 }

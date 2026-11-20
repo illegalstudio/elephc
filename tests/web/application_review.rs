@@ -373,6 +373,50 @@ Elephc\Web\Worker::register(new Application());
     assert_eq!(fs::read_to_string(fixture.0.join("lifecycle.log")).unwrap(), "stopped");
 }
 
+/// A normal stop lets an in-flight request and the shutdown hook finish.
+#[test]
+fn web_application_review_shutdown_drains_slow_request() {
+    let fixture = Fixture(make_test_dir("web_application_review_slow_shutdown"));
+    let binary = application(&fixture, r#"<?php
+class Application implements Elephc\Web\WorkerApplication {
+    public function handle(Elephc\Web\Request $request): void {
+        file_put_contents('__LOG__', 'started');
+        usleep(4_000_000);
+        echo 'slow';
+    }
+    public function shutdown(): void { file_put_contents('__LOG__', 'stopped', FILE_APPEND); }
+}
+Elephc\Web\Worker::register(new Application());
+"#);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut server = spawn_server(&binary, &addr, "1");
+    let request_addr = addr.clone();
+    let request = std::thread::spawn(move || body(&request_addr, "/"));
+    let log = fixture.0.join("lifecycle.log");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if fs::read_to_string(&log)
+            .is_ok_and(|contents| contents.contains("started"))
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let started = fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        started.contains("started"),
+        "handler did not start before SIGTERM: {started:?}"
+    );
+    server.kill().unwrap();
+    assert_eq!(request.join().unwrap(), "slow");
+    server.wait().unwrap();
+    let finished = fs::read_to_string(&log).unwrap();
+    assert!(
+        finished.ends_with("stopped"),
+        "shutdown hook did not run: {finished:?}"
+    );
+}
+
 /// Bootstrap and handler signal-mask changes survive the callback termination guard.
 #[test]
 fn web_application_review_callback_preserves_application_signal_mask() {
@@ -407,4 +451,49 @@ Elephc\Web\Worker::register(new Application());
     server.kill().unwrap();
     server.wait().unwrap();
     assert_eq!(fs::read_to_string(fixture.0.join("lifecycle.log")).unwrap(), "blocked");
+}
+
+/// A regex error recorded by one request does not leak into the next request's `preg_last_error()`.
+#[test]
+fn web_application_review_request_begin_clears_preg_last_error() {
+    let fixture = Fixture(make_test_dir("web_application_review_preg_error"));
+    let binary = compile_web_with_regex(&fixture.0, r#"<?php
+class Application implements Elephc\Web\WorkerApplication {
+    private int $count = 0;
+    public function handle(Elephc\Web\Request $_request): void {
+        $this->count++;
+        if ($this->count === 1) { preg_match('/./u', "\xff"); }
+        echo $this->count, ':', preg_last_error();
+    }
+    public function shutdown(): void {}
+}
+Elephc\Web\Worker::register(new Application());
+"#, "app", &["--web-lifecycle=application", "--php-only"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&binary, &addr, "1");
+    assert_eq!(body(&addr, "/"), "1:4");
+    assert_eq!(body(&addr, "/"), "2:0");
+}
+
+/// An eval regex error recorded by one worker request does not leak into the next request's
+/// eval `preg_last_error()` on the reused worker thread.
+#[test]
+fn web_application_review_request_begin_clears_eval_preg_last_error() {
+    let fixture = Fixture(make_test_dir("web_application_review_eval_preg_error"));
+    let binary = compile_web_with_regex(&fixture.0, r#"<?php
+class Application implements Elephc\Web\WorkerApplication {
+    private int $count = 0;
+    public function handle(Elephc\Web\Request $_request): void {
+        $this->count++;
+        echo $this->count, ':';
+        eval(($this->count === 1 ? 'preg_match("/./u", "\xff"); ' : '') . 'echo preg_last_error();');
+    }
+    public function shutdown(): void {}
+}
+Elephc\Web\Worker::register(new Application());
+"#, "app", &["--web-lifecycle=application", "--php-only", "--with-regex"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&binary, &addr, "1");
+    assert_eq!(body(&addr, "/"), "1:4");
+    assert_eq!(body(&addr, "/"), "2:0");
 }

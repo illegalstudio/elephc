@@ -46,6 +46,7 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
         }
     }
     let callable = ctx.load_local(var, Some(expr.span));
+    let callable = super::declared_callables::normalize_declared_callable(ctx, callable, expr.span);
     let result_type = result_type
         .or_else(|| {
             // An inferred parameter signature can come from another caller's callback.
@@ -91,6 +92,7 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
         &result_type,
         expr.span,
     );
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
     let mut arg_values = lower_args_with_signature(ctx, instance_signature.as_ref(), args);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
@@ -104,6 +106,9 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     );
     let mut operands = vec![callable.value];
     operands.extend(arg_values.iter().copied());
+    // A first-class `__construct` callable is opaque at this point; php-src binds the
+    // invocation site's `strict_types`, so publish it after the arguments are evaluated.
+    super::object_construction::publish_call_strictness(ctx, expr.span);
     let call = ctx.emit_value(
         Op::ClosureCall,
         operands,
@@ -113,6 +118,11 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
         Some(expr.span),
     );
     stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &arg_values,
@@ -210,7 +220,15 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     if let Some(value) = lower_bound_closure_immediate_call(ctx, callee, args, expr) {
         return value;
     }
+    // A pending binding describes the expression lowered last. Only a callee that can itself
+    // produce one (a closure literal or a rebinding call) may hand it to this call; a binding
+    // left by an earlier statement or by a closure passed as an argument inside the callee
+    // (`keep(fn () => 1)()`, `describe(fn ...); keep("x")("y")`) must not select the target.
+    ctx.clear_pending_static_callable_result();
     let lowered_callee = lower_expr(ctx, callee);
+    if !callee_may_publish_static_binding(callee) {
+        ctx.clear_pending_static_callable_result();
+    }
     // An immediately-invoked closure literal (`(fn &() => …)()`) registers its static
     // callable binding while lowering. Call it directly through the static-callable path
     // (as `$f()` does) so the closure body's signature — including a by-reference return —
@@ -241,10 +259,26 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
             return take_prepublished_call_result(ctx, result_staging, value, expr.span);
         }
     }
+    let lowered_callee =
+        super::declared_callables::normalize_declared_callable(ctx, lowered_callee, expr.span);
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
     let mut lowered_callee = root_descriptor_callback(ctx, lowered_callee, result_type, expr.span);
     let arg_container = lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut lowered_callee, args, expr.span);
     emit_callable_descriptor_invoke(ctx, lowered_callee, arg_container, expr.span)
+}
+
+/// Returns whether lowering `callee` itself can publish the static binding of its result: a
+/// closure literal or first-class callable (also through an assignment), or a
+/// `Closure::bind` / `->bindTo()` rebinding of one.
+fn callee_may_publish_static_binding(callee: &Expr) -> bool {
+    match &callee.kind {
+        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => true,
+        // `($f = function () {...})()` evaluates to the assigned closure.
+        ExprKind::Assignment { value, .. } => callee_may_publish_static_binding(value),
+        ExprKind::StaticMethodCall { method, .. } => php_symbol_key(method) == "bind",
+        ExprKind::MethodCall { method, .. } => php_symbol_key(method) == "bindto",
+        _ => false,
+    }
 }
 
 /// Recognizes the parser's internal `call_user_func([$object, $method], ...)`

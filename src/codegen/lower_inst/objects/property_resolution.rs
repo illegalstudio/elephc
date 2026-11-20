@@ -170,13 +170,40 @@ pub(super) enum PropertyRuntimeAction {
         /// php 8.5's verbatim wording, e.g. `Cannot access private property D::$n`.
         message: String,
     },
-    /// php answers `__get` on THIS runtime class, and the name is a compile-time constant, so the
-    /// dispatch makes the real call through `lower_magic_get_prop`.
+    /// php refuses to create a dynamic property, and the name is only known at run time.
     ///
-    /// Only a value read builds this. A silent probe would consult `__isset`, which has no codegen
-    /// call site yet and keeps `MagicDeferred`; a write and an `unset()` are peeled off earlier by
-    /// `crate::ir_lower`, which calls `__set` and `__unset` through the ordinary method lowering.
-    MagicGet,
+    /// The wording ends with `$`, so the dispatcher appends the runtime name it already holds
+    /// before raising the Error.
+    RefuseRuntimeName {
+        /// Verbatim wording through the trailing `$`, e.g. `Cannot create dynamic property R::$`.
+        prefix: String,
+    },
+    /// `isset()` on a class that keeps dynamic properties in a per-instance hash and declares
+    /// `__isset`.
+    ///
+    /// php answers an existing hash entry first and only consults `__isset` for a missing name.
+    /// Both facts live in this action: `hash_offset` is the class's entry table, and the accessor
+    /// is resolved when the miss arm runs. A class without a hash still builds this arm with
+    /// `hash_offset: None`, because its only possible answer is the accessor.
+    MagicIsset {
+        /// The per-instance hash that must be probed before the accessor, when the class has one.
+        hash_offset: Option<usize>,
+    },
+    /// A value read (`$o->p`, `$o->p ?? d`) on a class with `__get`: a stored hash entry wins;
+    /// only a miss calls the accessor.
+    MagicRead {
+        /// The per-instance hash that must be probed before `__get`, when the class has one.
+        hash_offset: Option<usize>,
+    },
+    /// `empty()` on a class that keeps dynamic properties in a per-instance hash and declares
+    /// `__isset`.
+    ///
+    /// A stored entry answers first. A miss asks `__isset`; only a true answer reads `__get`
+    /// (whose value `empty()` tests), and a missing `__get` behaves like PHP's null value.
+    MagicEmpty {
+        /// The per-instance hash that must be probed before the accessors, when the class has one.
+        hash_offset: Option<usize>,
+    },
     /// php answers an accessor this dispatch does not call.
     ///
     /// For a DIRECT name that never happens here: `crate::ir_lower::stmt::instance_property_writes`
@@ -357,15 +384,57 @@ pub(super) fn resolve_property_runtime_action(
         resolution,
         PropertyNameResolution::Visible | PropertyNameResolution::ScopePrivate { .. }
     ) {
+        // `$o->p` and `$o->p ?? d` probe a stored dynamic entry before `__get`, just like
+        // `isset()`; only a miss reaches the accessor.
+        let get_read = matches!(
+            kind,
+            PropertyAccessKind::DirectRead(mode)
+                if mode.uses_magic_get() || mode == PropertyFetchMode::Probe
+        );
+        if get_read && class_declares_method(ctx, class_name, "__get") {
+            return Ok(PropertyRuntimeAction::MagicRead {
+                hash_offset: dynamic_property_hash_offset_for_class(
+                    ctx,
+                    class_name,
+                    property,
+                )?,
+            });
+        }
         if let Some(magic) = kind.magic_method() {
             if class_declares_method(ctx, class_name, magic) {
-                return Ok(
-                    if matches!(kind, PropertyAccessKind::DirectRead(mode) if mode.uses_magic_get()) {
-                        PropertyRuntimeAction::MagicGet
-                    } else {
-                        PropertyRuntimeAction::MagicDeferred
-                    },
-                );
+                return Ok(match kind {
+                    PropertyAccessKind::DirectRead(mode) if mode.uses_magic_get() => {
+                        PropertyRuntimeAction::MagicRead {
+                            hash_offset: dynamic_property_hash_offset_for_class(
+                                ctx,
+                                class_name,
+                                property,
+                            )?,
+                        }
+                    }
+                    // A literal `isset()` name can call `__isset` from the codegen dispatch: the
+                    // missing hash entry has to fall through to the accessor, while a present
+                    // entry answers from storage without ever running user code.
+                    PropertyAccessKind::DirectRead(PropertyFetchMode::Isset) => {
+                        PropertyRuntimeAction::MagicIsset {
+                            hash_offset: dynamic_property_hash_offset_for_class(
+                                ctx,
+                                class_name,
+                                property,
+                            )?,
+                        }
+                    }
+                    PropertyAccessKind::DirectRead(PropertyFetchMode::Empty) => {
+                        PropertyRuntimeAction::MagicEmpty {
+                            hash_offset: dynamic_property_hash_offset_for_class(
+                                ctx,
+                                class_name,
+                                property,
+                            )?,
+                        }
+                    }
+                    _ => PropertyRuntimeAction::MagicDeferred,
+                });
             }
         }
     }
@@ -402,15 +471,25 @@ pub(super) fn resolve_property_runtime_action(
             // no hash. A read or an `unset()` needs no arm of its own, because nothing can ever
             // have been created, which is exactly what `DynamicMissing` already means.
             if kind.creates_dynamic_property() && class_is_readonly(ctx, class_name) {
+                let class_name = class_name.trim_start_matches('\\');
+                if matches!(kind, PropertyAccessKind::RuntimeWrite) {
+                    return Ok(PropertyRuntimeAction::RefuseRuntimeName {
+                        prefix: format!("Cannot create dynamic property {}::$", class_name),
+                    });
+                }
                 return Ok(PropertyRuntimeAction::Refuse {
                     message: format!(
                         "Cannot create dynamic property {}::${}",
-                        class_name.trim_start_matches('\\'),
-                        property
+                        class_name, property
                     ),
                 });
             }
-            let warns_on_miss = property_name_is_scope_dynamic(ctx, class_name, property);
+            let warns_on_miss = property_name_is_scope_dynamic(ctx, class_name, property)
+                || !ctx
+                    .module
+                    .class_infos
+                    .get(class_name.trim_start_matches('\\'))
+                    .is_some_and(|class_info| class_info.allow_dynamic_properties);
             Ok(
                 match dynamic_property_hash_offset_for_class(ctx, class_name, property)? {
                     Some(hash_offset) => PropertyRuntimeAction::DynamicHash {
@@ -442,10 +521,13 @@ pub(super) fn resolve_property_runtime_action(
 
 /// Returns whether the class is declared `readonly`, which php makes no-dynamic-properties.
 fn class_is_readonly(ctx: &FunctionContext<'_>, class_name: &str) -> bool {
-    ctx.module
-        .class_infos
-        .get(class_name.trim_start_matches('\\'))
-        .is_some_and(|class_info| class_info.is_readonly_class)
+    let class_name = class_name.trim_start_matches('\\');
+    elephc_builtin_contract::is_internal_readonly_class(class_name)
+        || ctx
+            .module
+            .class_infos
+            .get(class_name)
+            .is_some_and(|class_info| class_info.is_readonly_class)
 }
 
 /// Returns whether the class, or an ancestor, declares one magic accessor.
@@ -738,6 +820,9 @@ pub(super) fn dynamic_property_runtime_plan_for_class(
     let normalized = class_name.trim_start_matches('\\');
     let answers_dynamically = property_name_is_scope_dynamic(ctx, normalized, property)
         || dynamic_property_hash_offset_for_class(ctx, normalized, property)?.is_some()
+        // A readonly class reserves no hash, but it is not the declared-slot path either: a write
+        // raises `Cannot create dynamic property …` and a read warns `Undefined property`.
+        || class_is_readonly(ctx, normalized)
         || subtree_answers_from_its_own_hash(ctx, normalized, property)?
         || kind
             .magic_method()

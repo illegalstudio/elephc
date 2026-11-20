@@ -214,7 +214,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_statement_constructor_ca
         {
             continue;
         }
-        let Some(mut candidate) = dynamic_new_candidate(ctx, class_name, info, None, inst)? else {
+        let Some(mut candidate) = dynamic_new_candidate(ctx, class_name, info, None, inst, true)? else {
             continue;
         };
         candidate.constructor_impl = Some(ConstructorCallTarget {

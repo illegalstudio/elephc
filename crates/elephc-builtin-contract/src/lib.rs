@@ -18,14 +18,18 @@ mod comparison_policy;
 mod mixed_inputs;
 mod class_spec;
 mod constant_spec;
+mod constant_deprecation;
 mod catalog_classes;
 mod catalog_constants;
+mod catalog_constants_locale;
 mod catalog_constants_tokenizer;
 mod catalog_constants_curl;
 mod catalog_data;
+mod catalog_locale;
 mod catalog_gmp;
 mod catalog_mbstring;
 mod catalog_pcntl;
+mod catalog_tidy;
 mod catalog_xml;
 #[cfg(feature = "curl")]
 mod catalog_curl;
@@ -35,6 +39,7 @@ mod core_constants;
 mod core_attributes;
 mod eval_profile;
 mod id;
+mod internal_final;
 mod module;
 mod object_operators;
 mod php_version;
@@ -45,6 +50,7 @@ mod spec;
 mod type_spec;
 pub mod mbstring_abi;
 pub mod output_abi;
+pub mod pcre_errors;
 pub mod string_literal;
 pub mod reflection_format;
 pub mod reflection_methods;
@@ -60,9 +66,16 @@ pub use eval_profile::{
 };
 pub use class_spec::{ClassContract, ClassKind, ClassRoute};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
+pub use constant_deprecation::{
+    class_constant_deprecation, global_constant_deprecation, is_deprecated_class_constant_name,
+    ConstantDeprecation,
+};
 pub use id::BuiltinId;
 pub use comparison_policy::ComparisonPolicy;
 pub use mixed_inputs::MixedInputDomain;
+pub use internal_final::{
+    is_internal_readonly_class, INTERNAL_FINAL_CLASSES, INTERNAL_READONLY_CLASSES,
+};
 pub use core_functions::CORE_FUNCTION_NAMES;
 pub use core_constants::{core_environment_constant, EXECUTABLE_PATH_DEFAULT_KIND};
 pub use core_attributes::{core_attribute_flags, CORE_ATTRIBUTE_CONSTANTS, CORE_ATTRIBUTE_IS_REPEATABLE, CORE_ATTRIBUTE_TARGET_ALL};
@@ -70,9 +83,9 @@ pub use module::PhpModule;
 pub use object_operators::{
     CheckedNumericProjection, ClassCasts, ClassOperators, ObjectArithmetic, ObjectArithmeticResult, ObjectBitwise,
     ObjectCast, ObjectDimension, ObjectOperandDispatch, ObjectOrdering, ObjectProperty, ObjectPropertyUpdate,
-    ObjectShift, BCMATH_NUMBER_OPERATORS, GMP_CASTS, GMP_OPERATORS,
+    ObjectShift, BCMATH_NUMBER_OPERATORS, GMP_CASTS, GMP_OPERATORS, TIDY_CASTS, TIDY_OPERATORS,
 };
-pub use catalog_gmp::FUNCTIONS as GMP_FUNCTIONS;
+pub use catalog_gmp::{FUNCTIONS as GMP_FUNCTIONS, GMP_VERSION};
 pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};
 pub use symbol_registry::{canonical_constant_name, classes, constants, lookup_class, lookup_constant};

@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - The writable cell is updated before the deprecation callback observes it.
-//! - Null conversion is silent and precedes key validation and missing-key diagnostics.
+//! - PHP null conversion precedes ordinary key diagnostics; strict kind guards run earlier.
 //! - Static updates stop on callback throws; plain writes preserve opcode completion separately.
 //! - Existing receiver owners stay published across notification on every target.
 //! - A sole pending owner after notification means the original parent was detached.

@@ -214,6 +214,9 @@ pub enum StmtKind {
         once: bool,
         required: bool,
     },
+    /// Marks an include as loaded (`label` names its flag). A label made by
+    /// [`class_binding_mark_label`] instead marks where an included file binds a class or trait
+    /// whose declaration was hoisted out of it.
     IncludeOnceMark {
         label: String,
     },
@@ -230,6 +233,16 @@ pub enum StmtKind {
     },
     Break(usize),
     Continue(usize),
+    /// `goto name;`: an unconditional jump to the label `name` of the same function or file.
+    ///
+    /// Exists only between the parser and `crate::goto_lowering`, which validates the jump and
+    /// rewrites it into structured control flow. No later pass may see one.
+    Goto(String),
+    /// `name:` at statement position: the target of a `goto`.
+    ///
+    /// `crate::goto_lowering` validates and removes every label. One that reaches a later
+    /// pass, in a tree built without that lowering, is a statement that does nothing.
+    GotoLabel(String),
     ExprStmt(Expr),
     NamespaceDecl {
         name: Option<Name>,
@@ -443,3 +456,19 @@ impl Stmt {
 
 /// Type alias for a program as a vector of statements.
 pub type Program = Vec<Stmt>;
+
+/// Prefix of an [`StmtKind::IncludeOnceMark`] label that marks a class binding point instead of
+/// an include flag. It cannot start a flag label (`_include_once_...`).
+const CLASS_BINDING_MARK_PREFIX: &str = "\u{0}class-binding:";
+
+/// Returns the label of the mark that stands where an included file binds class or trait
+/// `name` (fully qualified): php-src binds it while compiling that file, or at its statement,
+/// both of which happen when the include runs, not when the hoisted declaration is lowered.
+pub fn class_binding_mark_label(name: &str) -> String {
+    format!("{CLASS_BINDING_MARK_PREFIX}{}", name.trim_start_matches('\\'))
+}
+
+/// Returns the class or trait a class-binding mark label names, or `None` for an include flag.
+pub fn class_binding_mark_class(label: &str) -> Option<&str> {
+    label.strip_prefix(CLASS_BINDING_MARK_PREFIX)
+}

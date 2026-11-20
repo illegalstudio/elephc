@@ -1,0 +1,38 @@
+// Ferron 2.8.x configuration (KDL syntax).
+// Verified against the Ferron 2.8.1 documentation:
+//   https://github.com/ferronweb/ferron/tree/2.8.1/docs
+// Ferron 2 is the stable line; keep this file in KDL syntax.
+globals {
+    auto_tls
+    auto_tls_contact "admin@example.com"
+    auto_tls_challenge "http-01"
+}
+
+example.com {
+    // Ferron serves the static assets; the compiled origin only sees dynamic
+    // requests. `remove_base` strips the /static prefix before resolving root.
+    location "/static" remove_base=#true {
+        root "/srv/app/public/static"
+    }
+
+    // Every other path goes to the elephc origin over a Unix socket.
+    location "/" {
+        proxy "http://localhost" unix="/run/elephc/app.sock"
+        // Loopback TCP alternative (use this when the origin listens on
+        // 127.0.0.1:8080 instead of a Unix socket):
+        // proxy "http://127.0.0.1:8080/"
+
+        // The origin prefers Forwarded over X-Forwarded-*. Remove the client
+        // chain and replace every fact the origin reads with the peer facts
+        // Ferron sees.
+        proxy_request_header_remove "Forwarded"
+        proxy_request_header_replace "X-Forwarded-For" "{client_ip}"
+        proxy_request_header_replace "X-Forwarded-Proto" "{scheme}"
+        proxy_request_header_replace "X-Forwarded-Host" "{header:Host}"
+        proxy_request_header_replace "X-Forwarded-Port" "{server_port}"
+        proxy_request_header_replace "X-Real-IP" "{client_ip}"
+
+        lb_health_check
+        proxy_keepalive
+    }
+}

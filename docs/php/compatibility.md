@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3181 constants).
 
-Overall coverage: functions **1078 / 2169** (50%), classes **191 / 329** (58%), constants **1420 / 3181** (45%).
+Overall coverage: functions **1114 / 2169** (51%), classes **202 / 329** (61%), constants **1614 / 3181** (51%).
 
 ## Coverage by PHP module
 
@@ -22,9 +22,9 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `bz2` | 0 / 10 · 0% | - | - |
 | [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | - | 21 / 21 · 100% |
 | `core` | 62 / 62 · 100% | 40 / 40 · 100% | 89 / 89 · 100% |
-| `ctype` | 4 / 11 · 36% | - | - |
+| `ctype` | 11 / 11 · 100% | - | - |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
-| [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
+| [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 17 / 17 · 100% |
 | `dba` | 0 / 15 · 0% | 0 / 1 · 0% | - |
 | [`dom`](./dom-html.md#functions) | 0 / 2 · 0% | 10 / 50 · 20% | 0 / 61 · 0% |
 | `enchant` | 0 / 25 · 0% | 0 / 2 · 0% | 0 / 3 · 0% |
@@ -47,7 +47,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `odbc` | 0 / 48 · 0% | 0 / 2 · 0% | 0 / 57 · 0% |
 | `openssl` | 4 / 64 · 6% | 0 / 3 · 0% | 3 / 70 · 4% |
 | [`pcntl`](./pcntl.md#functions) | 28 / 28 · 100% | 1 / 1 · 100% | 0 / 129 · 0% |
-| [`pcre`](./regex.md#functions) | 5 / 11 · 45% | - | 7 / 19 · 37% |
+| [`pcre`](./regex.md#functions) | 8 / 11 · 73% | - | 18 / 19 · 95% |
 | [`pdo`](./pdo.md#functions) | 1 / 1 · 100% | 4 / 4 · 100% | - |
 | [`pdo_dblib`](./pdo.md#functions) | - | 1 / 1 · 100% | - |
 | [`pdo_firebird`](./pdo.md#functions) | - | 1 / 1 · 100% | - |
@@ -70,13 +70,13 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
 | `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 390 / 545 · 72% | 3 / 6 · 50% | 163 / 400 · 41% |
+| `standard` | 392 / 545 · 72% | 3 / 6 · 50% | 171 / 400 · 43% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
-| `tidy` | 0 / 24 · 0% | 0 / 2 · 0% | 0 / 161 · 0% |
+| [`tidy`](./tidy.md#functions) | 24 / 24 · 100% | 2 / 2 · 100% | 161 / 161 · 100% |
 | [`tokenizer`](./tokenizer.md#functions) | 2 / 2 · 100% | 1 / 1 · 100% | 154 / 154 · 100% |
-| `uri` | - | 0 / 9 · 0% | - |
+| `uri` | - | 9 / 9 · 100% | - |
 | [`xml`](./xml.md#functions) | 22 / 22 · 100% | 1 / 1 · 100% | 28 / 28 · 100% |
 | `xmlreader` | - | 0 / 1 · 0% | - |
 | [`xmlwriter`](./xml.md#functions) | 42 / 42 · 100% | 1 / 1 · 100% | - |
@@ -98,8 +98,8 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `pdo` functions: 1 / 0
 - `random` functions: 9 / 3
 - `session` functions: 23 / 0
-- `standard` functions: 390 / 350
-- `standard` constants: 163 / 142
+- `standard` functions: 392 / 353
+- `standard` constants: 171 / 150
 
 Of those functions, 223 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
 
@@ -146,7 +146,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | Feature | Status | Notes |
 |---|---|---|
 | [PDO](./pdo.md) ([PHP](https://www.php.net/manual/en/book.pdo.php)) | ✅ Supported | Driver matrix documented on the PDO page |
-| [mysqli](./mysqli.md) ([PHP](https://www.php.net/manual/en/book.mysqli.php)) | 🟡 Partial | Locked v1 subset over the elephc-pdo bridge; divergences on the mysqli page |
+| [mysqli](./mysqli.md) ([PHP](https://www.php.net/manual/en/book.mysqli.php)) | 🟡 Partial | Complete selected-profile function, class, method and constant surface over the elephc-pdo bridge; behavioral divergences remain documented on the mysqli page |
 | [Sessions](./sessions.md) ([PHP](https://www.php.net/manual/en/book.session.php)) | ✅ Supported | In --web binaries |
 | [Streams](./streams.md) ([PHP](https://www.php.net/manual/en/book.stream.php)) | 🟡 Partial |  |
 | [SPL](./spl.md) ([PHP](https://www.php.net/manual/en/book.spl.php)) | 🟡 Partial |  |
@@ -158,6 +158,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [PCNTL](./pcntl.md) ([PHP](https://www.php.net/manual/en/book.pcntl.php)) | ✅ Supported | Target-aware Unix process control; auto-linked or forced with --with-pcntl |
 | [XML](./xml.md) ([PHP](https://www.php.net/manual/en/book.xml.php)) | ✅ Supported | ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost |
 | [SimpleXML](./xml.md) ([PHP](https://www.php.net/manual/en/book.simplexml.php)) | ✅ Supported | Three functions and two classes on the managed libxml2 bridge; supports element and attribute selections, mutation, namespace queries, XPath, and recursive iteration. Auto-linked or forced with --with-xml. |
+| [Tidy](./tidy.md) ([PHP](https://www.php.net/manual/en/book.tidy.php)) | ✅ Supported | ext/tidy (24 functions, tidy/tidyNode, 161 TIDY_* constants) on a pinned static libtidy 5.8.0 from the native catalog (elephc native add libtidy); auto-linked or forced with --with-tidy; the full php-src ext/tidy case corpus is migrated into Rust codegen tests |
 | [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 34 shared-contract functions; curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract and is the one function the row does not count. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compiled-script manifest plus a runtime parsed-script cache for dynamic include/require through eval(), with optional persistent file caching; ordinary code remains AOT-compiled and there is no tracing JIT |
@@ -214,7 +215,7 @@ Constants: `ARRAY_FILTER_USE_VALUE` (`standard`), `MYSQLI_TYPE_VARCHAR` (`mysqli
 
 ## Known limitations
 
-**eval() coverage of the prelude-implemented modules.** The generated eval() counts are zero for gd, exif, mysqli, PDO, and session because their functions use injected PHP preludes without interpreter bindings. OPcache has a separate supported route through native prelude declarations or dedicated interpreter handlers, including the live script cache and API restrictions. The remaining module gaps are tracked by mysqli #746, PDO #748, session #1211, gd and exif #1212, with #906 as the umbrella; call those functions from compiled code and pass the results into the fragment until their eval() surfaces are implemented.
+**eval() coverage of the prelude-implemented modules.** Generated eval() counts track explicit interpreter bindings and supported contract routes; a zero for a prelude module does not by itself mean its linked declarations are unavailable at runtime. In particular, eval() can call the PDO and mysqli surface linked into the compiled program. Use --with-pdo or --with-mysqli when only opaque eval source names that surface. OPcache also has native prelude and dedicated interpreter routes. Consult each module page for its runtime availability, required capabilities and remaining limitations.
 
 **Static subset, AOT only.** Ordinary source is compiled ahead of time with no opcode fallback; runtime code loading exists only through the experimental eval() interpreter bridge.
 

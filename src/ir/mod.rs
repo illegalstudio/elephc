@@ -43,7 +43,7 @@ pub use function::{
 };
 pub use instr::{
     BuiltinId, CheckedNumericChainImmediate, EvalBindingRole, EvalScopeStoreImmediate, CmpPredicate, CoreBuiltinOp, GcControlOp, Immediate,
-    InstId, Instruction, IterStartMetadata, MixedNumericOp, Op, PassOrigin, PhpTypePredicate,
+    InstId, Instruction, IterStartMetadata, MinMaxRule, MixedNumericOp, Op, PassOrigin, PhpTypePredicate,
     PropertyFetchMode, RuntimeId,
 };
 pub use module::{

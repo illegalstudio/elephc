@@ -103,6 +103,36 @@ fn test_parse_trait_use_as_protected() {
     }
 }
 
+/// A semi-reserved keyword names the method in every adaptation position: the bare target,
+/// the `Trait::method` target and the alias, while a modifier right after `as` stays a visibility
+/// change and a modifier after a visibility is the alias (`as protected static`).
+#[test]
+fn test_parse_trait_adaptation_keyword_method_names() {
+    let stmts = parse_source(
+        "<?php trait A { public function match() {} public function list() {} } class Box { use A { match as protected matchContent; A::list as print; match as public; list as private static; } }",
+    );
+    let StmtKind::ClassDecl { trait_uses, .. } = &stmts[1].kind else {
+        panic!("Expected ClassDecl");
+    };
+    let adaptations = &trait_uses[0].adaptations;
+    assert_eq!(adaptations.len(), 4);
+    let expected = [
+        (None, "match", Some("matchContent"), Some(Visibility::Protected)),
+        (Some("A"), "list", Some("print"), None),
+        (None, "match", None, Some(Visibility::Public)),
+        (None, "list", Some("static"), Some(Visibility::Private)),
+    ];
+    for (adaptation, (want_trait, want_method, want_alias, want_visibility)) in adaptations.iter().zip(expected) {
+        let TraitAdaptation::Alias { trait_name, method, alias, visibility } = adaptation else {
+            panic!("Expected trait alias adaptation, got {adaptation:?}");
+        };
+        assert_eq!(trait_name.as_deref(), want_trait);
+        assert_eq!(method, want_method);
+        assert_eq!(alias.as_deref(), want_alias);
+        assert_eq!(*visibility, want_visibility);
+    }
+}
+
 /// Parses a class using two traits `A, B` with an `A::foo insteadof B` conflict resolution.
 /// Verifies the `TraitAdaptation::InsteadOf` variant with `trait_name = A`, `method = foo`,
 /// and `instead_of = vec!["B"]`.

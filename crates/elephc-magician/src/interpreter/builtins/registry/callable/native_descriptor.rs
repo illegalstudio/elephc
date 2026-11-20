@@ -110,19 +110,25 @@ pub(in crate::interpreter) fn stage_native_descriptor_args(
         };
         let parameter_type = descriptor_parameter_type(parameter.type_tag);
         let coerced = match parameter_type.as_ref() {
-            Some(parameter_type) => match eval_method_parameter_value(
-                parameter_type,
-                argument.value,
-                context,
-                values,
-            ) {
-                Ok(value) => value,
-                Err(status) => {
-                    return abort_native_descriptor_staging(
-                        status, staged, pending, context, values,
-                    );
+            Some(parameter_type) => {
+                let parameter_name = (!parameter.name.is_empty()).then_some(parameter.name.as_str());
+                match eval_method_parameter_value_or_throw(
+                    &signature.display_name,
+                    parameter_index.unwrap_or(0) + 1,
+                    parameter_name,
+                    parameter_type,
+                    argument.value,
+                    context,
+                    values,
+                ) {
+                    Ok(value) => value,
+                    Err(status) => {
+                        return abort_native_descriptor_staging(
+                            status, staged, pending, context, values,
+                        );
+                    }
                 }
-            },
+            }
             None => argument.value,
         };
         let coerced_is_temporary = coerced != argument.value;

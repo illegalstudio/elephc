@@ -29,6 +29,8 @@ pub(super) fn ordinary(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: &str,
     index: LoweredValue, key: &Expr, increment: bool, results: Option<ValueIncDecLocals<'_>>, span: Span,
 ) {
+    // The update reads the element first; PHP rejects a null receiver before that read.
+    runtime_receivers::reject_null_receiver(ctx, receiver, property, span);
     runtime_receivers::guard_readwrite(ctx, receiver, property, span);
     let ty = ctx.builder.value_php_type(receiver.value);
     let borrowed = ctx.emit_value(Op::Borrow, vec![receiver.value], None, ty.clone(),

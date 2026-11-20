@@ -38,7 +38,7 @@ fn reflection_constructor_arrays_native_preserve_kinds_and_owners() {
                 let output = super::native_module::run(&module);
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 assert!(output.status.success(), "keys={keys} opt={optimize} mode={mode:?}: {:?}; {stderr}", output.status);
-                assert_eq!(String::from_utf8_lossy(&output.stdout), "T|K7|K9|K10|K7|K11|RK4|ConstructorArrayOther|AT|ET|1|Y:2|", "{stderr}");
+                assert_eq!(String::from_utf8_lossy(&output.stdout), "K12|K13|T|K7|K9|K10|K7|K11|RK4|ConstructorArrayOther|AT|ET|1|Y:2|", "{stderr}");
                 assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
             }
         }

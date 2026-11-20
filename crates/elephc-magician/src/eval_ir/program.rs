@@ -36,6 +36,8 @@ pub struct EvalProgram {
     /// Parser policy provenance, serialized without coupling the neutral crate to serde.
     semantic_profile_bits: u64,
     native_generic_syntax: bool,
+    #[serde(default)]
+    strict_types: bool,
     source_len: usize,
     statements: Vec<EvalStmt>,
     scope_access_mask: u64,
@@ -81,6 +83,7 @@ impl EvalProgram {
         Self {
             semantic_profile_bits: 0,
             native_generic_syntax: false,
+            strict_types: false,
             source_len,
             statements,
             scope_access_mask: EVAL_SCOPE_ACCESS_ALL,
@@ -115,6 +118,15 @@ impl EvalProgram {
 
     /// Returns whether source used native generic syntax.
     pub(crate) fn native_generic_syntax(&self) -> bool { self.native_generic_syntax }
+
+    /// Records the fragment's `declare(strict_types=...)` mode.
+    pub(crate) fn with_strict_types(mut self, strict_types: bool) -> Self {
+        self.strict_types = strict_types;
+        self
+    }
+
+    /// Returns the fragment's `declare(strict_types=...)` mode.
+    pub(crate) fn strict_types(&self) -> bool { self.strict_types }
 
     /// Records the CLI-populated superglobals (without `$`) this fragment's code names.
     pub fn with_cli_superglobals(mut self, names: Vec<&'static str>) -> Self {

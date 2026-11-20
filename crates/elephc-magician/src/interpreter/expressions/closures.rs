@@ -40,7 +40,8 @@ pub(super) fn eval_closure_expr(
             binding.name(), binding.value().borrowed(), binding.by_ref_target().cloned(),
         ).with_binding_type(origin).with_source_view(source, context.source_view_epoch()));
     }
-    let closure = EvalClosure::new(function.clone(), bindings, is_static);
+    let creating_class = context.current_class_scope().map(str::to_string);
+    let closure = EvalClosure::new(function.clone(), bindings, is_static).with_creating_class(creating_class.as_deref());
     let name = context.define_closure(closure);
     let object = eval_closure_object_expr(EvalClosureObjectTarget::Named(name), context, values);
     finish_eval_argument_values(object, owners, context, values)

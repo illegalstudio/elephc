@@ -249,6 +249,19 @@ impl Checker {
                 seen_idx += 1;
                 continue;
             }
+            // A written by-reference array type (`array<T> &`, `array<K, V> &`) is a storage
+            // contract the caller's variable is converted to or refused against; it is never
+            // sharpened or joined with what a call site passes.
+            if seen_idx < regular_param_count
+                && Self::is_written_reference_array_param(
+                    &stored_sig.ref_params,
+                    &stored_sig.param_type_exprs,
+                    seen_idx,
+                )
+            {
+                seen_idx += 1;
+                continue;
+            }
             // A DECLARED `array` hint is generic: it resolves to `Array(Mixed)` and is then
             // specialized to the first call site's concrete element type. That narrowing has to be
             // joined over ALL call sites, or a later `Array(Mixed)` argument is passed to a body

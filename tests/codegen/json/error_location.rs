@@ -2,7 +2,7 @@
 //! Regression tests for deferred JSON decode error locations.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//! - `cargo test --test codegen_tests_ext` through the JSON codegen test module.
 //!
 //! Key details:
 //! - Valid decodes must leave `_json_error_scan_count` and `_json_error_scan_bytes` at zero.

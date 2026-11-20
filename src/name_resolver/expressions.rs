@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - PHP builtin fallback applies to unqualified function calls without breaking explicit namespace references.
+//! - Reads of global constants listed by `elephc_builtin_contract::global_constant_deprecation`
+//!   become an inline `E_DEPRECATED` raise under the compile profile. Deprecated class
+//!   constants are reported by EIR lowering, which knows the class hierarchy.
 
 use std::cell::Cell;
 
@@ -26,7 +29,8 @@ use super::{
 thread_local! {
     /// Whether the expression currently being resolved must stay a constant expression.
     ///
-    /// `MT_RAND_PHP` is rewritten to an inline deprecation on an ordinary read, but a
+    /// A deprecated global constant (`MT_RAND_PHP`, `DATE_RFC7231`) is rewritten to an inline
+    /// deprecation on an ordinary read, but a
     /// constant initializer, default parameter, attribute argument, or switch label cannot
     /// contain a function call. Those sites resolve under this flag.
     static CONSTANT_EXPRESSION: Cell<bool> = const { Cell::new(false) };
@@ -51,35 +55,32 @@ fn in_constant_expression() -> bool {
     CONSTANT_EXPRESSION.with(|flag| flag.get())
 }
 
-/// Reports whether one resolved constant name is PHP's deprecated `MT_RAND_PHP`.
-fn is_mt_rand_php(name: &crate::names::Name) -> bool {
-    name.as_canonical().trim_start_matches('\\') == "MT_RAND_PHP"
+/// Returns the deprecation a read of the resolved global constant `name` raises under the
+/// compile profile, if any (`MT_RAND_PHP`, `DATE_RFC7231`).
+fn global_constant_read_deprecation(
+    name: &crate::names::Name,
+) -> Option<elephc_builtin_contract::ConstantDeprecation> {
+    elephc_builtin_contract::global_constant_deprecation(name.as_str())
+        .filter(|deprecation| deprecation.applies_to(crate::codegen_support::compile_php_version()))
 }
 
-/// Builds the expression PHP evaluates when the program reads `MT_RAND_PHP`.
+/// Builds the expression PHP evaluates when the program reads a deprecated constant.
 ///
 /// php-src emits `E_DEPRECATED` from the constant fetch itself, so the diagnostic has to
 /// carry the read's own file and line. A prelude helper would report the helper's synthetic
-/// span instead, hence the inline `trigger_error(...) ? 1 : 1`: the call runs at this
-/// expression's span, and both branches keep the constant's value so the read still yields
-/// `1` whichever way a user error handler answers.
-fn mt_rand_php_read(span: Span) -> ExprKind {
+/// span instead, hence the inline `__elephc_builtin_deprecated(...) ? value : value`: the call
+/// runs at this expression's span, and both branches keep the constant's literal value so the
+/// read still yields it whichever way a user error handler answers. The branches are literals
+/// rather than the constant itself, which EIR lowering would report a second time.
+fn deprecated_constant_read(span: Span, message: &str, value: ExprKind) -> ExprKind {
     let at = |kind| Expr::new(kind, span);
     ExprKind::Ternary {
         condition: Box::new(at(ExprKind::FunctionCall {
-            name: resolved_name("trigger_error".to_string()),
-            args: vec![
-                at(ExprKind::StringLiteral(
-                    "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937"
-                        .to_string(),
-                )),
-                at(ExprKind::ConstRef(resolved_name(
-                    "E_USER_DEPRECATED".to_string(),
-                ))),
-            ],
+            name: resolved_name("__elephc_builtin_deprecated".to_string()),
+            args: vec![at(ExprKind::StringLiteral(message.to_string()))],
         })),
-        then_expr: Box::new(at(ExprKind::IntLiteral(1))),
-        else_expr: Box::new(at(ExprKind::IntLiteral(1))),
+        then_expr: Box::new(at(value.clone())),
+        else_expr: Box::new(at(value)),
     }
 }
 
@@ -330,11 +331,16 @@ pub(super) fn resolve_expr(
                 imports,
                 symbols,
             ));
-            if !in_constant_expression() && is_mt_rand_php(&resolved) {
-                mt_rand_php_read(expr.span)
-            } else {
-                ExprKind::ConstRef(resolved)
-            }
+            let deprecated_read = (!in_constant_expression())
+                .then(|| global_constant_read_deprecation(&resolved))
+                .flatten()
+                .and_then(|deprecation| {
+                    let value = crate::types::predefined_constants::literal_of(
+                        elephc_builtin_contract::lookup_constant(resolved.as_str())?.value,
+                    )?;
+                    Some(deprecated_constant_read(expr.span, deprecation.message, value))
+                });
+            deprecated_read.unwrap_or(ExprKind::ConstRef(resolved))
         }
         // `new Box<int>(...)`. Both halves need resolving and the CATCH-ALL below would resolve
         // neither: the class type has to canonicalize to the same name the declaration does or
@@ -524,7 +530,9 @@ pub(super) fn resolve_expr(
                         if name.last_segment().is_some_and(|segment| segment.eq_ignore_ascii_case("Closure"))
                             && !symbols.declares_class_like(&name.as_canonical())
                 )
-                && matches!(&resolved_args[0].kind, ExprKind::StringLiteral(_))
+                // A literal `"Class::method"` names no function: it stays a factory call, which
+                // resolves the method (and its visibility) like a runtime-selected string.
+                && matches!(&resolved_args[0].kind, ExprKind::StringLiteral(name) if !name.contains("::"))
             {
                 let ExprKind::StringLiteral(candidate) = &resolved_args[0].kind else {
                     unreachable!("Closure::fromCallable literal guard must hold")

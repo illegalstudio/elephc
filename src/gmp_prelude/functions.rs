@@ -639,14 +639,35 @@ fn intval_helpers() -> Vec<Stmt> {
 
 /// Shared `min()`/`max()` reducer for one array of operands.
 ///
-/// The reducer applies PHP's last-operand-wins tie rule and only uses GMP's comparison
-/// adapter when either value is a GMP object; every other pair goes through the ordinary
-/// PHP comparison so mixed scalar arrays keep their engine semantics.
+/// `mode` is 0 for the single-array form, 1 for a variadic call with three or more
+/// arguments and 2 for a two-argument call. GMP's comparison adapter is used only when
+/// either value is a GMP object. Every other pair of a variadic call uses PHP's relational
+/// operators, which are false for an unordered `NAN`, in the shape php-src evaluates: a
+/// longer call replaces the running result only on a strict win, and the two-argument
+/// forms keep the first argument only for `first >= second` (max) or `first < second`
+/// (min). The single-array form keeps its three-way comparison.
+///
+/// `$state` follows php-src's comparison mode for the variadic forms: 0 while every value
+/// is an `int`, 1 once a float joined integers a double represents exactly, and 2 (generic)
+/// from the first other value on. `zend_compare` reports an unordered pair as "greater", so
+/// in generic mode a two-argument `max()` keeps its first argument and a longer `max()`
+/// takes the later one, the opposite of the numeric modes. `min()` is the same in all three.
 fn minmax_array() -> Stmt {
+    let mode_is = |mode: i64| bin(v("mode"), BinOp::StrictEq, i(mode));
+    let state_is = |state: i64| bin(v("state"), BinOp::StrictEq, i(state));
+    let three_way = || bin(v("value"), BinOp::Spaceship, v("best"));
+    // php-src's `zend_dval_to_lval((double) $n) == $n`. The largest integer rounds up to
+    // 2^63, whose conversion back is target-defined, so it is excluded by value.
+    let representable = |name: &str| {
+        and(
+            bin(v(name), BinOp::StrictNotEq, i(i64::MAX)),
+            bin(as_int(call("floatval", vec![v(name)])), BinOp::StrictEq, v(name)),
+        )
+    };
     function("__elephc_gmp_minmax_array")
         .param("strict", TypeExpr::Bool)
         .param("max", TypeExpr::Bool)
-        .param("last_min_tie", TypeExpr::Bool)
+        .param("mode", TypeExpr::Int)
         .param("values", t_array())
         .returns(t_mixed())
         .body(vec![
@@ -664,40 +685,125 @@ fn minmax_array() -> Stmt {
             ),
             assign("best", e_null()),
             assign("first", b(true)),
+            assign("state", i(2)),
             foreach_(v("values"), None, "value", vec![
                 if_(
                     v("first"),
-                    vec![assign("best", v("value"))],
-                    Vec::new(),
-                    Some(vec![
+                    vec![
+                        assign("best", v("value")),
                         assign(
-                            "cmp",
+                            "state",
                             e_ternary(
-                                or(
-                                    e_instance_of(v("value"), "GMP"),
-                                    e_instance_of(v("best"), "GMP"),
-                                ),
-                                e_static_call(
-                                    "GMP",
-                                    "__elephc_compare",
-                                    vec![v("value"), v("best")],
-                                ),
-                                bin(v("value"), BinOp::Spaceship, v("best")),
+                                call("is_int", vec![v("value")]),
+                                i(0),
+                                e_ternary(call("is_float", vec![v("value")]), i(1), i(2)),
                             ),
                         ),
-                        // php-src replaces strictly, so equal values keep the first
-                        // candidate. The two-argument frameless min() is the one exception:
-                        // it returns its right operand on equality.
+                    ],
+                    Vec::new(),
+                    Some(vec![
                         if_(
-                            e_ternary(
-                                v("max"),
-                                bin(v("cmp"), BinOp::Gt, i(0)),
-                                e_ternary(
-                                    v("last_min_tie"),
-                                    bin(v("cmp"), BinOp::LtEq, i(0)),
-                                    bin(v("cmp"), BinOp::Lt, i(0)),
-                                ),
+                            state_is(0),
+                            vec![if_(
+                                not(call("is_int", vec![v("value")])),
+                                vec![assign(
+                                    "state",
+                                    e_ternary(
+                                        and(
+                                            call("is_float", vec![v("value")]),
+                                            representable("best"),
+                                        ),
+                                        i(1),
+                                        i(2),
+                                    ),
+                                )],
+                                Vec::new(),
+                                None,
+                            )],
+                            vec![(
+                                state_is(1),
+                                vec![if_(
+                                    not(or(
+                                        call("is_float", vec![v("value")]),
+                                        and(
+                                            call("is_int", vec![v("value")]),
+                                            representable("value"),
+                                        ),
+                                    )),
+                                    vec![assign("state", i(2))],
+                                    Vec::new(),
+                                    None,
+                                )],
+                            )],
+                            None,
+                        ),
+                        assign("replace", b(false)),
+                        if_(
+                            or(
+                                e_instance_of(v("value"), "GMP"),
+                                e_instance_of(v("best"), "GMP"),
                             ),
+                            vec![
+                                assign(
+                                    "cmp",
+                                    e_static_call(
+                                        "GMP",
+                                        "__elephc_compare",
+                                        vec![v("value"), v("best")],
+                                    ),
+                                ),
+                                // php-src replaces strictly, so equal values keep the first
+                                // candidate. The two-argument frameless min() is the one
+                                // exception: it returns its right operand on equality.
+                                assign(
+                                    "replace",
+                                    e_ternary(
+                                        v("max"),
+                                        bin(v("cmp"), BinOp::Gt, i(0)),
+                                        e_ternary(
+                                            mode_is(2),
+                                            bin(v("cmp"), BinOp::LtEq, i(0)),
+                                            bin(v("cmp"), BinOp::Lt, i(0)),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                            Vec::new(),
+                            Some(vec![assign(
+                                "replace",
+                                e_ternary(
+                                    v("max"),
+                                    e_ternary(
+                                        mode_is(2),
+                                        e_ternary(
+                                            state_is(2),
+                                            bin(v("best"), BinOp::Lt, v("value")),
+                                            not(bin(v("best"), BinOp::GtEq, v("value"))),
+                                        ),
+                                        e_ternary(
+                                            mode_is(1),
+                                            e_ternary(
+                                                state_is(2),
+                                                not(bin(v("value"), BinOp::LtEq, v("best"))),
+                                                bin(v("value"), BinOp::Gt, v("best")),
+                                            ),
+                                            bin(three_way(), BinOp::Gt, i(0)),
+                                        ),
+                                    ),
+                                    e_ternary(
+                                        mode_is(2),
+                                        not(bin(v("best"), BinOp::Lt, v("value"))),
+                                        e_ternary(
+                                            mode_is(1),
+                                            bin(v("value"), BinOp::Lt, v("best")),
+                                            bin(three_way(), BinOp::Lt, i(0)),
+                                        ),
+                                    ),
+                                ),
+                            )]),
+                        ),
+                        if_(
+                            v("replace"),
                             vec![assign("best", v("value"))],
                             Vec::new(),
                             None,

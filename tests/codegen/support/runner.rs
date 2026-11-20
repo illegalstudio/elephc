@@ -77,6 +77,11 @@ struct TestBridgeStaticlib {
 /// Lists bridge staticlibs that codegen fixtures may link through `extra_link_libs`.
 const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
+        lib_name: "elephc_tidy",
+        package: "elephc-tidy",
+        php_extensions: &["tidy"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_tokenizer",
         package: "elephc-tokenizer",
         php_extensions: &["tokenizer"],
@@ -117,6 +122,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         lib_name: "elephc_random",
         package: "elephc-random",
         php_extensions: &["random"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_uri",
+        package: "elephc-uri",
+        php_extensions: &["uri"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_mbstring",
@@ -1128,7 +1138,7 @@ mod bridge_staticlib_dir_tests {
         let resolved = bridge_staticlib_dir_for(
             None,
             Some(Path::new(
-                "/tmp/nextest-archive/target/debug/deps/codegen_tests-hash",
+                "/tmp/nextest-archive/target/debug/deps/codegen_tests_core-hash",
             )),
             Path::new("/workspace/elephc"),
             true,
@@ -1143,7 +1153,7 @@ mod bridge_staticlib_dir_tests {
         let resolved = bridge_staticlib_dir_for(
             Some(std::ffi::OsStr::new("/shared/target")),
             Some(Path::new(
-                "/tmp/nextest-archive/target/debug/deps/codegen_tests-hash",
+                "/tmp/nextest-archive/target/debug/deps/codegen_tests_core-hash",
             )),
             Path::new("/workspace/elephc"),
             true,
@@ -1157,7 +1167,7 @@ mod bridge_staticlib_dir_tests {
     fn local_tests_use_workspace_target_debug_directory() {
         let resolved = bridge_staticlib_dir_for(
             None,
-            Some(Path::new("/workspace/target/debug/deps/codegen_tests-hash")),
+            Some(Path::new("/workspace/target/debug/deps/codegen_tests_core-hash")),
             Path::new("/workspace/elephc"),
             false,
         );
@@ -1449,6 +1459,15 @@ fn test_link_plan(
                 for archive in &package.archives {
                     plan.push(LinkItem::managed_archive(archive.clone(), package.name));
                 }
+            }
+        }
+    }
+    // The tidy bridge declares libtidy's symbols without linking them; the managed
+    // `libtidy` package supplies the single archive at final link time.
+    if named.contains("elephc_tidy") {
+        if let Some(archives) = super::tidy_native::tidy_native_archives() {
+            for archive in archives {
+                plan.push(LinkItem::managed_archive(archive, "libtidy"));
             }
         }
     }

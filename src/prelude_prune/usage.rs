@@ -46,8 +46,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    CallableTarget, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, InstanceOfTarget,
-    Stmt, StmtKind,
+    BinOp, CallableTarget, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind,
+    InstanceOfTarget, StaticReceiver, Stmt, StmtKind,
 };
 
 /// Symbol-reference summary for one AST subtree.
@@ -123,6 +123,15 @@ pub(crate) struct Usage {
     callable_parameter_proof: Option<super::environment_parameters::ParameterProof>,
     /// Reachable global bindings whose mutation can invalidate top-level callable identities.
     callable_global_writes: HashSet<String>,
+    /// Function names written as string literals where a user `callable` parameter or return
+    /// keeps them (`apply("gmp_abs")`); a prelude whose wrapper they need treats them as calls.
+    pub(crate) callable_slot_literals: HashSet<String>,
+    /// The program's own `callable` parameter table, built once per collection.
+    user_callable_slots: Option<std::rc::Rc<super::callable_slots::UserCallableSlots>>,
+    /// Walk state: the import aliases in scope, scoped like the name resolver's imports.
+    callable_imports: super::callable_slots::CallableImports,
+    /// Walk state: the callable being scanned declares a `callable` return type.
+    returns_callable: bool,
 }
 
 impl Usage {
@@ -242,7 +251,6 @@ fn record_method(usage: &mut Usage, name: &str) {
 
 /// Records a named static receiver without rooting unrelated classes' same-named methods.
 fn record_static_method(usage: &mut Usage, receiver: &crate::parser::ast::StaticReceiver, method: &str) {
-    use crate::parser::ast::StaticReceiver;
     usage.methods.insert(php_symbol_key(method));
     if !usage.environment_mode { return; }
     let class = match receiver.written_class_receiver() {
@@ -364,16 +372,83 @@ fn record_builtin_callbacks(usage: &mut Usage, name: &str, args: &[Expr]) -> boo
 
 /// Collects direct and literal-indirect function references from a program.
 pub(crate) fn collect(program: &[Stmt]) -> Usage {
-    let mut usage = Usage::default();
-    for stmt in program {
-        scan_stmt(stmt, &mut usage);
-    }
+    let mut usage = Usage { user_callable_slots: user_callable_slots(program), ..Usage::default() };
+    scan_program(program, &mut usage);
     usage
+}
+
+/// Builds the program's `callable` parameter table, or `None` when it declares none.
+fn user_callable_slots(program: &[Stmt]) -> Option<std::rc::Rc<super::callable_slots::UserCallableSlots>> {
+    let slots = super::callable_slots::UserCallableSlots::from_program(program);
+    (!slots.is_empty()).then(|| std::rc::Rc::new(slots))
+}
+
+/// Records the literals one call hands to the program's own `callable` parameters.
+///
+/// Only a target named before types counts: a function, a method or constructor, a first-class
+/// callable of one (`"x" |> apply(...)`, `(apply(...))("x")`) and `(new Box())("x")` through
+/// `__invoke`. A call through a variable (`$f("x")`) has no knowable target here, so its
+/// arguments may be ordinary text and inject nothing.
+fn record_user_callable_slots(expr: &Expr, usage: &mut Usage) {
+    let Some(slots) = usage.user_callable_slots.clone() else {
+        return;
+    };
+    let imports = &usage.callable_imports;
+    let out = &mut usage.callable_slot_literals;
+    match &expr.kind {
+        ExprKind::FunctionCall { name, args } => slots.function_call(name, imports, args, out),
+        ExprKind::StaticMethodCall { receiver: StaticReceiver::Named(class), method, args } => {
+            slots.class_method_call(class, imports, method, args, out);
+        }
+        ExprKind::MethodCall { method, args, .. }
+        | ExprKind::NullsafeMethodCall { method, args, .. }
+        | ExprKind::StaticMethodCall { method, args, .. } => slots.method_call(method, args, out),
+        ExprKind::NewObject { class_name, args } => {
+            slots.class_method_call(class_name, imports, "__construct", args, out);
+        }
+        ExprKind::NewGeneric { args, .. }
+        | ExprKind::NewScopedObject { args, .. } => slots.method_call("__construct", args, out),
+        ExprKind::ExprCall { callee, args } => {
+            record_named_value_call(&slots, imports, callee, args, out);
+        }
+        ExprKind::Pipe { value, callable } => {
+            let args = std::slice::from_ref(value.as_ref());
+            record_named_value_call(&slots, imports, callable, args, out);
+        }
+        _ => {}
+    }
+}
+
+/// Records the literals a call through a syntactically named callee hands to its `callable`
+/// parameters: a first-class callable of a function or method, or a freshly built object.
+fn record_named_value_call(
+    slots: &super::callable_slots::UserCallableSlots,
+    imports: &super::callable_slots::CallableImports,
+    callee: &Expr,
+    args: &[Expr],
+    out: &mut HashSet<String>,
+) {
+    match &callee.kind {
+        ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            slots.function_call(name, imports, args, out);
+        }
+        ExprKind::FirstClassCallable(
+            CallableTarget::Method { method, .. } | CallableTarget::StaticMethod { method, .. },
+        ) => slots.method_call(method, args, out),
+        ExprKind::NewObject { .. } | ExprKind::NewGeneric { .. } | ExprKind::NewScopedObject { .. } => {
+            slots.method_call("__invoke", args, out);
+        }
+        _ => {}
+    }
 }
 
 /// Collects ordinary usage plus the dispatch metadata needed to exclude unreferenced callbacks.
 pub(crate) fn collect_environment(program: &[Stmt]) -> Usage {
-    let mut usage = Usage { environment_mode: true, ..Usage::default() };
+    let mut usage = Usage {
+        environment_mode: true,
+        user_callable_slots: user_callable_slots(program),
+        ..Usage::default()
+    };
     scan_program(program, &mut usage);
     // A native callback can be the only opaque call, with no source helper to activate the gate.
     if usage.has_constructor_calls && !usage.callable_names.has_unknown_target() {
@@ -446,6 +521,22 @@ fn scan_literal_eval_fragment(source: Option<&Expr>, usage: &mut Usage) -> bool 
     usage.dynamic_function_call |= dynamic_call_before;
     usage.constructs_dynamic_class |= dynamic_class_before;
     true
+}
+
+/// Folds a concatenation tree whose leaves are all string literals.
+///
+/// Returns `None` as soon as one leaf is not a literal, so a partly dynamic expression is
+/// never mistaken for a statically known callable name.
+pub(super) fn folded_concat_literal(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::StringLiteral(text) => Some(text.clone()),
+        ExprKind::BinaryOp { left, right, op: BinOp::Concat } => Some(format!(
+            "{}{}",
+            folded_concat_literal(left)?,
+            folded_concat_literal(right)?
+        )),
+        _ => None,
+    }
 }
 
 /// Records one normalized PHP function name.
@@ -564,7 +655,12 @@ fn scan_callable(
     if let Some(ty) = return_type {
         scan_type(ty, usage);
     }
+    let outer_returns_callable = std::mem::replace(
+        &mut usage.returns_callable,
+        return_type.is_some_and(crate::parser::ast::TypeExpr::declares_callable),
+    );
     scan_program(body, usage);
+    usage.returns_callable = outer_returns_callable;
     leave_callable_scope(usage, outer);
 }
 
@@ -589,10 +685,15 @@ fn scan_class_const(constant: &ClassConst, usage: &mut Usage) {
 }
 
 /// Scans a statement list into an existing summary.
+///
+/// A `use` inside the list applies to the statements after it and ends with the list, as in the
+/// name resolver, so the import scope is restored on the way out.
 fn scan_program(program: &[Stmt], usage: &mut Usage) {
+    let imports = usage.callable_imports.clone();
     for stmt in program {
         scan_stmt(stmt, usage);
     }
+    usage.callable_imports = imports;
 }
 
 /// Scans every expression-bearing position of one statement.
@@ -645,6 +746,11 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             usage.storage_variables.extend(catches.iter().filter_map(|c| c.variable.clone()));
         }
         _ => {}
+    }
+    if let StmtKind::Return(Some(expr)) = &stmt.kind {
+        if usage.returns_callable {
+            super::callable_slots::record_literal(expr, &mut usage.callable_slot_literals);
+        }
     }
     match &stmt.kind {
         StmtKind::Echo(expr)
@@ -766,7 +872,10 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             if usage.scanning_eval_fragment {
                 usage.introspects = true;
             }
-            scan_program(body, usage)
+            // A namespace block starts with no imports.
+            let imports = std::mem::take(&mut usage.callable_imports);
+            scan_program(body, usage);
+            usage.callable_imports = imports;
         }
         StmtKind::Synthetic(body)
         | StmtKind::IncludeOnceGuard { body, .. } => scan_program(body, usage),
@@ -943,6 +1052,7 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             if usage.scanning_eval_fragment {
                 usage.introspects = true;
             }
+            usage.callable_imports.register(imports);
             for import in imports {
                 let name = import.name.as_canonical();
                 if usage.environment_mode && import.kind == crate::parser::ast::UseKind::Class {
@@ -973,14 +1083,19 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
                 usage.callable_names.unknown_call();
             }
         }
-        StmtKind::NamespaceDecl { .. } if usage.scanning_eval_fragment => {
+        StmtKind::NamespaceDecl { .. } => {
             // A namespaced fragment resolves its names through aliases this walk does not perform.
-            usage.introspects = true;
+            if usage.scanning_eval_fragment {
+                usage.introspects = true;
+            }
+            // `namespace X;` drops the imports of the namespace before it.
+            usage.callable_imports = Default::default();
         }
         StmtKind::Return(None)
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
-        | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantMark { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Global { .. }
@@ -1014,6 +1129,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         | ExprKind::NewGeneric { args, .. } | ExprKind::NewDynamic { args, .. }
         | ExprKind::NewDynamicObject { args, .. } | ExprKind::NewScopedObject { args, .. } => {
             usage.callable_names.arguments(args);
+            record_user_callable_slots(expr, usage);
         }
         _ => {}
     }
@@ -1111,12 +1227,12 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         // declaration the program goes on to use, and the failure surfaces as an undefined
         // class rather than as anything pointing back here.
         ExprKind::FirstClassCallable(CallableTarget::Method { object, method }) => {
-            if method.eq_ignore_ascii_case("fromCallable") { usage.callable_names.unknown_call(); }
+            if method.eq_ignore_ascii_case("fromCallable") || method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY { usage.callable_names.unknown_call(); }
             record_method(usage, method);
             scan_expr(object, usage);
         }
         ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, method }) => {
-            if method.eq_ignore_ascii_case("fromCallable") { usage.callable_names.unknown_call(); }
+            if method.eq_ignore_ascii_case("fromCallable") || method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY { usage.callable_names.unknown_call(); }
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
                 record_class(usage, &name.as_canonical());
             }
@@ -1137,9 +1253,17 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 scan_expr(arg, usage);
             }
         }
-        ExprKind::BinaryOp { left, right, .. } => {
+        ExprKind::BinaryOp { left, right, op } => {
             scan_expr(left, usage);
             scan_expr(right, usage);
+            // A callable or prelude-visible name assembled from string literals is a constant
+            // expression: the optimizer folds it before lowering, so detection has to see the
+            // folded spelling too (`call_user_func("array" . "_rand", ...)`).
+            if *op == BinOp::Concat {
+                if let Some(folded) = folded_concat_literal(expr) {
+                    usage.literals.insert(php_symbol_key(folded.trim_start_matches('\\')));
+                }
+            }
         }
         ExprKind::InstanceOf { value, target } => {
             scan_expr(value, usage);
@@ -1173,6 +1297,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             scan_expr(default, usage);
         }
         ExprKind::Pipe { value, callable } => {
+            record_user_callable_slots(expr, usage);
             usage.callable_names.expression_call(callable);
             usage.callable_names.arguments(std::slice::from_ref(value.as_ref()));
             scan_expr(value, usage);
@@ -1244,13 +1369,18 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             scan_expr(then_expr, usage);
             scan_expr(else_expr, usage);
         }
-        ExprKind::Closure { params, variadic, body, captures, capture_refs, .. } => {
+        ExprKind::Closure { params, variadic, body, captures, capture_refs, return_type, .. } => {
             for name in capture_refs { usage.callable_names.write(name); }
             usage.storage_variables.extend(captures.iter().chain(capture_refs).cloned());
             let mut outer = enter_callable_scope(usage, captures);
             scan_params(params, None, usage);
             if let Some(name) = variadic { usage.callable_names.write(name); }
+            let outer_returns_callable = std::mem::replace(
+                &mut usage.returns_callable,
+                return_type.as_ref().is_some_and(crate::parser::ast::TypeExpr::declares_callable),
+            );
             scan_program(body, usage);
+            usage.returns_callable = outer_returns_callable;
             if let Some(outer) = &mut outer {
                 usage.callable_names.propagate_capture_calls(outer, captures);
             }
@@ -1266,7 +1396,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 scan_constructor_callbacks(usage, receiver, args);
             }
             // An alias may hide the Closure class before name resolution.
-            if method.eq_ignore_ascii_case("fromCallable") && !args.is_empty()
+            if (method.eq_ignore_ascii_case("fromCallable") || method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY) && !args.is_empty()
                 && !args.first().is_some_and(|arg| record_callback_slot(usage, arg, false))
             {
                 usage.callable_names.unknown_call();
@@ -1276,7 +1406,8 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 record_class(usage, &class);
                 // `Closure::fromCallable('f')` invokes what it names, like `call_user_func`; one
                 // whose argument this walk cannot read is a dynamic call.
-                if php_symbol_key(&class) == "closure" && php_symbol_key(method) == "fromcallable" {
+                if php_symbol_key(&class) == "closure" && (php_symbol_key(method) == "fromcallable"
+                    || method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY) {
                     let read = args.iter().fold(false, |seen, arg| {
                         record_literal_callable(usage, arg) || seen
                     });

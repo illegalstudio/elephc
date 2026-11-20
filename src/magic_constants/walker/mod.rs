@@ -27,6 +27,23 @@ pub(crate) fn walk_expression<P: Pass>(expr: crate::parser::ast::Expr, pass: &mu
 
 use crate::parser::ast::TypeExpr;
 
+/// Walks one function, method or closure parameter: its declared type and its default.
+///
+/// `exported` is true for the parameters of an `#[Export]` function declaration.
+pub(super) fn walk_param<P: Pass>(
+    (name, ty, default, by_ref): (String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool),
+    pass: &mut P,
+    span: Span,
+    exported: bool,
+) -> (String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool) {
+    let ty = ty.map(|ty| {
+        let ty = pass.transform_param_type(&name, ty, default.as_ref(), by_ref, exported, span);
+        pass.transform_value_type(ty, span)
+    });
+    let default = default.map(|default| exprs::walk_expr(default, pass));
+    (name, ty, default, by_ref)
+}
+
 /// Routes one inheritance clause entry (`extends Box<int>`, `implements Repository<User>`)
 /// through [`Pass::transform_type`], and puts the answer back in the shape the AST stores it.
 ///
@@ -187,6 +204,21 @@ pub(crate) trait Pass {
         stmt
     }
 
+    /// Transforms the walked statement list of one label and variable scope: a function,
+    /// method or closure body. A braced `namespace` block is not one: it shares the scope of
+    /// the list that holds it.
+    ///
+    /// Called after the body's own statements and nested scopes have been rebuilt, so a pass
+    /// that restructures a whole body (`crate::goto_lowering`) sees inner scopes already
+    /// processed and never has to find them inside expressions itself. The top-level program is
+    /// not routed through here: its caller owns that list. Default returns it unchanged.
+    fn transform_scope_body(
+        &self,
+        body: Vec<crate::parser::ast::Stmt>,
+    ) -> Vec<crate::parser::ast::Stmt> {
+        body
+    }
+
     /// Transforms the span of a rebuilt expression. Default returns it unchanged; a pass that
     /// copies a body under a new source identity retags every expression here.
     fn transform_expr_span(&self, span: Span) -> Span {
@@ -229,6 +261,22 @@ pub(crate) trait Pass {
         self.transform_type(ty, span)
     }
 
+    /// Rewrites one parameter's declared type, given the parameter's name, default,
+    /// by-reference flag and whether its function is `#[Export]`ed, before
+    /// [`Pass::transform_value_type`] sees it. Called with the function, method or closure
+    /// scope already entered. Default returns it unchanged.
+    fn transform_param_type(
+        &mut self,
+        _name: &str,
+        ty: TypeExpr,
+        _default: Option<&crate::parser::ast::Expr>,
+        _by_ref: bool,
+        _exported: bool,
+        _span: Span,
+    ) -> TypeExpr {
+        ty
+    }
+
     /// Transforms a class NAMED at a use site — a construction or a static receiver.
     ///
     /// Exists for one caller: `generics::classes` renaming `new Box(5)` and `Box::of(5)` to the
@@ -249,6 +297,13 @@ pub(crate) trait Pass {
         method
     }
 
+    /// Called for each `use` declaration, in source order, before the statements it governs.
+    fn observe_use_decl(&mut self, _imports: &[crate::parser::ast::UseItem]) {}
+    /// Returns whether a function declaration's attributes name the `#[Export]` attribute,
+    /// passed to [`Pass::transform_param_type`]. The default reads the names as written.
+    fn marks_export(&self, attributes: &[crate::parser::ast::AttributeGroup]) -> bool {
+        crate::exports::attributes_mark_export(attributes)
+    }
     /// Called when entering a `namespace` declaration (the `namespace Foo;` statement).
     fn enter_namespace_decl(&mut self, _name: &Option<Name>) {}
     /// Called when entering a namespace block scope.
@@ -261,8 +316,16 @@ pub(crate) trait Pass {
     fn leave_function(&mut self) {}
     /// Called when entering a class or interface declaration.
     fn enter_class(&mut self, _name: &str) {}
+    /// Called after [`Pass::enter_class`] for a class declaration, with its parent and
+    /// interfaces as written, before the walker transforms them.
+    fn observe_class_heritage(&mut self, _extends: Option<&Name>, _implements: &[Name]) {}
     /// Called when leaving a class or interface declaration.
     fn leave_class(&mut self) {}
+    /// Called around the inheritance clauses (`extends`/`implements`) of the class or
+    /// interface just entered, so a pass can tell an inherited name from a member type.
+    fn enter_heritage(&mut self) {}
+    /// Called after the inheritance clauses of the class or interface just entered.
+    fn leave_heritage(&mut self) {}
     /// Called when entering a trait declaration.
     fn enter_trait(&mut self, _name: &str) {}
     /// Called when leaving a trait declaration.

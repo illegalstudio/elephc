@@ -3,11 +3,12 @@
 //! launch it with `--listen`, drive it over raw TCP, and assert the response.
 //!
 //! Called from:
-//! - `cargo test --test web_tests` through Rust's test harness.
+//! - `cargo test --test integration web_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an
-//!   isolated temp dir with an isolated runtime cache, mirroring cdylib_tests.
+//!   isolated temp dir with a private XDG cache root and the shared
+//!   runtime-object cache, mirroring cdylib_tests.
 //! - The HTTP client is a hand-written minimal HTTP/1.1 request over a
 //!   std::net::TcpStream so the test pulls in no HTTP client dependency.
 //! - Host-target only: each platform/arch covers itself (macOS aarch64 local,
@@ -16,16 +17,29 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+
+#[path = "web/apm.rs"]
+mod apm;
 
 #[path = "web/application.rs"]
 mod application;
 
 #[path = "web/isolated_json.rs"]
 mod isolated_json;
+
+#[path = "web/trusted_proxy.rs"]
+mod trusted_proxy;
+
+#[path = "web/uds.rs"]
+mod uds;
+
+#[path = "support/managed_pcre2.rs"]
+mod managed_pcre2_support;
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -53,10 +67,30 @@ fn elephc_bin() -> String {
 
 /// Compiles `source` in web mode with extra compiler flags and returns the binary path.
 fn compile_web_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> PathBuf {
+    compile_web_with_native(dir, source, stem, flags, false)
+}
+
+/// Compiles `source` in web mode against a hermetic managed-PCRE2 project, for `preg_*` fixtures.
+fn compile_web_with_regex(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> PathBuf {
+    compile_web_with_native(dir, source, stem, flags, true)
+}
+
+/// Compiles `source` in web mode, optionally providing the managed PCRE2 package.
+fn compile_web_with_native(
+    dir: &Path,
+    source: &str,
+    stem: &str,
+    flags: &[&str],
+    regex: bool,
+) -> PathBuf {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    if regex {
+        managed_pcre2_support::configure_host_managed_pcre2(&mut cmd, dir);
+    }
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
     cmd.arg("--web").args(flags).arg(&php);
     let output = cmd.output().expect("failed to spawn elephc");
@@ -99,6 +133,27 @@ fn wait_until_ready(addr: &str) {
         std::thread::sleep(Duration::from_millis(25));
     }
     panic!("server did not start listening on {}", addr);
+}
+
+/// Returns a short `/tmp` path for a Unix-domain socket.
+///
+/// `sun_path` is 104 bytes on macOS; the test `TMPDIR` is longer than that, so
+/// every UDS test uses this fixed short prefix instead.
+fn uds_path() -> PathBuf {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    PathBuf::from(format!("/tmp/elephc-uds-{}-{}.sock", std::process::id(), id))
+}
+
+/// Blocks until `path` accepts a Unix connection (server ready), or panics after 10s.
+fn wait_until_ready_unix(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if UnixStream::connect(path).is_ok() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("server did not start listening on unix:{}", path.display());
 }
 
 /// RAII guard around a spawned web-server child process.
@@ -151,7 +206,7 @@ impl ServerGuard {
     /// running). Across a suite that spawns dozens of servers those orphans
     /// accumulate and exhaust memory. Sending `SIGTERM` first lets the master
     /// run its shutdown path and reap its own workers; a `SIGKILL` fallback
-    /// covers a wedged master after a short grace period. This inherent method
+    /// covers a wedged master after a ten-second grace period. This inherent method
     /// shadows `Child::kill` through the `Deref`, so every existing
     /// `child.kill()` call site becomes graceful with no change. Idempotent: an
     /// already-reaped child returns `Ok` immediately.
@@ -170,8 +225,16 @@ impl ServerGuard {
             }
             LeaderState::Running => {}
         }
-        unsafe { libc::killpg(pgid, libc::SIGTERM) };
-        let deadline = Instant::now() + Duration::from_secs(3);
+        // Signal only the master: it forwards SIGTERM to its workers and lets
+        // them shut their brokers down. Signalling the whole group also hits
+        // grandchildren (handler brokers), which then log a normal exit during
+        // shutdown and make lifecycle assertions look like crashes.
+        unsafe { libc::kill(pgid, libc::SIGTERM) };
+        // The prefork master must reap its workers and remove the Unix socket
+        // before it exits. A loaded host can delay that path past three
+        // seconds; killing it early leaves the socket file behind and turns
+        // the cleanup assertions into flakes.
+        let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if self.leader_state() != LeaderState::Running {
                 break;
@@ -265,6 +328,47 @@ fn spawn_server_with_args(
     child
 }
 
+/// Spawns a server on a Unix socket, waits until it accepts connections, and
+/// returns an RAII guard that reaps it on scope exit.
+fn spawn_server_unix(
+    bin: &Path,
+    path: &Path,
+    workers: &str,
+    extra_args: &[&str],
+) -> ServerGuard {
+    let listen = format!("unix:{}", path.display());
+    let child = Command::new(bin)
+        .arg("--listen").arg(&listen)
+        .arg("--workers").arg(workers)
+        .args(extra_args)
+        .spawn_group()
+        .expect("failed to spawn web server");
+    wait_until_ready_unix(path);
+    child
+}
+
+/// Runs a command to completion, killing it after `timeout` so a startup
+/// regression cannot hang the test suite.
+fn output_with_timeout(mut command: Command, timeout: Duration) -> std::process::Output {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn command");
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    child.wait_with_output().unwrap()
+}
+
 /// Sends one HTTP/1.1 GET and returns the response with any complete chunked body decoded.
 fn http_get(addr: &str, path: &str) -> String {
     let mut s = TcpStream::connect(addr).unwrap();
@@ -272,6 +376,34 @@ fn http_get(addr: &str, path: &str) -> String {
     s.write_all(req.as_bytes()).unwrap();
     let mut buf = String::new();
     s.read_to_string(&mut buf).unwrap();
+    normalize_complete_http_response(buf)
+}
+
+/// Sends one HTTP/1.1 GET over a Unix socket and returns the decoded response.
+fn http_get_unix(path: &Path, request_path: &str) -> String {
+    http_request_unix(path, "GET", request_path, &[], "")
+}
+
+/// Sends one HTTP/1.1 request with headers over a Unix socket.
+fn http_request_unix(
+    path: &Path,
+    method: &str,
+    request_path: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+) -> String {
+    let mut stream = UnixStream::connect(path).unwrap();
+    let mut request = format!(
+        "{} {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n",
+        method, request_path
+    );
+    for (name, value) in headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    request.push_str(&format!("Content-Length: {}\r\n\r\n{}", body.len(), body));
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut buf = String::new();
+    stream.read_to_string(&mut buf).unwrap();
     normalize_complete_http_response(buf)
 }
 
@@ -875,7 +1007,47 @@ echo read_global();
     assert!(r2.ends_with("0"), "second response leaked ordinary global: {:?}", r2);
 }
 
-/// Verifies per-request reset of a function static: each request must see
+/// Verifies that a regex error recorded by one request is not reported by the next one.
+#[test]
+fn web_reset_clears_preg_last_error_between_requests() {
+    let dir = make_test_dir("web_reset_preg_error");
+    let src = r#"<?php
+if (isset($_GET["bad"])) { preg_match('/./u', "\xff"); }
+echo preg_last_error();
+"#;
+    let bin = compile_web_with_regex(&dir, src, "app", &[]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/?bad=1");
+    let r2 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(raw_response_body(&r1), "4", "first response: {r1:?}");
+    assert_eq!(raw_response_body(&r2), "0", "second response leaked the regex error: {r2:?}");
+}
+
+/// Verifies that an eval regex error recorded by one request is not reported by the next one:
+/// the request boundary clears the `preg_last_error()` state eval shares with compiled code.
+#[test]
+fn web_reset_clears_eval_preg_last_error_between_requests() {
+    let dir = make_test_dir("web_reset_eval_preg_error");
+    let src = r#"<?php
+$code = 'echo preg_last_error();';
+if (isset($_GET["bad"])) { $code = 'preg_match("/./u", "\xff"); ' . $code; }
+eval($code . ' // ' . count($_GET));
+"#;
+    // An opaque eval reaches PCRE2 only with the explicit regex capability.
+    let bin = compile_web_with_regex(&dir, src, "app", &["--with-regex"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/?bad=1");
+    let r2 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(raw_response_body(&r1), "4", "first response: {r1:?}");
+    assert_eq!(raw_response_body(&r2), "0", "second response leaked the eval regex error: {r2:?}");
+}
+
 /// the static re-initialized to 0, so each response ends with "1".
 #[test]
 fn web_reset_clears_function_static() {
@@ -1080,6 +1252,43 @@ fn web_server_multiple_workers() {
     assert!(r2.ends_with("ok"), "second response: {:?}", r2);
 }
 
+/// Two workers must actually share the listening socket.
+///
+/// Darwin's `SO_REUSEPORT` sends every connection from one client address to
+/// the same socket, so per-worker sockets answered the whole suite from one
+/// process while the other workers idled. The shared listener is only useful if
+/// it distributes work, which this asserts by collecting the PHP process id from
+/// concurrent responses.
+#[test]
+fn web_workers_share_the_listener() {
+    let dir = make_test_dir("web_workers_share");
+    let bin = compile_web(&dir, "<?php echo getmypid();", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "2");
+    let mut pids = std::collections::HashSet::new();
+    for _ in 0..4 {
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let addr = addr.clone();
+                std::thread::spawn(move || http_get(&addr, "/"))
+            })
+            .collect();
+        for handle in handles {
+            let response = handle.join().expect("request thread panicked");
+            if let Some(body) = response.split("\r\n\r\n").nth(1) {
+                pids.insert(body.trim().to_string());
+            }
+        }
+        if pids.len() >= 2 {
+            break;
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(pids.len() >= 2, "only one worker served requests: {pids:?}");
+}
+
 /// Sends one HTTP/1.1 request and returns it with any complete chunked body decoded.
 fn http_request(addr: &str, method: &str, path: &str, headers: &[(&str, &str)], body: &str) -> String {
     use std::io::{Read, Write};
@@ -1107,6 +1316,50 @@ fn try_http_get(addr: &str, path: &str) -> String {
     let mut buf = String::new();
     let _ = s.read_to_string(&mut buf);
     normalize_complete_http_response(buf)
+}
+
+/// A SIGKILLed master must not leave workers holding the port, and the workers
+/// must exit so a supervisor restart can bind immediately.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn web_master_sigkill_releases_port_and_workers() {
+    let dir = make_test_dir("web_master_sigkill");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server(&bin, &addr, "2");
+    let master = server.id();
+    let workers = wait_for_direct_child_count(master, 2);
+    unsafe { libc::kill(master as libc::pid_t, libc::SIGKILL); }
+    let _ = server.wait();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let live = workers
+            .iter()
+            .copied()
+            .filter(|pid| process_exists(*pid))
+            .collect::<Vec<_>>();
+        if live.is_empty() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            for pid in &live {
+                unsafe { libc::kill(*pid as libc::pid_t, libc::SIGKILL); }
+            }
+            panic!("workers survived a master SIGKILL: {live:?}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // A fresh master must bind the same address; the old workers no longer
+    // hold the listener.
+    let mut restarted = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    assert_eq!(raw_response_body(&response).trim(), "ok");
+    let _ = restarted.kill();
+    let _ = restarted.wait();
+    let _ = fs::remove_dir_all(&dir);
 }
 
 /// Verifies the extern getters are callable from --web PHP and return request data.
@@ -2353,7 +2606,9 @@ fn web_help_and_version() {
     );
     let help_text = String::from_utf8_lossy(&help.stdout);
     assert!(
-        help_text.contains("respawn a worker") && !help_text.contains("--handler-concurrency"),
+        help_text.contains("respawn a worker")
+            && help_text.contains("--trusted-proxy")
+            && !help_text.contains("--handler-concurrency"),
         "default --web help must describe the in-process worker model: {help_text}"
     );
 
@@ -2367,6 +2622,7 @@ fn web_help_and_version() {
     assert!(
         request_help_text.contains("--response-write-timeout")
             && request_help_text.contains("--handler-concurrency")
+            && request_help_text.contains("--trusted-proxy")
             && request_help_text.contains("timed-out handler process"),
         "request help must expose isolated-handler controls: {request_help_text}"
     );
@@ -2512,6 +2768,55 @@ fn web_max_requests_survives_sustained_recycle_churn() {
     );
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// SIGTERM during --max-requests respawn churn must exit the master.
+///
+/// A worker inherits the master's flag-only SIGTERM handler across `fork` until
+/// it resets it. A teardown SIGTERM delivered in that window used to be
+/// swallowed, leaving the master blocked in `waitpid` for a live child.
+#[test]
+fn web_sigterm_during_respawn_churn_exits_master() {
+    let dir = make_test_dir("web_sigterm_respawn");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    for attempt in 0..12 {
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut server =
+            spawn_server_with_args(&bin, &addr, "2", &["--max-requests", "1"]);
+        let mut flood = Vec::new();
+        for _ in 0..8 {
+            let addr = addr.clone();
+            flood.push(std::thread::spawn(move || {
+                for _ in 0..20 {
+                    let _ = try_http_get(&addr, "/");
+                }
+            }));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        let master = server.id();
+        unsafe { libc::kill(master as libc::pid_t, libc::SIGTERM); }
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut exited = false;
+        while Instant::now() < deadline {
+            if server.try_wait().expect("try_wait").is_some() {
+                exited = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        for handle in flood {
+            let _ = handle.join();
+        }
+        if !exited {
+            unsafe { libc::killpg(master as libc::pid_t, libc::SIGKILL); }
+            panic!(
+                "master did not exit after SIGTERM during respawn churn (attempt {})",
+                attempt + 1
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
 }
 
 /// Verifies an uncaught exception in the handler returns HTTP 500 instead of

@@ -50,7 +50,8 @@ fn enum_condition_defaults_retain_materialization_on_all_targets() {
         module.enum_infos.insert("E".into(), crate::types::EnumInfo {
             backing_type: None,
             cases: vec![crate::types::EnumCaseInfo {
-                name: "A".into(), value: None, attribute_names: Vec::new(), attribute_args: Vec::new(),
+                name: "A".into(), value: None, span: None, deprecated_mt_rand_php: false,
+                attribute_names: Vec::new(), attribute_args: Vec::new(),
             }],
         });
         let expr = |kind| Expr::new(kind, Span::dummy());
@@ -189,7 +190,8 @@ fn enum_dependent_keys_and_offsets_retain_ordered_reads_on_all_targets() {
         module.enum_infos.insert("E".into(), crate::types::EnumInfo {
             backing_type: None,
             cases: ["A", "B", "C"].into_iter().map(|name| crate::types::EnumCaseInfo {
-                name: name.into(), value: None, attribute_names: Vec::new(), attribute_args: Vec::new(),
+                name: name.into(), value: None, span: None, deprecated_mt_rand_php: false,
+                attribute_names: Vec::new(), attribute_args: Vec::new(),
             }).collect(),
         });
         let context = ConstDefaultContext { module: &module, current_class: None };

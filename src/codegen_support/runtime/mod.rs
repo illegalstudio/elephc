@@ -47,6 +47,7 @@ mod pointers;
 mod resource_ids;
 mod resource_inventory;
 pub(crate) use resource_inventory::DEFAULT_CONTEXT_PAYLOAD;
+pub(crate) mod property_ref_cells;
 pub(crate) mod reference_cells;
 /// PHP's `round($num, $precision, $mode)` runtime implementation (`__rt_round_mode`).
 mod round_mode;
@@ -99,7 +100,9 @@ pub(crate) use data::{is_user_filter_contract_method, is_user_wrapper_contract_m
 pub(crate) use emitters::emit_runtime;
 /// The PHP 8.5 NAN-to-bool coercion probe, reached from `src/codegen/lower_inst` float
 /// truthiness lowering as well as from the boxed-Mixed runtime helpers.
-pub(crate) use arrays::{emit_nan_bool_coercion_probe, nan_bool_coercion_warning_enabled};
+pub(crate) use arrays::{
+    emit_nan_bool_coercion_probe, emit_nan_string_coercion_probe, nan_bool_coercion_warning_enabled,
+};
 /// The `__rt_hash_map` callback result-kind selector, chosen by the `array_map()` lowering.
 pub(crate) use arrays::HashMapResultKind;
 /// Retire allocator payload-base metadata before bulk web arena reclamation.

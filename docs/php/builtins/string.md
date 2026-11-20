@@ -50,7 +50,7 @@ sidebar:
 | [`inet_ntop()`](./string/inet_ntop.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`inet_pton()`](./string/inet_pton.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`ip2long()`](./string/ip2long.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
-| [`join()`](./string/join.md) | `(mixed $separator, mixed $array = null): string` | `string` | ✓ | - |
+| [`join()`](./string/join.md) | `(mixed $separator, mixed $array = null): string` | `string` | ✓ | ✓ |
 | [`lcfirst()`](./string/lcfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`long2ip()`](./string/long2ip.md) | `(int $ip): string` | `string` | ✓ | ✓ |
 | [`ltrim()`](./string/ltrim.md) | `(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string` | `string` | ✓ | ✓ |
@@ -120,6 +120,7 @@ sidebar:
 | [`mb_ucfirst()`](./string/mb_ucfirst.md) | `(string $string, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`md5()`](./string/md5.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`nl2br()`](./string/nl2br.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`nl_langinfo()`](./string/nl_langinfo.md) | `(int $item): string|false` | `string|false` | ✓ | ✓ |
 | [`number_format()`](./string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |
 | [`openssl_cipher_iv_length()`](./string/openssl_cipher_iv_length.md) | `(string $cipher_algo): mixed` | `mixed` | ✓ | ✓ |
 | [`openssl_decrypt()`](./string/openssl_decrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = ''): mixed` | `mixed` | ✓ | ✓ |
@@ -133,6 +134,7 @@ sidebar:
 | [`rawurldecode()`](./string/rawurldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurlencode()`](./string/rawurlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rtrim()`](./string/rtrim.md) | `(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string` | `string` | ✓ | ✓ |
+| [`setlocale()`](./string/setlocale.md) | `(int $category, mixed $locales, ...$rest): string|false` | `string|false` | ✓ | ✓ |
 | [`sha1()`](./string/sha1.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`sprintf()`](./string/sprintf.md) | `(string $format, ...$values): string` | `string` | ✓ | ✓ |
 | [`sscanf()`](./string/sscanf.md) | `(string $string, string $format, ...$vars): array` | `array` | ✓ | ✓ |

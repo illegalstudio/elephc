@@ -79,6 +79,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     context.push_called_class_scope(String::new());
     let bound_call = match bind_evaluated_function_args_with_ref_mode(
         function.name(),
+        function.name(),
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
@@ -119,6 +120,10 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     frame.bind_scope(&function_scope);
     frame.set_sensitive_parameters(function.parameter_attributes(), function.parameter_is_variadic());
     context.push_function_args(frame);
+    // Argument binding above used the caller's mode, which is what PHP keys call-site coercion
+    // on. The body and its return coercion run under the declaring fragment's mode.
+    let caller_strict_types = context.strict_types();
+    context.set_strict_types(function.strict_types());
     let result = binding_result.and_then(|()| with_source_return_contract(
         function.return_type(), None, None, context, |context| {
         if let Some(body) = function.bytecode().filter(|_|
@@ -154,6 +159,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
             values,
         ),
     };
+    context.set_strict_types(caller_strict_types);
     let return_result = retain_static_local_return(
         return_result,
         &static_names,
@@ -426,8 +432,12 @@ fn eval_closure_with_optional_binding(
         context.push_class_scope(binding.class_scope.clone());
         context.push_called_class_scope(binding.called_class.clone());
     }
+    // Each copy of a trait method creates its own closure op_array in php-src, so the
+    // closure's default cache is keyed by the class whose code created it as well.
+    let default_site = closure.default_site();
     let bound_call = match bind_evaluated_function_args_with_ref_mode(
         &eval_closure_display_name(function, context),
+        &default_site,
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
@@ -483,6 +493,10 @@ fn eval_closure_with_optional_binding(
         backtrace_object,
         backtrace_object.is_none(),
     );
+    // Argument binding above used the caller's mode; the body and its return coercion run under
+    // the mode of the fragment that declared this closure.
+    let caller_strict_types = context.strict_types();
+    context.set_strict_types(function.strict_types());
     let result = binding_result.and_then(|()| with_source_return_contract(
         function.return_type(), binding.as_ref().map(|binding| binding.class_scope.as_str()),
         binding.as_ref().map(|binding| binding.called_class.as_str()), context, |context| {
@@ -529,6 +543,7 @@ fn eval_closure_with_optional_binding(
             values,
         ),
     };
+    context.set_strict_types(caller_strict_types);
     let return_result = retain_static_local_return(
         return_result,
         &static_names,
@@ -722,6 +737,8 @@ fn visit_static_var_declarations(
             | EvalStmt::ArraySetVar { .. }
             | EvalStmt::DimensionWrite { .. }
             | EvalStmt::Break
+            | EvalStmt::Goto(_)
+            | EvalStmt::Label(_)
             | EvalStmt::ClassDecl(_)
             | EvalStmt::Continue
             | EvalStmt::Echo(_)

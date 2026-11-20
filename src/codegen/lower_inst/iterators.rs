@@ -43,6 +43,7 @@ use super::{
 use crate::codegen::{CodegenIrError, Result};
 
 mod hash_objects;
+mod key_reuse;
 mod native_origins;
 
 const ITER_SOURCE_OFFSET_DELTA: usize = 0;
@@ -283,18 +284,29 @@ pub(super) fn lower_iter_next(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers the current iterator key by boxing it as a `Mixed` value.
+///
+/// An instruction that names the key variable's slot lets an integer key of an indexed array
+/// or hash rewrite the cell that slot already owns (`key_reuse`) instead of allocating. An
+/// object iterator's `key()` result never takes that path.
 pub(super) fn lower_iter_current_key(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     let iterator = expect_operand(inst, 0)?;
     let offset = iterator_state_offset(ctx, iterator, inst)?;
+    let reusable_slot = key_reuse::reusable_slot(ctx, inst);
     match iterator_source_kind(ctx, iterator, inst)? {
         IteratorSourceKind::Indexed { .. } if iterator_is_by_ref(ctx, iterator, inst)? => {
             match ctx.emitter.target.arch {
                 Arch::AArch64 => load_current_hash_key_as_mixed_aarch64(ctx, offset),
                 Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
             }
+        }
+        IteratorSourceKind::Indexed { .. } if reusable_slot.is_some() => {
+            key_reuse::lower_indexed(ctx, reusable_slot.expect("guarded above"), offset)?;
+        }
+        IteratorSourceKind::Hash if reusable_slot.is_some() => {
+            key_reuse::lower_hash(ctx, reusable_slot.expect("guarded above"), offset)?;
         }
         IteratorSourceKind::Indexed { .. } => {
             let result_reg = abi::int_result_reg(ctx.emitter);
@@ -306,7 +318,7 @@ pub(super) fn lower_iter_current_key(
             Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
         },
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
-            lower_dynamic_iter_current_key(ctx, inst, offset)?;
+            lower_dynamic_iter_current_key(ctx, inst, offset, reusable_slot)?;
         }
         // Dead code in practice — `IterNext` already reported "no more elements" — but the
         // block is still emitted, so materialize a null Mixed rather than reading the
@@ -1360,6 +1372,7 @@ fn lower_dynamic_iter_current_key(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     offset: usize,
+    reusable_slot: Option<LocalSlotId>,
 ) -> Result<()> {
     let indexed_case = ctx.next_label("iter_key_dyn_indexed");
     let hash_case = ctx.next_label("iter_key_dyn_hash");
@@ -1370,16 +1383,26 @@ fn lower_dynamic_iter_current_key(
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     abi::emit_jump(ctx.emitter, &done);
 
+    // The array and hash arms read stored keys without running user code, so they may rewrite
+    // the key variable's own cell. The object arm calls `key()` and leaves that cell alone.
     ctx.emitter.label(&indexed_case);
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    if let Some(slot) = reusable_slot {
+        key_reuse::lower_indexed(ctx, slot, offset)?;
+    } else {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    }
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&hash_case);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => load_current_hash_key_as_mixed_aarch64(ctx, offset),
-        Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
+    if let Some(slot) = reusable_slot {
+        key_reuse::lower_hash(ctx, slot, offset)?;
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => load_current_hash_key_as_mixed_aarch64(ctx, offset),
+            Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
+        }
     }
     abi::emit_jump(ctx.emitter, &done);
 

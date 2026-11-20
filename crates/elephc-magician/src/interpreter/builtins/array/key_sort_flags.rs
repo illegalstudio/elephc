@@ -12,8 +12,9 @@
 //! - The natural-order comparison is a direct port of php-src's `strnatcmp_ex`, quirks included.
 //!   It folds ASCII case only: php-src calls libc `toupper()` there, which folds Latin-1 under
 //!   Darwin's C locale but not under glibc's, and elephc gives the same answer on every target.
-//! - `SORT_LOCALE_STRING` clips both operands at the first NUL and compares bytes, which is
-//!   `strcoll` in the C locale -- the only locale a PHP program without `setlocale()` is in.
+//! - `SORT_LOCALE_STRING` collates through libc `strcoll` under the active `LC_COLLATE`, which
+//!   `setlocale()` can change. `strcoll` reads NUL-terminated strings, so each operand is
+//!   clipped at its first NUL and copied into a C string; only the sign of the result matters.
 
 use std::cmp::Ordering;
 
@@ -71,7 +72,7 @@ pub(in crate::interpreter) fn eval_key_sort_compare(
             right.make_ascii_lowercase();
             left.cmp(&right)
         }
-        EvalKeySortMode::Locale => eval_clip_nul(&left).cmp(eval_clip_nul(&right)),
+        EvalKeySortMode::Locale => eval_strcoll(&left, &right),
         EvalKeySortMode::Natural { fold_case } => eval_strnatcmp(&left, &right, fold_case),
     })
 }
@@ -191,12 +192,32 @@ fn eval_is_php_space(byte: u8) -> bool {
     byte == b' ' || (0x09..=0x0d).contains(&byte)
 }
 
-/// Returns the prefix `strcoll` would see, which ends at the first NUL.
+/// Returns the prefix `strcoll` reads, which ends at the first NUL.
 fn eval_clip_nul(bytes: &[u8]) -> &[u8] {
     match bytes.iter().position(|byte| *byte == 0) {
         Some(end) => &bytes[..end],
         None => bytes,
     }
+}
+
+/// Orders two keys the way php-src's `php_array_key_compare_string_locale` does.
+///
+/// `strcoll` reads NUL-terminated strings, so each operand is clipped at its first NUL and
+/// copied into a C string. Only the sign of the result is contractual, matching PHP's use of
+/// the comparator's `< 0` / `> 0` answer.
+fn eval_strcoll(left: &[u8], right: &[u8]) -> Ordering {
+    let left = eval_c_string(eval_clip_nul(left));
+    let right = eval_c_string(eval_clip_nul(right));
+    let result = unsafe { libc::strcoll(left.as_ptr().cast(), right.as_ptr().cast()) };
+    result.cmp(&0)
+}
+
+/// Copies `bytes` into a NUL-terminated buffer `strcoll` can read.
+fn eval_c_string(bytes: &[u8]) -> Vec<u8> {
+    let mut buffer = Vec::with_capacity(bytes.len() + 1);
+    buffer.extend_from_slice(bytes);
+    buffer.push(0);
+    buffer
 }
 
 /// Compares two byte strings in PHP's natural order, a port of php-src's `strnatcmp_ex`.

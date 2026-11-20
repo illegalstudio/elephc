@@ -46,8 +46,9 @@ pub(super) fn eval_reflection_class_constant_object_result_or_throw(
             values,
         );
     };
-    let constant_value = eval_reflection_constant_value(class_name, constant_name, context, values)?
-        .ok_or(EvalStatus::RuntimeFatal)?;
+    let (constant_value, _owned) =
+        eval_reflection_constant_preview_value(class_name, constant_name, context, values)?
+            .ok_or(EvalStatus::RuntimeFatal)?;
     let mut flags = eval_reflection_member_flags(visibility, false, is_final, false, false);
     if is_enum_case {
         flags |= EVAL_REFLECTION_MEMBER_FLAG_ENUM_CASE;
@@ -212,15 +213,13 @@ pub(super) fn eval_reflection_enum_case_object_result(
     if owner_kind == EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE && !is_backed {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let case_value = context
-        .enum_case(&declaring_class_name, case_name)
+    // Building the reflector evaluates nothing in php-src: a backed case not created yet is
+    // stored as null, and `getValue()`/`getBackingValue()` evaluate it
+    // (`eval_reflection_evaluating_getter_result`, or the `__lazy` closure from compiled code).
+    let (case_value, _owned) = eval_class_constant_preview(&declaring_class_name, case_name, context, values)?
         .ok_or(EvalStatus::RuntimeFatal)?;
     let backing_value = if owner_kind == EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE {
-        Some(
-            context
-                .enum_case_value(&declaring_class_name, case_name)
-                .ok_or(EvalStatus::RuntimeFatal)?,
-        )
+        context.enum_case_value(&declaring_class_name, case_name)
     } else {
         None
     };

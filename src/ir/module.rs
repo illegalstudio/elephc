@@ -103,6 +103,12 @@ pub struct Module {
     pub semantic_profile: elephc_semantics::SemanticProfile,
     pub target: Target,
     pub source_path: Option<String>,
+    /// Physical file of each source identity used by this module's instructions.
+    ///
+    /// Lowering copies `Span::registered_source_paths()` here because the source table is
+    /// thread-local while codegen may run on another thread. Kept per module so parallel
+    /// compilations never share identities.
+    pub source_paths: std::collections::HashMap<u32, String>,
     /// Optional mbstring startup arguments: effective core encodings followed by raw INI pairs.
     /// These belong to user assembly, never the reusable runtime object.
     pub mbstring_startup: Option<Vec<Vec<u8>>>,
@@ -112,6 +118,9 @@ pub struct Module {
     /// can prove the binary's identity through the HMAC handshake. `None` unless
     /// `--probe` is set.
     pub probe_key: Option<[u8; 32]>,
+    /// `--apm-collector host:port`: where a `--with-apm` build sends its
+    /// transaction counters, embedded for `elephc_probe_apm_init`.
+    pub apm_collector: Option<String>,
     pub functions: Vec<Function>,
     pub class_methods: Vec<Function>,
     pub closures: Vec<Function>,
@@ -124,6 +133,10 @@ pub struct Module {
     pub data: DataPool,
     pub extern_decls: Vec<ExternDecl>,
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Function names written as string literals where a declared `callable` keeps the
+    /// string. Runtime string dispatch must reach each of them, including builtins it would
+    /// not resolve from an arbitrary runtime name.
+    pub declared_callable_names: std::collections::BTreeSet<String>,
     pub class_table: ClassTable,
     pub enum_table: EnumTable,
     pub interface_table: InterfaceTable,
@@ -173,15 +186,49 @@ pub struct Module {
 }
 
 impl Module {
+    /// Replaces the checker-only `DeclaredCallable` type by its `Mixed` storage everywhere
+    /// codegen reads PHP types: function parameters, returns, locals, values and instruction
+    /// results, plus extern declarations.
+    ///
+    /// EIR lowering is the last stage that distinguishes a declared callable from `mixed`.
+    pub fn erase_declared_callable_types(&mut self) {
+        let erase = |ty: &mut PhpType| *ty = ty.erase_declared_callable();
+        for function in self
+            .functions
+            .iter_mut()
+            .chain(self.class_methods.iter_mut())
+            .chain(self.closures.iter_mut())
+            .chain(self.fiber_wrappers.iter_mut())
+            .chain(self.callback_wrappers.iter_mut())
+            .chain(self.extern_callback_trampolines.iter_mut())
+            .chain(self.runtime_callable_invokers.iter_mut())
+        {
+            erase(&mut function.return_php_type);
+            function.params.iter_mut().for_each(|param| erase(&mut param.php_type));
+            function.locals.iter_mut().for_each(|local| erase(&mut local.php_type));
+            function.values.iter_mut().for_each(|value| erase(&mut value.php_type));
+            function
+                .instructions
+                .iter_mut()
+                .for_each(|inst| erase(&mut inst.result_php_type));
+        }
+        for decl in &mut self.extern_decls {
+            erase(&mut decl.return_php_type);
+            decl.params.iter_mut().for_each(|param| erase(&mut param.php_type));
+        }
+    }
+
     /// Creates an empty module for the given target.
     pub fn new(target: Target) -> Self {
         Self {
             semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
             target,
             source_path: None,
+            source_paths: HashMap::new(),
             mbstring_startup: None,
             included_files: Vec::new(),
             probe_key: None,
+            apm_collector: None,
             functions: Vec::new(),
             class_methods: Vec::new(),
             closures: Vec::new(),
@@ -193,6 +240,7 @@ impl Module {
             data: DataPool::default(),
             extern_decls: Vec::new(),
             callable_param_sigs: HashMap::new(),
+            declared_callable_names: std::collections::BTreeSet::new(),
             class_table: ClassTable::default(),
             enum_table: EnumTable::default(),
             interface_table: InterfaceTable::default(),

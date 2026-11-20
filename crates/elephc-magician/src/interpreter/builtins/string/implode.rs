@@ -7,15 +7,22 @@
 //! Key details:
 //! - Direct and evaluated-argument dispatch stay in this leaf.
 //! - Both overloads share weak separator binding and the existing operand owner boundary.
+//! - Both overloads report PHP's catchable argument TypeErrors.
 
 eval_builtin! {
     contract: "implode",
     area: String,
+    source_arguments: true,
     direct: StringSplitJoin,
     values: StringSplitJoin,
 }
 
 use super::super::super::*;
+
+/// PHP's overload error when the optional array was not supplied or is null, completed by the
+/// called name (`implode` or `join`).
+const IMPLODE_NULL_TYPE_ERROR: &str = "If argument #1 ($separator) is of type string, \
+argument #2 ($array) must be of type array, null given";
 
 /// Evaluates PHP `implode()` over separator and array expressions.
 pub(in crate::interpreter) fn eval_builtin_implode(
@@ -24,29 +31,74 @@ pub(in crate::interpreter) fn eval_builtin_implode(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let operands = args.iter().collect::<Vec<_>>();
-    with_eval_operands(&operands, context, scope, values, |args, context, _, values|
-        eval_implode_declared_values_result(args, context, values))
+    let operands = match args {
+        [array] => vec![array],
+        [separator, array] => vec![separator, array],
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    with_eval_operands(&operands, context, scope, values, |args, context, _, values| {
+        // Zend specializes a direct one-argument implode call as an array-only join. It
+        // reports this overload error without attempting separator coercion.
+        if let [array] = args {
+            if !matches!(values.type_tag(*array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+                return eval_throw_type_error(
+                    &format!("implode(): {IMPLODE_NULL_TYPE_ERROR}"),
+                    context,
+                    values,
+                );
+            }
+        }
+        eval_implode_named_result("implode", args, context, values)
+    })
 }
 
 /// Joins array values in eval iteration order using PHP string conversion.
+///
+/// `name` is the called PHP function (`implode` or its `join` alias) the diagnostics report.
 pub(in crate::interpreter) fn eval_implode_result(
-    separator: RuntimeCellHandle,
+    name: &str,
+    separator: Option<RuntimeCellHandle>,
     array: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !values.is_array_like(array)? {
-        return Err(EvalStatus::RuntimeFatal);
+    let tag = values.type_tag(array)?;
+    if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        let first_argument = separator.is_none()
+            && (matches!(tag, EVAL_TAG_RESOURCE | EVAL_TAG_CALLABLE)
+                || (tag == EVAL_TAG_OBJECT
+                    && !eval_object_has_to_string(array, context, values)?));
+        if separator.is_none() && tag == EVAL_TAG_OBJECT && !first_argument {
+            let rendered = eval_string_context_value(array.borrowed(), context, values)?;
+            with_eval_value_lease(rendered, context, values, |_, _, _| Ok(()))?;
+        }
+        let message = if first_argument {
+            let given = eval_given_type_name(array, context, values)?;
+            format!("{name}(): Argument #1 ($separator) must be of type array|string, {given} given")
+        } else if separator.is_none() || tag == EVAL_TAG_NULL {
+            format!("{name}(): {IMPLODE_NULL_TYPE_ERROR}")
+        } else {
+            let given = eval_given_type_name(array, context, values)?;
+            format!("{name}(): Argument #2 ($array) must be of type ?array, {given} given")
+        };
+        return eval_throw_type_error(&message, context, values);
     }
-    let string_type = EvalParameterType::new(vec![EvalParameterTypeVariant::String], false);
-    let separator = eval_method_parameter_value(&string_type, separator.borrowed(), context, values)?;
-    let mut separator_bytes = Vec::new();
-    with_eval_value_lease(separator, context, values, |separator, _, values| {
-        separator_bytes = values.string_bytes(separator)?;
-        Ok(())
-    })?;
-    let separator = separator_bytes;
+    // Objects go through the eval string context so eval-declared `__toString()` methods run
+    // (with their side effects and exceptions) instead of reading the native backing object.
+    // PHP converts the separator before any element.
+    let separator = match separator {
+        Some(separator) => {
+            let string_type = EvalParameterType::new(vec![EvalParameterTypeVariant::String], false);
+            let rendered = eval_method_parameter_value(&string_type, separator.borrowed(), context, values)?;
+            let mut bytes = Vec::new();
+            with_eval_value_lease(rendered, context, values, |rendered, _, values| {
+                bytes = values.string_bytes(rendered)?;
+                Ok(())
+            })?;
+            bytes
+        }
+        None => Vec::new(),
+    };
     let len = values.array_len(array)?;
     let mut output = Vec::new();
     for position in 0..len {
@@ -56,9 +108,12 @@ pub(in crate::interpreter) fn eval_implode_result(
         let key = values.array_iter_key(array, position)?;
         with_eval_value_lease(key, context, values, |key, context, values| {
             let value = values.array_get(array, key)?;
-            with_eval_value_lease(value, context, values, |value, _, values| {
-                output.extend_from_slice(&values.string_bytes(value)?);
-                Ok(())
+            with_eval_value_lease(value, context, values, |value, context, values| {
+                let rendered = eval_string_context_value(value.borrowed(), context, values)?;
+                with_eval_value_lease(rendered, context, values, |rendered, _, values| {
+                    output.extend_from_slice(&values.string_bytes(rendered)?);
+                    Ok(())
+                })
             })
         })?;
     }
@@ -71,13 +126,21 @@ pub(in crate::interpreter) fn eval_implode_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_implode_named_result("implode", evaluated_args, context, values)
+}
+
+/// Binds evaluated `implode()`/`join()` operands by count and joins them under `name`.
+pub(in crate::interpreter) fn eval_implode_named_result(
+    name: &str,
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [array] => {
-            let separator = values.string("")?;
-            let result = eval_implode_result(separator, *array, context, values);
-            finish_eval_argument_values(result, [separator], context, values)
+        [array] => eval_implode_result(name, None, *array, context, values),
+        [separator, array] => {
+            eval_implode_result(name, Some(*separator), *array, context, values)
         }
-        [separator, array] => eval_implode_result(*separator, *array, context, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

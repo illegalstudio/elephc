@@ -36,6 +36,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
 
 /// Lowers a function call without the promotable-result view `lower_function_call` applies.
 fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
+    if let Some(value) = constants::lower_silenced_constant_deprecation_call(ctx, name, expr) {
+        return value;
+    }
     constants::register_static_define_call(ctx, name, args);
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
         return value;
@@ -208,6 +211,7 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
     // `take(): Argument #1 ...` spelling instead of the generic `call()` fallback.
     let previous_description = is_user_function
         .then(|| ctx.call_description.replace(canonical.to_string()));
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
     if is_user_function {
         ctx.call_argument_evaluation_scopes.last_mut().expect("call argument scope")
@@ -271,6 +275,11 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
             Op::ExternCall.default_effects(),
             Some(expr.span),
         );
+        super::enum_argument_guards::drain_reference_property_guards(
+            ctx,
+            reference_property_guard_mark,
+            expr.span,
+        );
         // Extern string results are copied into independent PHP storage by the C ABI
         // adapter. Scalar and pointer results own no PHP argument storage either.
         release_owned_call_arg_temporaries(
@@ -307,6 +316,11 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
             ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
         );
         stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+        super::enum_argument_guards::drain_reference_property_guards(
+            ctx,
+            reference_property_guard_mark,
+            expr.span,
+        );
         release_owned_call_arg_temporaries_with_roots(
             ctx, &operands, Some(call.value), &return_alias, sig.as_ref(), &roots, expr.span,
         );
@@ -329,12 +343,29 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
             Op::EvalFunctionCall.default_effects(),
             Some(expr.span),
         );
+        super::enum_argument_guards::drain_reference_property_guards(
+            ctx,
+            reference_property_guard_mark,
+            expr.span,
+        );
         retire_call_argument_intermediates(ctx, &evaluation_intermediates);
         return call;
     }
     let eval_literal = eval_literal_fragment(canonical, args);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
-    let call = emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal);
+    // Zend's direct positional implode fast path treats the operand as the array;
+    // named, unpacked and callable invocations use the ordinary separator overload.
+    let positional_implode = canonical_builtin_function_name(canonical).as_deref() == Some("implode")
+        && args.len() == 1 && plain_positional_call_args(args);
+    let call = emit_builtin_call_value_with_target(
+        ctx, canonical, operands, php_type, expr.span, eval_literal,
+        positional_implode.then_some(crate::ir::RuntimeCallTarget::PositionalImplode),
+    );
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     unbox_raw_word_builtin_result(ctx, call, expr.span)
 }
@@ -458,6 +489,24 @@ pub(super) fn emit_builtin_call_value_with_source_mode(
     ctx: &mut LoweringContext<'_, '_>, name: &str, operands: Vec<crate::ir::ValueId>,
     php_type: PhpType, span: Span, eval_literal: Option<&str>, source_mode: crate::source::SourceMode,
 ) -> LoweredValue {
+    emit_builtin_call_value_with_source_mode_and_target(ctx, name, operands, php_type, span, eval_literal, source_mode, None)
+}
+
+/// Retains a positional overload target without dropping the caller's semantic source mode.
+fn emit_builtin_call_value_with_target(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, operands: Vec<crate::ir::ValueId>,
+    php_type: PhpType, span: Span, eval_literal: Option<&str>, target: Option<crate::ir::RuntimeCallTarget>,
+) -> LoweredValue {
+    let source_mode = ctx.builtin_source_mode();
+    emit_builtin_call_value_with_source_mode_and_target(ctx, name, operands, php_type, span, eval_literal, source_mode, target)
+}
+
+/// Shares builtin operand ownership across semantic modes and source-selected overloads.
+fn emit_builtin_call_value_with_source_mode_and_target(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, operands: Vec<crate::ir::ValueId>,
+    php_type: PhpType, span: Span, eval_literal: Option<&str>, source_mode: crate::source::SourceMode,
+    target: Option<crate::ir::RuntimeCallTarget>,
+) -> LoweredValue {
     if eval_literal.is_none() {
         if let Some(def) = crate::builtins::registry::lookup(name) {
             let mut operands = operands;
@@ -468,23 +517,31 @@ pub(super) fn emit_builtin_call_value_with_source_mode(
             // in the unwind chain for the duration of the call so a caught guard releases them
             // exactly once instead of stranding them.
             let pins = pin_throwing_builtin_operands(ctx, def, &operands, &roots, &php_type, span, source_mode);
-            let lowered = crate::builtins::semantics::lower_registry_call_with_source_mode(
-                ctx,
-                def,
-                &operands,
-                &php_type,
-                span,
-                source_mode,
-            )
-            .unwrap_or_else(|error| {
-                panic!(
-                    "checked builtin {} failed backend-neutral EIR lowering at {}:{}: {}",
-                    def.name,
-                    span.line,
-                    span.col,
-                    error,
+            let lowered = if let Some(target) = target {
+                let value = ctx.emit_value(
+                    Op::RuntimeCall, operands.clone(), Some(Immediate::RuntimeCall(target)),
+                    php_type.clone(), crate::ir::RuntimeFnId::Implode.effects(), Some(span),
+                );
+                crate::builtins::semantics::LoweredBuiltinValue { value: value.value }
+            } else {
+                crate::builtins::semantics::lower_registry_call_with_source_mode(
+                    ctx,
+                    def,
+                    &operands,
+                    &php_type,
+                    span,
+                    source_mode,
                 )
-            });
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "checked builtin {} failed backend-neutral EIR lowering at {}:{}: {}",
+                        def.name,
+                        span.line,
+                        span.col,
+                        error,
+                    )
+                })
+            };
             let raw_call = LoweredValue {
                 value: lowered.value,
                 ir_type: ctx.builder.value_type(lowered.value),
@@ -528,18 +585,21 @@ pub(super) fn emit_builtin_call_value_with_source_mode(
             } else {
                 raw_call
             };
+            // A lowering hook that ends in a min/max selection returns a detached copy of the
+            // winner, whatever the builtin's static contract says about its other forms.
+            let detached_copy = ctx.builder.value_defining_op(call.value) == Some(Op::MixedMinMax);
             // Consumers make lifetime decisions during lowering, before final
             // ownership refinement. In particular, Fresh strings already own
             // heap storage and must not be persisted again as concat scratch.
-            if matches!(
+            if (detached_copy || matches!(
                 def.spec.semantics.result_ownership,
                 crate::builtins::semantics::BuiltinResultOwnership::Fresh,
-            ) && Ownership::php_type_needs_lifetime_tracking(
+            )) && Ownership::php_type_needs_lifetime_tracking(
                 &ctx.builder.value_php_type(call.value),
             ) {
                 ctx.builder.set_value_ownership(call.value, Ownership::Owned);
             }
-            let return_alias = if stabilizes_evaluation_pin {
+            let return_alias = if stabilizes_evaluation_pin || detached_copy {
                 ReturnArgAlias::None
             } else {
                 match def.spec.semantics.result_ownership {

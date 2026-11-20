@@ -37,7 +37,11 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_builtin_call_arguments("preg_match", args, context, scope, values, |evaluated_args, context, _, values| {
+    // Releasing the previous `$matches` (at the write, or when the argument owners drop after
+    // the call) can run a destructor whose nested `preg_*` call resets the error state. php-src
+    // empties `$matches` before matching, so the call's own outcome is restored last.
+    let mut outcome = None;
+    let result = with_eval_builtin_call_arguments("preg_match", args, context, scope, values, |evaluated_args, context, _, values| {
         let (bound, _) = bind_evaluated_ref_builtin_args(
             &["pattern", "subject", "matches", "flags"],
             &evaluated_args,
@@ -55,9 +59,14 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_call(
             .ok_or(EvalStatus::RuntimeFatal)?;
         let (result, matches_array) =
             eval_preg_match_capture_result(pattern.value, subject.value, flags, values)?;
+        outcome = Some(eval_preg_last_error_code());
         eval_write_preg_matches_target(&target, matches_array, context, values)?;
         Ok(result)
-    })
+    });
+    if let (Some(code), Ok(_)) = (outcome, &result) {
+        eval_preg_set_last_error(code);
+    }
+    result
 }
 
 /// Returns whether one regex matches the subject string.
@@ -68,7 +77,11 @@ pub(in crate::interpreter) fn eval_preg_match_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let regex = eval_preg_regex(pattern, values)?;
     let subject = values.string_bytes(subject)?;
-    values.int(i64::from(regex.is_match(&subject)))
+    let matched = regex.is_match(&subject);
+    if eval_preg_failed() {
+        return values.bool_value(false);
+    }
+    values.int(i64::from(matched))
 }
 
 /// Returns the match flag plus PHP `$matches` capture array for one regex search.
@@ -96,7 +109,8 @@ pub(in crate::interpreter) fn eval_preg_match_capture_result(
     }
     let matches =
         eval_preg_capture_array(&subject, None, offset_capture, unmatched_as_null, values)?;
-    let matched = values.int(0)?;
+    // A match error (malformed UTF-8, exhausted limits) is PHP `false` with `[]`.
+    let matched = if eval_preg_failed() { values.bool_value(false)? } else { values.int(0)? };
     Ok((matched, matches))
 }
 

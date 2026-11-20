@@ -20,6 +20,33 @@ class PartialApplication implements Elephc\Web\WorkerApplication {
 Elephc\Web\Worker::register(new PartialApplication());
 "#;
 
+/// Attempts one HTTP request and returns whether the peer returned no bytes.
+///
+/// Apple targets bind the TCP listener in the master so the kernel may complete
+/// the TCP handshake before a worker is ready. The failed-bootstrap contract is
+/// therefore "no HTTP response", not "no TCP accept".
+fn no_http_response(addr: &str) -> bool {
+    use std::io::{Read, Write};
+
+    let Ok(mut stream) = TcpStream::connect(addr) else {
+        return true;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+    if stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return true;
+    }
+    let mut buffer = [0u8; 512];
+    match stream.read(&mut buffer) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(_) => true,
+    }
+}
+
 /// Preserves the complete failed-startup contract for one independently compiled bootstrap.
 fn assert_failed_bootstrap(bootstrap: &str) {
     let fixture = Fixture(make_test_dir("web_application_boot_failure"));
@@ -28,14 +55,15 @@ fn assert_failed_bootstrap(bootstrap: &str) {
     let stderr_path = fixture.0.join("bootstrap.stderr");
     let stderr_file = fs::File::create(&stderr_path).unwrap();
     let mut server = ServerGuard::new(Command::new(binary).args(["--listen", &addr, "--workers", "1"]).stdout(Stdio::null()).stderr(Stdio::from(stderr_file)).spawn().unwrap());
+    assert!(no_http_response(&addr), "failed bootstrap served an HTTP response");
     let deadline = Instant::now() + Duration::from_secs(25);
     let status = loop {
-        assert!(TcpStream::connect(&addr).is_err(), "failed bootstrap accepted a connection");
         if let Some(status) = server.try_wait().unwrap() { break status; }
         assert!(Instant::now() < deadline, "startup crash-loop protection did not stop the master");
         std::thread::sleep(Duration::from_millis(25));
     };
     assert!(!status.success(), "failed application startup must report failure");
+    assert!(TcpStream::connect(&addr).is_err(), "failed bootstrap left the listener open");
     let diagnostics = fs::read_to_string(stderr_path).unwrap();
     if bootstrap.contains("throw new RuntimeException") {
         assert!(diagnostics.contains("bootstrap RuntimeException: "), "{diagnostics}");

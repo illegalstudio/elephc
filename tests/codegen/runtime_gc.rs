@@ -70,6 +70,8 @@ mod large_unary_string_results;
 mod static_local_initializers;
 #[path = "runtime_gc/ini_lookup_arguments.rs"]
 mod ini_lookup_arguments;
+#[path = "runtime_gc/memory_limit_runtime.rs"]
+mod memory_limit_runtime;
 #[path = "runtime_gc/mixed_string_cast_return.rs"]
 mod mixed_string_cast_return;
 #[path = "runtime_gc/stream_registry.rs"]
@@ -333,5 +335,12 @@ mod gmp_exception_operands;
 mod eval_reference_escape;
 mod leaf_unset_collection;
 mod foreach_hash_objects;
+mod property_element_writes;
+mod null_receiver_property_writes;
 mod nullable_identity_guards;
 mod safe_point_budget;
+
+#[path = "runtime_gc/dynamic_first_class.rs"]
+mod dynamic_first_class;
+#[path = "runtime_gc/closure_factory_storage.rs"]
+mod closure_factory_storage;

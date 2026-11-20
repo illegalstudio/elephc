@@ -28,8 +28,8 @@ pub use oop::{
     Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl,
     PropertyHooks, TraitAdaptation, TraitUse, Visibility,
 };
-pub use stmt::{CatchClause, Program, Stmt, StmtKind, UseItem, UseKind};
-pub use types::{GenericDecl, TypeExpr, TypeParam, Variance};
+pub use stmt::{class_binding_mark_class, class_binding_mark_label, CatchClause, Program, Stmt, StmtKind, UseItem, UseKind};
+pub use types::{GenericDecl, NativeHint, TypeExpr, TypeParam, Variance};
 
 /// Name prefix of the temporary a nested append (`$a[$k][] = $v`) reads its bucket into.
 ///
@@ -61,3 +61,6 @@ pub const SCOPED_WRITE_TEMP_PREFIX: &str = "__elephc_scoped_write_";
 /// skips the exceptional copy's rethrow — the same path a function's `return` in `finally`
 /// already takes.
 pub const INCLUDE_RETURN_BREAK_ATTRIBUTE: &str = "__elephc_include_return";
+
+/// Internal method marker for dynamic callable syntax, distinct from the PHP factory.
+pub const DYNAMIC_CALLABLE_FACTORY: &str = "\0dynamic_callable_factory";

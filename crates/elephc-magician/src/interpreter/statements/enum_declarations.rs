@@ -6,6 +6,10 @@
 //!
 //! Key details:
 //! - Trait expansion, synthetic methods, backing values, cases, and static defaults stay ordered.
+//! - Nothing is evaluated at declaration: class constants and enum cases (their singleton
+//!   objects and backed values) are evaluated on php-src's first evaluation of each, and a
+//!   backed enum's case values are checked when the enum initializes
+//!   (`constant_evaluation`).
 
 use super::*;
 
@@ -39,14 +43,7 @@ pub(in crate::interpreter) fn execute_enum_decl_stmt(
     let enum_decl = &enum_decl;
     validate_eval_enum_decl(enum_decl, context, values)?;
     if context.define_enum(enum_decl.clone()) {
-        initialize_eval_declared_constants(
-            enum_decl.name(),
-            enum_decl.constants(),
-            context,
-            scope,
-            values,
-        )?;
-        initialize_eval_enum_cases(enum_decl, context, scope, values)
+        Ok(())
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
@@ -97,6 +94,16 @@ pub(super) fn expand_eval_enum_traits(
     if !properties.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    // The declared cases and constants keep their source order; the constants the traits
+    // import come after them, as in php-src's constant table.
+    let mut member_order = enum_decl.member_order().to_vec();
+    if !member_order.is_empty() {
+        for constant in &constants {
+            if !member_order.iter().any(|member| member == constant.name()) {
+                member_order.push(constant.name().to_string());
+            }
+        }
+    }
     constants.extend(enum_decl.constants().iter().cloned());
     methods.extend(enum_decl.methods().iter().cloned());
     let mut expanded = EvalEnum::with_members_traits_adaptations(
@@ -109,7 +116,8 @@ pub(super) fn expand_eval_enum_traits(
         enum_decl.traits().to_vec(),
         enum_decl.trait_adaptations().to_vec(),
     )
-    .with_attributes(enum_decl.attributes().to_vec());
+    .with_attributes(enum_decl.attributes().to_vec())
+    .with_member_order(member_order);
     if let Some(source_location) = enum_decl.source_location() {
         expanded = expanded.with_source_location(source_location);
     }
@@ -249,49 +257,28 @@ pub(super) fn is_forbidden_eval_enum_magic_method(name: &str) -> bool {
     .any(|method| name.eq_ignore_ascii_case(method))
 }
 
-/// Initializes enum singleton case objects for a newly declared eval enum.
-pub(super) fn initialize_eval_enum_cases(
-    enum_decl: &EvalEnum,
+/// Initializes an eval-declared enum the way php-src does on `from()`, `tryFrom()`, or (for a
+/// backed enum) the first fetch of one of its constants: every constant and case it has not
+/// evaluated yet is evaluated, in table order, then the case values are checked against the
+/// backing type and each other. A failure leaves the enum uninitialized, so the next use
+/// retries, as php-src does.
+pub(in crate::interpreter) fn eval_raise_enum_initialization_deprecations(
+    enum_name: &str,
     context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let mut backing_values = Vec::new();
-    for case in enum_decl.cases() {
-        let backing_value = if let Some(value_expr) = case.value() {
-            let value = eval_expr(value_expr, context, scope, values)?;
-            validate_eval_enum_backing_value(enum_decl.backing_type(), value, values)?;
-            for existing in &backing_values {
-                let equal = values.compare(EvalBinOp::StrictEq, value, *existing)?;
-                if values.truthy(equal)? {
-                    return Err(EvalStatus::RuntimeFatal);
-                }
-            }
-            backing_values.push(value);
-            Some(value)
-        } else {
-            None
-        };
-        initialize_eval_enum_case(enum_decl, case, backing_value, context, values)?;
+    if !context.has_enum(enum_name)
+        || context.deprecations_silenced()
+        || !context.begin_class_initialization(enum_name)
+    {
+        return Ok(());
     }
-    Ok(())
-}
-
-/// Validates that one evaluated enum backing value matches the declared backing type.
-pub(super) fn validate_eval_enum_backing_value(
-    backing_type: Option<EvalEnumBackingType>,
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let Some(backing_type) = backing_type else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let tag = values.type_tag(value)?;
-    match backing_type {
-        EvalEnumBackingType::Int if tag == EVAL_TAG_INT => Ok(()),
-        EvalEnumBackingType::String if tag == EVAL_TAG_STRING => Ok(()),
-        EvalEnumBackingType::Int | EvalEnumBackingType::String => Err(EvalStatus::RuntimeFatal),
+    let result = eval_class_constant_table_evaluation(enum_name, context, values)
+        .and_then(|()| eval_validate_backed_enum_cases(enum_name, context, values));
+    if result.is_err() {
+        context.abort_class_initialization(enum_name);
     }
+    result
 }
 
 /// Creates and stores one enum case singleton object.
@@ -319,32 +306,7 @@ pub(super) fn initialize_eval_enum_case(
     Ok(())
 }
 
-/// Initializes class-like constant cells for a newly declared eval class-like.
-pub(super) fn initialize_eval_declared_constants(
-    owner_name: &str,
-    constants: &[EvalClassConstant],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    for constant in constants {
-        let value = eval_class_like_member_default(
-            owner_name,
-            constant.trait_origin(),
-            constant.value(),
-            context,
-            scope,
-            values,
-        )?;
-        if let Some(replaced) = context.set_class_constant_cell(owner_name, constant.name(), value)
-        {
-            values.release(replaced)?;
-        }
-    }
-    Ok(())
-}
-
-/// Evaluates a class-like constant or property initializer with PHP magic scope.
+/// Evaluates a class-like constant or property initializer with PHP magic and class scope.
 pub(super) fn eval_class_like_member_default(
     owner_name: &str,
     trait_origin: Option<&str>,
@@ -355,7 +317,13 @@ pub(super) fn eval_class_like_member_default(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let trait_name = trait_origin.or_else(|| context.has_trait(owner_name).then_some(owner_name));
     context.push_class_like_member_magic_scope(owner_name, trait_name);
+    // A constant expression in a class member resolves `self::`/`parent::` against, and is
+    // granted the visibility of, the declaring class.
+    context.push_class_scope(owner_name.to_string());
+    context.enter_constant_expression();
     let result = eval_expr(default, context, scope, values);
+    context.leave_constant_expression();
+    context.pop_class_scope();
     context.pop_magic_scope();
     result
 }
@@ -383,14 +351,16 @@ pub(super) fn initialize_eval_static_properties(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    // php-src evaluates a static default when the class initializes (first `new`, static
+    // property access, or reflection use), where `eval_raise_class_initialization_deprecations`
+    // evaluates and stores it. Only an untyped static without a default is set here, to null.
+    let _ = scope;
     for property in class
         .properties()
         .iter()
         .filter(|property| property.is_static())
     {
-        let value = if let Some(default) = property.default() {
-            Some(eval_property_default(class.name(), property, default, context, scope, values)?)
-        } else if property.property_type().is_none() {
+        let value = if property.default().is_none() && property.property_type().is_none() {
             Some(values.null()?)
         } else {
             None

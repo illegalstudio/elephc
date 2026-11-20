@@ -369,6 +369,8 @@ fn stmt_refs_testing(stmt: &Stmt) -> bool {
         // Statements with no class-name position and no child expr/stmt.
         StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }

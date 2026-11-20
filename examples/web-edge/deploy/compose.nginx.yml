@@ -1,0 +1,67 @@
+name: elephc-edge-nginx
+
+# nginx variant of the edge stack. The origin and the shared socket volume are
+# identical to compose.yml; only the edge service changes.
+#
+#   docker compose -f examples/web-edge/deploy/compose.nginx.yml up --build
+#
+# The official nginx image starts as root; that is intentional here because it
+# binds 80/443 and writes its pid/cache files. The origin runs as uid 10001 and
+# nginx's primary group (GID 101), so the 0660 socket and 0770 runtime directory
+# remain group-private instead of world-readable.
+
+services:
+  init:
+    image: busybox:1.36
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /run/elephc /var/lib/elephc/sessions
+        chown -R 10001:101 /run/elephc /var/lib/elephc
+        chmod 0770 /run/elephc
+    volumes:
+      - elephc-run:/run/elephc
+      - elephc-sessions:/var/lib/elephc/sessions
+    restart: "no"
+
+  app:
+    build:
+      context: ../../..
+      dockerfile: examples/web-edge/deploy/Dockerfile.app
+    # Join the nginx image's primary group (GID 101). nginx workers are uid/gid
+    # 101 and can traverse the 0770 directory and read the 0660 socket without
+    # making either world-accessible.
+    user: "10001:101"
+    environment:
+      ELEPHC_SESSION_SAVE_PATH: /var/lib/elephc/sessions
+    volumes:
+      - elephc-run:/run/elephc
+      - elephc-sessions:/var/lib/elephc/sessions
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/elephc/app.sock"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  edge:
+    image: nginx:1.27-alpine
+    # The origin already runs in this image's nginx group (GID 101).
+    ports:
+      - "80:80"
+    volumes:
+      - elephc-run:/run/elephc:ro
+      - ../nginx.compose.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../public:/srv/app/public:ro
+    depends_on:
+      app:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  elephc-run:
+  elephc-sessions:

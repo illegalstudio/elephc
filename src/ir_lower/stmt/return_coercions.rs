@@ -31,6 +31,7 @@ pub(super) fn coerce_to_return_type(
     } else { value };
     let value = ctx.retype_packed_address_for_pointer_sink(value, &return_php_type, span);
     crate::ir_lower::object_boundaries::guard_return(ctx, value, span);
+    guard_declared_callable_return_value(ctx, value, span.unwrap_or_else(Span::dummy));
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
         return value;
     }
@@ -389,3 +390,31 @@ pub(super) fn coerce_to_string(
     }
 }
 
+/// Runs PHP's return check for a declared `callable` return type (`callable`, `?callable`, ...)
+/// on the returned value, which keeps its PHP shape; any other return type is left alone.
+///
+/// A by-reference return (`function &f(): callable`) checks the value read through the cell it
+/// hands the caller, so both return paths throw the same `TypeError`.
+pub(super) fn guard_declared_callable_return_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) {
+    let return_php_type = ctx.return_php_type.clone();
+    if !ctx.return_type_is_declared || !return_php_type.declares_callable() {
+        return;
+    }
+    let display = ctx
+        .builder
+        .function()
+        .display_name
+        .clone()
+        .unwrap_or_else(|| ctx.owner_name().to_string());
+    crate::ir_lower::expr::guard_declared_callable_return(
+        ctx,
+        &display,
+        value,
+        &return_php_type,
+        span,
+    );
+}

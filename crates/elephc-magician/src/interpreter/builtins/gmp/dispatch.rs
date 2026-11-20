@@ -9,7 +9,8 @@
 //! - Ordinary helper suffixes match their public builtin (`gmp_strval` ->
 //!   `__elephc_gmp_strval`); checked projections supply their reviewed helper explicitly.
 //! - Evaluated builtin arguments arrive in PHP parameter order. The helper adds one
-//!   compiler-owned leading `bool $strict`; eval is always weak mode, so it is `false`.
+//!   compiler-owned leading `bool $strict`, taken from the active eval fragment's
+//!   `declare(strict_types=...)` mode.
 //! - The helper's own defaults, coercions, warnings, and thrown errors are the ones
 //!   compiled callers observe, so AOT and eval share one GMP semantics implementation.
 
@@ -49,7 +50,7 @@ pub(super) fn eval_gmp_helper_values_result(
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let function = eval_gmp_host_function(name, helper, context, values)?;
-    let strict = values.bool_value(false)?;
+    let strict = values.bool_value(context.strict_types())?;
     let mut arguments = Vec::with_capacity(evaluated_args.len() + 1);
     arguments.push(EvaluatedCallArg { source_type: None,
         evaluation_owner: None,

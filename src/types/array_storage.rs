@@ -5,6 +5,7 @@
 //! Called from:
 //! - `crate::types::checker::inference::expr::effects` (the env fact a conditional arm leaves behind)
 //! - `crate::ir_lower::context` and `crate::ir_lower::stmt::repr_fixpoint` (the op to emit)
+//! - Call validation and call-argument lowering (binding a packed list to a hash parameter)
 //!
 //! Key details:
 //! - The checker's parameter specialization compiles a callee for the element type it sees at the
@@ -78,4 +79,115 @@ pub(crate) fn join_array_storage_conversion(previous: &PhpType, next: &PhpType) 
             value: Box::new(PhpType::Mixed),
         },
     }
+}
+
+/// Returns the hash storage a packed `array<element>` argument is rebuilt into when it is bound
+/// to the declared hash parameter `expected`, or `None` when the two cannot be bound.
+///
+/// A list is a valid `array<int, V>` value, but its storage is a packed element vector while the
+/// callee is compiled for a hash table. `Op::ArrayToHash` rebuilds one into the other and can
+/// box every entry on the way, so three element shapes are convertible: an empty literal (no
+/// elements to disagree), elements already in the parameter's value representation, and any
+/// boxable element into `mixed` values. Everything else (an `int` list for `float` values, a
+/// nested list where the parameter nests a hash, pointer words into boxed cells) has no
+/// conversion, and binding it anyway would make the callee read one layout as another.
+///
+/// The answer is the parameter's own type: it is what the callee reads and, for a by-reference
+/// binding, what the caller's variable holds afterwards.
+pub(crate) fn packed_argument_hash_storage(
+    expected: &PhpType,
+    actual: &PhpType,
+) -> Option<PhpType> {
+    let PhpType::AssocArray { value, .. } = expected.codegen_repr() else {
+        return None;
+    };
+    let PhpType::Array(element) = actual.codegen_repr() else {
+        return None;
+    };
+    let fits = match (element.codegen_repr(), value.codegen_repr()) {
+        (PhpType::Never | PhpType::Void, _) => true,
+        (PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_), value) => {
+            value == element.codegen_repr()
+        }
+        (_, PhpType::Mixed) => true,
+        (PhpType::Object(_), PhpType::Object(_)) => true,
+        (element, value) => element == value,
+    };
+    fits.then(|| expected.clone())
+}
+
+/// Returns whether binding `actual` to the declared parameter `expected` crosses from packed
+/// list storage to hash storage, convertible or not.
+pub(crate) fn binds_packed_argument_to_hash(expected: &PhpType, actual: &PhpType) -> bool {
+    matches!(expected.codegen_repr(), PhpType::AssocArray { .. })
+        && matches!(actual.codegen_repr(), PhpType::Array(_))
+}
+
+/// Returns the storage a packed list variable is converted to, in place, before it is bound to
+/// the declared by-REFERENCE container parameter `expected`, or `None` when no in-place
+/// conversion exists (or none is needed).
+///
+/// A by-reference callee reads and writes the caller's own storage with the layout its
+/// parameter declares. Two declared layouts differ from a typed list and can be reached from
+/// one: a hash (`array<K, V>`, see [`packed_argument_hash_storage`]) and a list of boxed values
+/// (a written `array<mixed>`), which every boxable element type widens into. Raw pointer,
+/// buffer and packed-record words are not boxable: boxing would turn each into an integer.
+pub(crate) fn packed_reference_argument_storage(
+    expected: &PhpType,
+    actual: &PhpType,
+) -> Option<PhpType> {
+    if let Some(hash) = packed_argument_hash_storage(expected, actual) {
+        return Some(hash);
+    }
+    if !binds_packed_argument_to_boxed_list(expected, actual) {
+        return None;
+    }
+    let PhpType::Array(element) = actual.codegen_repr() else {
+        return None;
+    };
+    (!matches!(
+        element.codegen_repr(),
+        PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_)
+    ))
+    .then(|| PhpType::Array(Box::new(PhpType::Mixed)))
+}
+
+/// Returns whether binding the list `actual` by reference to the declared parameter `expected`
+/// needs the caller's storage in another layout, convertible or not.
+pub(crate) fn binds_packed_reference_argument(expected: &PhpType, actual: &PhpType) -> bool {
+    binds_packed_argument_to_hash(expected, actual)
+        || binds_packed_argument_to_boxed_list(expected, actual)
+}
+
+/// Returns whether parameter `index` is passed by reference and carries a WRITTEN array type
+/// (`array<T>` or `array<K, V>`).
+///
+/// Such a parameter is a storage contract in both directions: the callee reads and writes the
+/// caller's variable with exactly that layout, so the caller's list is converted to it in place
+/// or refused. A plain `array` hint resolves to the same `array<mixed>` but is no contract: it
+/// is sharpened to what call sites pass and bound through the boxed reference cell, which is
+/// how a wrapper forwards its own `array &` parameter to another `array &` parameter.
+pub(crate) fn is_written_reference_array_param(
+    ref_params: &[bool],
+    param_type_exprs: &[Option<crate::parser::ast::TypeExpr>],
+    index: usize,
+) -> bool {
+    ref_params.get(index).copied().unwrap_or(false)
+        && matches!(
+            param_type_exprs.get(index),
+            Some(Some(
+                crate::parser::ast::TypeExpr::Array(_)
+                    | crate::parser::ast::TypeExpr::AssocArray { .. }
+            ))
+        )
+}
+
+/// Returns whether `actual` is a list of unboxed elements bound to a list of boxed values.
+fn binds_packed_argument_to_boxed_list(expected: &PhpType, actual: &PhpType) -> bool {
+    let (PhpType::Array(expected_element), PhpType::Array(element)) =
+        (expected.codegen_repr(), actual.codegen_repr())
+    else {
+        return false;
+    };
+    expected_element.codegen_repr() == PhpType::Mixed && element.codegen_repr() != PhpType::Mixed
 }

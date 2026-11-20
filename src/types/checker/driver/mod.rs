@@ -117,6 +117,9 @@ pub(super) fn check_types_impl(
     errors.extend(flatten_errors);
     (checker.trait_imported_properties, checker.trait_imported_constructors) =
         super::schema::collect_trait_default_origins(program, &flattened_classes);
+    checker.trait_method_requirements =
+        super::schema::collect_trait_method_requirements(program, &flattened_classes);
+    checker.trait_property_origins = super::schema::collect_trait_property_origins(program);
     // A prelude parsed from PHP text gives its classes real spans, so the statement's source
     // mode is what tells them apart from the program's own classes (`ClassInfo::is_internal`).
     checker.internal_class_decls = program
@@ -345,6 +348,24 @@ pub(super) fn check_types_impl(
     // `_class_*` metadata tables and the object header each `new` stamps.
     let mut class_names: Vec<String> = class_map.keys().cloned().collect();
     class_names.sort();
+    checker.declared_class_ancestry = class_map
+        .iter()
+        .map(|(name, class)| (name.clone(), (class.extends.clone(), class.implements.clone())))
+        .collect();
+    // Enums are built after every class, so a class method may return an enum that only its
+    // declaration can relate to the interface the parent method returns. Every enum also
+    // implements `UnitEnum`, and a backed one `BackedEnum`, as `build_enum_info` publishes.
+    for stmt in program {
+        if let StmtKind::EnumDecl { name, implements, backing_type, .. } = &stmt.kind {
+            let implements = implements
+                .iter()
+                .map(|name| name.as_str().to_string())
+                .chain(std::iter::once("UnitEnum".to_string()))
+                .chain(backing_type.as_ref().map(|_| "BackedEnum".to_string()))
+                .collect();
+            checker.declared_class_ancestry.entry(name.clone()).or_insert((None, implements));
+        }
+    }
     for class_name in class_names {
         if let Err(error) = build_class_info_recursive(
             &class_name,
@@ -356,6 +377,7 @@ pub(super) fn check_types_impl(
             errors.extend(error.flatten());
         }
     }
+    checker.declared_class_ancestry.clear();
     if let Err(error) = inject_builtin_enums(program, &mut checker, &mut next_class_id) {
         errors.extend(error.flatten());
     }

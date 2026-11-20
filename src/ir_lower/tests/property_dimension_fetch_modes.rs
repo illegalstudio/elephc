@@ -70,8 +70,16 @@ concreteRequiredWrite(new RequiredFetchSlot());
         let read = function.instructions.iter().position(|inst| inst.op == Op::PropGet)
             .expect("an initialized ArrayAccess object retains its ordinary read");
         assert!(probe < read, "{target}: initialization must precede the property read");
-        assert!(!function.instructions.iter().any(|inst| inst.op == Op::IsNull),
+        // The RECEIVER may be the null sentinel of a missed element read and is tested before
+        // the probe; the property VALUE of an initialized concrete slot is never null-tested.
+        let property_reads: Vec<_> = function.instructions.iter()
+            .filter(|inst| inst.op == Op::PropGet).filter_map(|inst| inst.result).collect();
+        assert!(!function.instructions.iter().any(|inst| inst.op == Op::IsNull
+            && inst.operands.first().is_some_and(|operand| property_reads.contains(operand))),
             "{target}: initialized concrete object storage cannot contain null");
+        let receiver_test = function.instructions.iter().position(|inst| inst.op == Op::IsNull)
+            .expect("a class-typed receiver is checked for the null sentinel");
+        assert!(receiver_test < probe, "{target}: the receiver is tested before the probe");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }

@@ -2,7 +2,7 @@
 //! End-to-end proof that `ext/curl` integer constants are real, stable PHP values.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl` through Rust's test harness.
 //!
 //! Key details:
 //! - `CURLOPT_URL` is one of the four frozen constant prefixes
@@ -27,4 +27,26 @@ fn curlopt_url_is_defined_and_stable() {
     let out = compile_and_run("<?php echo CURLOPT_URL;");
     let expected = 10002;
     assert_eq!(out, expected.to_string());
+}
+
+/// `CURLOPT_BINARYTRANSFER` is deprecated since PHP 8.4: a read raises php-src's message and
+/// still yields 19914.
+#[test]
+fn curlopt_binarytransfer_read_deprecation() {
+    if skip_without_curl_native("curlopt_binarytransfer_read_deprecation") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", $message, " @", $line, "\n";
+    return true;
+});
+echo CURLOPT_BINARYTRANSFER, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "[8192] Constant CURLOPT_BINARYTRANSFER is deprecated since 8.4, as it had no effect since 5.1.2 @6\n19914\n"
+    );
 }

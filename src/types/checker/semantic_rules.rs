@@ -105,7 +105,8 @@ impl Checker {
     pub(crate) fn require_mixed_callable_type(&self, actual: &PhpType, span: Span) -> Result<(), CompileError> {
         crate::semantics::mixed::validate_use(self.semantic_profile, self.semantic_source_mode,
             actual, span, "callable invocation", |member| match member {
-                PhpType::Callable | PhpType::Str | PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+                PhpType::Callable | PhpType::DeclaredCallable | PhpType::Str
+                    | PhpType::Array(_) | PhpType::AssocArray { .. } => true,
                 PhpType::Object(class) => self.classes.get(class)
                     .is_some_and(|info| info.methods.contains_key("__invoke")),
                 _ => false,

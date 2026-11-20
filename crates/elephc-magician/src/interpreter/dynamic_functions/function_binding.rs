@@ -524,7 +524,21 @@ fn apply_native_function_arg_types(
         )? {
             continue;
         }
-        bound_arg.value = eval_method_parameter_value(param_type, original, context, values)?;
+        // PHP omits the parameter name for a variadic slot in an argument TypeError.
+        let parameter = if variadic_index.is_some_and(|index| position >= index) {
+            None
+        } else {
+            function.param_names().get(param_index).map(String::as_str)
+        };
+        bound_arg.value = eval_method_parameter_value_or_throw(
+            function.name(),
+            position + 1,
+            parameter,
+            param_type,
+            original,
+            context,
+            values,
+        )?;
         if bound_arg.value != original { release_expr_result(original, context, values)?; }
     }
     Ok(())

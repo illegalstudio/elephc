@@ -48,7 +48,7 @@ pub(crate) fn context_free_hint(hint: &crate::parser::ast::TypeExpr) -> Option<P
         TypeExpr::Named(name) => match name.as_str().to_ascii_lowercase().as_str() {
             "mixed" => PhpType::Mixed, "object" => PhpType::Object(String::new()),
             "array" => PhpType::php_array(), "iterable" => PhpType::Iterable,
-            "callable" => PhpType::Callable, _ => return None,
+            "callable" => PhpType::DeclaredCallable, _ => return None,
         },
         TypeExpr::Array(_) | TypeExpr::AssocArray { .. } | TypeExpr::CallableSig { .. } =>
             crate::types::constant_binding::declared_type(hint),
@@ -78,7 +78,7 @@ pub(crate) fn scalar_contract(ty: &PhpType) -> Option<AllowedKinds> {
 pub(crate) fn implicit_contract(ty: &PhpType) -> Option<AllowedKinds> {
     match ty {
         PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
-        | PhpType::Iterable | PhpType::Callable | PhpType::Resource(_) =>
+        | PhpType::Iterable | PhpType::Callable | PhpType::DeclaredCallable | PhpType::Resource(_) =>
             Some(AllowedKinds::one(ValueKind::NonScalar)),
         PhpType::Union(members) => members.iter().try_fold(AllowedKinds::EMPTY,
             |allowed, member| Some(allowed.union(implicit_contract(member)?))),
@@ -110,7 +110,7 @@ pub(crate) fn runtime_constraints(ty: &PhpType) -> Vec<RuntimeConstraint> {
     let constraints = match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } => vec![RuntimeConstraint::Array],
         PhpType::Iterable => vec![RuntimeConstraint::Iterable],
-        PhpType::Callable => vec![RuntimeConstraint::Callable],
+        PhpType::Callable | PhpType::DeclaredCallable => vec![RuntimeConstraint::Callable],
         PhpType::Resource(_) => vec![RuntimeConstraint::Resource],
         PhpType::Union(members) => members.iter().flat_map(runtime_constraints).collect(),
         _ => Vec::new(),
@@ -136,7 +136,8 @@ pub(crate) fn permits_guarded_unknown(ty: &PhpType) -> bool {
 pub(crate) fn inferred_binding_contract(ty: &PhpType) -> Option<PhpType> {
     Some(match ty {
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
-        | PhpType::Void | PhpType::Object(_) | PhpType::Callable | PhpType::Iterable => ty.clone(),
+        | PhpType::Void | PhpType::Object(_) | PhpType::Callable | PhpType::DeclaredCallable
+        | PhpType::Iterable => ty.clone(),
         PhpType::Resource(_) => PhpType::Resource(None),
         PhpType::Array(_) | PhpType::AssocArray { .. } => PhpType::php_array(),
         PhpType::Union(members) if !members.is_empty() => crate::types::checker::normalize_union_members(

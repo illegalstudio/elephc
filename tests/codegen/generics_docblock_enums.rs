@@ -3,7 +3,7 @@
 //! Covers instance/static calls, namespace resolution, bounds, and trait methods.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests generics_docblock_enums`.
+//! - `cargo test --test codegen_tests_oop generics_docblock_enums`.
 //!
 //! Key details:
 //! - Enum cases retain their singleton identity while their methods specialize.
@@ -70,9 +70,10 @@ namespace App {
     }
 }
 
-/// An enum template's bound rejects the same invalid argument as a class method template.
+/// An enum template's bound warns about the same argument a class method template warns about,
+/// and the call still compiles: php-src does not enforce a PHPDoc bound.
 #[test]
-fn test_docblock_enum_templates_enforce_bounds() {
+fn test_docblock_enum_template_bound_violation_warns() {
     let source = r#"<?php
 enum Id {
     case A;
@@ -86,8 +87,8 @@ enum Id {
 Id::A->id("seven");
 "#;
     for flags in [&[][..], &["--php-only"][..]] {
-        let error = compile_cli_file_with_flags_expect_failure(source, flags);
-        assert!(error.contains("does not satisfy its bound int"), "{error}");
+        let warnings = compile_cli_file_with_flags_capturing_stderr(source, flags);
+        assert!(warnings.contains("does not satisfy its bound int"), "{warnings}");
     }
 }
 

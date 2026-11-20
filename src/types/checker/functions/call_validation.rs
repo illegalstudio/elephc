@@ -170,6 +170,14 @@ fn unresolved_call_order_error(err: CallArgPlanError, callee_desc: &str) -> Comp
     }
 }
 
+/// Strips the named/spread wrappers from a by-reference argument so its storage place is visible.
+fn unwrap_ref_argument(mut arg: &Expr) -> &Expr {
+    while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+        arg = value;
+    }
+    arg
+}
+
 impl Checker {
     /// Enforces PHP's syntactic argument ordering on a callee not resolvable at compile time
     /// (string callables, `new $class(...)`), where no signature is available to
@@ -265,6 +273,220 @@ impl Checker {
         Ok(true)
     }
 
+    /// Returns whether a direct property argument can bind a by-reference parameter.
+    ///
+    /// A `mixed`/union parameter receives a boxed temporary of any declared property type.
+    /// A concretely typed parameter is accepted only when the property's declared type is
+    /// compatible with it, so the temporary can carry the property's own representation and
+    /// the callee's writes can be stored back.
+    pub(crate) fn property_ref_argument_supported(
+        &mut self,
+        arg: &Expr,
+        param_ty: &PhpType,
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        let arg = unwrap_ref_argument(arg);
+        let property_arg = match &arg.kind {
+            ExprKind::PropertyAccess { .. } => arg,
+            ExprKind::ArrayAccess { array, .. } => {
+                let Some(property_arg) = Self::root_property_access(array) else {
+                    return Ok(true);
+                };
+                // A nested element binds the property's array slot. Only a property whose
+                // inferred storage is a PHP array provides one; a declared `mixed`/union slot
+                // has no element storage the lowering can address.
+                let storage = self.infer_type(property_arg, env)?;
+                if !storage.is_php_array()
+                    && !matches!(
+                        storage.codegen_repr(),
+                        PhpType::Array(_) | PhpType::AssocArray { .. }
+                    )
+                {
+                    return Ok(false);
+                }
+                property_arg
+            }
+            _ => return Ok(true),
+        };
+        let ExprKind::PropertyAccess { object, property } = &property_arg.kind else {
+            return Ok(true);
+        };
+        let Some((class_name, addressable)) =
+            self.ref_property_slot_addressability(object, property, env)?
+        else {
+            return Ok(false);
+        };
+        let Some(info) = self.classes.get(class_name.as_str()) else {
+            return Ok(false);
+        };
+        if !addressable {
+            return Ok(false);
+        }
+        let declared = info.visible_property_is_declared(property);
+        let Some(property_ty) = info
+            .visible_property(property)
+            .map(|(_, (_, ty))| ty.codegen_repr())
+        else {
+            return Ok(false);
+        };
+        let param_ty = param_ty.codegen_repr();
+        // A declared `mixed` property already has the boxed cell a `mixed`/union parameter
+        // needs. Promoting it keeps the live-argument path the untyped-slot branch below
+        // provides; union-typed storage stays on the copy-in/out path so its declared type is
+        // still enforced on every write-back.
+        let exact_property_ty = info.visible_property(property).map(|(_, (_, ty))| ty);
+        if declared
+            && matches!(arg.kind, ExprKind::PropertyAccess { .. })
+            && matches!(param_ty, PhpType::Mixed | PhpType::Union(_))
+            && exact_property_ty == Some(&PhpType::Mixed)
+            && !info.is_internal
+            && !info.readonly_properties.contains(property)
+            && info.property_hooks.get(property).is_none_or(|hooks| !hooks.any())
+        {
+            self.reference_property_promotions
+                .insert((class_name.clone(), property.clone()));
+        }
+        if declared
+            && matches!(arg.kind, ExprKind::PropertyAccess { .. })
+            && crate::types::param_binding::by_ref_property_storage_compatible(&param_ty, &property_ty)
+            && param_ty.codegen_repr() == property_ty.codegen_repr()
+            && !matches!(
+                param_ty.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
+            )
+            && !info.is_internal
+            && !info.readonly_properties.contains(property)
+            && info.property_hooks.get(property).is_none_or(|hooks| !hooks.any())
+        {
+            // The callee's writes are typed exactly like the property declaration, so sharing
+            // the property's cell is safe and publishes them while the call is still running.
+            self.reference_property_promotions
+                .insert((class_name.clone(), property.clone()));
+        }
+        if !declared {
+            if matches!(param_ty, PhpType::Mixed | PhpType::Union(_))
+                && !info.is_internal
+                && !info.readonly_properties.contains(property)
+                && info.property_hooks.get(property).is_none_or(|hooks| !hooks.any())
+            {
+                self.reference_property_storage_widenings
+                    .insert((class_name.clone(), property.clone()));
+                // A direct property and an array ELEMENT both bind the property's cell rather
+                // than using the boxed-temporary write-back, so the widened untyped slot must
+                // become an owned reference property for `LoadPropRefCell` to resolve and for
+                // the callee's writes to stay visible while the call is still running.
+                self.reference_property_promotions
+                    .insert((class_name.clone(), property.clone()));
+                return Ok(true);
+            }
+            // An UNTYPED property is PHP's ordinary writable zval: a weak call coerces its
+            // current value to the declared parameter, and a strict call raises the call-site
+            // `TypeError`. Either way it is a legal PLACE, handled by the temporary
+            // read/write-back path rather than refused as "not a variable".
+            if matches!(arg.kind, ExprKind::PropertyAccess { .. })
+                && crate::types::param_binding::by_ref_property_writeback_supported(&param_ty)
+            {
+                // A weak conversion can replace the slot's inferred initializer type with the
+                // parameter type (and the callee can replace it again), so an untyped slot
+                // reached this way needs boxed `Mixed` storage instead of its narrow default.
+                if !info.is_internal
+                    && !info.readonly_properties.contains(property)
+                    && info.property_hooks.get(property).is_none_or(|hooks| !hooks.any())
+                {
+                    self.reference_property_storage_widenings
+                        .insert((class_name.clone(), property.clone()));
+                }
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+        Ok(matches!(param_ty, PhpType::Mixed | PhpType::Union(_))
+            || Self::types_compatible(&param_ty, &property_ty)
+            || self.type_accepts(&param_ty, &property_ty)
+            // A declared property whose current type the parameter cannot accept is still a
+            // legal PLACE: PHP binds the reference and raises its argument `TypeError` at the
+            // call boundary. `require_bound_param_arg_type` records that exact message, which
+            // lowering raises before the callee body runs.
+            || (crate::types::param_binding::by_ref_property_writeback_supported(&param_ty)
+                && crate::types::param_binding::by_ref_property_writeback_supported(&property_ty)))
+    }
+
+    /// Widens an untyped property that a BUILTIN receives by reference to boxed `Mixed` storage.
+    ///
+    /// Builtins bypass `property_ref_argument_supported`; `settype($obj->prop, ...)` is the
+    /// common case. Only a `mixed`/union parameter is eligible, and only an untyped slot: a
+    /// declared slot has its own storage contract.
+    pub(crate) fn widen_untyped_builtin_ref_property(
+        &mut self,
+        arg: &Expr,
+        param_ty: &PhpType,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let arg = unwrap_ref_argument(arg);
+        let ExprKind::PropertyAccess { object, property } = &arg.kind else {
+            return Ok(());
+        };
+        if !matches!(
+            param_ty.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        ) {
+            return Ok(());
+        }
+        // A native array property is already served by the dedicated array-place path, which
+        // promotes the slot to a reference property without changing its array layout. Widening
+        // it to boxed Mixed here would make the array mutator lowering reject the receiver.
+        let inferred = self.infer_type(arg, env)?;
+        if matches!(
+            inferred.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ) || inferred.is_php_array()
+        {
+            return Ok(());
+        }
+        let Some((class_name, addressable)) =
+            self.ref_property_slot_addressability(object, property, env)?
+        else {
+            return Ok(());
+        };
+        let Some(info) = self.classes.get(class_name.as_str()) else {
+            return Ok(());
+        };
+        if addressable && !info.visible_property_is_declared(property) {
+            self.reference_property_storage_widenings
+                .insert((class_name, property.clone()));
+        }
+        Ok(())
+    }
+
+    /// Returns the property access at the root of a possibly nested array-element expression.
+    fn root_property_access<'a>(expr: &'a Expr) -> Option<&'a Expr> {
+        match &expr.kind {
+            ExprKind::PropertyAccess { .. } => Some(expr),
+            ExprKind::ArrayAccess { array, .. } => Self::root_property_access(array),
+            _ => None,
+        }
+    }
+
+    /// Returns whether a direct property is an addressable place WITHOUT promoting it to a
+    /// reference property: the boxed-temporary write-back path needs the property's typed slot,
+    /// not a reference cell.
+    pub(crate) fn is_addressable_direct_property_place(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        let arg = unwrap_ref_argument(arg);
+        let ExprKind::PropertyAccess { object, property } = &arg.kind else {
+            return Ok(false);
+        };
+        if !self.is_stable_ref_object_receiver(object, env)? {
+            return Ok(false);
+        }
+        Ok(self
+            .ref_property_slot_addressability(object, property, env)?
+            .is_some_and(|(_, addressable)| addressable))
+    }
+
     /// Returns true when an argument expression is an l-value supported by by-reference calls.
     pub(crate) fn is_by_ref_argument_lvalue(
         &mut self,
@@ -342,25 +564,10 @@ impl Checker {
             ));
         }
         if self.by_ref_property_place(storage_arg, &PhpType::Mixed, caller_env)? {
-            // A property place is rewritten through its own temporary and write-back; it has no
-            // caller local to widen or to publish as a boxed reference output. Array properties
-            // still need their container payload repacked by the variadic collector, which the
-            // property temporary does not provide.
-            let property_ty = self.infer_type(storage_arg, caller_env)?;
-            if property_ty.is_php_array()
-                || matches!(
-                    property_ty.codegen_repr(),
-                    PhpType::Array(_) | PhpType::AssocArray { .. }
-                )
-            {
-                return Err(CompileError::new(
-                    storage_arg.span,
-                    &format!(
-                        "{} variadic parameter ${} cannot bind an array property by reference; bind the property to a local variable first",
-                        callee_desc, variadic_name
-                    ),
-                ));
-            }
+            // The property rewrite stages the place at its source position and writes it back
+            // after the collector runs. That works for array properties too: the collector
+            // transports the boxed container through the reference marker, and the write-back
+            // repacks the mutated payload into the declared property slot.
             self.record_reference_alias_root(arg);
             return Ok(());
         }
@@ -379,6 +586,7 @@ impl Checker {
             arg,
             caller_env,
             can_widen_local,
+            false,
             &format!("{} variadic parameter ${}", callee_desc, variadic_name),
         )?;
         self.record_boxed_reference_output(
@@ -387,6 +595,7 @@ impl Checker {
             actual_ty,
             call_span,
             caller_env,
+            false,
         )?;
         self.record_reference_alias_root(arg);
         Ok(())
@@ -638,6 +847,20 @@ impl Checker {
         if expected == actual {
             return true;
         }
+        // `int|callable` and other unions with a coercible scalar keep the descriptor-typed
+        // callable member: only a value-preserving `callable` accepts any string or array.
+        if let PhpType::Union(members) = expected {
+            if PhpType::callable_union_needs_descriptor(members) {
+                let members = members
+                    .iter()
+                    .map(|member| match member {
+                        PhpType::DeclaredCallable => PhpType::Callable,
+                        other => other.clone(),
+                    })
+                    .collect();
+                return Self::types_compatible(&PhpType::Union(members), actual);
+            }
+        }
         match (expected, actual) {
             (PhpType::Mixed, _) => true,
             (_, PhpType::Never) => true, // never is the bottom type — compatible with any expected type
@@ -677,6 +900,21 @@ impl Checker {
                 PhpType::resource_types_compatible(expected, actual)
             }
             (PhpType::Callable, PhpType::Callable) => true,
+            // A declared `callable` keeps the value PHP passed: a Closure, a function or
+            // `Class::method` string, a callable array, or an invokable object. Whether it is
+            // actually callable is PHP's runtime check; literal names are still resolved where
+            // the binding happens (`require_declared_callable_arg`).
+            (
+                PhpType::DeclaredCallable,
+                PhpType::Callable
+                | PhpType::Mixed
+                | PhpType::Str
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_),
+            ) => true,
+            // A Closure slot materializes a descriptor from the declared value when it is used.
+            (PhpType::Callable, PhpType::DeclaredCallable) => true,
             _ => false,
         }
     }
@@ -754,8 +992,9 @@ impl Checker {
         owner_class: &str,
     ) -> Result<PhpType, CompileError> {
         let coercive = self.class_is_user_declared(owner_class);
+        let tidy_sig = self.tidy_strict_adapter_signature(None, Some(owner_class), Some(callee_desc), sig);
         let internal_sig = self.internal_operand_binding_signature(owner_class, sig);
-        let sig = internal_sig.as_ref().unwrap_or(sig);
+        let sig = tidy_sig.as_ref().or(internal_sig.as_ref()).unwrap_or(sig);
         self.check_known_callable_call_with_options(
             sig,
             args,
@@ -781,8 +1020,9 @@ impl Checker {
         owner_class: &str,
     ) -> Result<PhpType, CompileError> {
         let coercive = self.class_is_user_declared(owner_class);
+        let tidy_sig = self.tidy_strict_adapter_signature(None, Some(owner_class), Some(callee_desc), sig);
         let internal_sig = self.internal_operand_binding_signature(owner_class, sig);
-        let sig = internal_sig.as_ref().unwrap_or(sig);
+        let sig = tidy_sig.as_ref().or(internal_sig.as_ref()).unwrap_or(sig);
         self.check_known_callable_call_with_options(
             sig,
             args,
@@ -939,9 +1179,18 @@ impl Checker {
         }
 
         let variadic_elem_ty = self.variadic_argument_element_type(sig, span, callee_desc)?;
+        // Spreads and named arguments decide which parameter a spread element binds, so a
+        // possible callable literal anywhere in the planned arguments is recorded.
+        let call_declares_callable = Self::call_declares_callable(
+            &Self::declared_spread_targets(sig, 0, regular_param_count),
+            variadic_elem_ty.as_ref(),
+        );
 
         let mut param_idx = 0usize;
         for arg in args {
+            if call_declares_callable {
+                self.record_static_callable_literals(arg);
+            }
             let descriptor_projected = descriptor_invocation
                 && descriptor_projections
                     .get(param_idx)
@@ -984,15 +1233,40 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
+                    let lvalue = self.is_by_ref_argument_lvalue(arg, caller_env)?;
+                    let reference_expected_ty = if sig.params.get(param_idx).is_some()
+                        && sig
+                            .declared_params
+                            .get(param_idx)
+                            .copied()
+                            .unwrap_or(false)
+                    {
+                        sig.params.get(param_idx).map(|(_, ty)| ty)
+                    } else if sig.params.get(param_idx).is_some() {
+                        // An undeclared by-reference parameter is PHP `mixed`; its property
+                        // argument binds the property's live cell even when the inferred
+                        // signature narrowed the slot from another call site.
+                        Some(&crate::types::PhpType::Mixed)
+                    } else {
+                        None
+                    };
                     let property_place = allow_property_ref_places
                         && !source_has_spread
-                        && match sig.params.get(param_idx).map(|(_, ty)| ty) {
+                        && match reference_expected_ty {
                             Some(expected_ty) => {
-                                self.by_ref_property_place(arg, expected_ty, caller_env)?
+                                (matches!(
+                                    arg.kind,
+                                    ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }
+                                ) && self.property_ref_argument_supported(
+                                    arg,
+                                    expected_ty,
+                                    caller_env,
+                                )?)
+                                    || self.by_ref_property_place(arg, expected_ty, caller_env)?
                             }
                             None => false,
                         };
-                    if !property_place && !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    if !property_place && !lvalue {
                         let param_name = sig
                             .params
                             .get(param_idx)
@@ -1016,12 +1290,18 @@ impl Checker {
                         && (sig.declared_params.get(param_idx).copied().unwrap_or(false)
                             || crate::types::uses_boxed_reference_payload(expected_ty));
                     if tracks_boxed_reference_output {
+                        let layout_contract = crate::types::is_written_reference_array_param(
+                            &sig.ref_params,
+                            &sig.param_type_exprs,
+                            param_idx,
+                        );
                         self.require_boxed_by_ref_storage(
                             expected_ty,
                             &actual_ty,
                             arg,
                             caller_env,
                             can_widen_by_ref_local,
+                            layout_contract,
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                         self.record_boxed_reference_output(
@@ -1030,6 +1310,7 @@ impl Checker {
                             &actual_ty,
                             span,
                             caller_env,
+                            layout_contract,
                         )?;
                     }
                     // `strict_types` applies to every declared parameter type, including the
@@ -1073,6 +1354,18 @@ impl Checker {
                                     item.kind,
                                     crate::parser::ast::ExprKind::StringLiteral(_)
                                 )));
+                    // A by-value list is rebuilt as the declared hash; refuse what cannot be.
+                    if sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                        && !supplied_reference
+                        && !runtime_descriptor_projection
+                    {
+                        self.require_packed_argument_hash_storage(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} parameter ${}", callee_desc, param_name),
+                        )?;
+                    }
                     if !proven_callable_array && !runtime_descriptor_projection
                         && !literal_str_replace_search
                     {
@@ -1091,8 +1384,27 @@ impl Checker {
                                 &format!("{} parameter ${}", callee_desc, param_name),
                                 None,
                                 supplied_reference,
+                                param_idx + 1,
+                            )?;
+                        } else if !supplied_reference
+                            && *expected_ty == PhpType::DeclaredCallable
+                            && sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                        {
+                            // A closure, arrow function or first-class callable binds without
+                            // coercion, but a literal name still has to be resolved and recorded
+                            // for the runtime dispatch, as a named function's `callable` does.
+                            self.require_declared_callable_arg(
+                                expected_ty,
+                                &actual_ty,
+                                arg,
+                                caller_env,
+                                &format!("{} parameter ${}", callee_desc, param_name),
+                                None,
                             )?;
                         } else {
+                            if !supplied_reference && expected_ty.declares_callable() {
+                                self.record_declared_callable_literal_name(arg, caller_env);
+                            }
                             self.require_compatible_arg_type(
                                 expected_ty,
                                 &actual_ty,
@@ -1153,12 +1465,39 @@ impl Checker {
                             &format!("{} variadic parameter ${}", callee_desc, vname),
                         )?;
                     }
+                    let variadic_by_ref = variadic_index
+                        .and_then(|index| sig.ref_params.get(index))
+                        .copied()
+                        .unwrap_or(false);
+                    self.require_declared_callable_variadic_arg(
+                        expected_ty,
+                        &actual_ty,
+                        arg,
+                        caller_env,
+                        &format!("{} variadic parameter ${}", callee_desc, vname),
+                        variadic_by_ref,
+                    )?;
                     self.require_compatible_arg_type(
                         expected_ty,
                         &actual_ty,
                         arg.span,
                         &format!("{} variadic parameter ${}", callee_desc, vname),
                     )?;
+                    // Same list-to-hash rule as a regular declared parameter: a collected list
+                    // is rebuilt as the element hash, or refused when no conversion exists.
+                    if variadic_index
+                        .and_then(|index| sig.declared_params.get(index))
+                        .copied()
+                        .unwrap_or(false)
+                        && !variadic_by_ref
+                    {
+                        self.require_packed_argument_hash_storage(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} variadic parameter ${}", callee_desc, vname),
+                        )?;
+                    }
                 }
             }
             param_idx += 1;

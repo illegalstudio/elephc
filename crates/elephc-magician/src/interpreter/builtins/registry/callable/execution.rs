@@ -10,7 +10,31 @@
 use super::*;
 
 /// Invokes an already normalized callback with source-order positional values.
+///
+/// Builtin functions invoke user callbacks from an engine frame, which never carries the
+/// caller's `declare(strict_types=...)` mode. PHP therefore binds these callback arguments
+/// coercively even when the surrounding eval fragment is strict, so the frame is weak here;
+/// the callee body and its return coercion still run under the callee's own defining mode.
 pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
+    callback: &EvaluatedCallable,
+    evaluated_args: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let previous_strict_types = context.strict_types();
+    context.set_strict_types(false);
+    let result = eval_evaluated_callable_with_values_in_engine_frame(
+        callback,
+        evaluated_args,
+        context,
+        values,
+    );
+    context.set_strict_types(previous_strict_types);
+    result
+}
+
+/// Executes one engine-frame callback after the public entry installed weak binding.
+fn eval_evaluated_callable_with_values_in_engine_frame(
     callback: &EvaluatedCallable,
     evaluated_args: Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext,
@@ -21,12 +45,16 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
             let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            eval_evaluated_callable_with_values(
+            let previous_strict_types = owner_context.strict_types();
+            owner_context.set_strict_types(false);
+            let result = eval_evaluated_callable_with_values_in_engine_frame(
                 callback,
                 evaluated_args,
                 owner_context,
                 values,
-            )
+            );
+            owner_context.set_strict_types(previous_strict_types);
+            result
         }
         EvaluatedCallable::NativeDescriptor { callback, .. } => {
             eval_native_descriptor_with_call_args(

@@ -21,7 +21,7 @@ Joins array elements into a single string using a separator (alias of implode).
 
 | Compiled (AOT) | Magician (eval) |
 |---|---|
-| Available | Not available yet |
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

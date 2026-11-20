@@ -27,6 +27,7 @@ function writeOpaqueCase(mixed $parent, mixed $key): void {
 }
 writeOpaqueCase([1, 2], false);
 writeOpaqueCase(null, false);
+writeOpaqueCase(false, false);
 writeOpaqueCase('ab', false);
 class WrittenPayload {
     public function __construct() { echo 'V'; }
@@ -40,3 +41,19 @@ function writeOwnedCase(mixed $key): void {
     echo '|';
 }
 writeOwnedCase(false);
+class WritePropertyReceiver {
+    public int $reads = 0;
+    public array $items = [1];
+}
+function markedPropertyReceiver(WritePropertyReceiver $box): WritePropertyReceiver {
+    $box->reads++;
+    echo 'G';
+    return $box;
+}
+function writePropertyReceiverCase(mixed $key): void {
+    $box = new WritePropertyReceiver();
+    try { markedPropertyReceiver($box)->items[markedWriteKey($key)] = markedWriteValue(); echo 'W'; }
+    catch (TypeError $error) { echo 'E'; unset($error); }
+    echo $box->reads, '|';
+}
+writePropertyReceiverCase(false);

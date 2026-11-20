@@ -440,6 +440,9 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
         } => propagate_try_stmt(try_body, catches, finally_body, span, env),
         StmtKind::Break(levels) => (Stmt::new(StmtKind::Break(levels), span), env),
         StmtKind::Continue(levels) => (Stmt::new(StmtKind::Continue(levels), span), env),
+        // `goto` is lowered before any optimizer pass runs, and a label that survives belongs
+        // to a file without one: it is an inert statement that no jump can reach.
+        kind @ (StmtKind::Goto(_) | StmtKind::GotoLabel(_)) => (Stmt::new(kind, span), env),
         StmtKind::ExprStmt(expr) => {
             let expr = propagate_expr(expr, &env);
             // Targeted invalidation covers `unset` (including array-element

@@ -307,6 +307,15 @@ pub fn execute_context_string_outcome(
     }
 }
 
+/// Probes PHP object stringability without invoking the object's `__toString()` method.
+pub fn execute_context_object_has_to_string(
+    context: &mut ElephcEvalContext,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    eval_object_has_to_string(value, context, values)
+}
+
 /// Calls a static method on a class-like symbol known to the shared eval context.
 pub fn execute_context_static_method_call_outcome(
     context: &mut ElephcEvalContext,
@@ -360,6 +369,28 @@ pub fn execute_context_class_relation(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_class_relation_result(name, &[target], context, values)
+}
+
+/// Returns PHP's `Error: Undefined constant "NAME"` for a global constant generated code read
+/// after `eval()` and found nowhere.
+pub fn execute_context_undefined_constant(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    let status = eval_throw_error::<()>(
+        &format!("Undefined constant \"{}\"", name.trim_start_matches('\\')),
+        context,
+        values,
+    )
+    .expect_err("throwing always returns an error status");
+    match status {
+        EvalStatus::UncaughtThrowable => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        status => Err(status),
+    }
 }
 
 /// Fetches a class-like constant through eval dynamic metadata and runtime fallback hooks.

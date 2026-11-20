@@ -111,6 +111,7 @@ impl ElephcEvalContext {
             .chain(self.static_properties.drain().map(|(_, cell)| cell))
             .chain(self.class_constants.drain().map(|(_, cell)| cell))
             .chain(self.constants.drain().map(|(_, cell)| cell))
+            .chain(self.instance_defaults.drain().map(|(_, cell)| cell))
             .collect()
     }
 
@@ -213,6 +214,28 @@ impl ElephcEvalContext {
             .get(&(normalize_class_name(class_name), name.to_string()))
             .copied()
             .map(RuntimeCellHandle::borrowed)
+    }
+
+    /// Returns the instance default `class_name` evaluated for property storage `name` when it
+    /// was initialized.
+    pub fn instance_default_cell(&self, class_name: &str, name: &str) -> Option<RuntimeCellHandle> {
+        self.instance_defaults
+            .get(&(normalize_class_name(class_name), name.to_string()))
+            .copied()
+            .map(RuntimeCellHandle::borrowed)
+    }
+
+    /// Stores one evaluated instance default and returns any replaced distinct cell.
+    pub fn set_instance_default_cell(
+        &mut self,
+        class_name: &str,
+        name: impl Into<String>,
+        cell: RuntimeCellHandle,
+    ) -> Option<RuntimeCellHandle> {
+        let previous = self
+            .instance_defaults
+            .insert((normalize_class_name(class_name), name.into()), cell);
+        previous.filter(|previous| *previous != cell)
     }
 
     /// Stores one eval class constant cell and returns any replaced distinct cell.

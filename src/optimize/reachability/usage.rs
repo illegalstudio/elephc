@@ -680,6 +680,7 @@ impl Scanner<'_> {
                 self.widen_dynamic_hazards();
             }
             StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue(_)
+            | StmtKind::Goto(_) | StmtKind::GotoLabel(_)
             | StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. }
             | StmtKind::FunctionVariantGroup { .. } | StmtKind::FunctionVariantMark { .. }
             | StmtKind::IncludeOnceMark { .. }

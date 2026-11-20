@@ -158,6 +158,8 @@ impl ClassBuildState {
                 })
                 .collect::<Result<HashMap<_, _>, CompileError>>()?,
             constant_order: class.constants.iter().map(|c| c.name.clone()).collect(),
+            property_initialization_order: Vec::new(),
+            trait_collision_defaults: Vec::new(),
             constant_deprecations: class
                 .constants
                 .iter()

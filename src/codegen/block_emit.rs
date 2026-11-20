@@ -54,6 +54,47 @@ use super::{CodegenIrError, Result};
 /// The hosted-extension engine's process-exit routine (RSHUTDOWN, then MSHUTDOWN), called by
 /// every exit sequence of a program that declares it.
 const HOSTED_EXIT_HOOK: &str = "elephc_php_ext_exit_hook";
+
+/// The exit hook of a program that both hosts PHP extensions and sends its
+/// transaction counts: runs the one, then the other (`emit_chained_exit_hooks`).
+const CHAINED_EXIT_HOOKS: &str = "__rt_exit_hooks";
+
+/// Emits `__rt_exit_hooks`: the hosted extensions' shutdown, then the APM
+/// flush, each told the exit status the exit sequence passes in the first
+/// argument register. That register's caller-saved, so the status is kept in a
+/// callee-saved one, itself saved and restored: exit sequences stash the code
+/// they exit with there.
+fn emit_chained_exit_hooks(emitter: &mut Emitter, hosted: &str, flush: &str) {
+    emitter.blank();
+    emitter.comment("--- runtime: exit_hooks (hosted extensions, then the apm flush) ---");
+    emitter.label_global(CHAINED_EXIT_HOOKS);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x29, x30, [sp, #-32]!");                   // save frame pointer and return address
+            emitter.instruction("mov x29, sp");                                 // establish the frame pointer
+            emitter.instruction("str x19, [sp, #16]");                          // keep the caller's x19: exit sequences stash their code there
+            emitter.instruction("mov x19, x0");                                 // keep the exit status across the first hook
+            emitter.instruction(&format!("bl {hosted}"));                       // shut the hosted PHP extensions down
+            emitter.instruction("mov x0, x19");                                 // the apm flush is told the exit status
+            emitter.instruction(&format!("bl {flush}"));                        // count what the exit leaves open and send the last counts
+            emitter.instruction("mov x0, x19");                                 // hand the status back as the hooks found it
+            emitter.instruction("ldr x19, [sp, #16]");                          // restore the caller's x19
+            emitter.instruction("ldp x29, x30, [sp], #32");                     // restore frame pointer and return address
+            emitter.instruction("ret");                                         // back to the exit sequence
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbx");                                    // keep the caller's rbx and realign the stack for the calls
+            emitter.instruction("mov ebx, edi");                                // keep the exit status across the first hook
+            emitter.instruction(&format!("call {hosted}"));                     // shut the hosted PHP extensions down
+            emitter.instruction("mov edi, ebx");                                // the apm flush is told the exit status
+            emitter.instruction(&format!("call {flush}"));                      // count what the exit leaves open and send the last counts
+            emitter.instruction("mov edi, ebx");                                // hand the status back as the hooks found it
+            emitter.instruction("pop rbx");                                     // restore the caller's rbx
+            emitter.instruction("ret");                                         // back to the exit sequence
+        }
+    }
+}
+
 /// The hosted-extension engine's request shutdown (RSHUTDOWN), called by the `--web` reset after
 /// the previous request's destructors and before its hosting tables are released.
 pub(super) const HOSTED_REQUEST_SHUTDOWN: &str = "elephc_php_ext_request_shutdown";
@@ -117,12 +158,43 @@ pub(super) fn emit_module(
     shared.counters = counters;
     shared.instrument = instrument;
     if probe {
-        let main_symbol = if web {
-            frame::WEB_HANDLER_SYMBOL
+        // `--with-monitoring` carries the instrumentation and the sampler,
+        // which needs the symbol table; `--with-apm` alone counts
+        // transactions and carries neither.
+        if shared.instrument.is_on() {
+            let main_symbol = if web {
+                frame::WEB_HANDLER_SYMBOL
+            } else {
+                emitter.entry_symbol()
+            };
+            shared.probe_table = Some(emit_probe_symbol_table(module, data, main_symbol));
         } else {
-            emitter.entry_symbol()
-        };
-        shared.probe_table = Some(emit_probe_symbol_table(module, data, main_symbol));
+            shared.apm_only = true;
+        }
+        if let Some(collector) = &module.apm_collector {
+            let mut text = collector.as_bytes().to_vec();
+            text.push(0);
+            let symbol = emitter.target.extern_symbol(frame::APM_COLLECTOR_SYMBOL);
+            data.add_named_symbol(symbol, &text);
+            shared.apm_collector = true;
+            // The last counts go out as the process exits through the exit
+            // hook, which every exit sequence the compiler emits runs (a
+            // runtime fatal that ends the process on the spot does not). A
+            // program hosting PHP extensions already uses the hook for their
+            // shutdown: both then run, the extensions' first, so their work
+            // is counted too (review: the extensions' hook alone lost the run
+            // and the last counts).
+            if emit == Emit::Executable {
+                let flush = emitter.target.extern_symbol("elephc_probe_apm_flush");
+                match emitter.exit_hook.take() {
+                    None => emitter.exit_hook = Some(flush),
+                    Some(hosted) => {
+                        emit_chained_exit_hooks(emitter, &hosted, &flush);
+                        emitter.exit_hook = Some(CHAINED_EXIT_HOOKS.to_string());
+                    }
+                }
+            }
+        }
         if let Some(key) = module.probe_key {
             let symbol = emitter.target.extern_symbol("elephc_probe_build_key");
             data.add_named_symbol(symbol, &key);
@@ -1982,5 +2054,52 @@ mod normalization_tests {
         assert!(normalized.contains("    .ascii \"L_payload_17\""));
         assert!(!normalized.contains("b L_payload_17"));
         assert_ne!(normalized, normalize_body_text(second, &function));
+    }
+}
+
+#[cfg(test)]
+mod exit_hook_tests {
+    use super::*;
+    use crate::codegen::platform::{Platform, Target};
+
+    /// A program hosting PHP extensions that sends its transaction counts
+    /// runs both exit hooks, the extensions' first, and tells the APM flush
+    /// the exit status: the extensions' hook alone lost the run and the last
+    /// counts (review).
+    #[test]
+    fn chained_exit_hooks_run_both_with_the_status() {
+        for (target, hosted, flush, keep, reload) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "bl _elephc_php_ext_exit_hook",
+                "bl _elephc_probe_apm_flush",
+                "mov x19, x0",
+                "mov x0, x19",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "call elephc_php_ext_exit_hook",
+                "call elephc_probe_apm_flush",
+                "mov ebx, edi",
+                "mov edi, ebx",
+            ),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_chained_exit_hooks(
+                &mut emitter,
+                hosted.split_whitespace().last().unwrap(),
+                flush.split_whitespace().last().unwrap(),
+            );
+            let asm = emitter.output();
+            let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+            let at = |needle: &str| lines.iter().position(|line| line.starts_with(needle)).expect(needle);
+            let (first, second) = (at(hosted), at(flush));
+            assert!(at(keep) < first && first < second, "the extensions shut down first:\n{asm}");
+            assert!(
+                lines[first + 1..second].iter().any(|line| line.starts_with(reload)),
+                "the flush is told the status:\n{asm}"
+            );
+            assert!(asm.contains(CHAINED_EXIT_HOOKS), "{asm}");
+        }
     }
 }

@@ -137,7 +137,6 @@ pub enum RuntimeFnId {
     ArrayPtrValue,
     ArrayProduct,
     ArrayPush,
-    ArrayRand,
     ArrayReduce,
     ArrayReplace,
     ArrayReplaceRecursive,
@@ -465,6 +464,7 @@ pub enum RuntimeFnId {
     ElephcOpcacheRtSwap,
     ElephcReflectionClassBuild,
     ElephcEvalReflectionClassBuild,
+    ElephcSetMemoryLimit,
     ElephcPtrGet,
     ElephcPtrIsNull,
     ElephcPtrReadString,
@@ -524,8 +524,15 @@ pub enum RuntimeFnId {
     Crc32,
     CtypeAlnum,
     CtypeAlpha,
+    CtypeCntrl,
     CtypeDigit,
+    CtypeGraph,
+    CtypeLower,
+    CtypePrint,
+    CtypePunct,
     CtypeSpace,
+    CtypeUpper,
+    CtypeXdigit,
     /// Allocates a libcurl easy handle and boxes it as a resource-kind-6 Mixed cell.
     CurlEasyInit,
     /// Applies an integer-valued `curl_setopt()` option to an easy handle.
@@ -656,6 +663,8 @@ pub enum RuntimeFnId {
     Htmlentities,
     Htmlspecialchars,
     Implode,
+    /// Alias of implode with its own PHP diagnostic name.
+    Join,
     InetNtop,
     InetPton,
     /// Allocation-free `strlen(inet_pton(...))` packed-address length.
@@ -874,6 +883,9 @@ pub enum RuntimeFnId {
     ElephcGmmktimeRaw,
     ElephcMktimeRaw,
     ElephcStrtotimeRaw,
+    ElephcNlLanginfo,
+    ElephcSetlocaleQuery,
+    ElephcSetlocaleSet,
     Checkdate,
     ClassAttributeArgs,
     ClassAttributeNames,
@@ -918,6 +930,8 @@ pub enum RuntimeFnId {
     Passthru,
     PhpUname,
     Phpversion,
+    PregLastError,
+    PregLastErrorMsg,
     PregMatch,
     PregMatchAll,
     PregReplace,
@@ -1469,7 +1483,7 @@ impl RuntimeFnId {
             // arbitrary PHP. Discarded calls must retain these observable effects.
             // I/O inside those callbacks is monitored at its own runtime boundary;
             // the join itself does not perform a network or blocking operation.
-            RuntimeFnId::Implode | RuntimeFnId::ArrayFlip | RuntimeFnId::StripTags => crate::ir::Effects::from_bits_retain(
+            RuntimeFnId::Implode | RuntimeFnId::Join | RuntimeFnId::ArrayFlip | RuntimeFnId::StripTags => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::BLOCKING_IO.bits()
                     & !crate::ir::Effects::NETWORK_IO.bits(),
@@ -1507,10 +1521,6 @@ impl RuntimeFnId {
             RuntimeFnId::Cos |
             RuntimeFnId::Cosh |
             RuntimeFnId::Crc32 |
-            RuntimeFnId::CtypeAlnum |
-            RuntimeFnId::CtypeAlpha |
-            RuntimeFnId::CtypeDigit |
-            RuntimeFnId::CtypeSpace |
             RuntimeFnId::Bindec |
             RuntimeFnId::Decbin |
             RuntimeFnId::Dechex |
@@ -1567,6 +1577,21 @@ impl RuntimeFnId {
             RuntimeFnId::Tanh |
             RuntimeFnId::Ucfirst |
             RuntimeFnId::Ucwords => crate::ir::Effects::empty(),
+            // A ctype call on a non-string argument emits the php-src 8.1+ deprecation
+            // naming that argument's runtime type, which can enter a user error handler and
+            // throw. `prepare_call_site` therefore has to publish the caller location before
+            // the call; the pure string path still performs no observable work.
+            RuntimeFnId::CtypeAlnum
+            | RuntimeFnId::CtypeAlpha
+            | RuntimeFnId::CtypeCntrl
+            | RuntimeFnId::CtypeDigit
+            | RuntimeFnId::CtypeGraph
+            | RuntimeFnId::CtypeLower
+            | RuntimeFnId::CtypePrint
+            | RuntimeFnId::CtypePunct
+            | RuntimeFnId::CtypeSpace
+            | RuntimeFnId::CtypeUpper
+            | RuntimeFnId::CtypeXdigit => crate::ir::Effects::MAY_WARN,
             // These raise reference PHP's catchable `ValueError` for out-of-range
             // arguments (`array_chunk()` non-positive length, `clamp()` inverted bounds,
             // `array_fill()` negative count, `array_pad()` oversized length, `explode()`
@@ -1611,6 +1636,8 @@ impl RuntimeFnId {
             | RuntimeFnId::Defined
             | RuntimeFnId::JsonLastError
             | RuntimeFnId::JsonLastErrorMsg
+            | RuntimeFnId::PregLastError
+            | RuntimeFnId::PregLastErrorMsg
             | RuntimeFnId::DateDefaultTimezoneGet
             | RuntimeFnId::ObGetLevel => crate::ir::Effects::READS_GLOBAL,
             RuntimeFnId::SplAutoloadExtensions => crate::ir::Effects::from_bits_retain(
@@ -1663,6 +1690,12 @@ impl RuntimeFnId {
             // pure read would let the optimizer fold two `ini_set()` calls into one, or
             // drop one whose result is discarded — which is the common spelling.
             RuntimeFnId::ElephcOpcacheRtSwap => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
+            // The live `memory_limit` ceiling is process-wide heap state: every later
+            // allocation observes the new value, so this neither folds nor hoists, and it
+            // reads the reserved arena capacity to clamp an unlimited request.
+            RuntimeFnId::ElephcSetMemoryLimit => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_GLOBAL.bits() | crate::ir::Effects::WRITES_GLOBAL.bits(),
             ),
             // Also a WRITE: it latches a restart on the process-wide cache. Its result is
@@ -1871,6 +1904,17 @@ impl RuntimeFnId {
                     | crate::ir::Effects::BLOCKING_IO.bits()
                     | crate::ir::Effects::NETWORK_IO.bits(),
             ),
+            // Every regex call records its outcome for `preg_last_error()`.
+            RuntimeFnId::PregMatch
+            | RuntimeFnId::PregMatchAll
+            | RuntimeFnId::PregReplace
+            | RuntimeFnId::PregReplaceCallback
+            | RuntimeFnId::PregSplit => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::REFCOUNT_OP.bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             _ => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::REFCOUNT_OP.bits()
@@ -1995,7 +2039,10 @@ impl RuntimeFnId {
             | RuntimeFnId::ArrayUdiff | RuntimeFnId::ArrayUintersect
             | RuntimeFnId::ArrayWalk | RuntimeFnId::ArrayWalkRecursive => self.effects(),
             RuntimeFnId::PregReplaceCallback => E::from_bits_retain(
-                E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
+                E::READS_HEAP.bits()
+                    | E::ALLOC_HEAP.bits()
+                    | E::MAY_WARN.bits()
+                    | E::WRITES_GLOBAL.bits(),
             ),
             RuntimeFnId::Uasort
             | RuntimeFnId::Uksort
@@ -2024,7 +2071,6 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::MtRand
             | RuntimeFnId::Rand
-            | RuntimeFnId::ArrayRand
             | RuntimeFnId::Shuffle => MonitoringPolicy::GenericTiming,
             RuntimeFnId::MbSendMail => MonitoringPolicy::Io {
                 kind: IoKind::Network,
@@ -2237,7 +2283,6 @@ impl RuntimeFnId {
             // and `array_rand`/`shuffle` reach the same state through a published slot.
             RuntimeFnId::MtRand
             | RuntimeFnId::Rand
-            | RuntimeFnId::ArrayRand
             | RuntimeFnId::Shuffle => &[BuiltinRequirement::Bridge("elephc_random")],
             RuntimeFnId::ElephcPharBzip2Archive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharDecompressArchive => &[BuiltinRequirement::Bridge("elephc_phar")],
@@ -2480,6 +2525,17 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::CloneWith
                 | RuntimeFnId::Count
+                | RuntimeFnId::CtypeAlnum
+                | RuntimeFnId::CtypeAlpha
+                | RuntimeFnId::CtypeCntrl
+                | RuntimeFnId::CtypeDigit
+                | RuntimeFnId::CtypeGraph
+                | RuntimeFnId::CtypeLower
+                | RuntimeFnId::CtypePrint
+                | RuntimeFnId::CtypePunct
+                | RuntimeFnId::CtypeSpace
+                | RuntimeFnId::CtypeUpper
+                | RuntimeFnId::CtypeXdigit
                 | RuntimeFnId::Getmypid
                 | RuntimeFnId::MemoryGetAllocations
                 | RuntimeFnId::MemoryGetFrees
@@ -2489,6 +2545,24 @@ impl RuntimeFnId {
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
+        )
+    }
+
+    /// Returns whether this runtime target is one of the `ctype_*` byte predicates.
+    pub const fn is_ctype(self) -> bool {
+        matches!(
+            self,
+            Self::CtypeAlnum
+                | Self::CtypeAlpha
+                | Self::CtypeCntrl
+                | Self::CtypeDigit
+                | Self::CtypeGraph
+                | Self::CtypeLower
+                | Self::CtypePrint
+                | Self::CtypePunct
+                | Self::CtypeSpace
+                | Self::CtypeUpper
+                | Self::CtypeXdigit
         )
     }
 
@@ -2523,6 +2597,19 @@ impl RuntimeFnId {
             | RuntimeFnId::MemoryResetPeakUsage
             => true,
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
+            // ctype accepts PHP's whole `mixed` surface and implements the non-string
+            // fallback itself, so a dynamically selected source value always fits.
+            RuntimeFnId::CtypeAlnum
+            | RuntimeFnId::CtypeAlpha
+            | RuntimeFnId::CtypeCntrl
+            | RuntimeFnId::CtypeDigit
+            | RuntimeFnId::CtypeGraph
+            | RuntimeFnId::CtypeLower
+            | RuntimeFnId::CtypePrint
+            | RuntimeFnId::CtypePunct
+            | RuntimeFnId::CtypeSpace
+            | RuntimeFnId::CtypeUpper
+            | RuntimeFnId::CtypeXdigit => true,
             _ => false,
         }
     }
@@ -2672,7 +2759,14 @@ impl RuntimeFnId {
         }
         // Decoding always constructs an independent Mixed graph. String payloads are
         // persisted from decoder scratch; no result borrows the source argument pin.
-        if matches!(self, RuntimeFnId::JsonDecode | RuntimeFnId::JsonEncodeStr) {
+        if matches!(
+            self,
+            RuntimeFnId::JsonDecode
+                | RuntimeFnId::JsonEncodeStr
+                | RuntimeFnId::ElephcNlLanginfo
+                | RuntimeFnId::ElephcSetlocaleQuery
+                | RuntimeFnId::ElephcSetlocaleSet
+        ) {
             return BuiltinResultOwnership::Fresh;
         }
         if matches!(self, RuntimeFnId::JsonDecodeCount) {
@@ -3039,6 +3133,7 @@ impl RuntimeFnId {
                 // The join lowerer persists every result before retiring normalized
                 // input values, so destructor reentry cannot overwrite returned bytes.
                 | RuntimeFnId::Implode
+                | RuntimeFnId::Join
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
                 // is new bytes, never a slice of the encoded value. Same leak shape as the
@@ -3246,7 +3341,6 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayPtrValue => "array_ptr_value",
             RuntimeFnId::ArrayProduct => "array_product",
             RuntimeFnId::ArrayPush => "array_push",
-            RuntimeFnId::ArrayRand => "array_rand",
             RuntimeFnId::ArrayReduce => "array_reduce",
             RuntimeFnId::ArrayReplace => "array_replace",
             RuntimeFnId::ArrayReplaceRecursive => "array_replace_recursive",
@@ -3566,6 +3660,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcOpcacheRtSwap => "__elephc_opcache_rt_swap",
             RuntimeFnId::ElephcReflectionClassBuild => "__elephc_reflection_class_build",
             RuntimeFnId::ElephcEvalReflectionClassBuild => "__elephc_eval_reflection_class_build",
+            RuntimeFnId::ElephcSetMemoryLimit => "__elephc_set_memory_limit",
             RuntimeFnId::ElephcPtrGet => "__elephc_ptr_get",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",
@@ -3666,8 +3761,15 @@ impl RuntimeFnId {
             RuntimeFnId::CurlVersion => "__elephc_curl_version",
             RuntimeFnId::CtypeAlnum => "ctype_alnum",
             RuntimeFnId::CtypeAlpha => "ctype_alpha",
+            RuntimeFnId::CtypeCntrl => "ctype_cntrl",
             RuntimeFnId::CtypeDigit => "ctype_digit",
+            RuntimeFnId::CtypeGraph => "ctype_graph",
+            RuntimeFnId::CtypeLower => "ctype_lower",
+            RuntimeFnId::CtypePrint => "ctype_print",
+            RuntimeFnId::CtypePunct => "ctype_punct",
             RuntimeFnId::CtypeSpace => "ctype_space",
+            RuntimeFnId::CtypeUpper => "ctype_upper",
+            RuntimeFnId::CtypeXdigit => "ctype_xdigit",
             RuntimeFnId::Explode => "explode",
             RuntimeFnId::GraphemeStrrev => "grapheme_strrev",
             RuntimeFnId::Gzcompress => "gzcompress",
@@ -3699,6 +3801,7 @@ impl RuntimeFnId {
             RuntimeFnId::Htmlentities => "htmlentities",
             RuntimeFnId::Htmlspecialchars => "htmlspecialchars",
             RuntimeFnId::Implode => "implode",
+            RuntimeFnId::Join => "join",
             RuntimeFnId::InetNtop => "inet_ntop",
             RuntimeFnId::InetPton => "inet_pton",
             RuntimeFnId::Ip2long => "ip2long",
@@ -3858,6 +3961,9 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcGmmktimeRaw => "__elephc_gmmktime_raw",
             RuntimeFnId::ElephcMktimeRaw => "__elephc_mktime_raw",
             RuntimeFnId::ElephcStrtotimeRaw => "__elephc_strtotime_raw",
+            RuntimeFnId::ElephcNlLanginfo => "__elephc_nl_langinfo",
+            RuntimeFnId::ElephcSetlocaleQuery => "__elephc_setlocale_query",
+            RuntimeFnId::ElephcSetlocaleSet => "__elephc_setlocale_set",
             RuntimeFnId::Checkdate => "checkdate",
             RuntimeFnId::ClassAttributeArgs => "class_attribute_args",
             RuntimeFnId::ClassAttributeNames => "class_attribute_names",
@@ -3895,6 +4001,8 @@ impl RuntimeFnId {
             RuntimeFnId::Passthru => "passthru",
             RuntimeFnId::PhpUname => "php_uname",
             RuntimeFnId::Phpversion => "phpversion",
+            RuntimeFnId::PregLastError => "preg_last_error",
+            RuntimeFnId::PregLastErrorMsg => "preg_last_error_msg",
             RuntimeFnId::PregMatch => "preg_match",
             RuntimeFnId::PregMatchAll => "preg_match_all",
             RuntimeFnId::PregReplace => "preg_replace",

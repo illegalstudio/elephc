@@ -78,7 +78,8 @@ fn loop_carried_storage_types(
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) -> Vec<(String, PhpType)> {
     analyze_loop_storage(body, update, None, entry, packed_counter,
-        tagged_integer_locals, &Default::default(), infer_value, &|_, _| false, elephc_semantics::SemanticProfile::PERMISSIVE).contracts
+        tagged_integer_locals, &Default::default(), infer_value,
+        ObjectRelations { is_a: &|_, _| false, common: &|_, _| None }, elephc_semantics::SemanticProfile::PERMISSIVE).contracts
 }
 
 /// Assignment values and executable calls collected without entering nested function bodies.
@@ -104,17 +105,30 @@ pub(super) struct LoopStorageAnalysis {
     pub fixed: TypeEnv,
 }
 
-/// Computes loop storage while exposing the same write evidence to read-flow analysis.
+/// Nominal class relations of the checked program, as the loop-storage lattice consults them.
 ///
-/// `object_is_a(class, ancestor)` answers the nominal upcast an indexed object element write
-/// keeps (see [`join_indexed_element_write`]).
+/// Every object element is one counted object pointer, so these are the two cases in which an
+/// indexed array keeps object slots although its items differ in class. EIR lowering applies
+/// the same rules (`ir_lower::expr::object_element_join`), which is what keeps the storage this
+/// pass predicts equal to the storage the loop body is lowered against.
+#[derive(Clone, Copy)]
+pub(super) struct ObjectRelations<'a> {
+    /// `is_a(class, ancestor)`: the nominal upcast an indexed object element write keeps (see
+    /// [`join_indexed_element_write`]).
+    pub is_a: &'a dyn Fn(&str, &str) -> bool,
+    /// `common(left, right)`: the class an indexed literal holding both keeps as its element
+    /// (see [`merge_literal_element_storage`]), or `None` when the two share none.
+    pub common: &'a dyn Fn(&str, &str) -> Option<String>,
+}
+
+/// Computes loop storage while exposing the same write evidence to read-flow analysis.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn analyze_loop_storage<'a>(
     body: &'a [Stmt], update: Option<&'a Stmt>, condition: Option<&'a Expr>,
     entry: &TypeEnv, packed_counter: Option<&str>, tagged_integer_locals: &HashSet<String>,
     promotable_candidates: &super::promotable_arrays::PromotableCandidates,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
-    object_is_a: &dyn Fn(&str, &str) -> bool, profile: elephc_semantics::SemanticProfile,
+    objects: ObjectRelations<'_>, profile: elephc_semantics::SemanticProfile,
 ) -> LoopStorageAnalysis {
     let mut assignments = LoopWrites::default();
     collect_value_assignments(body, &mut assignments);
@@ -139,7 +153,8 @@ pub(super) fn analyze_loop_storage<'a>(
             &mut fixed,
             infer_value,
             &mut whole_mixed_sources,
-            tagged_integer_locals, profile,
+            tagged_integer_locals,
+            objects, profile,
         );
         apply_array_write_evidence(
             &writes,
@@ -149,7 +164,7 @@ pub(super) fn analyze_loop_storage<'a>(
             &foreach_values,
             promotable_candidates,
             infer_value,
-            object_is_a, profile,
+            objects, profile,
         );
         if fixed == previous {
             break;
@@ -187,13 +202,14 @@ fn apply_assignment_evidence(
     env: &mut TypeEnv,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
     whole_mixed_sources: &mut HashSet<String>,
-    tagged_integer_locals: &HashSet<String>, profile: elephc_semantics::SemanticProfile,
+    tagged_integer_locals: &HashSet<String>,
+    objects: ObjectRelations<'_>, profile: elephc_semantics::SemanticProfile,
 ) {
     for (name, source) in assignments {
         let incoming = match source {
             AssignedValue::Expr(expr) if tagged_integer_locals.contains(*name) => infer_value(expr, env)
                 .or_else(|| precise_scalar_expr_type(expr)).unwrap_or(PhpType::Mixed),
-            AssignedValue::Expr(expr) => infer_storage_value_type(expr, env, infer_value, profile)
+            AssignedValue::Expr(expr) => infer_storage_value_type(expr, env, infer_value, objects, profile)
                 .or_else(|| precise_scalar_expr_type(expr))
                 .unwrap_or(PhpType::Mixed),
             AssignedValue::Known(ty) => ty.clone(),
@@ -259,17 +275,17 @@ fn apply_array_write_evidence(
     foreach_values: &HashSet<&str>,
     promotable_candidates: &super::promotable_arrays::PromotableCandidates,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
-    object_is_a: &dyn Fn(&str, &str) -> bool, profile: elephc_semantics::SemanticProfile,
+    objects: ObjectRelations<'_>, profile: elephc_semantics::SemanticProfile,
 ) {
     for write in writes {
-        let incoming = infer_storage_value_type(write.value, env, infer_value, profile)
+        let incoming = infer_storage_value_type(write.value, env, infer_value, objects, profile)
             .or_else(|| precise_scalar_expr_type(write.value))
             .unwrap_or(PhpType::Mixed);
         let Some(current) = env.get(write.name).cloned() else {
             continue;
         };
         let key_type = write.index.map(|index| {
-            let inferred = infer_storage_value_type(index, env, infer_value, profile)
+            let inferred = infer_storage_value_type(index, env, infer_value, objects, profile)
                 .or_else(|| precise_scalar_expr_type(index))
                 .unwrap_or(PhpType::Mixed);
             normalized_array_key_type(index, inferred, profile)
@@ -338,7 +354,7 @@ fn apply_array_write_evidence(
                 }
             }
             PhpType::Array(element) => {
-                PhpType::Array(Box::new(join_indexed_element_write(*element, incoming, object_is_a)))
+                PhpType::Array(Box::new(join_indexed_element_write(*element, incoming, objects.is_a)))
             }
             PhpType::AssocArray { key, value } => PhpType::AssocArray {
                 key: Box::new(merge_array_key_types(
@@ -362,15 +378,16 @@ fn apply_array_write_evidence(
 fn infer_storage_value_type(
     expr: &Expr,
     env: &TypeEnv,
-    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>, profile: elephc_semantics::SemanticProfile,
+    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+    objects: ObjectRelations<'_>, profile: elephc_semantics::SemanticProfile,
 ) -> Option<PhpType> {
     match &expr.kind {
         ExprKind::Variable(name) => env.get(name).cloned().or_else(|| infer_value(expr, env)),
         ExprKind::ArrayLiteral(items) => {
             let mut element = PhpType::Never;
             for item in items {
-                let next = infer_array_literal_element_storage(item, env, infer_value, profile);
-                element = merge_materialized_array_element(element, next);
+                let next = infer_array_literal_element_storage(item, env, infer_value, objects, profile);
+                element = merge_literal_element_storage(element, next, objects);
             }
             Some(PhpType::Array(Box::new(element)))
         }
@@ -384,7 +401,7 @@ fn infer_storage_value_type(
                     })
                     .codegen_repr();
                 let next_value =
-                    infer_array_literal_element_storage(value_expr, env, infer_value, profile);
+                    infer_array_literal_element_storage(value_expr, env, infer_value, objects, profile);
                 key = merge_materialized_array_element(key, next_key);
                 value = merge_materialized_array_element(value, next_value);
             }
@@ -393,14 +410,16 @@ fn infer_storage_value_type(
                 value: Box::new(value),
             })
         }
-        ExprKind::ErrorSuppress(inner) => infer_storage_value_type(inner, env, infer_value, profile),
+        ExprKind::ErrorSuppress(inner) => {
+            infer_storage_value_type(inner, env, infer_value, objects, profile)
+        }
         ExprKind::Ternary {
             then_expr,
             else_expr,
             ..
         } => {
-            let then_ty = infer_storage_value_type(then_expr, env, infer_value, profile)?;
-            let else_ty = infer_storage_value_type(else_expr, env, infer_value, profile)?;
+            let then_ty = infer_storage_value_type(then_expr, env, infer_value, objects, profile)?;
+            let else_ty = infer_storage_value_type(else_expr, env, infer_value, objects, profile)?;
             Some(join_loop_flow_type(then_ty, else_ty))
         }
         _ => infer_value(expr, env),
@@ -415,7 +434,8 @@ fn infer_storage_value_type(
 fn infer_array_literal_element_storage(
     item: &Expr,
     env: &TypeEnv,
-    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>, profile: elephc_semantics::SemanticProfile,
+    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+    objects: ObjectRelations<'_>, profile: elephc_semantics::SemanticProfile,
 ) -> PhpType {
     match &item.kind {
         ExprKind::Variable(name) => env
@@ -425,7 +445,7 @@ fn infer_array_literal_element_storage(
             .unwrap_or(PhpType::Mixed)
             .codegen_repr(),
         ExprKind::ArrayAccess { array, .. } => {
-            let source = infer_storage_value_type(array, env, infer_value, profile)
+            let source = infer_storage_value_type(array, env, infer_value, objects, profile)
                 .or_else(|| infer_value(array, env))
                 .unwrap_or(PhpType::Mixed)
                 .codegen_repr();
@@ -437,11 +457,11 @@ fn infer_array_literal_element_storage(
             }
         }
         ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => {
-            infer_storage_value_type(item, env, infer_value, profile)
+            infer_storage_value_type(item, env, infer_value, objects, profile)
                 .unwrap_or(PhpType::Mixed)
                 .codegen_repr()
         }
-        ExprKind::Spread(inner) => match infer_storage_value_type(inner, env, infer_value, profile)
+        ExprKind::Spread(inner) => match infer_storage_value_type(inner, env, infer_value, objects, profile)
             .unwrap_or(PhpType::Mixed)
             .codegen_repr()
         {
@@ -504,6 +524,24 @@ fn array_read_storage_type(element: PhpType) -> PhpType {
     } else {
         element.codegen_repr()
     }
+}
+
+/// Merges the storage of two items of one indexed array literal.
+///
+/// Items of related classes keep object slots typed as their common class, as the checker's
+/// `merge_array_element_type` and EIR's `merge_ir_literal_element_type` both decide for the
+/// same literal. Every other pair follows [`merge_materialized_array_element`].
+fn merge_literal_element_storage(
+    left: PhpType, right: PhpType, objects: ObjectRelations<'_>,
+) -> PhpType {
+    if let (PhpType::Object(left_class), PhpType::Object(right_class)) = (&left, &right) {
+        if left_class != right_class {
+            if let Some(common) = (objects.common)(left_class, right_class) {
+                return PhpType::Object(common);
+            }
+        }
+    }
+    merge_materialized_array_element(left, right)
 }
 
 /// Merges two materialized literal element representations.
@@ -1508,7 +1546,7 @@ fn call_arg_value(argument: &Expr) -> &Expr {
 mod tests {
     use super::{
         infer_storage_value_type, join_loop_flow_type, loop_carried_storage_types,
-        representation_contract,
+        representation_contract, ObjectRelations,
     };
     use crate::parser::ast::{CastType, Expr, ExprKind, Stmt, StmtKind};
     use crate::span::Span;
@@ -1525,12 +1563,16 @@ mod tests {
         )
     }
 
+    /// Class relations of a program without related classes.
+    const NO_OBJECTS: ObjectRelations<'static> =
+        ObjectRelations { is_a: &|_, _| false, common: &|_, _| None };
+
     /// Infers storage with the syntactic type standing in for the checker on literal sources.
     fn storage_type(expr: &Expr, env: &TypeEnv) -> PhpType {
         let mut infer = |expr: &Expr, _env: &TypeEnv| {
             Some(crate::types::checker::infer_expr_type_syntactic(expr, elephc_semantics::SemanticProfile::PERMISSIVE))
         };
-        infer_storage_value_type(expr, env, &mut infer, elephc_semantics::SemanticProfile::PERMISSIVE).expect("literal storage")
+        infer_storage_value_type(expr, env, &mut infer, NO_OBJECTS, elephc_semantics::SemanticProfile::PERMISSIVE).expect("literal storage")
     }
 
     /// An `(array)` cast used as a literal element keeps the cast's array, for both indexed
@@ -1758,8 +1800,9 @@ mod tests {
         let object_is_a = |class: &str, ancestor: &str| {
             class == ancestor || (class == "Player" && ancestor == "Actor")
         };
+        let objects = ObjectRelations { is_a: &object_is_a, common: &|_, _| None };
         super::analyze_loop_storage(&body, None, None, &entry, None,
-            &std::collections::HashSet::new(), &Default::default(), &mut infer, &object_is_a, elephc_semantics::SemanticProfile::PERMISSIVE)
+            &std::collections::HashSet::new(), &Default::default(), &mut infer, objects, elephc_semantics::SemanticProfile::PERMISSIVE)
             .contracts
     }
 
@@ -1774,5 +1817,38 @@ mod tests {
         assert_eq!(object_append_contracts("Player", "Actor"), boxed);
         assert_eq!(object_append_contracts("Actor", "Stranger"), boxed);
         assert_eq!(object_append_contracts("", "Player"), boxed);
+    }
+
+    /// An indexed literal of related classes keeps object slots typed as their common class,
+    /// while unrelated classes still box the literal, exactly as EIR types the same literal.
+    #[test]
+    fn indexed_literal_of_related_classes_keeps_object_storage() {
+        let mut env = TypeEnv::new();
+        env.insert("player".to_string(), PhpType::Object("Player".into()));
+        env.insert("enemy".to_string(), PhpType::Object("Enemy".into()));
+        env.insert("stranger".to_string(), PhpType::Object("Stranger".into()));
+        let common = |left: &str, right: &str| {
+            let actor = |class: &str| matches!(class, "Player" | "Enemy" | "Actor");
+            (actor(left) && actor(right)).then(|| "Actor".to_string())
+        };
+        let objects = ObjectRelations { is_a: &|_, _| false, common: &common };
+        let mut infer = |_expr: &Expr, _env: &TypeEnv| -> Option<PhpType> { None };
+        let mut storage = |names: &[&str]| {
+            let items = names.iter().map(|name| Expr::var(*name)).collect();
+            let literal = Expr::new(ExprKind::ArrayLiteral(items), Span::dummy());
+            infer_storage_value_type(&literal, &env, &mut infer, objects, elephc_semantics::SemanticProfile::PERMISSIVE)
+        };
+        assert_eq!(
+            storage(&["player", "player", "enemy"]),
+            Some(PhpType::Array(Box::new(PhpType::Object("Actor".into()))))
+        );
+        assert_eq!(
+            storage(&["player"]),
+            Some(PhpType::Array(Box::new(PhpType::Object("Player".into()))))
+        );
+        assert_eq!(
+            storage(&["player", "stranger"]),
+            Some(PhpType::Array(Box::new(PhpType::Mixed)))
+        );
     }
 }

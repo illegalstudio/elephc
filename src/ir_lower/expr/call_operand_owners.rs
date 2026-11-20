@@ -26,6 +26,7 @@ pub(super) fn begin_call_argument_evaluation(ctx: &mut LoweringContext<'_, '_>) 
             rooted_reference_value_views: std::collections::HashSet::new(),
             live_property_reference_arguments: false,
             prepared_builtin_reference_arguments: false,
+            pending_property_type_guards: Vec::new(),
         },
     );
 }
@@ -257,6 +258,11 @@ fn finish_call_argument_evaluation_with(
         .pop()
         .expect("call argument evaluation scope must be balanced");
     debug_assert_eq!(scope.expression_depth, ctx.expression_depth);
+    // PHP evaluates the complete argument list before entering the callee, so property
+    // by-reference checks run here rather than beside their source argument.
+    for guard in &scope.pending_property_type_guards {
+        super::call_arg_coercion::emit_property_type_guard(ctx, guard);
+    }
     let mut intermediates = Vec::new();
     for owner in scope.owners.into_iter().rev() {
         unregister_owned_call_operand(ctx, owner.slot, owner.span);
@@ -440,6 +446,10 @@ pub(super) fn root_non_aliasing_callback_operands(
                 // Query flags can throw for containers or invoke a NAN warning handler.
                 || matches!(target, crate::ir::RuntimeFnId::MemoryGetUsage
                     | crate::ir::RuntimeFnId::MemoryGetPeakUsage)
+                // A non-string ctype argument raises a deprecation that can enter a
+                // throwing user error handler, so its evaluated operand must survive
+                // that unwind path until the call returns.
+                || target.is_ctype()
         }
         _ => matches!(
             def.spec.semantics.argument_lowering,
@@ -888,6 +898,31 @@ pub(crate) fn root_owned_call_operand(
     register_owned_call_operand(ctx, slot, span);
     crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     (rooted, Some(slot))
+}
+
+/// Roots the owned list-to-hash conversions argument lowering could not publish itself.
+///
+/// `coerce_operands_to_params` rebuilds a list bound to a declared `array<K, V>` parameter as an
+/// owned hash and hands it to the argument-evaluation scope of the call. A descriptor
+/// `ExprCall` has no such scope, so the conversion comes back unpublished: nothing would
+/// release it after the call, on the normal path or while unwinding. Each one is moved into a
+/// frame slot here; the caller retires the returned slots once the call has returned.
+pub(super) fn root_unpublished_argument_conversions(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: &mut [crate::ir::ValueId],
+    span: Span,
+) -> Vec<crate::ir::LocalSlotId> {
+    let mut roots = Vec::new();
+    for operand in operands.iter_mut() {
+        if ctx.builder.value_defining_op(*operand) != Some(Op::ArrayToHash) {
+            continue;
+        }
+        let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
+        let (rooted, slot) = root_owned_call_operand(ctx, value, span);
+        *operand = rooted.value;
+        roots.extend(slot);
+    }
+    roots
 }
 
 /// Makes a rooted operand visible even to a catch that preserves the current PHP activation.
