@@ -63,4 +63,4 @@ Local append, indexed statements, simple offset expressions, deep local stores/a
   `tests/codegen/simplexml_php_src_cases.rs`; the runner never parses `.phpt`.
 - Latest local run: 154 passed, 0 failed, 2 ignored (both upstream environment skips;
   every runnable SimpleXML fixture passes). Run with
-  `ELEPHC_TEST_REQUIRE_XML_NATIVE=1 cargo test --test codegen_tests php_src_simplexml`.
+  `ELEPHC_TEST_REQUIRE_XML_NATIVE=1 cargo test --test codegen_tests_ext php_src_simplexml`.

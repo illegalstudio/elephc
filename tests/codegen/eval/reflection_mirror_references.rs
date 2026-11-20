@@ -2,7 +2,7 @@
 //! Regression tests for references bound to the public mirrors of eval-built reflectors.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval::reflection_mirror_references` through Rust's test
+//! - `cargo test --test codegen_tests_eval eval::reflection_mirror_references` through Rust's test
 //!   harness.
 //!
 //! Key details:

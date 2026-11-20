@@ -4,7 +4,7 @@
 //! are part of the shape: the invoker carries them as strings.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests codegen::eval::invoker_sharing` through Rust's test harness.
+//! - `cargo test --test codegen_tests_eval codegen::eval::invoker_sharing` through Rust's test harness.
 //!
 //! Key details:
 //! - The counts compare two programs that differ only by the added callees, so the builtin

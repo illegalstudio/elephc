@@ -2,7 +2,7 @@
 //! Regression tests for the declaring-class reflectors of eval-built member reflectors.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval::declaring_class_reflectors` through Rust's test
+//! - `cargo test --test codegen_tests_eval eval::declaring_class_reflectors` through Rust's test
 //!   harness.
 //!
 //! Key details:

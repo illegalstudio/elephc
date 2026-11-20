@@ -3,7 +3,7 @@
 //! node objects, configuration errors, casts, and the output handler.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests tidy` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext tidy` through Rust's test harness.
 //!
 //! Key details:
 //! - Every fixture links `elephc_tidy` and the managed native `libtidy` 5.8.0 archive

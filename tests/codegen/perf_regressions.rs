@@ -2,7 +2,7 @@
 //! Opt-in timing guards for the String hot paths.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests perf_regressions -- --ignored`.
+//! - `cargo test --test codegen_tests_core perf_regressions -- --ignored`.
 //!
 //! Key details:
 //! - These tests compile a small native fixture, run it once, and assert a generous

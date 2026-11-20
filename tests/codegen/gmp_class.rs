@@ -2,7 +2,7 @@
 //! End-to-end tests for the compiled `GMP` object projection and compiler storage visibility.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests gmp_class` through the codegen test module.
+//! - `cargo test --test codegen_tests_ext gmp_class` through the codegen test module.
 //!
 //! Key details:
 //! - `__elephc_num` is compiler storage, not a PHP property. It must stay out of
