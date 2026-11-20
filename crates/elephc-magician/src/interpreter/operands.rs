@@ -279,8 +279,12 @@ pub(in crate::interpreter) fn eval_condition(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let value = eval_owned_expr(expr, context, scope, values)?;
-    let result = eval_boolean_condition(value, context, values);
+    let (value,source)=if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        mixed_eval::evaluate(expr,context,scope,values)?
+    } else {(eval_owned_expr(expr,context,scope,values)?,None)};
+    let source=source.map(mixed_source_proofs::value_source).unwrap_or_else(||elephc_generics::Type::atom("mixed"));
+    let result=mixed_source_proofs::require_condition(&source,context,values)
+        .and_then(|()|eval_boolean_condition(value,context,values));
     let released = eval_release_value(context, values, value);
     let result = result.and_then(|result| released.map(|()| result))?;
     mixed_guards::record(expr, result, context, scope);

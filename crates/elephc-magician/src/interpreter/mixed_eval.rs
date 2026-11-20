@@ -25,6 +25,15 @@ pub(super) fn evaluate(expr: &EvalExpr, context: &mut ElephcEvalContext,
             let selected = if eval_condition(condition, context, scope, values)? { then_branch } else { else_branch };
             evaluate(selected, context, scope, values)
         }
+        EvalExpr::Ternary { condition,then_branch:None,else_branch }=>{
+            let (value,source)=evaluate(condition,context,scope,values)?;
+            let checked=mixed_source_proofs::require_condition(&whole_source(source.as_ref()),context,values)
+                .and_then(|()|eval_boolean_condition(value,context,values));
+            if matches!(checked,Ok(true)) {return Ok((value,source));}
+            let released=eval_release_value(context,values,value);
+            checked?;released?;
+            evaluate(else_branch,context,scope,values)
+        }
         EvalExpr::Assign { name, .. } => {
             let value = eval_owned_expr(expr, context, scope, values)?;
             let source = source_type(&EvalExpr::LoadVar(name.clone()), context, scope);
@@ -75,8 +84,12 @@ pub(super) fn binary(op: EvalBinOp, left: &EvalExpr, right: &EvalExpr,
     with_sources(&[left, right], context, scope, values, |operands, sources, context, _, values| {
         let left = whole_source(sources[0].as_ref()); let right = whole_source(sources[1].as_ref());
         mixed_source_proofs::require_binary(op, &left, &right, context, values)?;
+        if op==EvalBinOp::LogicalXor {
+            mixed_source_proofs::require_condition(&left,context,values)?;
+            mixed_source_proofs::require_condition(&right,context,values)?;
+        }
         let value = eval_binary_result(op, operands[0], operands[1], context, values)?;
-        Ok((value, Some(binary_result_source(op, &left, &right, context))))
+        Ok((value, Some(mixed_result_sources::binary(op, &left, &right, context))))
     })
 }
 
@@ -86,35 +99,15 @@ pub(super) fn unary(op: EvalUnaryOp, expr: &EvalExpr, context: &mut ElephcEvalCo
 ) -> Result<(RuntimeCellHandle, Option<Type>), EvalStatus> {
     with_sources(&[expr], context, scope, values, |operands, sources, context, _, values| {
         let operand = whole_source(sources[0].as_ref());
-        if op != EvalUnaryOp::LogicalNot {
+        if op==EvalUnaryOp::LogicalNot {mixed_source_proofs::require_condition(&operand,context,values)?;}
+        else {
             mixed_source_proofs::require_source(&operand, "unary operations", context, values,
                 |ty, context| mixed_source_proofs::unary_source_supported(op, ty, context))?;
         }
         let value = eval_unary_value(op, operands[0], context, values)?;
-        let source = if op == EvalUnaryOp::LogicalNot { Type::atom("bool") }
-            else if op == EvalUnaryOp::BitNot && operand == Type::atom("string") { Type::atom("string") }
-            else if op == EvalUnaryOp::BitNot { Type::atom("int") } else { numeric_source() };
+        let source=mixed_result_sources::unary(op,&operand,context);
         Ok((value, Some(source)))
     })
-}
-
-/// Retains the closed logical numeric result instead of narrowing to the actual returned scalar.
-fn numeric_source() -> Type { Type::Union(vec![Type::atom("int"), Type::atom("float")]) }
-
-/// Selects source results without consulting the storage tag produced by the operation.
-fn binary_result_source(op: EvalBinOp, left: &Type, right: &Type, context: &ElephcEvalContext) -> Type {
-    match op {
-        EvalBinOp::Concat => Type::atom("string"),
-        EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr | EvalBinOp::LogicalXor | EvalBinOp::LooseEq
-            | EvalBinOp::LooseNotEq | EvalBinOp::StrictEq | EvalBinOp::StrictNotEq
-            | EvalBinOp::Lt | EvalBinOp::LtEq | EvalBinOp::Gt | EvalBinOp::GtEq => Type::atom("bool"),
-        EvalBinOp::Spaceship | EvalBinOp::Mod | EvalBinOp::BitAnd | EvalBinOp::BitOr
-            | EvalBinOp::BitXor | EvalBinOp::ShiftLeft | EvalBinOp::ShiftRight => Type::atom("int"),
-        EvalBinOp::Div if context.semantic_profile().contains(elephc_semantics::StrictFeature::Arithmetic) => Type::atom("float"),
-        EvalBinOp::Add if [left, right].iter().all(|ty|
-            matches!(ty, Type::Atom(name) | Type::Apply(name, _) if name == "array")) => Type::atom("array"),
-        _ => numeric_source(),
-    }
 }
 
 /// Normalizes only the consumed whole-kind proof, preserving optional producer metadata in transit.

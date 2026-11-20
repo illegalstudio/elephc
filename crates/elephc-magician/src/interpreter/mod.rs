@@ -62,6 +62,7 @@ mod scope_cells;
 mod local_binding_origins;
 mod mixed_source_proofs;
 mod mixed_eval;
+mod mixed_result_sources;
 mod mixed_guards;
 mod initialization;
 mod probe_reads;

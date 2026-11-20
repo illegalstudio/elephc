@@ -105,7 +105,7 @@ fn scalar_atom(ty: &Type, names: &[&str]) -> bool {
 }
 
 /// Resolves internal handlers through the same reviewed class contracts as AOT operator planning.
-fn operator_class(ty: &Type, context: &ElephcEvalContext) -> Option<&'static elephc_builtin_contract::ClassContract> {
+pub(super) fn operator_class(ty: &Type, context: &ElephcEvalContext) -> Option<&'static elephc_builtin_contract::ClassContract> {
     let Type::Atom(name) = ty else { return None; };
     elephc_builtin_contract::lookup_class(name).filter(|class| class.operators.is_some())
         .or_else(|| context.class_native_parent_name(name).as_deref()
@@ -140,6 +140,26 @@ fn object_pair_supported(op: EvalBinOp, left: &Type, right: &Type,
         EvalBinOp::ShiftRight => operators.shift_method(S::Right).is_some(),
         _ => false,
     }
+}
+
+/// Reads native operator result kinds from the same reviewed handler capability contract.
+pub(super) fn object_result_source(op: EvalBinOp,left: &Type,right: &Type,
+    context: &ElephcEvalContext,
+) -> Option<Type> {
+    if !object_pair_supported(op,left,right,context) {return None;}
+    let class=operator_class(left,context).or_else(||operator_class(right,context))?;
+    Some(if class.operators?.arithmetic_result==elephc_builtin_contract::ObjectArithmeticResult::Object {
+        Type::atom(class.name)
+    } else {Type::Union(vec![Type::atom("int"),Type::atom("float")])})
+}
+
+/// Selected boolean signatures require every represented source alternative to be boolean.
+pub(super) fn require_condition(ty: &Type,context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(),EvalStatus> {
+    if !context.semantic_profile().contains(StrictFeature::Bools) {return Ok(());}
+    require_source(ty,"a boolean condition",context,values,
+        |ty,_|scalar_atom(ty,&["bool","true","false"]))
 }
 
 /// Uses nominal Stringable evidence without invoking user code to manufacture a source proof.

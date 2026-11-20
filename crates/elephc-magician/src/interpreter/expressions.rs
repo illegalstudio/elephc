@@ -431,6 +431,9 @@ fn eval_expr_with_result_ownership(
                 };
                 return eval_expr(selected, context, scope, values);
             }
+            if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+                return mixed_eval::evaluate(expr,context,scope,values).map(|result|result.0);
+            }
             let condition = eval_owned_expr(condition, context, scope, values)?;
             let truthy = eval_boolean_condition(condition, context, values);
             if matches!(truthy, Ok(true)) { return Ok(condition); }

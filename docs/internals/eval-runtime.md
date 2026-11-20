@@ -779,7 +779,11 @@ invocation share the same entry projection and owner cleanup adapters. Native
 function and method binders also retain source packets through named, variadic and
 default normalization. They check logical alternatives and canonical reference
 stamps before coercing payloads; method variadic collectors keep each entry's
-optional evidence independently.
+optional evidence independently. Logical operator result domains preserve finite
+alternatives, exact float and checked integer signatures, and reviewed native
+class result kinds. Lazy conditional expressions retain the reached branch's
+source, and selected boolean signatures validate every logical alternative before
+truthiness conversion.
 
 
 ## Runtime script cache
