@@ -1495,3 +1495,25 @@ echo "next\n";
     assert_eq!(output.stdout, "TypeError: f(): Argument #1 ($a) must be of type int, string given\nTypeError: f(): Argument #1 ($a) must be of type int, string given\nTypeError: f(): Argument #2 ($s) must be of type string, null given\nDivisionByZeroError: Modulo by zero\nnext\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A method called through a callable value is named in its declared spelling, whatever case
+/// the callable string uses: the invoker reads the descriptor's `Class::method` name.
+#[test]
+fn test_callable_method_guard_names_the_declared_method_spelling() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+class P { public function withPath(string $p): string { return "[" . $p . "]"; } public static function sM(string $p): string { return $p; } }
+function show(TypeError $e): void { echo explode(', called', $e->getMessage())[0], "\n"; }
+$n = box(null);
+try { call_user_func([new P, "withPath"], $n); } catch (TypeError $e) { show($e); }
+try { call_user_func([new P, "WITHPATH"], $n); } catch (TypeError $e) { show($e); }
+try { $c = [new P, "withpath"]; $c($n); } catch (TypeError $e) { show($e); }
+try { call_user_func([P::class, "SM"], $n); } catch (TypeError $e) { show($e); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "P::withPath(): Argument #1 ($p) must be of type string, null given\nP::withPath(): Argument #1 ($p) must be of type string, null given\nP::withPath(): Argument #1 ($p) must be of type string, null given\nP::sM(): Argument #1 ($p) must be of type string, null given\n"
+    );
+}

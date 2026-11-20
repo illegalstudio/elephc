@@ -274,6 +274,7 @@ pub(super) use fiber_dynamic_entry::{
 };
 pub(super) use fixed_new::lower_object_new;
 pub(in crate::codegen) use reflection::emit_pending_reflection_class_builders;
+pub(in crate::codegen) use reflection::reflection_declared_method_name;
 pub(super) use instanceof_entry::{
     is_closure_class_name, lower_closure_class_check, lower_instanceof, lower_instanceof_dynamic,
     lower_mixed_is_a_literal_target,
