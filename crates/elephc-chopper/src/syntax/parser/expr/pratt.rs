@@ -131,16 +131,11 @@ fn parse_expr_bp_inner(
             break;
         }
 
-        if validating && starts_with_numeric_literal(tokens, lhs_start)
-            && matches!(
-                tokens[*pos].0,
-                Token::LBracket
-                    | Token::Arrow
-                    | Token::QuestionArrow
-                    | Token::DoubleColon
-                    | Token::LParen
-            )
-            && !parenthesized_expression_covers(tokens, lhs_start, *pos)
+        if matches!(
+            tokens[*pos].0,
+            Token::LBracket | Token::Arrow | Token::QuestionArrow | Token::DoubleColon | Token::LParen
+        ) && (validating || crate::syntax::parser::runtime_fragment())
+            && starts_with_numeric_literal(tokens, lhs_start)
         {
             // PHP's grammar only dereferences a parenthesized expression, a variable, a
             // string, or an array literal; an unparenthesized number is a ParseError.
