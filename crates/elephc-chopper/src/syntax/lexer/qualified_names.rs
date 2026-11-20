@@ -38,10 +38,7 @@ pub(super) fn identify_reserved_name_segments(tokens: &mut [SpannedToken]) {
             && matches!(tokens[index - 1].0, Token::Backslash)
             && tokens_touch(tokens, index - 1);
         let leads_name = !matches!(tokens[index].0, Token::Namespace)
-            && matches!(tokens.get(index + 1), Some((Token::Backslash, _)))
-            && tokens_touch(tokens, index)
-            && is_word(tokens, index + 2)
-            && tokens_touch(tokens, index + 1);
+            && has_glued_name_suffix(tokens, index);
         // A constant token is a segment only inside a name (`Vendor\PHP_EOL`, `PHP_EOL\Foo`):
         // after a lone leading `\` it is the fully qualified global constant (`\PHP_EOL`).
         let segment = if is_constant_token(&tokens[index].0) {
@@ -68,6 +65,14 @@ pub(super) fn identify_reserved_name_segments(tokens: &mut [SpannedToken]) {
             .to_string();
         tokens[index].0 = Token::Identifier(spelling);
     }
+}
+
+/// Checks for a backslash and a word touching the token at `index`.
+pub(crate) fn has_glued_name_suffix(tokens: &[SpannedToken], index: usize) -> bool {
+    matches!(tokens.get(index + 1), Some((Token::Backslash, _)))
+        && tokens_touch(tokens, index)
+        && is_word(tokens, index + 2)
+        && tokens_touch(tokens, index + 1)
 }
 
 /// Returns whether `token` is a literal or predefined constant the lexer gives its own token

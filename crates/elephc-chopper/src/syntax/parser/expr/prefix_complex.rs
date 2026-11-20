@@ -27,7 +27,7 @@ use crate::syntax::parser::stmt::expect_token;
 use crate::syntax::span::Span;
 
 use super::calls::parse_first_class_callable_parens;
-use super::{parse_args, parse_args_in, parse_expr, ArgumentSyntax};
+use super::{list_keyword, parse_args, parse_args_in, parse_expr, ArgumentSyntax};
 
 /// Consumes a variable class-name chain for `new` (`$class[0]`, `$factory->make()`, `$c::$n`).
 ///
@@ -923,6 +923,15 @@ pub(super) fn parse_named_expr(
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
+    if validation_only()
+        && list_keyword(tokens, *pos).is_some()
+        && !matches!(tokens.get(*pos + 1), Some((Token::LParen, _)))
+    {
+        return Err(CompileError::new(
+            tokens.get(*pos + 1).map_or(span, |(_, metadata)| metadata.span),
+            "list must be followed by '('",
+        ));
+    }
     let name = parse_name(tokens, pos, span, "Expected name")?;
     // `Box<int>::of(1)` — static access through a generic class. The type arguments are read
     // here rather than where `::` is handled, because `Name<...>` has to be told apart from a
@@ -987,17 +996,6 @@ pub(super) fn parse_named_expr(
         return Err(CompileError::new(
             tokens.get(*pos).map_or(span, |(_, metadata)| metadata.span),
             "array must be followed by '('",
-        ));
-    }
-    if validation_only()
-        && name.kind == crate::syntax::names::NameKind::Unqualified
-        && name.parts.len() == 1
-        && name.parts[0].eq_ignore_ascii_case("list")
-        && !matches!(tokens.get(*pos), Some((Token::LParen, _)))
-    {
-        return Err(CompileError::new(
-            tokens.get(*pos).map_or(span, |(_, metadata)| metadata.span),
-            "list must be followed by '('",
         ));
     }
     // `buffer_new<T>` is elephc-only syntax: PHP reads the angle brackets as comparisons, so

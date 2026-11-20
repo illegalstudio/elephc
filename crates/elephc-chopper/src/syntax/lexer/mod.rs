@@ -19,6 +19,7 @@ mod scan;
 pub mod token;
 
 pub use token::{SpannedToken, Token, TokenMetadata};
+pub(crate) use qualified_names::has_glued_name_suffix;
 
 use crate::syntax::errors::CompileError;
 use crate::syntax::source::SourceMode;

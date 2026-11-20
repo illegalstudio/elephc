@@ -174,8 +174,17 @@ pub(crate) fn diagnostic_override<T: SourceToken>(
     if raw_message == "Expected '=' after constant name" {
         return Some(with_expectation(mapped.clone(), "\"=\""));
     }
-    if raw_message == "Expected ':' after list argument label" {
-        return Some(with_expectation(mapped.clone(), "\":\""));
+    let delimiter = match raw_message {
+        "Expected ':' after list argument label" => Some("\":\""),
+        "array must be followed by '('" | "list must be followed by '('" => Some("\"(\""),
+        _ => None,
+    };
+    if let Some(delimiter) = delimiter {
+        let mut diagnostic = mapped.clone();
+        if source.get(mapped.pos..).is_some_and(|rest| rest.starts_with(b"?>")) {
+            diagnostic.message = "syntax error, unexpected token \";\"".into();
+        }
+        return Some(with_expectation(diagnostic, delimiter));
     }
     if raw_message == "Expected ')' before list in unset operands" {
         return Some(with_expectation(mapped.clone(), "\")\""));
@@ -337,13 +346,6 @@ pub(crate) fn diagnostic_override<T: SourceToken>(
                 lexical: false,
             });
         }
-    }
-    if matches!(raw_message, "array must be followed by '('" | "list must be followed by '('") {
-        let mut diagnostic = mapped.clone();
-        if source.get(mapped.pos..).is_some_and(|rest| rest.starts_with(b"?>")) {
-            diagnostic.message = "syntax error, unexpected token \";\"".into();
-        }
-        return Some(with_expectation(diagnostic, "\"(\""));
     }
     if raw_message == "Reserved type name" {
         let token = tokens
@@ -958,6 +960,15 @@ pub(crate) fn token_error_at<T: SourceToken>(
             match token.id() {
                 id if id == tok::T_STRING || id == tok::T_IDENTIFIER => {
                     unexpected_noun_at(source, pos, len, "identifier", None)
+                }
+                tok::T_NAME_FULLY_QUALIFIED => {
+                    unexpected_noun_at(source, pos, len, "fully qualified name", None)
+                }
+                tok::T_NAME_QUALIFIED => {
+                    unexpected_noun_at(source, pos, len, "namespaced name", None)
+                }
+                tok::T_NAME_RELATIVE => {
+                    unexpected_noun_at(source, pos, len, "namespace-relative name", None)
                 }
                 id if id == tok::T_VARIABLE => {
                     unexpected_noun_at(source, pos, len, "variable", None)

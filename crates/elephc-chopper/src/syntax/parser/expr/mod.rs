@@ -23,7 +23,7 @@ pub(crate) use pratt::is_increment_target;
 pub(crate) use prefix_complex::parse_statement_unset_call;
 
 use crate::syntax::errors::CompileError;
-use crate::syntax::lexer::{SpannedToken, Token};
+use crate::syntax::lexer::{has_glued_name_suffix, SpannedToken, Token, TokenMetadata};
 use crate::syntax::parser::ast::{Expr, ExprKind};
 use crate::syntax::parser::validation_only;
 use crate::syntax::span::Span;
@@ -149,12 +149,9 @@ fn validate_list_argument(
     syntax: &ArgumentSyntax,
     after_comma: bool,
 ) -> Result<(), CompileError> {
-    let Some((Token::Identifier(name), metadata)) = tokens.get(pos) else {
+    let Some(metadata) = list_keyword(tokens, pos) else {
         return Ok(());
     };
-    if !name.eq_ignore_ascii_case("list") || matches!(tokens.get(pos + 1), Some((Token::Backslash, _))) {
-        return Ok(());
-    }
     match syntax {
         ArgumentSyntax::Call if !matches!(tokens.get(pos + 1), Some((Token::LParen | Token::Colon, _))) => {
             let span = tokens.get(pos + 1).map_or(metadata.span, |(_, next)| next.span);
@@ -169,5 +166,17 @@ fn validate_list_argument(
             },
         )),
         _ => Ok(()),
+    }
+}
+
+/// Identifies the list keyword at the start of a primary expression or argument.
+fn list_keyword(tokens: &[SpannedToken], pos: usize) -> Option<&TokenMetadata> {
+    match tokens.get(pos) {
+        Some((Token::Identifier(name), metadata))
+            if name.eq_ignore_ascii_case("list") && !has_glued_name_suffix(tokens, pos) =>
+        {
+            Some(metadata)
+        }
+        _ => None,
     }
 }
