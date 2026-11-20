@@ -199,7 +199,82 @@ pub fn implicated_files(
             }
         }
     }
+    with_dependents(out)
+}
+
+/// Every class-like name `source` declares (`class X`, `interface X`, `trait X`).
+///
+/// A token scan, not a parse: a name spelled in prose is picked up too, which only makes the
+/// closure below erase one more file, never fewer.
+fn declared_names(source: &str) -> Vec<String> {
+    let mut words = source.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
+    let mut names = Vec::new();
+    while let Some(word) = words.next() {
+        if matches!(word, "class" | "interface" | "trait") {
+            if let Some(name) = words.next().filter(|name| !name.is_empty()) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+/// Adds to `files` every other adopting file that writes type arguments on a class they declare.
+///
+/// Erasing a file turns its templates into ordinary classes, so a file elsewhere that still
+/// writes `Repository<T>` or `@extends Base<T>` against one is refused in the NEXT round, which
+/// erases one more file and re-runs the whole compiler: Symfony's Demo needed eight rounds for
+/// Doctrine's schema classes alone and still ended refused. The closure is taken in one go
+/// instead, to a fixpoint, so the re-run compiles every file that depends on an erased one with
+/// its written types too. Over-erasing only gives up annotations php never read.
+fn with_dependents(files: Vec<PathBuf>) -> Vec<PathBuf> {
+    if files.is_empty() {
+        return files;
+    }
+    let mut candidates: Vec<PathBuf> = adopted()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .cloned()
+        .collect();
+    candidates.sort();
+    let mut sources: HashMap<PathBuf, String> = HashMap::default();
+    let mut read = |path: &PathBuf| -> String {
+        sources
+            .entry(path.clone())
+            .or_insert_with(|| std::fs::read_to_string(path).unwrap_or_default())
+            .clone()
+    };
+    let mut out = files;
+    let mut done = 0;
+    while done < out.len() {
+        let names = declared_names(&read(&out[done]));
+        done += 1;
+        if names.is_empty() {
+            continue;
+        }
+        for path in &candidates {
+            if out.contains(path) || erased_files().contains(path) {
+                continue;
+            }
+            let text = read(path);
+            if names.iter().any(|name| writes_arguments_on(&text, name)) {
+                out.push(path.clone());
+            }
+        }
+    }
     out
+}
+
+/// Whether `text` writes type arguments on `name`: `name<`, as a whole word.
+fn writes_arguments_on(text: &str, name: &str) -> bool {
+    let pattern = format!("{name}<");
+    text.match_indices(&pattern).any(|(at, _)| {
+        !text[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 /// Every class-like name a diagnostic spells: quoted (`'Ns\Box'`, `'Ns\Box<int>::get'`) or
@@ -332,6 +407,33 @@ mod tests {
         assert!(implicated_files(&both, &HashMap::default()).is_empty());
         adopted().lock().unwrap().remove(&path);
         std::fs::remove_file(&path).unwrap();
+    }
+
+    /// Erasing a template's file takes in one go every adopting file writing arguments on it, and
+    /// theirs in turn, so the re-run does not discover them one whole compile at a time.
+    #[test]
+    fn erasing_a_class_erases_its_dependents_to_a_fixpoint() {
+        let dir = std::env::temp_dir().join(format!("elephc-erasure-closure-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, text: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, text).unwrap();
+            canonical(&path)
+        };
+        let base = write("base.php", "<?php /** @template T */ class Base {}");
+        let mid = write("mid.php", "<?php /** @template T @extends Base<T> */ class Mid extends Base {}");
+        let leaf = write("leaf.php", "<?php /** @param Mid<int> $m */ class Leaf {}");
+        let near_miss = write("near.php", "<?php /** @template T @extends OtherBase<T> */ class Near {}");
+        let unrelated = write("unrelated.php", "<?php /** @template T */ class Alone {}");
+        for path in [&base, &mid, &leaf, &near_miss, &unrelated] {
+            adopted().lock().unwrap().insert(path.clone());
+        }
+        let closure = with_dependents(vec![base.clone()]);
+        assert_eq!(closure, vec![base.clone(), mid.clone(), leaf.clone()]);
+        for path in [&base, &mid, &leaf, &near_miss, &unrelated] {
+            adopted().lock().unwrap().remove(path);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
