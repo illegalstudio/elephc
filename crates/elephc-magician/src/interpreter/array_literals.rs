@@ -12,7 +12,7 @@
 use super::*;
 
 mod source_contracts;
-pub(in crate::interpreter) use source_contracts::{evaluate_literal, evaluate_argument_literal, evaluate_value};
+pub(in crate::interpreter) use source_contracts::{evaluate_literal, evaluate_argument_literal, evaluate_argument_array, evaluate_value};
 
 /// Recognizes only normalized native-default metadata, not PHP-visible function calls.
 pub(super) fn native_default_array_spread(element: &EvalArrayElement) -> Option<&EvalExpr> {
@@ -38,16 +38,19 @@ pub(super) fn eval_indexed_array(
             let index = values.int(index as i64)?;
             operands.push(index);
             let mut producer = None;
+            let mut proof = None;
             let (value, target) = match element {
                 EvalArrayElement::Value(element) if observed.is_some() => {
-                    let (value, observed) = source_contracts::evaluate_value(element, context, scope, values)?;
-                    producer = observed;
+                    let (value, observed, source) = source_contracts::evaluate_literal_value(element, context, scope, values)?;
+                    producer = observed; proof = source;
                     (value, None)
                 }
                 EvalArrayElement::Value(element) => (eval_owned_expr(element, context, scope, values)?, None),
                 EvalArrayElement::Reference(element) => {
                     if observed.is_some() { producer = local_binding_origins::source_view(element, context, scope); }
-                    eval_reference_array_element_value(element, context, scope, values)?
+                    let result = eval_reference_array_element_value(element, context, scope, values)?;
+                    proof = producer.as_ref().map(|ty| ArgumentSource::capture(ty.clone(), context));
+                    result
                 }
                 EvalArrayElement::KeyValue { .. } | EvalArrayElement::KeyReference { .. } => {
                     return Err(EvalStatus::UnsupportedConstruct);
@@ -55,7 +58,7 @@ pub(super) fn eval_indexed_array(
             };
             operands.push(value);
             array = values.array_set(array, index, value)?;
-            if let Some(source) = observed.as_deref_mut() { source.record(index, producer, value, context, values)?; }
+            if let Some(source) = observed.as_deref_mut() { source.record(index, producer, proof, value, context, values)?; }
             if let Some(target) = target {
                 bind_array_element_reference(context, array, index, target, values)?;
             }
@@ -100,7 +103,7 @@ pub(super) fn eval_assoc_array(
                         key
                     };
                     array = values.array_set(array, key, value)?;
-                    if let Some(source) = observed.as_deref_mut() { source.record(key, None, value, context, values)?; }
+                    if let Some(source) = observed.as_deref_mut() { source.record(key, None, None, value, context, values)?; }
                 }
                 continue;
             }
@@ -119,12 +122,15 @@ pub(super) fn eval_assoc_array(
                 take_next_array_key(&mut next_key, &mut operands, values)?
             };
             let mut producer = None;
+            let mut proof = None;
             let (value, target) = if by_ref {
                 if observed.is_some() { producer = local_binding_origins::source_view(value, context, scope); }
-                eval_reference_array_element_value(value, context, scope, values)?
+                let result = eval_reference_array_element_value(value, context, scope, values)?;
+                proof = producer.as_ref().map(|ty| ArgumentSource::capture(ty.clone(), context));
+                result
             } else if observed.is_some() {
-                let (value, observed) = source_contracts::evaluate_value(value, context, scope, values)?;
-                producer = observed;
+                let (value, observed, source) = source_contracts::evaluate_literal_value(value, context, scope, values)?;
+                producer = observed; proof = source;
                 (value, None)
             } else {
                 (eval_owned_expr(value, context, scope, values)?, None)
@@ -133,7 +139,7 @@ pub(super) fn eval_assoc_array(
             if explicit_key.is_none() { validate_array_append_key(key, context, values)?; }
             checked_array_keys::for_receiver(array, key, context, values)?;
             array = values.array_set(array, key, value)?;
-            if let Some(source) = observed.as_deref_mut() { source.record(key, producer, value, context, values)?; }
+            if let Some(source) = observed.as_deref_mut() { source.record(key, producer, proof, value, context, values)?; }
             if let Some(target) = target {
                 bind_array_element_reference(context, array, key, target, values)?;
             }

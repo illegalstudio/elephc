@@ -3022,3 +3022,11 @@ Logical operand proofs now consume the same neutral numeric operator/domain sele
 Permissive bitwise and shift domains include numeric strings, while unary bitwise-not distinguishes supported integer/float/string kinds from unsupported bool/null alternatives. Reviewed native unary capabilities remain authoritative. Original runtime adapters still own contents, precision, range and value errors.
 
 Both initial source regressions fail on signed251. Job31a525ed passes18 exact tests plus default build, diff/assembly hygiene and source stability (22 gates). Tests cover selected integer-only modulo, PHP unary/binary domains, independent Mixed/Coercions/Strings combinations and previous numeric, string, declaration, builtin and callable controls. Result producer precision, remaining consumers and native/spread protocols remain active work; public admission is unchanged.
+
+### Verified253: original proof packets across literal spreads
+
+Literal arguments carry optional per-entry logical proofs and their original reference-write epochs separately from the inferred homogeneous array schema. Unknown entries stay unknown. Nested callback tuples retain the same distinction. A shared extraction adapter projects packets in runtime key order while preserving existing normalization and owner cleanup.
+
+By-value spread operands detach before later argument effects. By-reference operands retain their canonical reference wrapper and invalidate stale evidence against that reference, including mutations in later named arguments. Direct calls, call_user_func_array and reflected invokeArgs consume the shared packet-aware adapter.
+
+The initial stale-reference and callback regressions fail before the candidate. Additional baselines isolate later named-argument passing modes and nested callback proof loss. Jobeba3ca23 passes25 exact tests plus default build and hygiene (29 gates). Job36ad5942 passes the seven-step builtin documentation workflow and hygiene (10 gates) on the identical source digest. Generated builtin files remain unchanged. Mixed and ArrayTypes/full umbrella remain gated pending stored sources, remaining consumers and native integration.

@@ -160,6 +160,7 @@ pub(super) fn require_argument(expected: &EvalParameterType, source: Option<&Arg
     if !context.semantic_profile().contains(StrictFeature::Mixed) { return Ok(()); }
     let target = crate::eval_ir::generic_type(expected);
     if target == Type::atom("mixed") { return Ok(()); }
+    let shared = shared || values.is_reference(value)?;
     let source = source.filter(|source| !shared || context.source_view_is_current(value, source.write_epoch));
     let actual = value_source(source.map(|source| crate::eval_ir::generic_type(&source.ty))
         .unwrap_or_else(|| Type::atom("mixed")));

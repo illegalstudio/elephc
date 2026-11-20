@@ -152,6 +152,17 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
                 ).and_then(|result| promote_borrowed_result(result, values))
             });
         }
+        if name == "call_user_func_array"
+            && context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+            validate_builtin_call_arguments(name, &evaluated, context, values)?;
+            let (bound, _) = bind_evaluated_ref_builtin_args(&["callback", "args"], &evaluated, false)?;
+            let callback = required_evaluated_ref_arg(&bound, 0)?;
+            let array = required_evaluated_ref_arg(&bound, 1)?;
+            ordered.extend(evaluated.iter().map(|argument| argument.value));
+            return with_runtime_owners(&owners, || eval_call_user_func_array_with_source(
+                callback.value, array.value, array.source_type.as_ref(), lexical_scope.as_deref(), context, values))
+                .and_then(|result| promote_borrowed_result(result, values));
+        }
         validate_builtin_call_arguments(name, &evaluated, context, values)?;
         ordered = bind_builtin_arguments(name, evaluated.clone(), values, Some(&mut owners))?;
         if callback {

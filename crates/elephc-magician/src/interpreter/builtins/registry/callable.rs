@@ -74,6 +74,15 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_call_user_func_array_with_source(callback, arg_array, None, lexical_scope, context, values)
+}
+
+/// Preserves source entry metadata while using the ordinary normalized callback-array dispatcher.
+pub(in crate::interpreter) fn eval_call_user_func_array_with_source(
+    callback: RuntimeCellHandle, arg_array: RuntimeCellHandle, source: Option<&ArgumentSource>,
+    lexical_scope: Option<&ElephcEvalScope>, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback_is_object = values.type_tag(callback)? == EVAL_TAG_OBJECT;
     let callback = eval_call_user_func_callback(
         callback,
@@ -86,7 +95,7 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
         if !values.is_array_like(arg_array)? {
             return Err(EvalStatus::RuntimeFatal);
         }
-        with_eval_array_call_arguments(arg_array, context, values, |evaluated_args, context, values| {
+        with_eval_array_call_arguments_with_sources(arg_array, source, context, values, |evaluated_args, context, values| {
             if let EvaluatedCallable::Named { name, .. } = &callback {
                 if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
                     if forbidden != "get_defined_vars" || callback_is_object {

@@ -15,6 +15,7 @@ mod array_literals;
 mod array_entry_copies;
 mod array_reference_contracts;
 mod argument_value_owners;
+mod array_argument_sources;
 mod call_argument_owners;
 
 use argument_value_owners::*;

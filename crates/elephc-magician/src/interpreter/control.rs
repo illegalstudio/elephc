@@ -34,13 +34,14 @@ pub enum EvalOutcome {
 pub(super) struct ArgumentSource {
     pub(super) ty: crate::eval_ir::EvalParameterType,
     pub(super) write_epoch: u64,
+    pub(super) entries: Vec<(crate::context::EvalArrayReferenceKey, Option<ArgumentSource>)>,
 }
 
 impl ArgumentSource {
     /// Captures declaration metadata without retaining or inspecting its runtime value.
     pub(super) fn capture(ty: crate::eval_ir::EvalParameterType,
         context: &crate::context::ElephcEvalContext,
-    ) -> Self { Self { ty, write_epoch: context.source_view_epoch() } }
+    ) -> Self { Self { ty, write_epoch: context.source_view_epoch(), entries: Vec::new() } }
 }
 
 /// One already evaluated function-like call argument.

@@ -15,26 +15,27 @@ use elephc_generics::Type;
 /// Source alternatives of the final entries, independent from their boxed storage kinds.
 #[derive(Default)]
 pub(in crate::interpreter) struct LiteralSource {
-    entries: Vec<(EvalArrayReferenceKey, Type)>,
+    entries: Vec<(EvalArrayReferenceKey, Type, Option<ArgumentSource>)>,
 }
 
 impl LiteralSource {
     /// Records a successfully inserted element under the same normalized key as runtime storage.
     pub(super) fn record(&mut self, key: RuntimeCellHandle, source: Option<EvalParameterType>,
-        value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+        proof: Option<ArgumentSource>, value: RuntimeCellHandle,
+        context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
     ) -> Result<(), EvalStatus> {
         let Some(key) = eval_array_reference_key(key, context.semantic_profile(), values)? else { return Ok(()); };
         let ty = local_binding_origins::element_value_source_type(source.as_ref(), value, context, values)?;
-        if let Some((_, previous)) = self.entries.iter_mut().find(|(previous, _)| previous == &key) {
-            *previous = ty;
-        } else { self.entries.push((key, ty)); }
+        if let Some((_, previous, source)) = self.entries.iter_mut().find(|(previous, _, _)| previous == &key) {
+            *previous = ty; *source = proof;
+        } else { self.entries.push((key, ty, proof)); }
         Ok(())
     }
 
     /// Describes final source entries, keeping heterogeneous inference distinct from explicit openness.
     pub(in crate::interpreter) fn finish(self) -> Type {
         let mut keys = Vec::new(); let mut element = None;
-        for (key, ty) in self.entries {
+        for (key, ty, _) in self.entries {
             let key = match key { EvalArrayReferenceKey::Int(_) => Type::atom("int"),
                 EvalArrayReferenceKey::String(_) => Type::atom("string") };
             if !keys.contains(&key) { keys.push(key); }
@@ -56,9 +57,20 @@ pub(in crate::interpreter) fn evaluate_literal(elements: &[EvalArrayElement],
 /// Returns each final argument entry's own producer instead of inferring a homogeneous tuple.
 pub(in crate::interpreter) fn evaluate_argument_literal(elements: &[EvalArrayElement],
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-) -> Result<(RuntimeCellHandle, Vec<(EvalArrayReferenceKey, EvalParameterType)>), EvalStatus> {
+) -> Result<(RuntimeCellHandle, Vec<(EvalArrayReferenceKey, Option<ArgumentSource>)>), EvalStatus> {
     let (value, source) = evaluate_literal_source(elements, context, scope, values)?;
-    Ok((value, source.entries.into_iter().map(|(key, ty)| (key, parameter_type(&ty))).collect()))
+    Ok((value, source.entries.into_iter().map(|(key, _, proof)| (key, proof)).collect()))
+}
+
+/// Captures tuple entry proofs separately from the schema used by inferred data-array constraints.
+pub(in crate::interpreter) fn evaluate_argument_array(elements: &[EvalArrayElement],
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, ArgumentSource), EvalStatus> {
+    let (value, source) = evaluate_literal_source(elements, context, scope, values)?;
+    let entries = source.entries.iter().map(|(key, _, proof)| (key.clone(), proof.clone())).collect();
+    let mut proof = ArgumentSource::capture(parameter_type(&source.finish()), context);
+    proof.entries = entries;
+    Ok((value, proof))
 }
 
 /// Shares source-aware construction without imposing a data-array contract on argument tuples.
@@ -84,5 +96,25 @@ pub(in crate::interpreter) fn evaluate_value(expr: &EvalExpr, context: &mut Elep
         let source = local_binding_origins::source_view(expr, context, scope);
         let value = eval_owned_expr(expr, context, scope, values)?;
         Ok((value, source))
+    }
+}
+
+/// Captures nested tuple proofs independently from data inference, evaluating every expression once.
+pub(super) fn evaluate_literal_value(expr: &EvalExpr, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvalParameterType>, Option<ArgumentSource>), EvalStatus> {
+    if let EvalExpr::Array(elements) = expr {
+        let (value, proof) = evaluate_argument_array(elements, context, scope, values)?;
+        return Ok((value, Some(proof.ty.clone()), Some(proof)));
+    }
+    let schema = local_binding_origins::source_view(expr, context, scope);
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        let (value, source) = mixed_eval::evaluate(expr, context, scope, values)?;
+        let proof = source.as_ref().map(|ty| ArgumentSource::capture(parameter_type(ty), context));
+        Ok((value, schema, proof))
+    } else {
+        let value = eval_owned_expr(expr, context, scope, values)?;
+        let proof = schema.as_ref().map(|ty| ArgumentSource::capture(ty.clone(), context));
+        Ok((value, schema, proof))
     }
 }

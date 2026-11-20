@@ -33,6 +33,10 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func_array(
     if let Some(name) = eval_literal_func_args_callback(callback) {
         return eval_literal_func_args_array_call(name, arg_array, context, scope, values);
     }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        let arguments = args.iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+        return eval_owned_builtin_call("call_user_func_array", &arguments, false, context, scope, values);
+    }
     let callback = eval_owned_expr(callback, context, scope, values)?;
     if let Some(name) = eval_owned_argument_callback_name(callback, context, Some(scope), values)? {
         if eval_builtin_uses_owned_arguments(&name) {

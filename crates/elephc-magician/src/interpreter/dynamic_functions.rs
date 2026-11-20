@@ -143,8 +143,8 @@ fn evaluate_call_argument_value(
         }
         let (value, source) = if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
             if let EvalExpr::Array(elements) = expr {
-                let (value, source) = array_literals::evaluate_literal(elements, context, scope, values)?;
-                (value, Some(ArgumentSource::capture(source, context)))
+                let (value, source) = array_literals::evaluate_argument_array(elements, context, scope, values)?;
+                (value, Some(source))
             } else {
                 let (value, source) = mixed_eval::evaluate(expr, context, scope, values)?;
                 (value, source.as_ref().map(|ty| ArgumentSource::capture(crate::eval_ir::parameter_type(ty), context)))

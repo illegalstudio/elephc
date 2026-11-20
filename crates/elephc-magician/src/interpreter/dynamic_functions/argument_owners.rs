@@ -29,7 +29,8 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
                     return Err(EvalStatus::RuntimeFatal);
                 }
                 let source = local_binding_origins::source_view(arg.value(), context, caller_scope);
-                let (spread, entry_sources) = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes) {
+                let (spread, entry_sources) = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
+                    || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
                     if let EvalExpr::Array(elements) = arg.value() {
                         let (spread, sources) = array_literals::evaluate_argument_literal(elements, context, caller_scope, values)?;
                         (spread, Some(sources))
@@ -56,8 +57,22 @@ pub(in crate::interpreter) fn eval_owned_call_arg_values(
                             let normalized = eval_array_reference_key(key, context.semantic_profile(), values);
                             let released = release_expr_result(key, context, values);
                             let key = normalized.and_then(|key| released.map(|()| key))?;
-                            key.and_then(|key| sources.iter().find(|(source, _)| source == &key).map(|(_, ty)| ty.clone()))
-                        } else { element_source.clone() }.map(|ty| ArgumentSource::capture(ty, context));
+                            key.and_then(|key| sources.iter().find(|(source, _)| source == &key).and_then(|(_, proof)| proof.clone()))
+                        } else { element_source.clone().map(|ty| ArgumentSource::capture(ty, context)) };
+                        if let Some(reference) = array_argument_sources::reference_cell(argument, values)? {
+                            argument.source_type = argument.source_type.take().filter(|source|
+                                context.source_view_is_current(reference, source.write_epoch));
+                            if !modes.by_reference(argument.name.as_deref(), first_unpacked + position) {
+                                let previous = argument.value;
+                                argument.value = copy_scope_value(previous, context, values)?;
+                                argument.ref_target = None;
+                                eval_release_value(context, values, previous)?;
+                            } else if values.is_reference(reference)? && argument.value != reference {
+                                let previous = argument.value;
+                                argument.value = values.retain(reference)?;
+                                eval_release_value(context, values, previous)?;
+                            }
+                        }
                     }
                     Ok(())
                 })();
@@ -232,6 +247,13 @@ fn eval_source_argument_with_type(argument: &EvalCallArg, position: usize,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>, Option<ArgumentSource>), EvalStatus> {
     let source = local_binding_origins::source_view(argument.value(), context, scope);
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+        && !modes.by_reference(argument.name(), position) {
+        if let EvalExpr::Array(elements) = argument.value() {
+            let (value, source) = array_literals::evaluate_argument_array(elements, context, scope, values)?;
+            return Ok((value, None, Some(source)));
+        }
+    }
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
         && !modes.by_reference(argument.name(), position)
         && !matches!(argument.value(), EvalExpr::Array(_)) {

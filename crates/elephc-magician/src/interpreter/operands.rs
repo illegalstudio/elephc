@@ -253,11 +253,21 @@ pub(in crate::interpreter) fn with_eval_array_call_arguments<V: RuntimeValueOps>
         Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut V,
     ) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_eval_array_call_arguments_with_sources(array, None, context, values, consume)
+}
+
+/// Keeps tuple entry evidence beside the established extraction, normalization and owner boundary.
+pub(in crate::interpreter) fn with_eval_array_call_arguments_with_sources<V: RuntimeValueOps>(
+    array: RuntimeCellHandle, source: Option<&ArgumentSource>, context: &mut ElephcEvalContext,
+    values: &mut V, consume: impl FnOnce(Vec<EvaluatedCallArg>, &mut ElephcEvalContext, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let arguments = eval_array_call_arg_values(array, context, values)?;
-    let (borrowed_arguments, argument_owners) = own_evaluated_call_arguments(arguments,
+    let (mut borrowed_arguments, argument_owners) = own_evaluated_call_arguments(arguments,
         |argument, _| argument.ref_target.is_some());
     with_runtime_owners(&argument_owners, || {
-        let result = consume(borrowed_arguments, context, values);
+        let result = array_argument_sources::apply(array, source, &mut borrowed_arguments, context, values)
+            .and_then(|()| consume(borrowed_arguments, context, values));
         finish_eval_argument_owners(result, &argument_owners, context, values)
     })
 }
