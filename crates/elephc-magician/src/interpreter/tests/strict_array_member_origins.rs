@@ -19,10 +19,10 @@ fn strict_array_member_origins_infer_instance_and_static_default_contents() {
         $object=new ArrayMemberSources(); \
         try{$object->items[]='bad';}catch(TypeError $error){echo 'P';} \
         try{ArrayMemberSources::$cached[]='bad';}catch(TypeError $error){echo 'S';} \
-        return count($object->items)+count(ArrayMemberSources::$cached);";
+        return count($object->items)*10+count(ArrayMemberSources::$cached);";
     for dispatch in [false, true] {
         let (output, returned) = run_source(source, None, &[StrictFeature::ArrayTypes], dispatch);
-        assert_eq!(output, "PS"); assert_eq!(returned, FakeValue::Int(2));
+        assert_eq!(output, "PS"); assert_eq!(returned, FakeValue::Int(11));
     }
 }
 

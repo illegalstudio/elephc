@@ -472,7 +472,13 @@ fn eval_initialize_class(
             }
             continue;
         }
+        let origin = eval_default_property_array_origin(
+            class.name(), property, value, context, values,
+        )?;
         store_static_property_value(class.name(), property.name(), value, context, values)?;
+        if let Some(origin) = origin {
+            context.set_static_property_array_type(class.name(), property.name(), origin);
+        }
     }
     Ok(())
 }
