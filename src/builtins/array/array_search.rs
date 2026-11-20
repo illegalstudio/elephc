@@ -32,6 +32,15 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    // A declared `array` names either layout, decided at run time; the boxed scan reads both, and
+    // its key is an int or a string.
+    if arr_ty.is_php_array() {
+        return Ok(cx.checker.normalize_union_type(vec![
+            PhpType::Int,
+            PhpType::Str,
+            PhpType::False,
+        ]));
+    }
     if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return Err(CompileError::new(
             cx.span,

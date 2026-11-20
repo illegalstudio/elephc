@@ -174,6 +174,12 @@ pub(crate) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let needle_ty = ctx.value_php_type(needle)?;
     let array_ty = ctx.value_php_type(array)?;
     let strict = inst.operands.get(2).copied();
+    // Mixed elements, a boxed haystack or a non-scalar needle: the typed fast paths below have no
+    // comparison for them, and `in_array()` already scans those shapes with the shared boxed scan.
+    if super::boxed_membership::needs_dynamic_membership(&needle_ty, &array_ty) {
+        super::boxed_membership::lower_dynamic_array_search(ctx, needle, array, strict)?;
+        return store_if_result(ctx, inst);
+    }
     match strict {
         Some(strict) if array_search_strict_never_matches(&needle_ty, &array_ty) => {
             let strict_label = ctx.next_label("array_search_strict");
