@@ -289,6 +289,9 @@ class SharedReflectionTarget {
     public function first(): void {}
     public function second(): void {}
 }
+// A computed eval keeps the interpreter linked: this test measures the per-class generated
+// materializer, which a closed-world build (table-driven reflectors) never emits.
+if ($argc > 7) { eval($argv[1]); }
 $reflection = new ReflectionClass(SharedReflectionTarget::class);
 echo count($reflection->getMethods());
 "#;
@@ -297,8 +300,9 @@ class SharedReflectionTarget {
     public function first(): void {}
     public function second(): void {}
 }
+if ($argc > 7) { eval($argv[1]); }
 $first = new ReflectionClass(SharedReflectionTarget::class);
-$second = new ReflectionClass(SharedReflectionTarget::class);
+$second =new ReflectionClass(SharedReflectionTarget::class);
 $third = new ReflectionClass(SharedReflectionTarget::class);
 echo count($first->getMethods()) + count($second->getMethods()) + count($third->getMethods());
 "#;

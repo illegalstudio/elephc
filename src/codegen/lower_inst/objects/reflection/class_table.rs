@@ -307,6 +307,15 @@ pub(super) fn pool(data: &mut DataSection, strings: &[String]) -> DataWord {
     DataWord::Symbol(data.add_words(words))
 }
 
+/// A string VALUE (or array key) as a pool of one. Values spell php's raw bytes with private-use
+/// marker characters, which `literal_bytes` turns back into the bytes: two keys that spell the same
+/// bytes differently (`"\xc3\xa9"` and `"\u{e9}"`) are the same key, and `"\xff"` is one byte.
+fn value_text_pool(data: &mut DataSection, text: &str) -> DataWord {
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(text);
+    let (label, length) = data.add_string(&bytes);
+    DataWord::Symbol(data.add_words(vec![DataWord::Symbol(label), DataWord::U64(length as u64)]))
+}
+
 /// A value node: `[tag, a, b]`.
 pub(super) fn node(tag: i64, a: DataWord, b: DataWord) -> Vec<DataWord> {
     vec![DataWord::U64(tag as u64), a, b]
@@ -339,7 +348,7 @@ pub(super) fn encode_constant(data: &mut DataSection, constant: &ReflectionConst
         ReflectionConstantValue::Int(number) => int_node(*number),
         ReflectionConstantValue::Float(number) => float_node(data, *number),
         ReflectionConstantValue::Str(text) => {
-            node(value::STRING, pool(data, std::slice::from_ref(text)), DataWord::U64(0))
+            node(value::STRING, value_text_pool(data, text), DataWord::U64(0))
         }
         ReflectionConstantValue::Array(elements) => {
             let mut entries = Vec::new();
@@ -356,7 +365,7 @@ pub(super) fn encode_constant(data: &mut DataSection, constant: &ReflectionConst
                     ReflectionDefaultArrayKey::Int(number) => entries.extend(int_node(*number)),
                     ReflectionDefaultArrayKey::Str(text) => entries.extend(node(
                         value::STRING,
-                        pool(data, std::slice::from_ref(text)),
+                        value_text_pool(data, text),
                         DataWord::U64(0),
                     )),
                 }
@@ -394,7 +403,7 @@ pub(super) fn encode_default(
         ReflectionParameterDefaultValue::Int(number) => int_node(*number),
         ReflectionParameterDefaultValue::Float(number) => float_node(data, *number),
         ReflectionParameterDefaultValue::Str(text) => {
-            node(value::STRING, pool(data, std::slice::from_ref(text)), DataWord::U64(0))
+            node(value::STRING, value_text_pool(data, text), DataWord::U64(0))
         }
         ReflectionParameterDefaultValue::Array(elements) => {
             let mut entries = Vec::new();
@@ -411,7 +420,7 @@ pub(super) fn encode_default(
                     ReflectionDefaultArrayKey::Int(number) => entries.extend(int_node(*number)),
                     ReflectionDefaultArrayKey::Str(text) => entries.extend(node(
                         value::STRING,
-                        pool(data, std::slice::from_ref(text)),
+                        value_text_pool(data, text),
                         DataWord::U64(0),
                     )),
                 }

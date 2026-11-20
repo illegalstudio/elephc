@@ -19,6 +19,7 @@
 use crate::fast_hash::FastMap as HashMap;
 
 use super::class_table::{array_node, encode_constant, encode_default, node, pool};
+use super::class_traits::reflection_class_like_is_internal;
 use super::*;
 use crate::codegen::data_section::{DataSection, DataWord};
 use crate::codegen::shared_reflection::ReflectionOwnerKind;
@@ -408,6 +409,9 @@ fn method_row(
     if listed.returns_reference {
         flags |= member_flag::RETURNS_REFERENCE;
     }
+    if reflection_class_like_is_internal(declaring) {
+        flags |= member_flag::INTERNAL;
+    }
     if let Some(prototype) = listed.prototype_member.as_deref() {
         flags |= member_flag::HAS_PROTOTYPE;
         let prototype_class = prototype.declaring_class_name.clone().unwrap_or_default();
@@ -726,6 +730,7 @@ fn function_row(
         (listed.is_generator, member_flag::GENERATOR),
         (listed.returns_reference, member_flag::RETURNS_REFERENCE),
         (is_closure, member_flag::CLOSURE),
+        (is_internal, member_flag::INTERNAL),
     ] {
         if condition {
             flags |= bit;

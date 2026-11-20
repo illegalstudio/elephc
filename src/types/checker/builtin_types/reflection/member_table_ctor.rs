@@ -349,7 +349,7 @@ pub(super) fn apply_property_table(class: &mut FlattenedClass) {
     replace_body(
         class,
         "getDeclaringClass",
-        vec![s_return(e_new("ReflectionClass", vec![e_this_prop("__class")]))],
+        declaring_class_body("__class"),
     );
 }
 
@@ -459,6 +459,7 @@ fn method_constructor() -> ClassMethod {
     let mut fill = vec![s_assign("flags", mw(member::FLAGS))];
     fill.push(s_prop_assign(e_this(), "__name", pool_one(mw(member::NAME))));
     fill.push(s_prop_assign(e_this(), "__class", pool_one(mw(member::CLASS))));
+    fill.push(s_prop_assign(e_this(), "__short_name", e_this_prop("__name")));
     fill.push(s_prop_assign(e_this(), "__modifiers", mw(member::MODIFIERS)));
     for (property, bit) in [
         ("__is_static", member_flag::STATIC),
@@ -482,6 +483,12 @@ fn method_constructor() -> ClassMethod {
         e_binop(e_var("return_type"), BinOp::StrictNotEq, crate::synthetic_class::e_null()),
     ));
     fill.push(s_prop_assign(e_this(), "__string", pool_one(mw(member::STRING))));
+    fill.push(s_prop_assign(e_this(), "__is_internal", flag_set(member_flag::INTERNAL)));
+    fill.push(s_prop_assign(
+        e_this(),
+        "__is_user_defined",
+        crate::synthetic_class::e_not(flag_set(member_flag::INTERNAL)),
+    ));
     fill.push(s_prop_assign(e_this(), "__required_parameter_count", mw(member::COUNT)));
     fill.push(s_prop_assign(e_this(), "__parameter_count", mw(member::PARAMETER_COUNT)));
     fill.push(s_prop_assign(e_this(), "__parameters_row", mw(member::PARAMETERS)));
@@ -575,7 +582,7 @@ pub(super) fn apply_method_table(class: &mut FlattenedClass) {
     replace_body(
         class,
         "getDeclaringClass",
-        vec![s_return(e_new("ReflectionClass", vec![e_this_prop("__class")]))],
+        declaring_class_body("__class"),
     );
     replace_body(
         class,
@@ -755,6 +762,29 @@ pub(super) fn apply_parameter_table(class: &mut FlattenedClass) {
             s_return(e_new("ReflectionClass", vec![e_this_prop("__class_name")])),
         ],
     );
+    // `getClass()` (deprecated): the class a class-typed parameter names, null for any other type.
+    replace_body(
+        class,
+        "getClass",
+        vec![
+            s_assign("type", e_this_prop("__type")),
+            s_if(
+                crate::synthetic_class::e_instance_of(e_var("type"), "ReflectionNamedType"),
+                vec![s_if(
+                    crate::synthetic_class::e_not(e_method_call(e_var("type"), "isBuiltin", vec![])),
+                    vec![s_return(e_new(
+                        "ReflectionClass",
+                        vec![e_method_call(e_var("type"), "getName", vec![])],
+                    ))],
+                    vec![],
+                    None,
+                )],
+                vec![],
+                None,
+            ),
+            s_return(crate::synthetic_class::e_null()),
+        ],
+    );
     replace_body(
         class,
         "getDeclaringFunction",
@@ -771,6 +801,19 @@ pub(super) fn apply_parameter_table(class: &mut FlattenedClass) {
             )),
         ],
     );
+}
+
+/// `getDeclaringClass()` of a member: php's class factory answers a `ReflectionEnum` for an enum.
+fn declaring_class_body(property: &str) -> Vec<Stmt> {
+    vec![
+        s_if(
+            e_call("enum_exists", vec![e_this_prop(property)]),
+            vec![s_return(e_new("ReflectionEnum", vec![e_this_prop(property)]))],
+            vec![],
+            None,
+        ),
+        s_return(e_new("ReflectionClass", vec![e_this_prop(property)])),
+    ]
 }
 
 fn function_constructor() -> ClassMethod {
@@ -917,6 +960,12 @@ fn function_constructor() -> ClassMethod {
         e_binop(e_var("return_type"), BinOp::StrictNotEq, crate::synthetic_class::e_null()),
     ));
     fill.push(s_prop_assign(e_this(), "__string", pool_one(mw(member::STRING))));
+    fill.push(s_prop_assign(e_this(), "__is_internal", flag_set(member_flag::INTERNAL)));
+    fill.push(s_prop_assign(
+        e_this(),
+        "__is_user_defined",
+        crate::synthetic_class::e_not(flag_set(member_flag::INTERNAL)),
+    ));
     fill.push(s_prop_assign(e_this(), "__required_parameter_count", mw(member::COUNT)));
     fill.push(s_prop_assign(e_this(), "__parameter_count", mw(member::PARAMETER_COUNT)));
     fill.push(s_prop_assign(e_this(), "__parameters_row", mw(member::PARAMETERS)));
@@ -1167,7 +1216,7 @@ pub(super) fn apply_constant_table(class: &mut FlattenedClass, kind: ConstantKin
     replace_body(
         class,
         "getDeclaringClass",
-        vec![s_return(e_new("ReflectionClass", vec![e_this_prop("__class")]))],
+        declaring_class_body("__class"),
     );
     if kind != ConstantKind::Constant {
         replace_body(

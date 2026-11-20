@@ -165,6 +165,8 @@ pub mod member_flag {
     /// Function rows.
     pub const CLOSURE: i64 = 1 << 28;
     pub const HAS_FILE: i64 = 1 << 29;
+    /// Function and method rows: an internal (builtin) callable, otherwise user-defined.
+    pub const INTERNAL: i64 = 1 << 30;
 }
 
 /// Kind byte of a member key, see [`member_key`].
