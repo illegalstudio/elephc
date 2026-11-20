@@ -3811,20 +3811,20 @@ mod tests {
         let sig = crate::types::first_class_callable_builtin_sig("trim").unwrap();
         let defaults: InvokerDefaults = vec![None; sig.params.len()];
         let mut state = crate::codegen::shared_state::SharedCodegenState::default();
-        state.cache_runtime_callable_invoker(&sig, &[], false, false, &defaults, false, None, "borrowed_result");
+        state.cache_runtime_callable_invoker(&sig, &[], false, false, &defaults, 0, None, "borrowed_result");
         assert!(state
-            .runtime_callable_invoker(&sig, &[], true, false, &defaults, false, None)
+            .runtime_callable_invoker(&sig, &[], true, false, &defaults, 0, None)
             .is_none());
-        state.cache_runtime_callable_invoker(&sig, &[], true, false, &defaults, false, None, "owned_result");
+        state.cache_runtime_callable_invoker(&sig, &[], true, false, &defaults, 0, None, "owned_result");
         assert_eq!(
             state
-                .runtime_callable_invoker(&sig, &[], false, false, &defaults, false, None)
+                .runtime_callable_invoker(&sig, &[], false, false, &defaults, 0, None)
                 .as_deref(),
             Some("borrowed_result")
         );
         assert_eq!(
             state
-                .runtime_callable_invoker(&sig, &[], true, false, &defaults, false, None)
+                .runtime_callable_invoker(&sig, &[], true, false, &defaults, 0, None)
                 .as_deref(),
             Some("owned_result")
         );
@@ -3842,13 +3842,13 @@ mod tests {
         left[0] = Some(InvokerDefaultValue::String("left".to_string()));
         right[0] = Some(InvokerDefaultValue::String("right".to_string()));
         let mut state = crate::codegen::shared_state::SharedCodegenState::default();
-        state.cache_runtime_callable_invoker(&sig, &[], false, false, &left, false, None, "left_body");
+        state.cache_runtime_callable_invoker(&sig, &[], false, false, &left, 0, None, "left_body");
         assert!(state
-            .runtime_callable_invoker(&sig, &[], false, false, &right, false, None)
+            .runtime_callable_invoker(&sig, &[], false, false, &right, 0, None)
             .is_none());
         assert_eq!(
             state
-                .runtime_callable_invoker(&sig, &[], false, false, &left, false, None)
+                .runtime_callable_invoker(&sig, &[], false, false, &left, 0, None)
                 .as_deref(),
             Some("left_body")
         );

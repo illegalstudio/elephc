@@ -1557,3 +1557,65 @@ echo call_user_func_array([$w, "withQuery"], [$n])->toAsciiString(), "\n";
     );
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A method that a subclass or another implementor overrides is not checked against the
+/// receiver's static class: PHP binds the override selected at run time, which here accepts
+/// `null` and an `int` (`Child::m(mixed)`, `Other::name(?string)`), through a direct call and
+/// through the callable forms alike. (The overrides print no argument: how a value reaches a
+/// wider override through a parent-typed receiver is #2467.)
+#[test]
+fn test_scalar_checks_leave_overridden_methods_to_the_selected_override() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+interface Named { public function name(string $s): string; }
+class Base implements Named {
+    public function m(string $s): string { return "base[" . $s . "]"; }
+    public function name(string $s): string { return "base-name[" . $s . "]"; }
+}
+class Child extends Base {
+    public function m(mixed $s): string { return "child"; }
+}
+class Other implements Named { public function name(?string $s): string { return "other"; } }
+function show(TypeError $e): void { echo explode(', called', $e->getMessage())[0], "\n"; }
+function run(Base $o, mixed $v): void {
+    try { echo $o->m($v), "\n"; } catch (TypeError $e) { show($e); }
+    try { $f = [$o, 'm']; echo $f($v), "\n"; } catch (TypeError $e) { show($e); }
+    try { echo call_user_func_array([$o, 'm'], [$v]), "\n"; } catch (TypeError $e) { show($e); }
+    try { echo call_user_func([$o, 'm'], $v), "\n"; } catch (TypeError $e) { show($e); }
+}
+function named(Named $n, mixed $v): void {
+    try { echo $n->name($v), "\n"; } catch (TypeError $e) { show($e); }
+}
+run(new Child, box(null));
+run(new Child, box(5));
+named(new Other, box(null));
+echo "done\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "child\nchild\nchild\nchild\nchild\nchild\nchild\nchild\nother\ndone\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
+
+/// Under `strict_types=1` a bound method callable refuses an `int` for a `string` parameter in
+/// every form, including `call_user_func_array($o->m(...), [...])`, which the compiler lowers
+/// to a direct call.
+#[test]
+fn test_bound_method_callables_follow_strict_types() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+function box(mixed $v): mixed { return $v; }
+class P { public function withPath(string $p): string { return "[" . $p . "]"; } }
+function show(TypeError $e): void { echo explode(', called', $e->getMessage())[0], "\n"; }
+$o = new P;
+try { echo call_user_func_array($o->withPath(...), [box(5)]), "\n"; } catch (TypeError $e) { show($e); }
+try { echo call_user_func($o->withPath(...), box(5)), "\n"; } catch (TypeError $e) { show($e); }
+try { echo call_user_func_array([$o, "withPath"], [box(5)]), "\n"; } catch (TypeError $e) { show($e); }
+try { $f = $o->withPath(...); echo $f(box(5)), "\n"; } catch (TypeError $e) { show($e); }
+echo call_user_func_array($o->withPath(...), [box("ok")]), "\n";
+"#,
+    );
+    assert_eq!(out, "P::withPath(): Argument #1 ($p) must be of type string, int given\nP::withPath(): Argument #1 ($p) must be of type string, int given\nP::withPath(): Argument #1 ($p) must be of type string, int given\nP::withPath(): Argument #1 ($p) must be of type string, int given\n[ok]\n");
+}

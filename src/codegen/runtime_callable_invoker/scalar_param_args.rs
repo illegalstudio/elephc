@@ -39,6 +39,9 @@ pub(in crate::codegen) struct InvokerScalarGuards {
     /// The callee name for the message when the descriptor's own name is not PHP's (a
     /// closure's `{closure:file:line}`); `None` reads the descriptor name at run time.
     pub(in crate::codegen) callee: Option<String>,
+    /// The callee is a method of an internal `ext/uri` class: coercive callers bind as before
+    /// (PHP coerces `null` with a deprecation) and only `strict_types=1` callers are checked.
+    pub(in crate::codegen) strict_only: bool,
 }
 
 /// The parameter whose boxed argument is checked, selected per container entry.
@@ -66,6 +69,11 @@ pub(super) fn emit_guard(
     guards: &InvokerScalarGuards,
     parameter: &ScalarParameter,
 ) -> Option<PhpType> {
+    // The internal URI methods declare no checked `int`/`float` parameter a program can reach;
+    // such a parameter keeps the ordinary cast rather than a strict-only conversion path.
+    if guards.strict_only && matches!(parameter.declared, PhpType::Int | PhpType::Float) {
+        return None;
+    }
     let result = abi::int_result_reg(emitter);
     let strict = ctx.next_label("scalar_param_strict");
     let accept = ctx.next_label("scalar_param_accept");
@@ -90,6 +98,10 @@ pub(super) fn emit_guard(
             Some(parameter.declared.clone())
         }
         _ => {
+            if guards.strict_only {
+                // -- coercive caller of an internal method: bind as before --
+                abi::emit_jump(emitter, &accept);
+            }
             emit_string_or_bool(emitter, data, guards, parameter, &strict, &accept, &refuse);
             None
         }

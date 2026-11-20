@@ -130,9 +130,9 @@ struct RuntimeCallableInvokerCacheEntry {
     captures: Vec<(String, PhpType, bool)>,
     owns_string_return: bool,
     php_return_status: bool,
-    /// Whether the invoker checks boxed arguments bound to declared scalar parameters (a user
-    /// callable outside the internal `ext/uri` classes).
-    scalar_guarded: bool,
+    /// How the invoker checks boxed arguments bound to declared scalar parameters: 0 not at
+    /// all, 1 always, 2 only for `strict_types=1` callers (an internal `ext/uri` method).
+    scalar_guarded: u8,
     /// The static callee name a closure invoker's scalar-parameter `TypeError` uses, if any.
     guard_callee: Option<String>,
     /// The RESOLVED defaults the body materializes. Two signatures can be identical as ABI and
@@ -455,7 +455,7 @@ impl SharedCodegenState {
         owns_string_return: bool,
         php_return_status: bool,
         defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
-        scalar_guarded: bool,
+        scalar_guarded: u8,
         guard_callee: Option<&str>,
     ) -> Option<String> {
         self.runtime_callable_invokers
@@ -480,7 +480,7 @@ impl SharedCodegenState {
         owns_string_return: bool,
         php_return_status: bool,
         defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
-        scalar_guarded: bool,
+        scalar_guarded: u8,
         guard_callee: Option<&str>,
         label: &str,
     ) {

@@ -9,6 +9,45 @@
 
 use super::*;
 
+/// Returns the `Class::method` a bound method callable's scalar-parameter checks name, or
+/// `None` for any other target or a receiver whose class is unknown.
+pub(super) fn instance_callable_guard_description(
+    ctx: &LoweringContext<'_, '_>,
+    target: &StaticCallableBinding,
+) -> Option<String> {
+    let StaticCallableBinding::InstanceMethod { object, method, .. } = target else {
+        return None;
+    };
+    let class_name = instance_callable_object_class(ctx, object)?;
+    Some(super::scalar_param_guards::method_guard_description(ctx, &class_name, method, false))
+}
+
+/// Lowers the arguments a bound method callable binds with the method's signature.
+///
+/// They get the same scalar-parameter checks as the method call the callable stands for,
+/// named by `guard_description`. The checker recorded no argument sites for such a call, so
+/// the checks decide from the value types. Without a description nothing is checked.
+pub(super) fn lower_bound_method_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    signature: Option<&FunctionSig>,
+    args: &[Expr],
+    guard_description: Option<String>,
+    span: Span,
+) -> Vec<crate::ir::ValueId> {
+    let previous_description = ctx.call_description.take();
+    let previous_call_site = ctx.call_site_span;
+    if let Some(description) = guard_description {
+        ctx.call_description = Some(description);
+        ctx.call_site_span = Some(span);
+        ctx.scalar_guards_unrecorded = true;
+    }
+    let values = lower_args_with_signature(ctx, signature, args);
+    ctx.scalar_guards_unrecorded = false;
+    ctx.call_description = previous_description;
+    ctx.call_site_span = previous_call_site;
+    values
+}
+
 /// Lowers a closure variable call.
 pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, args: &[Expr], expr: &Expr) -> LoweredValue {
     if let Some(value) = lower_invokable_object_variable_call(ctx, var, args, expr) {
@@ -25,10 +64,8 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
         result_type = Some(static_callable_return_type(ctx, &target));
         instance_signature = instance_callable_signature(&target).cloned();
         if let StaticCallableBinding::InstanceMethod { object, method, .. } = &target {
+            instance_guard_description = instance_callable_guard_description(ctx, &target);
             if let Some(class_name) = instance_callable_object_class(ctx, object) {
-                instance_guard_description = Some(super::scalar_param_guards::method_guard_description(
-                    ctx, &class_name, method, false,
-                ));
                 instance_return_alias = class_method_return_arg_alias(
                     ctx,
                     &class_name,
@@ -96,20 +133,9 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     );
     let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
-    // A bound method callable binds its arguments like the method call it stands for, so a
-    // runtime-typed argument gets the same scalar-parameter check. The checker recorded no
-    // argument sites for this call, so the checks decide from the value types.
-    let previous_description = ctx.call_description.take();
-    let previous_call_site = ctx.call_site_span;
-    if let Some(description) = instance_guard_description {
-        ctx.call_description = Some(description);
-        ctx.call_site_span = Some(expr.span);
-        ctx.scalar_guards_unrecorded = true;
-    }
-    let mut arg_values = lower_args_with_signature(ctx, instance_signature.as_ref(), args);
-    ctx.scalar_guards_unrecorded = false;
-    ctx.call_description = previous_description;
-    ctx.call_site_span = previous_call_site;
+    let mut arg_values = lower_bound_method_args(
+        ctx, instance_signature.as_ref(), args, instance_guard_description, expr.span,
+    );
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
         ctx,
