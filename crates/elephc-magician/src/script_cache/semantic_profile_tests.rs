@@ -122,6 +122,7 @@ fn strict_cache_status_aggregates_profile_variants_by_path() {
     let stats = store::stats();
     let scripts = store::cached_scripts();
     assert_eq!(scripts.len(), 1, "OPcache exposes one row for one canonical path");
+    assert_eq!(stats.num_cached_scripts, scripts.len(), "the status total matches its rows");
     assert_eq!(scripts[0].hits, stats.hits, "the row sums hits from both profiles");
     assert_eq!(
         scripts[0].memory_consumption, stats.used_memory,

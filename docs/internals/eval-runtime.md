@@ -954,7 +954,9 @@ Discarded profile variants no longer participate in path staleness checks, so a
 stale retired variant cannot invalidate a fresh live sibling. OPcache status
 still exposes one row per path: it sums hits and retained memory across profile
 variants, takes freshness from the most recently used live variant, and reports
-timestamp `0` only when every variant for that path is discarded.
+timestamp `0` only when every variant for that path is discarded. The
+`num_cached_scripts` counter counts those distinct paths, while capacity still
+counts every internal profile artifact.
 
 ### Capacity
 

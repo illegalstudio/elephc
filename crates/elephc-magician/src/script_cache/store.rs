@@ -27,7 +27,7 @@
 use super::config::{config, ScriptCacheConfig};
 use super::segments::{segment_script_with_semantics, ParseMode, ScriptSegment};
 use elephc_semantics::SemanticProfile;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -560,6 +560,18 @@ fn fresh_revalidate_at(config: &ScriptCacheConfig, now: i64) -> i64 {
 }
 
 impl ScriptCache {
+    /// Counts PHP-visible cached scripts, whose identity is the canonical path.
+    ///
+    /// Profile variants occupy independent internal capacity and memory, but status exposes
+    /// one row per path. Discarded variants still retain that row until a restart.
+    fn visible_script_count(&self) -> usize {
+        self.entries
+            .keys()
+            .map(|key| key.path.as_path())
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
     /// Returns whether one more entry fits, latching `cache_full` when it does not.
     ///
     /// php-src stops storing new scripts once either the byte budget or the entry
@@ -942,7 +954,7 @@ pub fn stats() -> ScriptCacheStats {
     ScriptCacheStats {
         hits: cache.hits,
         misses: cache.misses,
-        num_cached_scripts: cache.entries.len(),
+        num_cached_scripts: cache.visible_script_count(),
         used_memory: cache.used_memory,
         cache_full: cache.cache_full,
         oom_restarts: cache.oom_restarts,
