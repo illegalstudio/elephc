@@ -23,6 +23,8 @@ mod support;
 mod locals_retype_fixtures;
 
 mod codegen {
+    mod filter;
+    mod filter_phpt;
     mod include_paths;
     mod curl;
     pub(crate) mod io;

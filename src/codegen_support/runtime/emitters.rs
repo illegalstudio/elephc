@@ -25,6 +25,7 @@ use crate::codegen_support::RuntimeFeatures;
 /// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     diagnostics::emit_diagnostics(emitter, features);
+    super::filter_regex::emit_filter_regex(emitter, features);
 
     // Shared numeric coercions. Emitted first because string, array, and cast helpers all
     // branch into `__rt_php_float_to_int` for PHP's float→int rules.
@@ -103,6 +104,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_split(emitter);
     strings::emit_str_split_count(emitter);
     strings::emit_addslashes(emitter);
+    strings::emit_addcslashes(emitter);
     strings::emit_stripslashes(emitter);
     strings::emit_nl2br(emitter);
     strings::emit_chunk_split(emitter);

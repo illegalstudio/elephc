@@ -9,9 +9,9 @@ sidebar:
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`die()`](./process/die.md) | `(int $status = 0): void` | `void` | ✓ | ✓ |
+| [`die()`](./process/die.md) | `(string|int $status = 0): void` | `void` | ✓ | ✓ |
 | [`exec()`](./process/exec.md) | `(string $command): string` | `string` | ✓ | ✓ |
-| [`exit()`](./process/exit.md) | `(int $status = 0): void` | `void` | ✓ | ✓ |
+| [`exit()`](./process/exit.md) | `(string|int $status = 0): void` | `void` | ✓ | ✓ |
 | [`passthru()`](./process/passthru.md) | `(string $command): void` | `void` | ✓ | ✓ |
 | [`pclose()`](./process/pclose.md) | `(resource $handle): int` | `int` | ✓ | ✓ |
 | [`popen()`](./process/popen.md) | `(string $command, string $mode): mixed` | `mixed` | ✓ | ✓ |

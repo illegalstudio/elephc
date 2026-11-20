@@ -19,6 +19,12 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::{abi, platform::Arch};
 use crate::types::PhpType;
 
+/// Runtime value tag marking a hash-entry payload that is a managed reference cell.
+///
+/// This is not a [`PhpType`] tag: PHP reference entries store the cell pointer in the low
+/// payload word and must be dereferenced by every value reader. It lives beside the other
+/// runtime value tags so hash writers and reference-cell helpers name the same number.
+pub(crate) const REFERENCE_CELL_VALUE_TAG: u8 = 11;
 
 /// Names the register `__rt_mixed_unbox` returns its payload LOW word in, per target.
 ///

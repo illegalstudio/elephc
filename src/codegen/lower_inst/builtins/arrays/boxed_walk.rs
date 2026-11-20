@@ -56,7 +56,7 @@ pub(super) fn lower_boxed_array_walk(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 3),
-        ctx.lexical_class_id(),
+        ctx.callable_callback_scope(),
     );
     abi::emit_call_label(ctx.emitter, "__rt_array_walk_boxed");
     abi::emit_release_temporary_stack(ctx.emitter, CALLBACK_STACK_BYTES);

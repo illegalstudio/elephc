@@ -505,9 +505,9 @@ echo call_user_func($callbacks[0], "Ada");
     let _ = fs::remove_dir_all(dir);
 }
 
-/// Verifies descriptor invokers preserve runtime by-reference arguments for callable params.
+/// Verifies descriptor invokers pass runtime by-reference arguments by value for callable params.
 #[test]
-fn test_call_user_func_callable_param_descriptor_preserves_by_ref_argument() {
+fn test_call_user_func_callable_param_descriptor_passes_by_value() {
     let source = r#"<?php
 function run(callable $cb): void {
     $value = 4;
@@ -519,8 +519,13 @@ $cb = function(int &$n): void {
 };
 run($cb);
 "#;
-    let out = compile_and_run(source);
-    assert_eq!(out, "7");
+    let output = compile_and_run_capture(source);
+    assert_eq!(output.stdout, "4");
+    assert!(
+        output.stderr.contains("must be passed by reference, value given"),
+        "stderr: {:?}",
+        output.stderr
+    );
 
     let dir = make_cli_test_dir("elephc_call_user_func_descriptor_invoker_by_ref_arg");
     let (user_asm, _runtime_asm, _required_libraries) =
@@ -1712,9 +1717,9 @@ echo call_user_func_array($use_left ? $left->add(...) : $right->add(...), []);
     let _ = fs::remove_dir_all(dir);
 }
 
-/// Verifies descriptor invokers preserve by-reference literal args for branch-selected callbacks.
+/// Verifies descriptor invokers pass by-reference literal args by value for branch callbacks.
 #[test]
-fn test_call_user_func_array_complex_captured_callable_expr_preserves_by_ref_literal_arg() {
+fn test_call_user_func_array_complex_captured_callable_expr_passes_by_value() {
     let source = r#"<?php
 class Counter {
     public int $step = 0;
@@ -1733,8 +1738,15 @@ $value = 5;
 call_user_func_array($use_left ? $left->bump(...) : $right->bump(...), [$value]);
 echo $value;
 "#;
-    let out = compile_and_run(source);
-    assert_eq!(out, "12");
+    let output = compile_and_run_capture(source);
+    assert_eq!(output.stdout, "5");
+    assert!(
+        output
+            .stderr
+            .contains("Counter::bump(): Argument #1 ($n) must be passed by reference, value given"),
+        "stderr: {:?}",
+        output.stderr
+    );
 }
 
 /// Verifies returned method FCC descriptors use their runtime receiver in `call_user_func_array()`.
@@ -2493,9 +2505,9 @@ foreach ([null, "ELEPHC_NULLABLE_ENV", "ELEPHC_NULLABLE_ENV_MISSING"] as $name) 
 // that a later `putenv` does NOT reach them.
 /// Verifies a CLI program finds its environment in both superglobals.
 ///
-/// Measured against `php -n` on a script file: `$_ENV` equals `getenv()`, and
-/// `$_SERVER` holds the same environment plus nine keys of its own. They were
-/// seeded EMPTY before, which read as "not set" to any program that looked.
+/// Measured against `php -d variables_order=GPCSE` on a script file: `$_ENV` equals
+/// `getenv()`, and `$_SERVER` holds the same environment plus nine keys of its own.
+/// They were seeded EMPTY before, which read as "not set" to any program that looked.
 ///
 /// The `putenv` half is the asymmetry PHP actually has, and it is easy to get
 /// wrong in either direction: `getenv()` reads the live environment and reports
@@ -2508,7 +2520,7 @@ foreach ([null, "ELEPHC_NULLABLE_ENV", "ELEPHC_NULLABLE_ENV_MISSING"] as $name) 
 /// those are different answers to `array_key_exists`.
 #[test]
 fn test_cli_superglobals_carry_the_environment() {
-    let out = compile_and_run(
+    let output = compile_and_run_capture_with_ini(
         r#"<?php
 echo count($_ENV) > 0 ? "env-filled" : "env-empty";
 echo ":", count($_SERVER) > count($_ENV) ? "server-has-more" : "server-not-more";
@@ -2524,9 +2536,10 @@ echo ":", is_int($_SERVER["REQUEST_TIME"]) ? "int-time" : "not-int";
 // The request superglobals stay empty in CLI, as they are in PHP.
 echo ":", count($_GET) + count($_POST) + count($_COOKIE) + count($_FILES);
 "#,
+        &[("variables_order".to_string(), "GPCSE".to_string())],
     );
     assert_eq!(
-        out,
+        output.stdout,
         "env-filled:server-has-more:not-in-env:not-in-server:seen:argv:argc:root::int-time:0"
     );
 }

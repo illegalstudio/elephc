@@ -26,7 +26,7 @@ pub(in crate::interpreter) fn eval_builtin_exit(
         [] => 0,
         [status] => {
             let status = eval_expr(status, context, scope, values)?;
-            eval_int_value(status, values)?
+            eval_exit_status_value(&[status], values)?
         }
         _ => return Err(EvalStatus::RuntimeFatal),
     };
@@ -49,7 +49,14 @@ pub(in crate::interpreter) fn eval_exit_status_value(
 ) -> Result<i64, EvalStatus> {
     match evaluated_args {
         [] => Ok(0),
-        [status] => eval_int_value(*status, values),
+        [status] => {
+            if values.type_tag(*status)? == EVAL_TAG_STRING {
+                values.echo(*status)?;
+                Ok(0)
+            } else {
+                eval_int_value(*status, values)
+            }
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

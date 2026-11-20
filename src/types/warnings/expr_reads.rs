@@ -27,6 +27,9 @@ pub(super) fn collect_expr_reads(
     warnings: &mut Vec<CompileWarning>,
 ) {
     match &expr.kind {
+        // A reference bind creates an undefined variable silently in PHP. The inner
+        // variable is the bind target, not a read that should raise Undefined variable.
+        ExprKind::Reference(_) => {}
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

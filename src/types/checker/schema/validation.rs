@@ -39,10 +39,11 @@ pub(crate) fn build_method_sig(
                 return Ok((n.clone(), PhpType::php_array()));
             }
             let ty = match type_ann {
-                Some(type_ann) => checker.resolve_declared_param_type_hint(
+                Some(type_ann) => checker.resolve_declared_param_storage_hint(
                     type_ann,
                     method.span,
                     &format!("Method parameter ${}", n),
+                    *is_ref,
                 )?,
                 None if *is_ref => PhpType::Mixed,
                 None => default

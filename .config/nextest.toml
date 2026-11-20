@@ -292,6 +292,9 @@ relative-to = "target"
 path = "debug/libelephc_pcntl.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_filter.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_fileinfo.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
@@ -500,6 +503,27 @@ slow-timeout = { period = "300s", terminate-after = 3 }
 [[profile.ci.archive.include]]
 path = "debug/elephc-pdo-features.txt"
 relative-to = "target"
+
+# These two opaque-eval fixtures passed at 112-146s locally after the filter-surface skip;
+# keep a bounded 300s allowance for shared macOS runners instead of the 180s default.
+[[profile.default.overrides]]
+filter = 'binary(/^codegen_tests_/) and (test(=codegen::runtime_gc::gc_exception_recovery::test_core_native_throwable_wrapped_by_eval_releases_unread_previous) or test(=codegen::simplexml::dom_and_iterator::test_simplexml_dom_reflected_load_xml_detection))'
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[[profile.ci.overrides]]
+filter = 'binary(/^codegen_tests_/) and (test(=codegen::runtime_gc::gc_exception_recovery::test_core_native_throwable_wrapped_by_eval_releases_unread_previous) or test(=codegen::simplexml::dom_and_iterator::test_simplexml_dom_reflected_load_xml_detection))'
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+# This fixture compiles the same opaque-eval host twice, once per optimizer mode, and each
+# host now carries the expanded filter-inclusive eval catalog. The pair measured 334s on a
+# local macOS host and crossed a 360s budget once under load; give it a bounded 600s budget.
+[[profile.default.overrides]]
+filter = 'binary(/^codegen_tests_/) and test(=codegen::eval_scope_access_mask::test_dynamic_eval_scope_access_mask_preserves_php_semantics)'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+[[profile.ci.overrides]]
+filter = 'binary(/^codegen_tests_/) and test(=codegen::eval_scope_access_mask::test_dynamic_eval_scope_access_mask_preserves_php_semantics)'
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 # On shared macOS runners, eval-linked programs (the 65MB Magician archive per link)
 # measured 60-66s in otherwise green runs, with a different fixture crossing the guard:

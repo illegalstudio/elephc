@@ -56,7 +56,7 @@ pub(super) fn emit_static_closure_descriptor(
     callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &function_symbol(&closure.name),
-        Some(&closure.name),
+        Some(closure.display_name.as_deref().unwrap_or(&closure.name)),
         callable_descriptor::CALLABLE_DESC_KIND_CLOSURE,
         Some(&signature),
         &captures,

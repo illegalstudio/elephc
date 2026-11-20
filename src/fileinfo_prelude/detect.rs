@@ -205,6 +205,7 @@ fn packed_field_refs_fileinfo(field: &PackedField) -> bool {
 /// The `match` is exhaustive so a newly added `ExprKind` cannot silently bypass detection.
 fn expr_refs_fileinfo(expr: &Expr) -> bool {
     match &expr.kind {
+        ExprKind::Reference(inner) => expr_refs_fileinfo(inner),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

@@ -51,7 +51,7 @@ fn lower_predicate(ctx: &mut FunctionContext<'_>, inst: &Instruction, name: &str
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 3),
-        ctx.lexical_class_id(),
+        ctx.callable_callback_scope(),
     );
     abi::emit_call_label(ctx.emitter, "__rt_array_predicate_boxed");
     if mode != 0 {

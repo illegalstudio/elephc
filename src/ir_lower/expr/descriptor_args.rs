@@ -248,34 +248,6 @@ pub(super) fn lower_signature_invoker_ref_arg_marker(
     Some(lower_invoker_ref_arg_marker(ctx, var_name, item.span))
 }
 
-/// Returns true when a local slot can be passed directly to a descriptor ref param.
-pub(super) fn invoker_ref_arg_storage_compatible(
-    ctx: &LoweringContext<'_, '_>,
-    sig: &FunctionSig,
-    index: usize,
-    var_name: &str,
-    span: Span,
-) -> bool {
-    let regular_param_count = crate::types::call_args::regular_param_count(sig);
-    let variadic_reference = index >= regular_param_count && variadic_param_is_by_ref(sig);
-    let param = if variadic_reference {
-        crate::types::signatures::variadic_param_index(sig)
-            .and_then(|variadic_index| sig.params.get(variadic_index))
-    } else {
-        sig.params.get(index)
-    };
-    let Some((_, param_ty)) = param else {
-        return true;
-    };
-    if variadic_reference || matches!(param_ty, PhpType::Mixed) {
-        return ctx.local_type(var_name).codegen_repr() == PhpType::Mixed
-            || (!ctx.is_ref_bound_local(var_name)
-                && ctx.local_is_promotable_to_ref_cell(var_name)
-                && ctx.boxed_reference_promotion_is_authorized(var_name, span));
-    }
-    value_ir_type(&param_ty.codegen_repr()) == value_ir_type(&ctx.local_type(var_name).codegen_repr())
-}
-
 /// Emits an invoker reference-cell marker for a local variable argument.
 ///
 /// The marker points at the local's own storage, so the callee writes straight back into the

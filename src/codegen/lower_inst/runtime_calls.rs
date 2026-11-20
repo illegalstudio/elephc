@@ -92,6 +92,12 @@ pub(super) fn lower(
         | RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst, true)
         }
+        RuntimeCallTarget::AutoVivifyArray => lower_auto_vivify_array(ctx, inst, false),
+        RuntimeCallTarget::AutoVivifyHash => lower_auto_vivify_array(ctx, inst, true),
+        RuntimeCallTarget::HashEntryBindReference => lower_hash_entry_bind_reference(ctx, inst),
+        RuntimeCallTarget::HashEntrySetReference => {
+            super::hashes::lower_hash_reference_set(ctx, inst)
+        }
         RuntimeCallTarget::StringWriteOffset => super::string_write_offsets::lower_offset(ctx, inst),
         RuntimeCallTarget::WriteDiagnostic => super::string_write_offsets::lower_diagnostic(ctx, inst),
         RuntimeCallTarget::MixedArrayCellHasLiveOwner => super::runtime_array_liveness::lower(ctx, inst),
@@ -622,6 +628,125 @@ fn lower_unary_string(
         abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
         ctx.emitter.label(&ready);
     }
+    store_if_result(ctx, inst)
+}
+
+/// Rebinds an existing hash entry to a caller-owned managed reference cell.
+///
+/// Operands: the hash, the key and the live cell. The entry was inserted by the lowering
+/// before this call; a miss is a no-op (the value has no reference storage to share).
+fn lower_hash_entry_bind_reference(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let cell = expect_operand(inst, 2)?;
+    let done = ctx.next_label("hash_entry_bind_reference_done");
+    match ctx.emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+            ctx.load_value_to_reg(hash, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+            ctx.emitter.instruction(&format!("cbz x4, {done}"));                // a missing entry has no reference storage to bind
+            ctx.emitter.instruction("add x0, x4, #24");                         // address the entry's low value word
+            ctx.load_value_to_reg(cell, "x1")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_entry_bind_reference");
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+            ctx.load_value_to_reg(hash, "rdi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+            ctx.emitter.instruction(&format!("test r8, r8"));                   // did the lookup find a matching entry?
+            ctx.emitter.instruction(&format!("jz {done}"));                     // a missing entry has no reference storage to bind
+            ctx.emitter.instruction("lea rdi, [r8 + 24]");                      // address the entry's low value word
+            ctx.load_value_to_reg(cell, "rsi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_entry_bind_reference");
+        }
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Returns the operand pointer unchanged, or allocates an empty indexed array when it is zero.
+///
+/// The loaded slot is passed unmodified: an unbound local is the zero pointer. The result is
+/// published by the caller only after the offset and value expressions have run.
+fn lower_auto_vivify_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    hash: bool,
+) -> Result<()> {
+    let loaded = expect_operand(inst, 0)?;
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("auto-vivified array missing result value"))?;
+    let result_ty = ctx.value_php_type(result)?.codegen_repr();
+    let (stride, value_tag) = if hash {
+        let PhpType::AssocArray { value, .. } = &result_ty else {
+            return Err(CodegenIrError::unsupported(format!(
+                "auto-vivified hash result PHP type {:?}",
+                result_ty
+            )));
+        };
+        (0, crate::codegen::runtime_value_tag(&value.codegen_repr()) as i64)
+    } else {
+        let PhpType::Array(element) = &result_ty else {
+            return Err(CodegenIrError::unsupported(format!(
+                "auto-vivified array result PHP type {:?}",
+                result_ty
+            )));
+        };
+        (match element.codegen_repr() {
+            PhpType::Str => 16,
+            PhpType::Void | PhpType::Never => 0,
+            _ => 8,
+        }, 0)
+    };
+    let existing = ctx.next_label("array_auto_vivify_existing");
+    let done = ctx.next_label("array_auto_vivify_done");
+    ctx.load_value_to_result(loaded)?;
+    // A binding left by `unset()` or `$a = null` may still carry the in-band null sentinel.
+    // It is not a container; treat it like the zero an unbound local loads.
+    match ctx.emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x9",
+                crate::codegen::sentinels::NULL_SENTINEL,
+            );
+            ctx.emitter.instruction("cmp x0, x9");                              // is the killed slot holding the unset null marker?
+            ctx.emitter.instruction("csel x0, xzr, x0, eq");                    // an unset binding starts from an empty container
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "r10",
+                crate::codegen::sentinels::NULL_SENTINEL,
+            );
+            ctx.emitter.instruction("xor r11d, r11d");                          // materialize the empty-container replacement
+            ctx.emitter.instruction("cmp rax, r10");                            // is the killed slot holding the unset null marker?
+            ctx.emitter.instruction("cmove rax, r11");                          // an unset binding starts from an empty container
+        }
+    }
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &existing);
+    match ctx.emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", if hash { value_tag } else { stride });
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", if hash { value_tag } else { stride });
+        }
+    }
+    abi::emit_call_label(ctx.emitter, if hash { "__rt_hash_new" } else { "__rt_array_new" });
+    abi::emit_jump(ctx.emitter, &done);
+    // The caller owns the returned result. An existing bound array is borrowed from its slot,
+    // so retain it here; the freshly allocated arm already owns its one reference.
+    ctx.emitter.label(&existing);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
 

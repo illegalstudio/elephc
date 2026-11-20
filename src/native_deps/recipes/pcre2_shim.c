@@ -11,6 +11,9 @@
 #define ELEPHC_PCRE2_GLOBAL_NEXT (1u << 16)
 /* Private compile flag. pcre2posix has no PCRE2_EXTENDED bit (REG_EXTENDED is 0). */
 #define ELEPHC_PCRE2_EXTENDED 0x2000
+/* Private compile flags for PHP modifiers pcre2posix does not expose. */
+#define ELEPHC_PCRE2_DOLLAR_ENDONLY 0x8000
+#define ELEPHC_PCRE2_ANCHORED 0x10000
 /* Private exec statuses for PCRE2 match errors POSIX has no code for. They sit above
  * every REG_* value so PHP's PREG_RECURSION_LIMIT_ERROR and PREG_BAD_UTF8_OFFSET_ERROR
  * survive the opaque ABI. */
@@ -92,6 +95,8 @@ static int elephc_pcre2_compile_with_options(
     if ((cflags & REG_UTF) != 0) options |= PCRE2_UTF;
     if ((cflags & REG_UCP) != 0) options |= PCRE2_UCP;
     if ((cflags & REG_UNGREEDY) != 0) options |= PCRE2_UNGREEDY;
+    if ((cflags & ELEPHC_PCRE2_DOLLAR_ENDONLY) != 0) options |= PCRE2_DOLLAR_ENDONLY;
+    if ((cflags & ELEPHC_PCRE2_ANCHORED) != 0) options |= PCRE2_ANCHORED;
 
     preg->re_cflags = cflags;
     preg->re_pcre2_code = NULL;
@@ -343,6 +348,38 @@ int32_t elephc_pcre2_v1_mime_match(void *handle, const uint8_t *subject, uint64_
 /* Releases a native MIME handle through the same allocator that compiled it. */
 void elephc_pcre2_v1_mime_free(void *handle) {
     pcre2_code_free((pcre2_code *)handle);
+}
+
+/* Compiles one PHP regexp body for diagnostics only. Returns zero on success, a positive
+ * diagnostic length in `message`, or a negative PCRE2 error on an ABI failure. */
+int32_t elephc_pcre2_v1_php_compile_check(
+    const uint8_t *pattern,
+    uint64_t length,
+    uint32_t options,
+    uint8_t *message,
+    uint64_t capacity,
+    uint64_t *offset_out
+) {
+    int errorcode = 0;
+    PCRE2_SIZE erroffset = 0;
+    pcre2_code *code;
+
+    if (message == NULL || capacity > PTRDIFF_MAX || (pattern == NULL && length != 0)) {
+        return PCRE2_ERROR_BADDATA;
+    }
+    if (offset_out != NULL) {
+        *offset_out = 0;
+    }
+    code = pcre2_compile(pattern == NULL ? (const uint8_t *)"" : pattern,
+        (PCRE2_SIZE)length, options, &errorcode, &erroffset, NULL);
+    if (code != NULL) {
+        pcre2_code_free(code);
+        return 0;
+    }
+    if (offset_out != NULL) {
+        *offset_out = (uint64_t)erroffset;
+    }
+    return (int32_t)pcre2_get_error_message(errorcode, message, (PCRE2_SIZE)capacity);
 }
 
 /* Copies a NUL-terminated PCRE2 diagnostic and returns its length excluding NUL.

@@ -45,10 +45,13 @@ pub mod goto_lowering;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.
 pub(crate) mod global_decls;
 mod progress;
+/// PHP `ext/filter` standard-library prelude injection.
+pub mod filter_prelude;
 /// Immutable BCMath Number standard-library prelude injection.
 pub mod bcmath_prelude;
 /// PHP ext/gmp standard-library prelude injection.
 pub mod gmp_prelude;
+pub mod parse_str_prelude;
 pub mod random_prelude;
 pub mod uri_prelude;
 /// Incremental hashing standard-library prelude injection.
@@ -70,8 +73,12 @@ pub mod ir_passes;
 pub mod link_plan;
 /// Lexer for tokenizing PHP source.
 pub mod lexer;
+/// Shared mbstring and Core INI startup argument resolution.
+pub mod mbstring_startup;
 /// Conditionally-injected `DateTimeZone::listIdentifiers` filtering prelude.
 pub mod list_id_prelude;
+/// PHP `setlocale` standard-library prelude injection.
+pub mod locale_prelude;
 /// Magic constant substitution.
 pub mod magic_constants;
 /// Curated project-native dependency management and artifact resolution.
@@ -135,7 +142,6 @@ pub mod xml_prelude;
 mod simplexml_prelude;
 pub mod tidy_prelude;
 pub mod fileinfo_prelude;
-pub mod locale_prelude;
 pub mod tokenizer_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;

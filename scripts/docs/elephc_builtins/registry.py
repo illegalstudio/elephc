@@ -37,6 +37,7 @@ AREAS: list[str] = [
     "Image",
     "XML",
     "Tidy",
+    "Filter",
 ]
 
 
@@ -88,6 +89,9 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     # `Area::Tidy`: the 24 `tidy_*` prelude functions and the `tidy`/`tidyNode`
     # classes, on a pinned static libtidy 5.8.0 from the native catalog.
     "tidy": ("Tidy", "Tidy"),
+    # `Area::Filter`: the seven filter_* prelude functions and the two
+    # Filter\* exception classes, over the `elephc_filter` bridge.
+    "filter": ("Filter", "Filter"),
     # `ext/random` procedural functions declared by the random prelude.
     "random": ("Math", "Random"),
 }

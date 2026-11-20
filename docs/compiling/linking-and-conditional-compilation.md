@@ -528,6 +528,20 @@ ifdef (DEBUG) {
 See [Conditional Compilation](../beyond-php/ifdef.md) for the full `ifdef` syntax
 and semantics.
 
+## Filter
+
+Using `filter_var()`, `filter_var_array()`, `filter_input()`,
+`filter_input_array()`, `filter_has_var()`, `filter_list()` or `filter_id()`
+automatically links the optional `elephc_filter` bridge and injects the complete
+`ext/filter` PHP surface. `--with-filter` also retains the surface for opaque
+dynamic eval. Integer, float, boolean, IP, MAC, domain, email and sanitizer
+validation run in the bridge on every supported target; email matching uses its
+pure-Rust PCRE-compatible engine. `FILTER_VALIDATE_REGEXP` additionally links the
+managed `pcre2` package and runs both matching and compilation diagnostics through
+PCRE2, so every modifier (`A`, `D`, `m`, `s`, `u`, `x`) and binary subject behaves
+like PHP; declare it with `elephc native add pcre2` when the project does not
+already.
+
 ## Fileinfo
 
 Using `finfo` or a fileinfo function automatically links the optional

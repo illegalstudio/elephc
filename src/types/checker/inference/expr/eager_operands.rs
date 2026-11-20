@@ -52,7 +52,8 @@ impl Checker {
                 self.infer_constructor_operand_effects(args, env)?;
             }
             ExprKind::NewGeneric { args, .. } => self.infer_constructor_operand_effects(args, env)?,
-            ExprKind::Clone(value) | ExprKind::YieldFrom(value)
+            ExprKind::Reference(value)
+            | ExprKind::Clone(value) | ExprKind::YieldFrom(value)
             | ExprKind::ObjectClassName { object: value }
             | ExprKind::IncludeValue { path: value, .. } => {
                 self.infer_type_with_assignment_effects(value, env)?;

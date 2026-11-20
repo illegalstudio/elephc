@@ -448,6 +448,16 @@ pub(super) fn check_ref_assign(
             if let Some(class) =
                 crate::types::checker::single_object_class_name(&object_ty)
             {
+                if checker
+                    .classes
+                    .get(&class)
+                    .is_some_and(|info| info.visible_property_index(property).is_none())
+                {
+                    return Err(CompileError::new(
+                        source.span,
+                        "Reference assignment to a dynamic property is not supported; declare the property on the class",
+                    ));
+                }
                 checker
                     .reference_property_promotions
                     .insert((class, property.clone()));
@@ -513,6 +523,29 @@ pub(super) fn check_ref_assign(
                     span,
                     "Reference assignment to an array element requires an integer or string array key",
                 ));
+            }
+            // A reference element forces hash storage with boxed Mixed values. Mirror that
+            // promotion in the flow-sensitive type environment so later array builtins see the
+            // same layout the EIR writer installs instead of a stale packed-array type.
+            let mut root = array;
+            while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+                root = array;
+            }
+            if let ExprKind::Variable(root_name) = &root.kind {
+                let storage = match env.get(root_name).map(PhpType::codegen_repr) {
+                    Some(PhpType::Array(_)) => Some(PhpType::AssocArray {
+                        key: Box::new(PhpType::Int),
+                        value: Box::new(PhpType::Mixed),
+                    }),
+                    Some(PhpType::AssocArray { key, .. }) => Some(PhpType::AssocArray {
+                        key,
+                        value: Box::new(PhpType::Mixed),
+                    }),
+                    _ => None,
+                };
+                if let Some(storage) = storage {
+                    env.insert(root_name.clone(), storage);
+                }
             }
             let target_ty = checker.infer_type(source, env)?;
             checker.record_operation_exception_flow(source, env);

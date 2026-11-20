@@ -16,6 +16,7 @@ MODULE_PAGES: dict[str, str] = {
     "exif": "image.md",
     "gd": "image.md",
     "fileinfo": "fileinfo.md",
+    "filter": "filter.md",
     "gmagick": "image.md",
     "iconv": "iconv.md",
     "imagick": "image.md",

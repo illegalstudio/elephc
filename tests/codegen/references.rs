@@ -690,6 +690,24 @@ echo Box::$number, ",", count(Box::$items), "\n";
     assert_eq!(out, "2,2\n");
 }
 
+/// A bare `array &$items` parameter accepts associative storage and forwards it to another
+/// by-reference declaration without requiring a packed array contract.
+#[test]
+fn test_array_reference_parameters_forward_associative_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class Store {
+    public static function inner(array &$items): void { $items["k"] = 1; }
+}
+function forward(array &$items): void { Store::inner($items); }
+$items = ["k" => 0, "other" => 2];
+forward($items);
+echo $items["k"], "|", $items["other"], "\n";
+"#,
+    );
+    assert_eq!(out, "1|2\n");
+}
+
 /// By-reference variadics accept scalar, string, mixed, object, static, union, and nullable
 /// property places through the same hidden write-back.
 #[test]

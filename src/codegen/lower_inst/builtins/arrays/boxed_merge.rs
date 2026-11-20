@@ -18,10 +18,12 @@ pub(super) fn lower_boxed_array_merge(
     first: ValueId,
     second: ValueId,
 ) -> Result<()> {
-    if inst.result_php_type.codegen_repr() != PhpType::Mixed {
-        return Err(CodegenIrError::unsupported(
-            "boxed array_merge requires a boxed array result".to_string(),
-        ));
+    let result_ty = inst.result_php_type.codegen_repr();
+    let boxed_result = result_ty == PhpType::Mixed;
+    if !boxed_result && !matches!(result_ty, PhpType::AssocArray { .. }) {
+        return Err(CodegenIrError::unsupported(format!(
+            "boxed array_merge result PHP type {result_ty:?}"
+        )));
     }
     load_borrowed_array_pair(ctx, first)?;
     match ctx.emitter.target.arch {
@@ -65,7 +67,9 @@ pub(super) fn lower_boxed_array_merge(
         ctx, "array_merge(): Argument #2 must be of type array",
     );
     ctx.emitter.label(&valid);
-    box_hash_result_for_mixed_builtin(ctx, inst, &PhpType::Mixed);
+    if boxed_result {
+        box_hash_result_for_mixed_builtin(ctx, inst, &PhpType::Mixed);
+    }
     store_if_result(ctx, inst)
 }
 

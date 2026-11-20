@@ -36,6 +36,7 @@ pub(super) const NO_SUCCESSOR_KEY_MARKER: i64 = -2;
 /// Emits every hash-entry reference helper for the current target.
 pub fn emit_hash_entry_reference(emitter: &mut Emitter) {
     emit_make_reference(emitter);
+    emit_bind_reference(emitter);
     emit_entry_deref(emitter);
     emit_iter_next_value(emitter);
     emit_iter_resync(emitter);
@@ -191,6 +192,91 @@ fn emit_make_reference(emitter: &mut Emitter) {
             emitter.label("__rt_hash_entry_make_reference_existing");
             emitter.instruction("mov rax, QWORD PTR [rdi]");                    // return the reference cell the entry already owns
             emitter.instruction("ret");                                         // idempotent promotion keeps the existing reference set intact
+        }
+    }
+}
+
+/// Emits `__rt_hash_entry_bind_reference`, which points an existing reference entry at one
+/// already-live managed reference cell.
+///
+/// The caller has just inserted the source value and may address its value word. A
+/// non-reference entry is promoted first (allocating and then discarding its fresh cell), so
+/// this helper only has to swap the payload cell and transfer the reference counts. Every
+/// `[&$x]` element after the first therefore shares `$x`'s cell instead of rebinding `$x` to a
+/// private copy, which is what keeps earlier elements observing later writes.
+///
+/// Input: argument 0 = address of `entry.value_lo`, argument 1 = borrowed reference cell.
+fn emit_bind_reference(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: hash_entry_bind_reference ---");
+    emitter.label_global("__rt_hash_entry_bind_reference");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x9, [x0, #16]"));                 // read the entry runtime value tag
+            emitter.instruction(&format!("cmp x9, #{REFERENCE_CELL_VALUE_TAG}")); // is the entry already a reference marker?
+            emitter.instruction("b.eq __rt_hash_entry_bind_reference_bound");   // a promoted entry is ready for the swap
+            emitter.instruction("stp x29, x30, [sp, #-32]!");                   // save the frame across the promotion call
+            emitter.instruction("mov x29, sp");                                 // establish the promotion frame
+            emitter.instruction("str x0, [sp, #16]");                           // save the entry value address
+            emitter.instruction("str x1, [sp, #24]");                           // save the cell that must replace the promoted one
+            emitter.instruction("bl __rt_hash_entry_make_reference");           // allocate the entry's temporary reference cell
+            emitter.instruction("ldr x0, [sp, #16]");                           // reload the entry value address
+            emitter.instruction("ldr x1, [sp, #24]");                           // reload the caller's live cell
+            emitter.instruction("ldp x29, x30, [sp], #32");                     // release the promotion frame
+            emitter.label("__rt_hash_entry_bind_reference_bound");
+            emitter.instruction("ldr x2, [x0]");                                // read the cell the entry currently owns
+            emitter.instruction("cmp x2, x1");                                  // is the entry already bound to this cell?
+            emitter.instruction("b.eq __rt_hash_entry_bind_reference_done");    // the idempotent path changes no reference counts
+            emitter.instruction("stp x29, x30, [sp, #-48]!");                   // save the frame across the reference-count transfer
+            emitter.instruction("mov x29, sp");                                 // establish the transfer frame
+            emitter.instruction("str x0, [sp, #16]");                           // save the entry value address
+            emitter.instruction("str x1, [sp, #24]");                           // save the replacement cell
+            emitter.instruction("str x2, [sp, #32]");                           // save the cell the entry is giving up
+            emitter.instruction("mov x0, x1");                                  // retain the replacement cell for the entry
+            emitter.instruction("bl __rt_incref");                              // the entry takes its own reference
+            emitter.instruction("ldr x0, [sp, #32]");                           // load the old cell
+            emitter.instruction("bl __rt_reference_cell_release");              // release the entry's share of the old cell
+            emitter.instruction("ldr x0, [sp, #16]");                           // reload the entry value address
+            emitter.instruction("ldr x1, [sp, #24]");                           // reload the replacement cell
+            emitter.instruction("str x1, [x0]");                                // publish the shared cell as the entry payload
+            emitter.instruction("ldp x29, x30, [sp], #48");                     // release the transfer frame
+            emitter.label("__rt_hash_entry_bind_reference_done");
+            emitter.instruction("ret");                                         // return without a value
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp QWORD PTR [rdi + 16], {REFERENCE_CELL_VALUE_TAG}")); // is the entry already a reference marker?
+            emitter.instruction("je __rt_hash_entry_bind_reference_bound_x");   // a promoted entry is ready for the swap
+            emitter.instruction("push rbp");                                    // save the frame across the promotion call
+            emitter.instruction("mov rbp, rsp");                                // establish the promotion frame
+            emitter.instruction("sub rsp, 16");                                 // reserve slots for the entry address and cell
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // save the entry value address
+            emitter.instruction("mov QWORD PTR [rbp - 16], rsi");               // save the cell that must replace the promoted one
+            emitter.instruction("call __rt_hash_entry_make_reference");         // allocate the entry's temporary reference cell
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // reload the entry value address
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");               // reload the caller's live cell
+            emitter.instruction("add rsp, 16");                                 // release the promotion slots
+            emitter.instruction("pop rbp");                                     // restore the caller frame
+            emitter.label("__rt_hash_entry_bind_reference_bound_x");
+            emitter.instruction("mov rax, QWORD PTR [rdi]");                    // read the cell the entry currently owns
+            emitter.instruction("cmp rax, rsi");                                // is the entry already bound to this cell?
+            emitter.instruction("je __rt_hash_entry_bind_reference_done_x");    // the idempotent path changes no reference counts
+            emitter.instruction("push rbp");                                    // save the frame across the reference-count transfer
+            emitter.instruction("mov rbp, rsp");                                // establish the transfer frame
+            emitter.instruction("sub rsp, 32");                                 // reserve slots for both cells and the entry
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // save the entry value address
+            emitter.instruction("mov QWORD PTR [rbp - 16], rsi");               // save the replacement cell
+            emitter.instruction("mov QWORD PTR [rbp - 24], rax");               // save the cell the entry is giving up
+            emitter.instruction("mov rax, rsi");                                // pass the replacement cell in the private incref register
+            emitter.instruction("call __rt_incref");                            // the entry takes its own reference
+            emitter.instruction("mov rax, QWORD PTR [rbp - 24]");               // load the old cell in the private release register
+            emitter.instruction("call __rt_reference_cell_release");            // release the entry's share of the old cell
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // reload the entry value address
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");               // reload the replacement cell
+            emitter.instruction("mov QWORD PTR [rdi], rsi");                    // publish the shared cell as the entry payload
+            emitter.instruction("add rsp, 32");                                 // release the transfer slots
+            emitter.instruction("pop rbp");                                     // restore the caller frame
+            emitter.label("__rt_hash_entry_bind_reference_done_x");
+            emitter.instruction("ret");                                         // return without a value
         }
     }
 }
