@@ -1220,6 +1220,15 @@ fn merge_local_assignment_type(
     }
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty).or_else(|| {
+            // Internal prelude bodies can be checked again after a guard left the shared
+            // environment at one member of the initializer's union. Re-reading the original
+            // assignment restores that complete union; it is not a source-level retype. This
+            // keeps generated `$stream = fopen(...); if ($stream === false) { ... }` bodies
+            // stable across checker passes while public strict-local contracts remain unchanged.
+            (checker.semantic_source_mode == crate::source::SourceMode::Internal
+                && checker.type_contains_values(ty, existing))
+                .then(|| ty.clone())
+        }).or_else(|| {
             // Locals owns the PHP container kind. Element and packed/hash representation
             // changes remain legal for inferred arrays until ArrayTypes supplies its contract.
             (!checker.typed_local_names.contains_key(name)
