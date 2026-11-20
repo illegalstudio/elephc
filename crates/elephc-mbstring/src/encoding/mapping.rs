@@ -6,8 +6,8 @@
 //!
 //! Key details:
 //! - Raw index records are sorted little-endian key/offset pairs, read by [`lookup`].
-//! - Large codec indexes are embedded through [`index_table!`] in the blocked delta layout
-//!   written by the crate's `build.rs`, read by [`Index`]. Both return the same value for
+//! - Large codec indexes are embedded through [`index_table!`] in the fixed-width block
+//!   layout written by the crate's `build.rs`, read by [`Index`]. Both return the same value for
 //!   every key; the tests below compare each compacted table with its canonical file.
 //! - Large dense word arrays are embedded through [`dense_table!`] as page directories into
 //!   one page pool shared by all of them, read by [`Dense`].
@@ -58,14 +58,12 @@ impl Dense {
     }
 }
 
-/// Records per directory block, matching `build.rs`.
-const BLOCK: usize = 16;
-/// Bytes in one directory entry: first key, first value, stream offset.
-const ENTRY: usize = 12;
+/// Bytes in one directory entry: first key, value base, data offset, widths, record count.
+const ENTRY: usize = 16;
 /// Bytes before the directory: record count and block count.
 const HEADER: usize = 8;
 
-/// A sorted codepoint/byte-sequence index in the compact blocked delta layout.
+/// A sorted codepoint/byte-sequence index in the compact fixed-width block layout.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Index(&'static [u8]);
 
@@ -77,57 +75,47 @@ impl Index {
 
     /// Reports whether the index has no records.
     pub(super) fn is_empty(self) -> bool {
-        self.count() == 0
+        word(self.0, 0) == 0
     }
 
     /// Returns the value stored for `key`, as [`lookup`] does on the canonical records.
+    ///
+    /// Bisects the block directory, then the block's fixed-width key offsets.
     pub(super) fn get(self, key: u32) -> Option<u32> {
-        let count = self.count();
-        if count == 0 {
-            return None;
-        }
         let blocks = word(self.0, 4) as usize;
         let (mut low, mut high) = (0, blocks);
         while low < high {
             let mid = low + (high - low) / 2;
             if word(self.0, HEADER + mid * ENTRY) <= key { low = mid + 1; } else { high = mid; }
         }
-        let block = low.checked_sub(1)?;
-        let entry = HEADER + block * ENTRY;
-        let (mut current, mut value) = (u64::from(word(self.0, entry)), i64::from(word(self.0, entry + 4)));
-        let mut cursor = HEADER + blocks * ENTRY + word(self.0, entry + 8) as usize;
-        for _ in 1..(count - block * BLOCK).min(BLOCK) {
-            if current == u64::from(key) {
-                break;
-            }
-            let gap = varint(self.0, &mut cursor);
-            let delta = varint(self.0, &mut cursor);
-            current += gap + 1;
-            value += ((delta >> 1) as i64) ^ -((delta & 1) as i64);
-            if current > u64::from(key) {
-                return None;
+        let entry = HEADER + low.checked_sub(1)? * ENTRY;
+        let target = key - word(self.0, entry);
+        let (key_width, value_width) = (usize::from(self.0[entry + 12]), usize::from(self.0[entry + 13]));
+        let records = usize::from(self.0[entry + 14]);
+        let data = HEADER + blocks * ENTRY + word(self.0, entry + 8) as usize;
+        let (mut low, mut high) = (0, records);
+        while low < high {
+            let mid = low + (high - low) / 2;
+            match narrow(self.0, data + mid * key_width, key_width).cmp(&target) {
+                std::cmp::Ordering::Less => low = mid + 1,
+                std::cmp::Ordering::Greater => high = mid,
+                std::cmp::Ordering::Equal => {
+                    let values = data + records * key_width;
+                    return Some(word(self.0, entry + 4) + narrow(self.0, values + mid * value_width, value_width));
+                }
             }
         }
-        (current == u64::from(key)).then_some(value as u32)
-    }
-
-    /// Returns the number of records.
-    fn count(self) -> usize {
-        word(self.0, 0) as usize
+        None
     }
 }
 
-/// Decodes one unsigned LEB128 integer and advances the cursor past it.
-fn varint(bytes: &[u8], cursor: &mut usize) -> u64 {
-    let (mut value, mut shift) = (0u64, 0);
-    loop {
-        let byte = bytes[*cursor];
-        *cursor += 1;
-        value |= u64::from(byte & 0x7f) << shift;
-        if byte & 0x80 == 0 {
-            return value;
-        }
-        shift += 7;
+/// Reads a little-endian unsigned integer stored in `width` bytes, one to four.
+fn narrow(bytes: &[u8], offset: usize, width: usize) -> u32 {
+    match width {
+        1 => u32::from(bytes[offset]),
+        2 => u32::from(u16::from_le_bytes([bytes[offset], bytes[offset + 1]])),
+        3 => u32::from(bytes[offset]) | u32::from(bytes[offset + 1]) << 8 | u32::from(bytes[offset + 2]) << 16,
+        _ => word(bytes, offset),
     }
 }
 

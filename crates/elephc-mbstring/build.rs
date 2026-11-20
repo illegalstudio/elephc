@@ -8,10 +8,12 @@
 //! - The canonical `src/encoding/data/*.bin` files stay the generator's output: sorted
 //!   little-endian `(key, value)` u32 records. Only files named by an `index_table!` literal in
 //!   the generated catalog are compacted; payload and dense tables are embedded unchanged.
-//! - Compact layout, all little-endian: `count: u32`, `blocks: u32`, then one directory entry
-//!   per block of up to 16 records (`first_key: u32`, `first_value: u32`, `stream_offset: u32`),
-//!   then a byte stream holding each later record as `varint(key - previous_key - 1)` and
-//!   `varint(zigzag(value - previous_value))`.
+//! - Compact index layout, all little-endian: `count: u32`, `blocks: u32`, then one 16-byte
+//!   directory entry per block of up to 32 records (`first_key: u32`, `value_base: u32`,
+//!   `data_offset: u32`, `key_width: u8`, `value_width: u8`, `records: u8`, padding), then the
+//!   block data: every key as `key - first_key` in `key_width` bytes, followed by every value
+//!   as `value - value_base` in `value_width` bytes. Fixed widths keep each block searchable
+//!   by bisection, so a lookup never decodes records sequentially.
 //! - Files named by a `dense_table!` literal are little-endian u32 arrays indexed directly.
 //!   They are cut into 64-word pages and every distinct page is stored once in a pool shared
 //!   by all dense tables (`mbstring-dense/pool.bin`). Each table keeps `len_words: u32`
@@ -23,8 +25,8 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-/// Records per directory block; bounds the linear decode done by one lookup.
-const BLOCK: usize = 16;
+/// Records per directory block, searched by bisection after the directory.
+const BLOCK: usize = 32;
 /// Macro whose string literal names a sorted index file in the generated catalog.
 const INDEX_MARKER: &str = "index_table!(\"";
 /// Macro whose string literal names a dense word array in the generated catalog.
@@ -107,40 +109,46 @@ fn table_names(source: &str, marker: &str) -> Vec<String> {
     names
 }
 
-/// Encodes sorted `(key, value)` records into the blocked delta layout.
+/// Encodes sorted `(key, value)` records into fixed-width offset blocks.
 fn compact(raw: &[u8], name: &str) -> Vec<u8> {
     assert_eq!(raw.len() % 8, 0, "{name}: index records are eight bytes");
     let records: Vec<(u32, u32)> = raw.chunks_exact(8).map(|record| (word(record, 0), word(record, 4))).collect();
     assert!(records.windows(2).all(|pair| pair[0].0 < pair[1].0), "{name}: index keys must be strictly ascending");
     let blocks = records.len().div_ceil(BLOCK);
-    let mut directory = Vec::with_capacity(blocks * 12);
-    let mut stream = Vec::new();
+    let mut directory = Vec::with_capacity(blocks * 16);
+    let mut data = Vec::new();
     for block in records.chunks(BLOCK) {
-        let (first_key, first_value) = block[0];
+        let first_key = block[0].0;
+        let value_base = block.iter().map(|record| record.1).min().expect("blocks are non-empty");
+        let key_width = byte_width(block[block.len() - 1].0 - first_key);
+        let value_width = byte_width(block.iter().map(|record| record.1 - value_base).max().expect("blocks are non-empty"));
         directory.extend_from_slice(&first_key.to_le_bytes());
-        directory.extend_from_slice(&first_value.to_le_bytes());
-        directory.extend_from_slice(&u32::try_from(stream.len()).expect("index stream fits u32").to_le_bytes());
-        for pair in block.windows(2) {
-            push_varint(&mut stream, u64::from(pair[1].0 - pair[0].0 - 1));
-            let delta = i64::from(pair[1].1) - i64::from(pair[0].1);
-            push_varint(&mut stream, ((delta << 1) ^ (delta >> 63)) as u64);
+        directory.extend_from_slice(&value_base.to_le_bytes());
+        directory.extend_from_slice(&u32::try_from(data.len()).expect("index data fits u32").to_le_bytes());
+        directory.extend_from_slice(&[key_width as u8, value_width as u8, block.len() as u8, 0]);
+        for &(key, _) in block {
+            data.extend_from_slice(&(key - first_key).to_le_bytes()[..key_width]);
+        }
+        for &(_, value) in block {
+            data.extend_from_slice(&(value - value_base).to_le_bytes()[..value_width]);
         }
     }
-    let mut output = Vec::with_capacity(8 + directory.len() + stream.len());
+    let mut output = Vec::with_capacity(8 + directory.len() + data.len());
     output.extend_from_slice(&u32::try_from(records.len()).expect("record count fits u32").to_le_bytes());
     output.extend_from_slice(&u32::try_from(blocks).expect("block count fits u32").to_le_bytes());
     output.extend_from_slice(&directory);
-    output.extend_from_slice(&stream);
+    output.extend_from_slice(&data);
     output
 }
 
-/// Appends one unsigned LEB128 integer.
-fn push_varint(output: &mut Vec<u8>, mut value: u64) {
-    while value >= 0x80 {
-        output.push((value as u8) | 0x80);
-        value >>= 7;
+/// Returns the fewest little-endian bytes, one to four, that hold `value`.
+fn byte_width(value: u32) -> usize {
+    match value {
+        0..=0xff => 1,
+        0x100..=0xffff => 2,
+        0x1_0000..=0xff_ffff => 3,
+        _ => 4,
     }
-    output.push(value as u8);
 }
 
 /// Reads one little-endian word from a generated record.

@@ -634,8 +634,9 @@ subjects, dynamic encodings, spread arguments and callable uses keep the bridge.
 
 The bridge's codec tables are compacted at build time. `crates/elephc-mbstring/build.rs`
 reads the generated `src/encoding/data/*.bin` files named by `index_table!` and
-`dense_table!` in the catalog: sorted key/value indexes become blocked delta-varint
-indexes, and dense word arrays become page directories into one deduplicated page pool.
+`dense_table!` in the catalog: sorted key/value indexes become fixed-width offset
+blocks searched by bisection, and dense word arrays become page directories into one
+deduplicated page pool.
 `encoding::mapping` reads both layouts, and its tests compare every compacted table with
 its canonical file.
 
