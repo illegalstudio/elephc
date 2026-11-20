@@ -41,6 +41,26 @@ fn test_strict_casts_public_source_evidence_and_independence() {
     assert_eq!(StrictFixture::new("<?php echo (int)'12tail';").run(&["--no-strict-casts"]), "12");
 }
 
+/// Runtime string-to-float casts retain the sign bit of an integer-shaped negative zero.
+#[test]
+fn test_strict_casts_public_runtime_string_float_preserves_negative_zero() {
+    let source = r#"<?php
+function checkedRuntimeFloat(mixed $value): float { return (float)$value; }
+$value = $argc > 0 ? '-0' : '0';
+echo json_encode(checkedRuntimeFloat($value));
+gc_collect_cycles();
+"#;
+    for optimization in ["--ir-opt=off", "--ir-opt=on"] {
+        let output = StrictFixture::new(source).capture(&[
+            "--strict-casts", optimization, "--heap-debug",
+        ]);
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "-0", "{optimization}: {}",
+            String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+            "{optimization}: {}", String::from_utf8_lossy(&output.stderr));
+    }
+}
+
 /// Public checked casts reach descriptors, Reflection, callback arrays and native/eval re-entry.
 #[test]
 fn test_strict_casts_public_callable_hosts_bundle() {

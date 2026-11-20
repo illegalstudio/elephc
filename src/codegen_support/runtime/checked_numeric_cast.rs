@@ -7,6 +7,7 @@
 //! Key details:
 //! - Source cells stay borrowed, and string parsing retires private scratch before failure.
 //! - Integer decimal conversion uses exact digits rather than rounded double payloads.
+//! - Floating string conversion reuses the bounded `strtod` path, preserving signed zero.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use elephc_semantics::{numeric_cast::{NumericCastFailure, NumericCastTarget}, SemanticProfile, StrictFeature};
@@ -94,20 +95,22 @@ fn entry(emitter: &mut Emitter, target: NumericCastTarget) {
     if target == NumericCastTarget::Int { checked_float(emitter); }
     abi::emit_jump(emitter, &done);
     emitter.label(&string);
-    abi::emit_store_to_sp(emitter, low, 0); abi::emit_store_to_sp(emitter, high, 8);
-    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), low);
-    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 1), high);
-    abi::emit_call_label(emitter, "__rt_str_numeric_value");
-    ins(emitter, "cmp x2, #0", "cmp rdx, 0");
-    abi::emit_branch_if_not_equal_wide(emitter, STRING);
-    if target == NumericCastTarget::Int {
+    if target == NumericCastTarget::Float {
+        if emitter.target.arch == Arch::X86_64 {
+            abi::emit_reg_move(emitter, result, low);
+        }
+        abi::emit_call_label(emitter, "__rt_str_to_number");
+        abi::emit_branch_if_int_result_zero(emitter, STRING);
+    } else {
+        abi::emit_store_to_sp(emitter, low, 0); abi::emit_store_to_sp(emitter, high, 8);
+        abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), low);
+        abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 1), high);
+        abi::emit_call_label(emitter, "__rt_str_numeric_value");
+        ins(emitter, "cmp x2, #0", "cmp rdx, 0");
+        abi::emit_branch_if_not_equal_wide(emitter, STRING);
         abi::emit_load_temporary_stack_slot(emitter, abi::int_arg_reg_name(emitter.target, 0), 0);
         abi::emit_load_temporary_stack_slot(emitter, abi::int_arg_reg_name(emitter.target, 1), 8);
         abi::emit_call_label(emitter, "__rt_checked_decimal_to_int");
-    } else {
-        ins(emitter, "cmp x0, #0", "cmp rax, 0");
-        abi::emit_branch_if_equal_wide(emitter, &integer);
-        abi::emit_jump(emitter, &floating);
     }
     emitter.label(&done);
     abi::emit_frame_restore(emitter, 32);

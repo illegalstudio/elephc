@@ -42,6 +42,7 @@ fn strict_checked_casts_runtime_assembles_all_targets_and_relocations() {
                 if target.platform == Platform::MacOS && dead_strip { emitter.raw(".subsections_via_symbols"); }
                 let labels = emitter.take_internal_labels();
                 let assembly = localize_internal_labels(&emitter.output(), &labels);
+                assert!(assembly.contains("__rt_str_to_number"), "{name}");
                 let source = scratch.0.join(format!("{name}-{pic}-{dead_strip}.s"));
                 fs::write(&source, assembly).unwrap();
                 let output = Command::new("clang").args(["-target", triple, "-c"]).arg(&source)
