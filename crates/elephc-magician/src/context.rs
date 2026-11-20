@@ -22,6 +22,7 @@ mod global_registry;
 mod local_types;
 mod array_reference_types;
 mod property_reference_types;
+use property_reference_types::PropertyReferenceAdmission;
 mod native_catalog;
 mod native_defaults;
 mod native_function;

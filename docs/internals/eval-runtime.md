@@ -822,6 +822,14 @@ the selected nominal result; static reads and first-class methods keep immutable
 declaration metadata. Dynamic static writes normalize to the ordinary static
 statement dispatcher, with the class owner retained through RHS effects and
 released on success or failure.
+Declared property writes reuse the original-RHS weak candidate planner. Unaliased
+writes recheck access after conversion callbacks; aliases retain the original
+input for joint source arbitration. Mixed and ArrayTypes select the same checked
+reference machinery. A new typed property alias contributes a stack-scoped
+prospective declaration to exactly one publication, before callbacks execute.
+Nested callback writes keep the actual unbound storage rules; successful binding
+then publishes the normal property association. These admissions own metadata,
+while existing runtime frames retain the original values and canonical cells.
 
 Native descriptor signatures retain their original twelve physical metadata words.
 Flag bit 1 marks an appended logical-source record pointer at word 12. The

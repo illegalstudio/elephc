@@ -484,6 +484,12 @@ pub(crate) fn eval_property_set_result(
             );
         }
         eval_validate_property_value(&declaring_class, &property, value, context, values)?;
+        if context.dynamic_property_alias(identity,&storage_property_name).is_none() {
+            if let Some(candidate)=coerce_property_value_candidate(&declaring_class,&property,value,context,values)? {
+                return with_eval_value_lease(candidate,context,values,|candidate,context,values|
+                    eval_property_set_result(object,property_name,candidate,context,values));
+            }
+        }
     }
     if !declared_property_found {
         if let Some((declaring_class, visibility, write_visibility, is_static)) =
@@ -724,6 +730,7 @@ pub(super) fn eval_property_reference_bind_result(
         scope,
         values,
     )?;
+    prepare_property_reference_admission(&declaring_class,&property,&target,context,values)?;
     let value = eval_reference_target_value(&target, context, values)?;
     with_eval_value_lease(value, context, values, |value, context, values| {
         eval_validate_property_value(&declaring_class, &property, value, context, values)?;

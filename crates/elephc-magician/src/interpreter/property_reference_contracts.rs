@@ -79,3 +79,22 @@ pub(crate) fn eval_validate_property_reference(
     }
     Ok(())
 }
+
+/// Coerces a prospective property's source through the shared coordinator before publishing its alias.
+pub(in crate::interpreter) fn prepare_property_reference_admission(owner: &str,property: &EvalClassProperty,
+    target: &EvalReferenceTarget,context: &mut ElephcEvalContext,values: &mut impl RuntimeValueOps,
+) -> Result<(),EvalStatus> {
+    if !context.semantic_profile().checked_property_references() {return Ok(());}
+    let Some(declared)=property.property_type() else {return Ok(());};
+    let EvalReferenceTarget::Cell {cell}=target else {return Err(EvalStatus::UnsupportedConstruct);};
+    if eval_declared_value_type_accepts_exact(declared,Some(owner),Some(owner),*cell,context,values)? {
+        return Ok(());
+    }
+    let original=values.copy_value(*cell)?;
+    with_eval_value_lease(original,context,values,|original,context,values| {
+        context.with_property_reference_admission(*cell,owner,property.name(),declared,|context| {
+            let previous=eval_replace_reference_value(*cell,original,context,values)?;
+            eval_release_value(context,values,previous)
+        })
+    })
+}

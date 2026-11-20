@@ -45,7 +45,8 @@ impl SemanticProfile {
     /// Selects persistent declaration validation without enabling another guarantee's conversion rules.
     pub const fn checked_property_references(self) -> bool {
         self.contains(StrictFeature::Casts) || self.contains(StrictFeature::Coercions)
-            || self.contains(StrictFeature::Nullability)
+            || self.contains(StrictFeature::Nullability) || self.contains(StrictFeature::Mixed)
+            || self.contains(StrictFeature::ArrayTypes)
     }
 
     /// Checks whether this profile enables a guarantee.

@@ -130,6 +130,7 @@ use property_reference_contracts::*;
 pub(crate) use property_reference_contracts::eval_validate_property_reference;
 pub(crate) use property_reference_candidates::{prepare_property_reference_candidates,
     coerce_property_reference_candidates};
+use property_reference_candidates::coerce_property_value_candidate;
 pub use runtime_ops::{
     NativeCallableParameterMetadata, NativeCallableSignatureMetadata, RuntimeValueOps,
 };

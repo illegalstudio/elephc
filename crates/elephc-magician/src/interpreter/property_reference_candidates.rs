@@ -28,35 +28,55 @@ pub(crate) fn prepare_property_reference_candidates(
 ) -> Result<Vec<PropertyReferenceCandidate>, EvalStatus> {
     if !context.semantic_profile().checked_property_references() { return Ok(Vec::new()); }
     let mut prepared = Vec::new();
-    for source in context.property_reference_types(reference) {
-        let exact = eval_declared_value_type_accepts_exact(&source.declared, Some(&source.owner),
-            Some(&source.owner), original, context, values)?;
-        let expected = eval_null_boundary_type_label(&source.declared,
-            Some(&source.owner), Some(&source.owner), context)?;
-        let failure = format!("Cannot assign value to property {}::${} of type {expected}",
-            source.owner.trim_start_matches('\\'), source.property);
-        let mut allowed = AllowedKinds::EMPTY;
-        if !source.declared.is_intersection() {
-            for variant in source.declared.variants() {
-                let kind = match variant {
-                    EvalParameterTypeVariant::Int => ValueKind::Integer,
-                    EvalParameterTypeVariant::Float => ValueKind::Float,
-                    EvalParameterTypeVariant::Bool => ValueKind::Boolean,
-                    EvalParameterTypeVariant::String => ValueKind::String,
-                    _ => continue,
-                };
-                allowed = allowed.union(AllowedKinds::one(kind));
-            }
-        }
-        let weak = !context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions);
-        let tag = values.type_tag(original)?;
-        let stringable = weak && !exact && tag == EVAL_TAG_OBJECT
-            && allowed.allows(ValueKind::String) && has_to_string(original, context, values)?;
-        let action = if exact { Some(WeakScalarBinding::Identity) }
-            else if weak { scalar_plan(allowed, original, tag, values)? } else { None };
-        prepared.push(PropertyReferenceCandidate { action, stringable, failure });
+    let mut sources=context.property_reference_types(reference);
+    sources.extend(context.claim_property_reference_admission(reference));
+    for source in sources {
+        prepared.push(prepare_property_value_candidate(&source.owner,&source.property,&source.declared,original,context,values)?);
     }
     Ok(prepared)
+}
+
+/// Plans one immutable property declaration from the original value without consuming it.
+pub(crate) fn prepare_property_value_candidate(owner: &str,property: &str,declared: &EvalParameterType,
+    original: RuntimeCellHandle,context: &mut ElephcEvalContext,values: &mut impl RuntimeValueOps,
+) -> Result<PropertyReferenceCandidate,EvalStatus> {
+    let exact = eval_declared_value_type_accepts_exact(declared, Some(owner),
+        Some(owner), original, context, values)?;
+    let expected = eval_null_boundary_type_label(declared,
+        Some(owner), Some(owner), context)?;
+    let failure = format!("Cannot assign value to property {}::${} of type {expected}",
+        owner.trim_start_matches('\\'), property);
+    let mut allowed = AllowedKinds::EMPTY;
+    if !declared.is_intersection() {
+        for variant in declared.variants() {
+            let kind = match variant {
+                EvalParameterTypeVariant::Int => ValueKind::Integer,
+                EvalParameterTypeVariant::Float => ValueKind::Float,
+                EvalParameterTypeVariant::Bool => ValueKind::Boolean,
+                EvalParameterTypeVariant::String => ValueKind::String,
+                _ => continue,
+            };
+            allowed = allowed.union(AllowedKinds::one(kind));
+        }
+    }
+    let weak = !context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions);
+    let tag = values.type_tag(original)?;
+    let stringable = weak && !exact && tag == EVAL_TAG_OBJECT
+        && allowed.allows(ValueKind::String) && has_to_string(original, context, values)?;
+    let action = if exact { Some(WeakScalarBinding::Identity) }
+        else if weak { scalar_plan(allowed, original, tag, values)? } else { None };
+    Ok(PropertyReferenceCandidate {action,stringable,failure})
+}
+
+/// Normalizes an ordinary unaliased property write without applying explicit-cast policy.
+pub(in crate::interpreter) fn coerce_property_value_candidate(owner: &str,property: &EvalClassProperty,
+    original: RuntimeCellHandle,context: &mut ElephcEvalContext,values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>,EvalStatus> {
+    if !context.semantic_profile().checked_property_references() {return Ok(None);}
+    let Some(declared)=property.property_type() else {return Ok(None);};
+    if eval_declared_value_type_accepts_exact(declared,Some(owner),Some(owner),original,context,values)? {return Ok(None);}
+    let plan=prepare_property_value_candidate(owner,property.name(),declared,original,context,values)?;
+    coerce_property_reference_candidates(vec![plan],original,context,values)
 }
 
 /// Probes escaped dynamic objects against their own immutable method metadata without PHP.

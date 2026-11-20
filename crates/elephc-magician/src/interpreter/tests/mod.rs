@@ -168,3 +168,5 @@ mod strict_mixed_access_sources;
 mod strict_mixed_foreach_sources;
 
 mod strict_mixed_class_sources;
+
+mod strict_mixed_member_promises;

@@ -18,6 +18,13 @@ pub(crate) struct EvalPropertyReferenceType {
     pub(crate) declared: EvalParameterType,
 }
 
+/// A stack-owned prospective declaration for one canonical reference publication.
+pub(super) struct PropertyReferenceAdmission {
+    reference: usize,
+    declaration: EvalPropertyReferenceType,
+    claimed: bool,
+}
+
 impl ElephcEvalContext {
     /// Reads current property associations without extending receiver or reference lifetimes.
     pub(crate) fn property_reference_types(&self, cell: RuntimeCellHandle) -> Vec<EvalPropertyReferenceType> {
@@ -47,5 +54,30 @@ impl ElephcEvalContext {
         }
         types.sort_by(|left, right| (&left.owner, &left.property).cmp(&(&right.owner, &right.property)));
         types
+    }
+}
+
+impl ElephcEvalContext {
+    /// Adds one prospective source to the next publication while keeping callback reads on actual storage.
+    pub(crate) fn with_property_reference_admission<T>(&mut self,reference: RuntimeCellHandle,
+        owner: &str,property: &str,declared: &EvalParameterType,body: impl FnOnce(&mut Self)->T,
+    ) -> T {
+        let depth=self.property_reference_admissions.len();
+        self.property_reference_admissions.push(PropertyReferenceAdmission {
+            reference:reference.as_ptr() as usize,
+            declaration:EvalPropertyReferenceType {owner:owner.into(),property:property.into(),declared:declared.clone()},claimed:false,
+        });
+        let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||body(self)));
+        self.property_reference_admissions.truncate(depth);
+        match result {Ok(result)=>result,Err(panic)=>std::panic::resume_unwind(panic)}
+    }
+
+    /// Copies the next prospective declaration once, leaving nested callback publications unconstrained by it.
+    pub(crate) fn claim_property_reference_admission(&mut self,reference: RuntimeCellHandle)
+        -> Option<EvalPropertyReferenceType> {
+        let source=self.property_reference_admissions.iter_mut().rev()
+            .find(|source|!source.claimed && source.reference==reference.as_ptr() as usize)?;
+        source.claimed=true;
+        Some(source.declaration.clone())
     }
 }

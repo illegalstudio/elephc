@@ -608,6 +608,7 @@ pub(super) fn eval_static_property_reference_bind_result(
             scope,
             values,
         )?;
+        prepare_property_reference_admission(&declaring_class,&property,&target,context,values)?;
         let value = eval_reference_target_value(&target, context, values)?;
         return with_eval_value_lease(value, context, values, |value, context, values| {
             eval_validate_property_value(&declaring_class, &property, value, context, values)?;
@@ -829,6 +830,12 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
         }
         validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
         eval_validate_property_value(&declaring_class, &property, value, context, values)?;
+        if context.static_property_alias(&declaring_class,property.name()).is_none() {
+            if let Some(candidate)=coerce_property_value_candidate(&declaring_class,&property,value,context,values)? {
+                return with_eval_value_lease(candidate,context,values,|candidate,context,values|
+                    eval_static_property_set_result(&declaring_class,property.name(),candidate,context,values));
+            }
+        }
         if let Some(target) = context
             .static_property_alias(&declaring_class, property.name())
             .cloned()
