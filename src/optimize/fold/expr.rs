@@ -385,6 +385,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         }
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -404,6 +405,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             );
             ExprKind::Closure {
                 params: fold_params(params),
+                param_attributes,
                 variadic,
                 variadic_by_ref,
                 variadic_type,

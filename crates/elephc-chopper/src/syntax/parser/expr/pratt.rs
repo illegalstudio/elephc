@@ -585,7 +585,8 @@ fn parse_expr_bp_inner(
                 }
             }
             Token::LParen => {
-                let call_applies = postfix_call_applies(&lhs)
+                // The runtime evaluates the callee before deciding whether it is callable.
+                let call_applies = crate::syntax::parser::runtime_fragment() || postfix_call_applies(&lhs)
                     || validating && (
                         starts_with_predefined_constant_name(tokens, lhs_start)
                         || parenthesized_expression_covers(tokens, lhs_start, *pos)
@@ -990,11 +991,10 @@ pub(crate) fn is_increment_target(expr: &Expr) -> bool {
     )
 }
 
-/// Returns whether a postfix `(` turns this expression into a call.
+/// Returns whether the compiler or validation grammar permits a postfix call here.
 ///
 /// PHP also calls string and keyed/mixed array literals directly (`'strlen'('hello')`,
-/// `[0 => 'strlen']('hello')`); the compiler cannot lower those forms, so only the validation
-/// build accepts them.
+/// `[0 => 'strlen']('hello')`); validation accepts forms beyond the compiled subset.
 fn postfix_call_applies(expr: &Expr) -> bool {
     if matches!(
         expr.kind,

@@ -11,7 +11,7 @@
 use crate::syntax::names::Name;
 use crate::syntax::span::Span;
 
-use super::{BinOp, RuntimeExpr, Stmt, StmtKind, TypeExpr};
+use super::{AttributeGroup, BinOp, RuntimeExpr, Stmt, StmtKind, TypeExpr};
 
 // --- Expressions ---
 
@@ -179,6 +179,8 @@ pub enum ExprKind {
     },
     Closure {
         params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
+        /// Parameter attribute groups retained for runtime reflection, including a variadic slot.
+        param_attributes: Vec<Vec<AttributeGroup>>,
         variadic: Option<String>,
         /// Whether the variadic parameter was declared by reference (`&...$args`).
         variadic_by_ref: bool,

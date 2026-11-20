@@ -227,6 +227,7 @@ fn expr_carries_decision(expr: &Expr) -> bool {
             variadic_by_ref: _,
             captures: _,
             capture_refs: _,
+            ..
         } => {
             params
                 .iter()

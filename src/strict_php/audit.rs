@@ -651,6 +651,7 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             by_ref_return: _,
             captures: _,
             capture_refs: _,
+            ..
         } => {
             audit_params(params, span, errors);
             if let Some(variadic_type) = variadic_type {

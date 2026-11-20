@@ -280,7 +280,7 @@ pub(super) fn parse_closure(
         return Err(CompileError::new(span, "Unexpected token: Function"));
     }
     *pos = after_fn + 1;
-    let (params, variadic, variadic_by_ref, variadic_type) =
+    let (params, param_attributes, variadic, variadic_by_ref, variadic_type) =
         parse_closure_params(tokens, pos, span)?;
     let mut captures = Vec::new();
     let mut capture_refs = Vec::new();
@@ -354,6 +354,7 @@ pub(super) fn parse_closure(
     Ok(Expr::new(
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -385,7 +386,7 @@ pub(super) fn parse_arrow_closure(
         return Err(CompileError::new(span, "Expected '(' after 'fn'"));
     }
     *pos += 1;
-    let (params, variadic, variadic_by_ref, variadic_type) =
+    let (params, param_attributes, variadic, variadic_by_ref, variadic_type) =
         parse_closure_params(tokens, pos, span)?;
     let return_type = parse_optional_closure_return_type(tokens, pos, span)?;
     if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleArrow {
@@ -401,6 +402,7 @@ pub(super) fn parse_arrow_closure(
     Ok(Expr::new(
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -688,6 +690,7 @@ fn parse_closure_params(
 ) -> Result<
     (
         Vec<(String, Option<crate::syntax::parser::ast::TypeExpr>, Option<Expr>, bool)>,
+        Vec<Vec<crate::syntax::parser::ast::AttributeGroup>>,
         Option<String>,
         bool,
         Option<crate::syntax::parser::ast::TypeExpr>,
@@ -695,6 +698,8 @@ fn parse_closure_params(
     CompileError,
 > {
     let mut params = Vec::new();
+    let mut param_attributes = Vec::new();
+    let retain_attributes = crate::syntax::parser::runtime_fragment();
     let mut variadic = None;
     let mut variadic_by_ref = false;
     let mut variadic_type = None;
@@ -716,7 +721,10 @@ fn parse_closure_params(
             }
         }
         // PHP 8.0 closure-parameter attributes (`fn(#[X] $a) => …`).
-        crate::syntax::parser::consume_attribute_lists(tokens, pos)?;
+        let attributes = crate::syntax::parser::parse_attribute_lists(tokens, pos)?;
+        if retain_attributes {
+            param_attributes.push(attributes);
+        }
         // Promotion modifiers are grammar-valid on closure parameters too; PHP rejects them
         // while compiling the declaration.
         if validation_only() {
@@ -771,7 +779,7 @@ fn parse_closure_params(
         return Err(CompileError::new(span, "Expected ')' after parameters"));
     }
     *pos += 1;
-    Ok((params, variadic, variadic_by_ref, variadic_type))
+    Ok((params, param_attributes, variadic, variadic_by_ref, variadic_type))
 }
 
 /// Parses the tail of a function-style call once the name and its opening `(` have been

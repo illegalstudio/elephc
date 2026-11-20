@@ -144,6 +144,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -169,6 +170,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             pass.leave_closure();
             ExprKind::Closure {
                 params: new_params,
+                param_attributes,
                 variadic,
                 variadic_by_ref,
                 variadic_type: new_variadic_type,

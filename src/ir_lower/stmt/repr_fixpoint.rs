@@ -729,6 +729,7 @@ impl<'a> ConversionScan<'a> {
                 variadic_by_ref: _,
                 captures,
                 capture_refs,
+                ..
             } => {
                 // The body is lowered as its own function against its own locals; only the capture
                 // list touches ours, and a by-reference capture makes the local ref-bound (never a

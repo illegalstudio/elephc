@@ -220,6 +220,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         },
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -242,6 +243,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
                 variadic.as_deref(), variadic_by_ref);
             ExprKind::Closure {
                 params: propagate_params(params),
+                param_attributes,
                 variadic,
                 variadic_by_ref,
                 variadic_type,

@@ -11,12 +11,13 @@ use elephc_chopper::syntax::parser::ast::{Expr, ExprKind};
 
 use crate::eval_ir::{EvalClosureCapture, EvalExpr, EvalFunction, EvalSourceLocation};
 
-use super::{Scope, lower_branch, signatures::lower_signature};
+use super::{Scope, attributes::lower_attributes, lower_branch, signatures::lower_signature};
 
 /// Lowers an anonymous function with its lexical captures and reflection range.
 pub(super) fn lower_closure(scope: &Scope<'_>, expr: Expr) -> Option<EvalExpr> {
     let ExprKind::Closure {
         params,
+        param_attributes,
         variadic,
         variadic_by_ref,
         variadic_type,
@@ -43,8 +44,13 @@ pub(super) fn lower_closure(scope: &Scope<'_>, expr: Expr) -> Option<EvalExpr> {
     let body = lower_branch(scope, body)?;
     super::validate_body_jumps(scope, &body)?;
     let span = expr.span;
+    let parameter_attributes = param_attributes
+        .into_iter()
+        .map(|groups| lower_attributes(scope, groups))
+        .collect();
     let function = EvalFunction::new(crate::parser::state::next_closure_function_name(), signature.names, body)
         .with_source_location(EvalSourceLocation::new(i64::from(span.line), i64::from(span.end_line)))
+        .with_parameter_attributes(parameter_attributes)
         .with_parameter_types(signature.types)
         .with_parameter_defaults(signature.defaults)
         .with_parameter_by_ref_flags(signature.by_ref)

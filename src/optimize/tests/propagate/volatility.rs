@@ -37,6 +37,7 @@ fn closure_with_captures(captures: Vec<String>, capture_refs: Vec<String>) -> Ex
     Expr::new(
         ExprKind::Closure {
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_by_ref: false,
             variadic_type: None,

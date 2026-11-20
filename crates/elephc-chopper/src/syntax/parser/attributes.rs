@@ -39,8 +39,7 @@ pub fn parse_attribute_lists(
     Ok(groups)
 }
 
-/// Parse and discard attribute groups — used at sites where the AST does
-/// not yet carry an `attributes` field (parameters, closure params).
+/// Parses and discards attribute groups at sites that do not retain metadata.
 pub fn consume_attribute_lists(
     tokens: &[SpannedToken],
     pos: &mut usize,
