@@ -32,7 +32,6 @@ pub struct FeedbackGuard {
 
 impl FeedbackGuard {
     /// Enables collection for one parse, clearing names recorded by an earlier attempt.
-    #[allow(dead_code)]
     pub fn start() -> Self {
         let previous = ACTIVE.with(|active| active.replace(true));
         NAMES.with(|names| names.borrow_mut().clear());
@@ -40,7 +39,6 @@ impl FeedbackGuard {
     }
 
     /// Returns the names accepted so far, in source order.
-    #[allow(dead_code)]
     pub fn names(&self) -> Vec<(Span, String)> {
         NAMES.with(|names| names.borrow().clone())
     }

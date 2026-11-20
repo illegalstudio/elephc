@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - The subset preserves dynamic variable names and operator evaluation in EvalIR.
-//! - Unsupported token or AST shapes leave the fragment to the existing eval parser.
+//! - Unsupported token or AST shapes return an eval parse diagnostic.
 
 use elephc_chopper::syntax::{
     names::{Name, NameKind},
@@ -81,7 +81,7 @@ pub(crate) fn try_lower_type(tokens: &[crate::lexer::Token]) -> Option<elephc_ge
     let lines = tokens.iter().map(crate::lexer::Token::line).collect::<Vec<_>>();
     let tokens = tokens.iter().map(|token| token.kind().clone()).collect::<Vec<_>>();
     let input = tokens::adapt_fragment(&tokens, &lines)?;
-    scope::lower_type(parser::parse_runtime_type(&input).ok()?)
+    parser::parse_runtime_type_with(&input, scope::lower_type).ok().flatten()
 }
 
 /// Reads declaration parameter names through Chopper for PHPDoc attachment.
@@ -91,8 +91,9 @@ pub(crate) fn type_parameter_names(
     let (tokens, lines): (Vec<_>, Vec<_>) = tokens.into_iter()
         .map(|token| (token.kind().clone(), token.line())).unzip();
     let input = tokens::adapt_fragment(&tokens, &lines)?;
-    let parameters = parser::parse_runtime_type_parameters(&input).ok()?;
-    Some(parameters.into_iter().map(|parameter| parameter.name).collect())
+    parser::parse_runtime_type_parameters_with(&input, |parameters| {
+        parameters.into_iter().map(|parameter| parameter.name).collect()
+    }).ok()
 }
 
 /// Lowers statements in source order and expands multi-argument echo sequences.

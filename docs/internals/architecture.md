@@ -341,20 +341,21 @@ The full parser-enabled engine can be measured with
 `scripts/measure-tokenizer-engine-size.sh size` or `fast`. Both profiles use
 `panic = "immediate-abort"` through `-Z build-std=std,panic_abort`, which removes
 the std panic/backtrace formatter from the executable. `size` uses opt-level z
-and `fast` uses opt-level 3. The macOS ARM64 baseline from PR #2180 used
-separate optimization levels for the scanner and parser in its fast profile.
-That baseline measured 501,184 bytes for
-`size` and 533,856 bytes for `fast`. The Mago 1.51 binaries in that comparison
-are 634,352 bytes (`size-z`) and 798,784 bytes (`release-lto`); Mago built with
-the same immediate-abort profile is 367,504 bytes (`size`) and 498,736 bytes
-(`fast`). The fast profile is therefore about 34 KB above Mago's matching
-immediate-abort artifact, while the pure size profile still pays the AST parser
-premium. A plain `cargo build --release` probe (no LTO, 16 codegen units,
-unwinding panics and symbols) is 1,741,168 bytes and is not size-comparable to
-Mago's stripped release. Adding the
-same fat-LTO, one-codegen-unit and strip settings gives 1,014,000 bytes with
-`panic = "abort"` and 1,113,344 bytes with the default unwinding panic; the same
-build with `panic = "immediate-abort"` is 763,808 bytes.
+and `fast` uses opt-level 3.
+
+The macOS ARM64 results below are a historical baseline from the `66a5ad66d8`
+revision of [PR #2180](https://github.com/illegalstudio/elephc/pull/2180), before
+the move to Chopper. Its fast profile used separate optimization levels for
+the scanner and parser. Sizes are in bytes.
+
+| Profile | #2180 snapshot | Mago 1.51 |
+| --- | ---: | ---: |
+| `size` | 501,184 | 367,504 with matching immediate-abort profile, 634,352 with `size-z` |
+| `fast` | 533,856 | 498,736 with matching immediate-abort profile, 798,784 with `release-lto` |
+| Plain Cargo release, 16 codegen units, unwind, no LTO or stripping | 1,741,168 | |
+| Fat LTO, one codegen unit, stripped, abort | 1,014,000 | |
+| Fat LTO, one codegen unit, stripped, unwind | 1,113,344 | |
+| Fat LTO, one codegen unit, stripped, immediate-abort | 763,808 | |
 
 ## Target Model
 

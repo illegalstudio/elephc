@@ -45,9 +45,6 @@ use crate::syntax::parser::ast::Stmt;
 use crate::syntax::span::Span;
 
 /// Shares class-like name token grammar with source attribution tools.
-///
-/// The compiler binary uses this library API, not its parallel private parser module.
-#[allow(dead_code)]
 pub fn name_part_from_token(token: &Token, metadata: &crate::syntax::lexer::TokenMetadata) -> Option<String> {
     stmt::name_part_from_token(token, metadata)
 }
@@ -223,7 +220,6 @@ fn take_anonymous_classes() -> Vec<Stmt> {
 }
 
 /// Parses tokens into an AST program, returning the first error if any.
-#[allow(dead_code)]
 pub fn parse(tokens: &[SpannedToken]) -> Result<Program, CompileError> {
     parse_with_mode(tokens, crate::syntax::source::SourceMode::Php)
 }
@@ -239,13 +235,6 @@ pub fn parse_test_source(source: &str) -> Result<Program, CompileError> {
 }
 
 /// Parses compiler-generated tagged source without exposing it to user strict-PHP rules.
-///
-/// No compilation path calls this any more: the synthetic preludes it existed for are BUILT
-/// rather than parsed, so the only callers left are the oracles that check those builders
-/// against the PHP they replaced. The lib keeps it as public API; the bin compiles the same
-/// sources through its own module tree, where nothing reaches it — hence the allow, exactly as
-/// `parse` above carries it.
-#[allow(dead_code)]
 pub fn parse_internal(tokens: &[SpannedToken]) -> Result<Program, CompileError> {
     parse_with_mode(tokens, crate::syntax::source::SourceMode::Internal)
 }
@@ -293,36 +282,72 @@ pub fn parse_runtime_fragment_in_scope(
 
 /// Parses a complete standalone type used when looking up a runtime specialization.
 pub fn parse_runtime_type(tokens: &[SpannedToken]) -> Result<ast::TypeExpr, CompileError> {
-    let _guard = RuntimeFragmentGuard(RUNTIME_FRAGMENT.with(|flag| flag.replace(true)));
-    let _trace = runtime_templates::Trace::start();
+    parse_runtime_type_with(tokens, std::convert::identity)
+}
+
+/// Parses a standalone type and projects its AST on the same protected stack.
+pub fn parse_runtime_type_with<T>(
+    tokens: &[SpannedToken],
+    project: impl FnOnce(ast::TypeExpr) -> T,
+) -> Result<T, CompileError> {
     reject_excessive_nesting(tokens).map_err(CompileError::from_many)?;
-    relative_names::with_global_namespace_scope(|| {
-        crate::syntax::compiler_stack::with_compiler_stack(|| {
-            let mut pos = 0;
-            let span = tokens.first().map_or(Span::dummy(), |(_, metadata)| metadata.span);
-            let ty = stmt::parse_type_expr(tokens, &mut pos, span)?;
-            if !matches!(tokens.get(pos), Some((Token::Eof, _))) {
-                return Err(CompileError::new(span, "Unexpected token after type"));
-            }
-            Ok(ty)
-        })
+    with_runtime_type_stack(tokens, || {
+        let ty = {
+            let _guard = RuntimeFragmentGuard(RUNTIME_FRAGMENT.with(|flag| flag.replace(true)));
+            let _trace = runtime_templates::Trace::start();
+            relative_names::with_global_namespace_scope(|| {
+                let mut pos = 0;
+                let span = tokens.first().map_or(Span::dummy(), |(_, metadata)| metadata.span);
+                let ty = stmt::parse_type_expr(tokens, &mut pos, span)?;
+                if !matches!(tokens.get(pos), Some((Token::Eof, _))) {
+                    return Err(CompileError::new(span, "Unexpected token after type"));
+                }
+                Ok(ty)
+            })?
+        };
+        Ok(project(ty))
     })
 }
 
 /// Parses the leading type parameter list used by runtime declaration annotations.
 pub fn parse_runtime_type_parameters(tokens: &[SpannedToken]) -> Result<Vec<ast::TypeParam>, CompileError> {
-    let _guard = RuntimeFragmentGuard(RUNTIME_FRAGMENT.with(|flag| flag.replace(true)));
+    parse_runtime_type_parameters_with(tokens, std::convert::identity)
+}
+
+/// Parses a type parameter list and projects its AST on the same protected stack.
+pub fn parse_runtime_type_parameters_with<T>(
+    tokens: &[SpannedToken],
+    project: impl FnOnce(Vec<ast::TypeParam>) -> T,
+) -> Result<T, CompileError> {
     reject_excessive_nesting(tokens).map_err(CompileError::from_many)?;
-    relative_names::with_global_namespace_scope(|| {
-        crate::syntax::compiler_stack::with_compiler_stack(|| {
-            let span = tokens.first().map_or(Span::dummy(), |(_, metadata)| metadata.span);
-            stmt::parse_type_param_list(tokens, &mut 0, span)
-        })
+    with_runtime_type_stack(tokens, || {
+        let parameters = {
+            let _guard = RuntimeFragmentGuard(RUNTIME_FRAGMENT.with(|flag| flag.replace(true)));
+            relative_names::with_global_namespace_scope(|| {
+                let span = tokens.first().map_or(Span::dummy(), |(_, metadata)| metadata.span);
+                stmt::parse_type_param_list(tokens, &mut 0, span)
+            })?
+        };
+        Ok(project(parameters))
     })
 }
 
+/// Gives short, standalone type inputs a parser-sized stack. Larger inputs use the compiler
+/// budget. The explicit switch also works when a native Fiber owns the caller's stack.
+fn with_runtime_type_stack<R>(tokens: &[SpannedToken], parse: impl FnOnce() -> R) -> R {
+    // Recursive type productions consume input tokens. Four MiB leaves headroom for debug
+    // frames as well as deeply nested types within the short-input token budget.
+    const SHORT_TYPE_TOKEN_LIMIT: usize = 64;
+    const SHORT_TYPE_STACK_BYTES: usize = 4 * 1024 * 1024;
+    let stack_bytes = if tokens.len() <= SHORT_TYPE_TOKEN_LIMIT {
+        SHORT_TYPE_STACK_BYTES
+    } else {
+        crate::syntax::compiler_stack::COMPILER_STACK_BYTES
+    };
+    stacker::grow(stack_bytes, parse)
+}
+
 /// Parses tokens with recovery, collecting all syntax errors encountered.
-#[allow(dead_code)]
 pub fn parse_with_recovery(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
     parse_with_recovery_in_mode(tokens, crate::syntax::source::SourceMode::Php)
 }
@@ -331,7 +356,6 @@ pub fn parse_with_recovery(tokens: &[SpannedToken]) -> Result<Program, Vec<Compi
 ///
 /// The returned spans point at tokens Zend must rewrite from their keyword token ID to
 /// T_STRING. A parse error is returned exactly as the ordinary parser reports it.
-#[allow(dead_code)]
 pub fn parse_with_tokenizer_feedback(
     tokens: &[SpannedToken],
 ) -> (Result<Program, CompileError>, Vec<(Span, String)>) {
