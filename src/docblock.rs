@@ -347,7 +347,10 @@ fn adopt_generics(
         return;
     };
     let interface_args = align_inherited(inherited_interfaces, block);
-    *generics = GenericDecl::new(block.type_params.clone(), extends_args, interface_args);
+    // Marked as adopted: an inherited annotation naming a class that is no template is php-valid
+    // (the parent's own `@template` may be one this reader cannot parse, `class-string<…>`), so
+    // the instantiation pass forgets it rather than refusing it (`forget_doc_inheritance_of_non_templates`).
+    *generics = GenericDecl::with_origin(block.type_params.clone(), extends_args, interface_args, true);
 }
 
 /// The type parameters in scope for a declaration's members, written or adopted.

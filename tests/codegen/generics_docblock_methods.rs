@@ -1292,3 +1292,36 @@ echo get_class($c), (int) ($c instanceof Box), (int) ($c instanceof $b), (int) i
     let expected = "Box|false|false|0\nSBox|Box|0|true\nBox|false|true|5\nBox1111\n";
     assert_eq!(compile_and_run(source), expected);
 }
+
+/// A class whose `@template` bound this reader cannot parse (`class-string`, Symfony's type-info
+/// `ObjectType`) is no template, php sees an ordinary class, and a child annotated
+/// `@extends ObjectType<T>` must not be refused for it: the inherited annotation is forgotten, the
+/// program compiles at once with no second round that falls back to written types.
+#[test]
+fn test_docblock_extends_of_a_class_with_an_unreadable_template_is_forgotten() {
+    let source = r#"<?php
+/**
+ * @template T of class-string
+ */
+class ObjectType {
+    public function __construct(public string $name) {}
+}
+/**
+ * @template T of class-string<\UnitEnum>
+ *
+ * @extends ObjectType<T>
+ */
+class EnumType extends ObjectType {}
+/**
+ * @template T of class-string<\BackedEnum>
+ *
+ * @extends EnumType<T>
+ */
+final class BackedEnumType extends EnumType {}
+$t = new BackedEnumType("Suit");
+echo get_class($t), ":", $t->name, ":", $t instanceof ObjectType ? "y" : "n";
+"#;
+    let notes = compile_cli_file_with_flags_capturing_stderr(source, &[]);
+    assert!(!notes.contains(ERASED_NOTE), "{notes}");
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "BackedEnumType:Suit:y");
+}
