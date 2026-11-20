@@ -1093,3 +1093,20 @@ var_dump($r->getFileName() !== false, $r->getStartLine());
         "bool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\nint(3)\nbool(true)\nint(2)\n"
     );
 }
+
+/// A reflection of an absent class inside a function body compiles (the body may never run) and,
+/// when it does run, raises php's own `ReflectionException` -- in a closed-world build too, where
+/// no interpreter can supply the class.
+#[test]
+fn test_reflection_of_an_absent_class_in_a_function_raises_at_run_time() {
+    let out = compile_and_run(
+        r#"<?php
+function absentMethod() { return new ReflectionMethod(Missing::class, "run"); }
+function absentClass() { return new ReflectionClass(Missing2::class); }
+echo "ok\n";
+try { absentMethod(); } catch (ReflectionException $e) { echo $e->getMessage(), "\n"; }
+try { absentClass(); } catch (ReflectionException $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out, "ok\nClass \"Missing\" does not exist\nClass \"Missing2\" does not exist\n");
+}

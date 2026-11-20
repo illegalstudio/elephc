@@ -1251,9 +1251,14 @@ impl Checker {
     /// [`Checker::program_defers_unknown_classes`] covers a runtime include or an autoloader,
     /// wherever they sit; `eval_barrier_active` covers a literal `eval()` already passed, whose
     /// text can declare the class (`eval('class Signer {...}'); new ReflectionClass('Signer')`
-    /// was a compile error where `php -n` runs it).
+    /// was a compile error where `php -n` runs it). A function, method or closure body defers as
+    /// well, as it does for `new`: the body may never run (an optional extension's code), and one
+    /// that does raises php's own `ReflectionException`. A closed-world build has no interpreter
+    /// that could set the other two, so this clause is the one that keeps it faithful.
     pub(crate) fn reflection_defers_unknown_classes(&self) -> bool {
-        self.program_defers_unknown_classes || self.eval_barrier_active
+        self.program_defers_unknown_classes
+            || self.eval_barrier_active
+            || !self.null_probe_scope_is_top_level
     }
 
     /// Returns whether unresolved class names may be deferred to PHP's runtime `Error` path.
