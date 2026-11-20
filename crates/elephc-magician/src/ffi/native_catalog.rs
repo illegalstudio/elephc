@@ -31,7 +31,7 @@ unsafe fn module_generation(token: *mut u64) -> Option<u64> {
     let token = unsafe { &*token.cast::<AtomicU64>() };
     let current = token.load(Ordering::Acquire);
     if current != 0 { return Some(current); }
-    let next = NEXT_CATALOG_GENERATION.fetch_update(Ordering::Relaxed, Ordering::Relaxed,
+    let next = NEXT_CATALOG_GENERATION.try_update(Ordering::Relaxed, Ordering::Relaxed,
         |value| value.checked_add(1)).ok()?;
     Some(match token.compare_exchange(0, next, Ordering::AcqRel, Ordering::Acquire) {
         Ok(_) => next,
