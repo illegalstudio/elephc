@@ -343,6 +343,12 @@ pub(super) fn lower_closure_with_context(
     let mut by_value_capture_views = Vec::with_capacity(captures.len());
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
+        // Asked before this capture promotes the name: the promotion itself marks it ref-bound,
+        // which would hide that this capture is the one that made the cell. A later capture in
+        // an alternative branch (`if (..) { use (&$x) } elseif (..) { use (&$x) }`) still finds
+        // the name ref-bound while its own cell is unpublished, and must promote and widen it.
+        let capture_made_cell = by_ref
+            && (!ctx.is_ref_bound_local(capture) || ctx.is_capture_bound_local(capture));
         let (captured, php_type) = if capture == "this" && !ctx.local_slots.contains_key("this") {
             // Top-level closure, or one written in a STATIC method: no enclosing `$this`. Start
             // with a null receiver that `Closure::bind` overwrites; `Mixed` so members dispatch
@@ -465,7 +471,6 @@ pub(super) fn lower_closure_with_context(
         let immediate = by_ref.then_some(Immediate::I64(1));
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
         if by_ref {
-            let capture_made_cell = !ctx.is_ref_bound_local(capture);
             ctx.mark_ref_bound_local(capture);
             if capture_made_cell {
                 ctx.mark_capture_bound_local(capture);
