@@ -241,8 +241,21 @@ pub(super) fn ordinary_append(ctx: &mut LoweringContext<'_, '_>, object: Lowered
     let writeback = |ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, value: LoweredValue| {
         ctx.emit_void(Op::MixedArrayAppend, vec![array.value, value.value], None,
             Op::MixedArrayAppend.default_effects(), Some(span));
+        // An ArrayAccess object appended through `offsetSet` is mutated in place and the property
+        // keeps pointing at it: writing it back would be a store php never performs, and it
+        // refuses one on a readonly slot.
+        let is_object = ctx.emit_value(Op::TypePredicate, vec![array.value],
+            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
+            Op::TypePredicate.default_effects(), Some(span));
+        let store = ctx.builder.create_named_block("property.append.writeback", vec![]);
+        let done = ctx.builder.create_named_block("property.append.in_place", vec![]);
+        ctx.builder.terminate(Terminator::CondBr { cond: is_object.value,
+            then_target: done, then_args: vec![], else_target: store, else_args: vec![] });
+        ctx.builder.position_at_end(store);
         ctx.emit_void(Op::DynamicPropSet, vec![object.value, name.value, array.value], None,
             Op::DynamicPropSet.default_effects(), Some(span));
+        ctx.builder.terminate(Terminator::Br { target: done, args: vec![] });
+        ctx.builder.position_at_end(done);
     };
     if !super::super::native_dimension_append::lower(ctx, borrowed, value, span, |ctx, array, value| writeback(ctx, array, value)) {
         writeback(ctx, borrowed, value);
