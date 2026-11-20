@@ -177,16 +177,25 @@ pub(in crate::interpreter) fn eval_fetch_class_constant(
     result
 }
 
-/// Returns the value of eval class constant (or enum case) `holder::name` for a reflector
-/// being built, which php-src does without evaluating it: the stored value or case, otherwise
-/// a silent evaluation that stores nothing, or null when that is unavailable (a backed case not
-/// created yet, an initializer that throws). The flag tells whether the caller owns the value.
-pub(in crate::interpreter) fn eval_class_constant_preview(
+/// One silent class-constant probe before Reflection decides how to represent an unavailable value.
+pub(in crate::interpreter) enum EvalClassConstantPreview {
+    /// A usable constant value and whether the caller owns its runtime cell.
+    Value(RuntimeCellHandle, bool),
+    /// The requested metadata did not produce a value.
+    Missing,
+    /// Metadata exists, but cannot be materialized before normal evaluation.
+    Unavailable,
+    /// Evaluation threw and the preview consumed the temporary Throwable.
+    Failed,
+}
+
+/// Probes a class constant without publishing its value or conflating failure with PHP null.
+pub(in crate::interpreter) fn eval_class_constant_preview_state(
     holder: &str,
     name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<(RuntimeCellHandle, bool)>, EvalStatus> {
+) -> Result<EvalClassConstantPreview, EvalStatus> {
     context.begin_deprecation_silence();
     let value = if eval_is_enum_case(holder, name, context) {
         eval_enum_case_object(holder, name, context, values)
@@ -194,10 +203,33 @@ pub(in crate::interpreter) fn eval_class_constant_preview(
         eval_class_constant_value(holder, name, context, values)
     };
     context.end_deprecation_silence();
-    match eval_preview_outcome(value, context, values)? {
-        Some(Some(value)) => Ok(Some((value, !value.is_borrowed()))),
-        Some(None) => Ok(None),
-        None => Ok(Some((values.null()?, true))),
+    match value {
+        Ok(Some(value)) => Ok(EvalClassConstantPreview::Value(value, !value.is_borrowed())),
+        Ok(None) => Ok(EvalClassConstantPreview::Missing),
+        Err(EvalStatus::UnsupportedConstruct) => Ok(EvalClassConstantPreview::Unavailable),
+        Err(EvalStatus::UncaughtThrowable) => {
+            if let Some(throwable) = context.take_pending_throw() {
+                eval_release_value(context, values, throwable)?;
+            }
+            Ok(EvalClassConstantPreview::Failed)
+        }
+        Err(status) => Err(status),
+    }
+}
+
+/// Returns a reflector preview, using null when silent materialization is unavailable or fails.
+pub(in crate::interpreter) fn eval_class_constant_preview(
+    holder: &str,
+    name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(RuntimeCellHandle, bool)>, EvalStatus> {
+    match eval_class_constant_preview_state(holder, name, context, values)? {
+        EvalClassConstantPreview::Value(value, owned) => Ok(Some((value, owned))),
+        EvalClassConstantPreview::Missing => Ok(None),
+        EvalClassConstantPreview::Unavailable | EvalClassConstantPreview::Failed => {
+            Ok(Some((values.null()?, true)))
+        }
     }
 }
 

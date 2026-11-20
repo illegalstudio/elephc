@@ -119,6 +119,56 @@ fn strict_static_reflection_deferral_preserves_pending_throw_and_uninitialized_s
     }
 }
 
+/// A failed class-constant preview leaves the dependent static ready for normal evaluation.
+#[test]
+fn strict_static_reflection_failed_class_constant_initializers_stay_deferred() {
+    use super::strict_semantics::staged_numeric_execution;
+    let setup = "class FailedStaticConstant{const VALUE=1/0;} \
+        function failedStaticConstant(){static $value=FailedStaticConstant::VALUE;return $value;}";
+    let reflection = "$reflection=new ReflectionFunction('failedStaticConstant');";
+    let snapshot = "$snapshot=$reflection->getStaticVariables();";
+    let observation = "echo gettype($snapshot['value']),'|';";
+    let invocation = "try{failedStaticConstant();}catch(DivisionByZeroError $error){echo 'D';}";
+    for vm in [false, true] {
+        for strict in [false, true] {
+            let mut context = ElephcEvalContext::new();
+            context.install_semantic_profile(SemanticProfile::PERMISSIVE
+                .with(StrictFeature::Locals, strict)
+                .with(StrictFeature::Arithmetic, true)).unwrap();
+            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+            assert!(context.set_global_scope(&mut scope));
+            let result = staged_numeric_execution(setup, false, &mut context, &mut scope, &mut values);
+            assert!(result.is_ok(), "stage=setup, vm={vm}, strict={strict}, output={}: {:?}", values.output, result.as_ref().err());
+            if vm {
+                let wrapper = format!("function failedConstantObservations(){{{reflection}{snapshot}{observation}{invocation}}}");
+                staged_numeric_execution(&wrapper, false, &mut context, &mut scope, &mut values).unwrap();
+                let source = "if(false){function failedConstantObservations(){}} failedConstantObservations();";
+                let result = staged_numeric_execution(source, true, &mut context, &mut scope, &mut values);
+                assert!(result.is_ok(), "stage=vm-observations, strict={strict}, output={}: {:?}", values.output, result.as_ref().err());
+            } else {
+                for (stage, source) in [
+                    ("reflection", reflection),
+                    ("snapshot", snapshot),
+                    ("observation", observation),
+                ] {
+                    let result = staged_numeric_execution(source, false, &mut context, &mut scope, &mut values);
+                    assert!(result.is_ok(), "stage={stage}, strict={strict}, output={}: {:?}", values.output, result.as_ref().err());
+                }
+                assert_eq!(values.output, "NULL|", "strict={strict}");
+                assert!(context.static_local("failedStaticConstant", "value").is_none());
+                let result = staged_numeric_execution(invocation, false, &mut context, &mut scope, &mut values);
+                assert!(result.is_ok(), "stage=invocation, strict={strict}, output={}: {:?}", values.output, result.as_ref().err());
+            }
+            assert_eq!(values.output, "NULL|D", "vm={vm}, strict={strict}");
+            assert!(context.static_local("failedStaticConstant", "value").is_none());
+            assert!(context.take_pending_throw().is_none());
+            for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+            for value in context.take_persistent_cell_owners() { values.release(value).unwrap(); }
+            for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "vm={vm}, strict={strict}: {:?}", values.values[id]); }
+        }
+    }
+}
+
 /// Array constants preserve union keys, equality order and every temporary owner.
 #[test]
 fn strict_static_reflection_array_constant_operators_preserve_keys_and_owners() {

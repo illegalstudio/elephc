@@ -142,10 +142,13 @@ impl<V: RuntimeValueOps> Reducer<'_, V> {
         let value = if let Some(value) = self.context.enum_case(&class, name) { value }
         else if let Some((owner, constant)) = self.context.class_constant(&class, name) {
             if validate_eval_member_access(&owner, constant.visibility(), self.context).is_err() { return Ok(None); }
-            let preview = self.operation(|context, values|
-                eval_class_constant_preview(&owner, name, context, values))?;
-            let Some((value, _)) = preview else { return Ok(None); };
-            value
+            match self.operation(|context, values|
+                eval_class_constant_preview_state(&owner, name, context, values))? {
+                EvalClassConstantPreview::Value(value, _) => value,
+                EvalClassConstantPreview::Missing
+                | EvalClassConstantPreview::Unavailable
+                | EvalClassConstantPreview::Failed => return Ok(None),
+            }
         } else { return Ok(None); };
         self.own(value).map(Some)
     }
