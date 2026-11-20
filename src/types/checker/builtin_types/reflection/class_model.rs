@@ -288,9 +288,13 @@ fn member_fill_preamble(slot: &str, force_generic: bool) -> Stmt {
         span,
     )];
     let is_generic = force_generic || crate::reflection_table::generic_slots().contains(&slot);
-    let fill = if crate::closed_world::is_enabled() {
+    // A property hook's `ReflectionMethod` is built natively by the owner emission even in a
+    // closed world, so its `__parameters_filler` is a compiled filler's address, not -1: the
+    // generic fill would read parameter rows from a `__parameters_row` that was never set.
+    let native_parameters = crate::closed_world::is_enabled() && slot == "__parameters";
+    let fill = if crate::closed_world::is_enabled() && !native_parameters {
         generic_fill
-    } else if is_generic {
+    } else if is_generic || native_parameters {
         vec![Stmt::new(
             StmtKind::If {
                 condition: binary_expr(
