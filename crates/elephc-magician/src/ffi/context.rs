@@ -149,6 +149,35 @@ pub(crate) fn drain_pooled_eval_contexts() {
     }
 }
 
+/// Releases the global scope every retained context took over, at the end of a CLI process.
+///
+/// The variables in that scope hold the program's last references to eval objects. Freeing them
+/// here, while the object-owner registry and the contexts are still intact, lets each object's
+/// release drain the property overlay values its context owns (`forget_released_object`).
+/// Left to `reset_retained_eval_contexts`, the registry is already cleared and
+/// `forget_request_scoped_state` has dropped the overlay table, so those values never came back.
+#[cfg(not(test))]
+pub(crate) fn release_retained_global_scopes_at_exit() {
+    let contexts = {
+        let Ok(contexts) = live_eval_contexts().lock() else {
+            return;
+        };
+        contexts.iter().copied().collect::<Vec<_>>()
+    };
+    for address in contexts {
+        let context = address as *mut ElephcEvalContext;
+        // A destructor run by an earlier scope release may have finalized this context.
+        if !live_eval_contexts().lock().is_ok_and(|live| live.contains(&address)) {
+            continue;
+        }
+        let Some(scope) = (unsafe { context.as_mut() }).and_then(|live| live.take_owned_global_scope())
+        else {
+            continue;
+        };
+        unsafe { crate::ffi::scope::__elephc_eval_scope_free(scope) };
+    }
+}
+
 /// Frees every context still alive at a generated web request boundary.
 ///
 /// `__elephc_eval_context_free` refuses to free a context while it still owns a live closure, a

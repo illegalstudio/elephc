@@ -118,4 +118,6 @@ pub(crate) fn release_request_statics_at_exit() {
     let _ = crate::runtime_hooks::release::release_native_cells(properties.into_values(), None);
     // SAFETY: the box came from `RequestStatics::new` and nothing else holds its pointer now.
     let _ = unsafe { crate::ffi::scope::__elephc_eval_scope_free(Box::into_raw(scope)) };
+    // The program's globals die with the request too, while their objects can still be forgotten.
+    crate::ffi::context::release_retained_global_scopes_at_exit();
 }
