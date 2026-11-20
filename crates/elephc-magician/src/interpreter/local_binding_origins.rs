@@ -44,12 +44,12 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
     match expr {
         EvalExpr::LoadVar(name) => {
             let kind = scope.local_type(name).or_else(|| scope.inferred_local_type(name))
-                .or_else(|| scope.native_binding_type(name)).cloned();
+                .or_else(|| scope.native_binding_type(name)).cloned().unwrap_or_else(mixed);
             let contents = if arrays { generic_local_contracts(scope, name, context).into_iter()
                 .filter(|ty| arrays::contains_contents(&generic_type(ty))).collect::<Vec<_>>() }
                 else { Vec::new() };
-            if contents.is_empty() { kind } else {
-                let mut members = kind.as_ref().map(generic_type).into_iter().collect::<Vec<_>>();
+            if contents.is_empty() { Some(kind) } else {
+                let mut members = vec![generic_type(&kind)];
                 members.extend(contents.iter().map(generic_type));
                 Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Generic(Type::Intersection(members))], false))
             }
@@ -91,7 +91,7 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
         EvalExpr::Call { name, .. } => calls::producer(name, None, context),
         EvalExpr::NamespacedCall { name, fallback_name, .. } => calls::producer(name, Some(fallback_name), context),
         EvalExpr::DynamicCall { .. } | EvalExpr::DynamicMethodCall { .. }
-            | EvalExpr::DynamicStaticMethodCall { .. } => None,
+            | EvalExpr::DynamicStaticMethodCall { .. } => Some(mixed()),
         _ => declared_sources::producer(expr, context, scope),
     }
 }

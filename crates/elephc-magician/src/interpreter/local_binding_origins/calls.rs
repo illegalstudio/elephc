@@ -5,7 +5,7 @@
 //! - Assignment producers and observed builtin predicate source views.
 //!
 //! Key details:
-//! - Known untyped declarations remain unknown rather than falling through to another target.
+//! - Known untyped declarations remain explicitly open rather than inferring from one result.
 //! - A shadowing user function never inherits a global builtin predicate identity.
 
 use super::*;
@@ -27,8 +27,11 @@ pub(in crate::interpreter) fn producer(name: &str, fallback: Option<&str>,
     let name = selected_name(name, fallback, context);
     let source = if let Some(contract) = elephc_builtin_contract::lookup(&name) {
         Some(parameter_type(&builtin_producer_type(contract.returns)))
-    } else if let Some(function) = context.function(&name) { function.return_type().cloned() }
-    else { context.native_function(&name).and_then(|function| function.return_type().cloned()) };
+    } else if let Some(function) = context.function(&name) {
+        Some(function.return_type().cloned().unwrap_or_else(|| parameter_type(&Type::atom("mixed"))))
+    } else if let Some(function) = context.native_function(&name) {
+        Some(function.return_type().cloned().unwrap_or_else(|| parameter_type(&Type::atom("mixed"))))
+    } else { None };
     source.map(|ty| if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
         || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { ty }
         else { parameter_type(&binding_kind_type(generic_type(&ty))) })
