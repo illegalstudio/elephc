@@ -97,11 +97,11 @@ fn evaluate_call_arguments(
 
         if let Some(name) = arg.name() {
             saw_named = true;
-            let (value, ref_target) =
+            let (value, ref_target, source_type) =
                 evaluate_call_argument_value(arg.value(), context, caller_scope, values, owners.as_deref_mut(),
                     builtin_arguments::by_reference(contract, Some(name), evaluated_args.len()))?;
             observe(arg.value(), value);
-            evaluated_args.push(EvaluatedCallArg { source_type: None,
+            evaluated_args.push(EvaluatedCallArg { source_type,
                 evaluation_owner: None,
                 name: Some(name.to_string()),
                 value,
@@ -113,10 +113,10 @@ fn evaluate_call_arguments(
         if saw_named {
             return Err(EvalStatus::RuntimeFatal);
         }
-        let (value, ref_target) = evaluate_call_argument_value(arg.value(), context, caller_scope, values, owners.as_deref_mut(),
+        let (value, ref_target, source_type) = evaluate_call_argument_value(arg.value(), context, caller_scope, values, owners.as_deref_mut(),
             builtin_arguments::by_reference(contract, None, evaluated_args.len()))?;
         observe(arg.value(), value);
-        evaluated_args.push(EvaluatedCallArg { source_type: None,
+        evaluated_args.push(EvaluatedCallArg { source_type,
             evaluation_owner: None,
             name: None,
             value,
@@ -132,17 +132,27 @@ fn evaluate_call_argument_value(
     expr: &EvalExpr, context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps, owners: Option<&mut Vec<RuntimeCellHandle>>,
     by_reference: bool,
-) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>, Option<ArgumentSource>), EvalStatus> {
+    let source = local_binding_origins::source_view(expr, context, scope)
+        .map(|ty| ArgumentSource::capture(ty, context));
     if let Some(owners) = owners {
         if by_reference {
             let reference = builtin_arguments::reference(expr, context, scope, values)?;
             owners.push(reference);
-            return Ok((reference, Some(EvalReferenceTarget::Cell { cell: reference })));
+            return Ok((reference, Some(EvalReferenceTarget::Cell { cell: reference }), source));
         }
-        let value = eval_owned_expr(expr, context, scope, values)?;
+        let (value, source) = if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+            if let EvalExpr::Array(elements) = expr {
+                let (value, source) = array_literals::evaluate_literal(elements, context, scope, values)?;
+                (value, Some(ArgumentSource::capture(source, context)))
+            } else {
+                let (value, source) = mixed_eval::evaluate(expr, context, scope, values)?;
+                (value, source.as_ref().map(|ty| ArgumentSource::capture(crate::eval_ir::parameter_type(ty), context)))
+            }
+        } else { (eval_owned_expr(expr, context, scope, values)?, source) };
         owners.push(value);
-        Ok((value, None))
-    } else { eval_call_arg_value(expr, context, scope, values) }
+        Ok((value, None, source))
+    } else { eval_call_arg_value(expr, context, scope, values).map(|(value, target)| (value, target, source)) }
 }
 
 /// Evaluates one call arg and captures caller-side storage for by-reference parameters.

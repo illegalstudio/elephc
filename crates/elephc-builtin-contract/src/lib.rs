@@ -15,6 +15,7 @@
 mod aot_profile;
 mod callback_parameters;
 mod comparison_policy;
+mod mixed_inputs;
 mod class_spec;
 mod constant_spec;
 mod catalog_classes;
@@ -61,6 +62,7 @@ pub use class_spec::{ClassContract, ClassKind, ClassRoute};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use id::BuiltinId;
 pub use comparison_policy::ComparisonPolicy;
+pub use mixed_inputs::MixedInputDomain;
 pub use core_functions::CORE_FUNCTION_NAMES;
 pub use core_constants::{core_environment_constant, EXECUTABLE_PATH_DEFAULT_KIND};
 pub use core_attributes::{core_attribute_flags, CORE_ATTRIBUTE_CONSTANTS, CORE_ATTRIBUTE_IS_REPEATABLE, CORE_ATTRIBUTE_TARGET_ALL};

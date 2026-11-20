@@ -49,6 +49,7 @@ fn eval_bound_builtin_call_from_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    validate_builtin_call_arguments(name, &arguments, context, values)?;
     for argument in &mut arguments { argument.value = argument.value.borrowed(); }
     let bound = bind_evaluated_builtin_args(name, arguments, values)?;
     let result = eval_builtin_with_values_from_scope(name, &bound, lexical_scope, context, values)

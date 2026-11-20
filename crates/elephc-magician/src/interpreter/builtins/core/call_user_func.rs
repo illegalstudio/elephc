@@ -40,6 +40,10 @@ pub(in crate::interpreter) fn eval_builtin_call_user_func(
             _ => unreachable!("literal func-args callback was canonicalized"),
         };
     }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        let arguments = args.iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+        return eval_owned_builtin_call("call_user_func", &arguments, false, context, scope, values);
+    }
     let callback = eval_owned_expr(&args[0], context, scope, values)?;
     if let Some(name) = eval_owned_argument_callback_name(callback, context, Some(scope), values)? {
         if eval_builtin_uses_owned_arguments(&name) {

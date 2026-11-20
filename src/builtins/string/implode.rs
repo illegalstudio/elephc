@@ -59,10 +59,5 @@ pub(crate) const fn implode_semantics() -> crate::builtins::semantics::BuiltinSe
 /// Uses the supplied arity to distinguish a sole array from a separator followed by an array.
 fn mixed_input_roles(input: &crate::builtins::semantics::BuiltinSemanticInput<'_>)
     -> Vec<(usize, crate::types::PhpType)> {
-    use crate::types::PhpType;
-    match input.arg_types.len() {
-        0 => Vec::new(),
-        1 => vec![(0, PhpType::php_array())],
-        _ => vec![(0, PhpType::Str), (1, PhpType::php_array())],
-    }
+    crate::builtins::mixed_inputs::shared_domains(input)
 }

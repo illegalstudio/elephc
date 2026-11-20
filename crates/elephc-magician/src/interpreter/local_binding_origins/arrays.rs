@@ -177,6 +177,9 @@ pub(in crate::interpreter) fn publish_write(scope: &mut ElephcEvalScope, name: &
             if values.is_reference(cell)? { context.bind_local_reference_types(cell, &[origin]); }
         }
     }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+        scope.record_local_source_view(name.to_string(), parameter_type(&Type::atom("array")), context.source_view_epoch());
+    }
     refresh_reference_sources(scope, name, context, values)
 }
 

@@ -140,7 +140,7 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
         )?;
         // call_user_func forwards variadic names to its target, rather than binding them to
         // its own `args` parameter. Keep the same owner lease around that named dispatch.
-        if name == "call_user_func" && evaluated.iter().any(|argument| argument.name.is_some()) {
+        if name == "call_user_func" {
             ordered.extend(evaluated.iter().map(|argument| argument.value));
             let borrowed = evaluated.iter().cloned().map(|mut argument| {
                 argument.value = argument.value.borrowed();
@@ -152,6 +152,7 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
                 ).and_then(|result| promote_borrowed_result(result, values))
             });
         }
+        validate_builtin_call_arguments(name, &evaluated, context, values)?;
         ordered = bind_builtin_arguments(name, evaluated.clone(), values, Some(&mut owners))?;
         if callback {
             adapt_callback_references(

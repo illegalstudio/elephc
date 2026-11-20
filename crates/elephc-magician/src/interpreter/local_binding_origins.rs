@@ -92,7 +92,7 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
 }
 
 /// Adapts the neutral builtin return contract without parsing rendered documentation as semantics.
-fn builtin_producer_type(ty: elephc_builtin_contract::TypeSpec) -> Type {
+pub(in crate::interpreter) fn builtin_producer_type(ty: elephc_builtin_contract::TypeSpec) -> Type {
     use elephc_builtin_contract::TypeSpec;
     let name = match ty {
         TypeSpec::Int => "int", TypeSpec::Float => "float", TypeSpec::Str => "string",

@@ -37,9 +37,10 @@ pub(in crate::interpreter) fn validate_builtin_call_arguments(
     name: &str, arguments: &[EvaluatedCallArg],
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    let mixed = context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed);
     let coercions = context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions);
     let nullability = context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability);
-    if !coercions && !nullability && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Comparisons) { return Ok(()); }
+    if !mixed && !coercions && !nullability && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Comparisons) { return Ok(()); }
     let Some(spec) = eval_declared_builtin_spec(name) else { return Ok(()); };
     let (bound, _) = bind_evaluated_ref_builtin_args(&spec.param_names, arguments, spec.variadic.is_some())?;
     // The existing callee retains its missing-required-argument diagnostic priority.
@@ -47,6 +48,7 @@ pub(in crate::interpreter) fn validate_builtin_call_arguments(
     super::comparison_contracts::validate(spec,
         |index| bound.get(index).and_then(|argument| argument.as_ref().map(|argument| argument.value)),
         context, values)?;
+    if mixed { validate_mixed_builtin_inputs(name, arguments, &bound, context, values)?; }
     if !coercions && !nullability { return Ok(()); }
     for (index, (parameter, argument)) in spec.params.iter().zip(&bound).enumerate() {
         if let Some(argument) = argument {
@@ -64,7 +66,8 @@ pub(in crate::interpreter) fn with_eval_builtin_call_arguments<V: RuntimeValueOp
         -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let modes = if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)
-        || context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability) {
+        || context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
+        || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
         CallArgumentModes::for_builtin(name)
     } else { CallArgumentModes::default() };
     with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |arguments, context, scope, values| {
@@ -120,4 +123,39 @@ fn builtin_type_accepts_exact(
             accepted
         }
     })
+}
+
+/// Applies signature inputs and shared overloaded capabilities before value hooks discard source metadata.
+fn validate_mixed_builtin_inputs(name: &str, arguments: &[EvaluatedCallArg],
+    bound: &[Option<EvaluatedCallArg>], context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    use crate::eval_ir::parameter_type;
+    use elephc_generics::Type;
+    let Some(spec) = eval_declared_builtin_spec(name) else { return Ok(()); };
+    for (parameter, argument) in spec.params.iter().zip(bound) {
+        let Some(argument) = argument else { continue; };
+        if parameter.by_ref || parameter.ty == TypeSpec::Mixed { continue; }
+        let mut target = local_binding_origins::builtin_producer_type(parameter.ty);
+        if parameter.default == Some(EvalBuiltinDefaultValue::Null) {
+            target = Type::Nullable(Box::new(target));
+        }
+        mixed_source_proofs::require_argument(&parameter_type(&target), argument.source_type.as_ref(),
+            argument.value, false, context, values)?;
+    }
+    if let Some(contract) = elephc_builtin_contract::lookup(name) {
+        let arity = bound.iter().rposition(Option::is_some).map_or(arguments.len(), |position| position+1);
+        for (index, domain) in contract.mixed_input_domains(arity) {
+            use elephc_builtin_contract::MixedInputDomain as D;
+            let Some(argument) = bound.get(index).and_then(Option::as_ref) else { continue; };
+            let target = match domain {
+                D::Array => Type::atom("array"), D::String => Type::atom("string"),
+                D::Resource => Type::atom(elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC),
+                D::Countable => Type::Union(vec![Type::atom("array"),Type::atom("Countable")]),
+            };
+            mixed_source_proofs::require_argument(&parameter_type(&target), argument.source_type.as_ref(),
+                argument.value, argument.ref_target.is_some(), context, values)?;
+        }
+    }
+    Ok(())
 }
