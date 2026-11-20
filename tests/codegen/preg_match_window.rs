@@ -117,44 +117,6 @@ echo json_encode($m), "\n";
     );
 }
 
-/// Eval runs the same `$flags` / `$offset` semantics through Magician.
-#[test]
-fn test_preg_match_window_eval_parity() {
-    let out = compile_and_run_with_regex(r#"<?php
-$source = 'echo preg_match("/(b)(x)?/", "abcb", $m, PREG_OFFSET_CAPTURE | PREG_UNMATCHED_AS_NULL, 2), json_encode($m), "|";
-echo preg_match_all("/(a)(x)?/", "baba", $all, PREG_SET_ORDER, 2), json_encode($all), "|";
-var_dump(preg_match("/a/", "a", $m, 0, 5));
-try { preg_match("/a/", "a", $m, PREG_SET_ORDER); } catch (ValueError $e) { echo $e->getMessage(); }' . ' // ' . $argc;
-eval($source);
-"#);
-    assert_eq!(
-        out,
-        "1[[\"b\",3],[\"b\",3],[null,-1]]|1[[\"a\",\"a\"]]|bool(false)\n\
-         preg_match(): Argument #4 ($flags) must be a PREG_* constant"
-    );
-}
-
-/// Named `offset:` / `flags:` that skip `$matches` bind through callables on both backends,
-/// without a by-reference warning for the omitted `$matches`.
-#[test]
-fn test_preg_match_named_offset_through_callables() {
-    let body = r#"set_error_handler(function ($no, $msg) { echo "[", $msg, "]"; return true; });
-echo call_user_func_array('preg_match', ['pattern' => '/a/', 'subject' => 'ba', 'offset' => 1]), call_user_func_array('preg_match', ['/a/', 'ba', 'offset' => 2]), "|";
-$f = preg_match(...);
-echo $f('/a/', 'ba', offset: 2), $f(pattern: '/a/', subject: 'bab', offset: 2, flags: 0), "|";
-$g = preg_match_all(...);
-echo call_user_func_array('preg_match_all', ['pattern' => '/a/', 'subject' => 'baa', 'offset' => 2]), $g('/a/', 'baaa', offset: 1), "|";
-var_dump(call_user_func_array('preg_match', ['pattern' => '/a/', 'subject' => 'ba', 'offset' => 5]));
-echo preg_last_error(), "|";
-try { call_user_func_array('preg_match', ['pattern' => '/a/', 'subject' => 'ba', 'flags' => 99]); } catch (ValueError $e) { echo $e->getMessage(), "|"; }
-try { $g('/a/', 'ba', flags: 99); } catch (ValueError $e) { echo $e->getMessage(); }
-"#;
-    let expected = "10|00|13|bool(false)\n1|preg_match(): Argument #4 ($flags) must be a PREG_* constant|\
-                    preg_match_all(): Argument #4 ($flags) must be a PREG_* constant";
-    assert_eq!(compile_and_run_with_regex(&format!("<?php\n{body}")), expected, "aot");
-    assert_eq!(compile_and_run_with_regex(&opaque_eval(body)), expected, "eval");
-}
-
 /// Boxed `$flags` / `$offset` values are cast to integers, so a capture can drive the next search.
 #[test]
 fn test_preg_match_boxed_offset_and_flags() {
@@ -267,11 +229,34 @@ $all = new WindowNoisy_SFX();
 var_dump(preg_match_all('/a/', 'aa', $all, 0, 1), preg_last_error());
 "#;
 
-/// The `$flags` / `$offset` forms record PHP's `preg_last_error()` codes in compiled code
-/// and through a runtime-built `eval()`, sharing one compile. `SFX` keeps the bundled
-/// declarations unique.
+/// Fixture: eval runs the same `$flags` / `$offset` semantics through Magician.
+const WINDOW_EVAL_PARITY: &str = r#"echo preg_match("/(b)(x)?/", "abcb", $parity_m, PREG_OFFSET_CAPTURE | PREG_UNMATCHED_AS_NULL, 2), json_encode($parity_m), "|";
+echo preg_match_all("/(a)(x)?/", "baba", $parity_all, PREG_SET_ORDER, 2), json_encode($parity_all), "|";
+var_dump(preg_match("/a/", "a", $parity_m, 0, 5));
+try { preg_match("/a/", "a", $parity_m, PREG_SET_ORDER); } catch (ValueError $e) { echo $e->getMessage(); }
+"#;
+
+/// Fixture: named `offset:` / `flags:` that skip `$matches` bind through callables, without
+/// a by-reference warning for the omitted `$matches`. The handler echoes any warning and is
+/// restored so later bundled cases keep the default one.
+const WINDOW_NAMED_CALLABLES: &str = r#"set_error_handler(function ($no, $msg) { echo "[", $msg, "]"; return true; });
+echo call_user_func_array('preg_match', ['pattern' => '/a/', 'subject' => 'ba', 'offset' => 1]), call_user_func_array('preg_match', ['/a/', 'ba', 'offset' => 2]), "|";
+$match_SFX = preg_match(...);
+echo $match_SFX('/a/', 'ba', offset: 2), $match_SFX(pattern: '/a/', subject: 'bab', offset: 2, flags: 0), "|";
+$match_all_SFX = preg_match_all(...);
+echo call_user_func_array('preg_match_all', ['pattern' => '/a/', 'subject' => 'baa', 'offset' => 2]), $match_all_SFX('/a/', 'baaa', offset: 1), "|";
+var_dump(call_user_func_array('preg_match', ['pattern' => '/a/', 'subject' => 'ba', 'offset' => 5]));
+echo preg_last_error(), "|";
+try { call_user_func_array('preg_match', ['pattern' => '/a/', 'subject' => 'ba', 'flags' => 99]); } catch (ValueError $e) { echo $e->getMessage(), "|"; }
+try { $match_all_SFX('/a/', 'ba', flags: 99); } catch (ValueError $e) { echo $e->getMessage(); }
+restore_error_handler();
+"#;
+
+/// The `$flags` / `$offset` forms record PHP's `preg_last_error()` codes, run in eval, and
+/// bind named arguments through callables, in compiled code and through a runtime-built
+/// `eval()`, sharing one compile. `SFX` keeps the bundled declarations unique.
 #[test]
-fn test_preg_match_window_last_error() {
+fn test_preg_match_window_bundle() {
     let internal = "1:Internal error";
     let utf8 = "4:Malformed UTF-8 characters, possibly incorrectly encoded";
     let offset = "5:The offset did not correspond to the beginning of a valid UTF-8 code point";
@@ -289,6 +274,10 @@ fn test_preg_match_window_last_error() {
     );
     let destructor_expected = "bool(false)\nint(1)\nint(0)\nbool(false)\nbool(false)\nint(1)\n\
                                bool(false)\nint(1)\nint(0)\n";
+    let parity_expected = "1[[\"b\",3],[\"b\",3],[null,-1]]|1[[\"a\",\"a\"]]|bool(false)\n\
+                           preg_match(): Argument #4 ($flags) must be a PREG_* constant";
+    let named_expected = "10|00|13|bool(false)\n1|preg_match(): Argument #4 ($flags) must be a PREG_* constant|\
+                          preg_match_all(): Argument #4 ($flags) must be a PREG_* constant";
     let aot = |body: &str| format!("<?php\n{}", body.replace("SFX", "aot"));
     let eval = |body: &str| opaque_eval(&body.replace("SFX", "eval"));
     let sources = [
@@ -297,6 +286,9 @@ fn test_preg_match_window_last_error() {
         aot(WINDOW_MATCHES_DESTRUCTOR),
         eval(WINDOW_MATCHES_DESTRUCTOR),
         aot(WINDOW_INVALID_PATTERN),
+        eval(WINDOW_EVAL_PARITY),
+        aot(WINDOW_NAMED_CALLABLES),
+        eval(WINDOW_NAMED_CALLABLES),
     ];
     assert_bundle_with(
         &[
@@ -305,6 +297,9 @@ fn test_preg_match_window_last_error() {
             BundleCase { name: "window_destructor_aot", source: &sources[2], expected: destructor_expected },
             BundleCase { name: "window_destructor_eval", source: &sources[3], expected: destructor_expected },
             BundleCase { name: "window_invalid_pattern_aot", source: &sources[4], expected: &invalid_expected },
+            BundleCase { name: "window_eval_parity", source: &sources[5], expected: parity_expected },
+            BundleCase { name: "window_named_callables_aot", source: &sources[6], expected: named_expected },
+            BundleCase { name: "window_named_callables_eval", source: &sources[7], expected: named_expected },
         ],
         compile_and_run_with_regex,
     );
