@@ -105,6 +105,11 @@ fn eval_expr_with_result_ownership(
     values: &mut impl RuntimeValueOps,
     own_result: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+        && nullsafe_chains::receiver(expr).is_some() {
+        return nullsafe_chains::evaluate_with_source(expr,false,false,context,scope,values)?
+            .map_or_else(||values.null(),|result|Ok(result.0));
+    }
     if (context.semantic_profile().contains(elephc_semantics::StrictFeature::Nullability)
         || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed))
         && super::nullsafe_chains::has_nullsafe(expr) {

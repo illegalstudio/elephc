@@ -806,6 +806,10 @@ its ordinary successor; an upstream nullsafe short circuit skips later selectors
 keys and arguments. Quiet `??` probes preserve missing roots and initialized null
 receivers without deriving type evidence from them. Reached PHP array/string
 keys use their source alternatives; custom ArrayAccess keys keep their own domain.
+Ordinary postfix accesses reuse this same source and owner scope. A reached index
+or dynamic member selector runs before its access proof is checked; method
+arguments remain behind receiver validation. Open array elements and undeclared
+properties retain unknown sources instead of inheriting their current value tags.
 
 Native descriptor signatures retain their original twelve physical metadata words.
 Flag bit 1 marks an appended logical-source record pointer at word 12. The

@@ -86,7 +86,7 @@ pub(super) fn eval_discarded_core_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
-        && nullsafe_chains::has_nullsafe(expression) {
+        && nullsafe_chains::receiver(expression).is_some() {
         return nullsafe_chains::evaluate_with_source(expression,false,true,context,scope,values)?
             .map_or_else(||values.null(),|result|Ok(result.0));
     }

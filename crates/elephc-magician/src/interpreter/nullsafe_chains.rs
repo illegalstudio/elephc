@@ -54,34 +54,45 @@ pub(super) fn evaluate_with_source(
     };
     let Some((object,source))=evaluate_with_source(receiver_expr,quiet,false,context,scope,values)? else {return Ok(None);};
     let result=(|| {
-        source_types::receiver(expr,source.as_ref(),nullsafe,quiet,context,values)?;
-        if nullsafe && values.is_null(object)? {return Ok(None);}
+        if nullsafe && values.is_null(object)? {
+            source_types::receiver(expr,source.as_ref(),nullsafe,quiet,context,values)?;
+            return Ok(None);
+        }
         let result=match expr {
             EvalExpr::PropertyGet {property,..}|EvalExpr::NullsafePropertyGet {property,..}=> {
+                source_types::receiver(expr,source.as_ref(),nullsafe,quiet,context,values)?;
                 let source=source_types::property(object,property,context,values)?;
                 property_value(object,property,quiet,context,values).map(|value|(value,source))
             }
             EvalExpr::DynamicPropertyGet {property,..}|EvalExpr::NullsafeDynamicPropertyGet {property,..}=> {
                 let property=eval_dynamic_member_name(property,context,scope,values)?;
+                source_types::receiver(expr,source.as_ref(),nullsafe,quiet,context,values)?;
                 let source=source_types::property(object,&property,context,values)?;
                 property_value(object,&property,quiet,context,values).map(|value|(value,source))
             }
             EvalExpr::ArrayGet {index,..}=> {
                 let (index,key_source)=if mixed {mixed_eval::evaluate(index,context,scope,values)?}
                     else {(eval_owned_expr(index,context,scope,values)?,None)};
-                let result=source_types::offset_key(source.as_ref(),key_source.as_ref(),context,values).and_then(|()|
+                let result=source_types::receiver(expr,source.as_ref(),nullsafe,quiet,context,values)
+                    .and_then(|()|source_types::offset_key(source.as_ref(),key_source.as_ref(),context,values)).and_then(|()|
                     if quiet {eval_array_get_quiet_result(object,index,context,values)}
                     else {eval_array_get_result(object,index,context,values)});
                 finish_eval_argument_values(result,[index],context,values)
                     .map(|value|(value,source.as_ref().and_then(local_binding_origins::declared_offset_result)))
             }
-            EvalExpr::MethodCall {method,args,..}|EvalExpr::NullsafeMethodCall {method,args,..}=>
-                method_value(object,method,args,discarded,mixed,context,scope,values),
+            EvalExpr::MethodCall {method,args,..}|EvalExpr::NullsafeMethodCall {method,args,..}=> {
+                source_types::receiver(expr,source.as_ref(),nullsafe,quiet,context,values)?;
+                method_value(object,method,args,discarded,mixed,context,scope,values)
+            }
             EvalExpr::DynamicMethodCall {method,args,..}|EvalExpr::NullsafeDynamicMethodCall {method,args,..}=> {
                 let method=eval_dynamic_member_name(method,context,scope,values)?;
+                source_types::receiver(expr,source.as_ref(),nullsafe,quiet,context,values)?;
                 method_value(object,&method,args,discarded,mixed,context,scope,values)
             }
-            EvalExpr::DynamicCall {args,..}=>eval_dynamic_call_with_callback_source(object,args,context,scope,values),
+            EvalExpr::DynamicCall {args,..}=> {
+                source_types::receiver(expr,source.as_ref(),nullsafe,quiet,context,values)?;
+                eval_dynamic_call_with_callback_source(object,args,context,scope,values)
+            }
             _=>Err(EvalStatus::RuntimeFatal),
         };
         result.and_then(|(value,source)| {

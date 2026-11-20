@@ -17,7 +17,7 @@ use crate::runtime_hooks::owner_frames::with_runtime_owners;
 pub(super) fn evaluate(expr: &EvalExpr, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<Type>), EvalStatus> {
-    if nullsafe_chains::has_nullsafe(expr) {
+    if nullsafe_chains::receiver(expr).is_some() {
         return nullsafe_chains::evaluate_with_source(expr,false,false,context,scope,values)?
             .map_or_else(||values.null().map(|value|(value,Some(Type::atom("null")))),Ok);
     }
