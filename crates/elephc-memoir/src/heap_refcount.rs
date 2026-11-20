@@ -61,3 +61,52 @@ pub fn emit_commit_unique_integer(emitter: &mut (impl AssemblyEmitter + TargetAb
         }
     }
 }
+
+/// Marks an owned string whose identity lease must be retired during heap release.
+pub fn emit_mark_string_identity(emitter: &mut (impl AssemblyEmitter + TargetAbi), pointer: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr w9, [{pointer}, #-8]"));          // load the allocation kind word before registering identity metadata
+            emitter.instruction(&format!("mov w10, #{}", crate::layout::MBSTRING_IDENTITY_TRACKED)); // materialize the tracked-identity header flag
+            emitter.instruction("orr w9, w9, w10");                             // mark this allocation as carrying mbstring identity metadata
+            emitter.instruction(&format!("str w9, [{pointer}, #-8]"));          // publish the flag so the free path can skip untracked strings
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("or QWORD PTR [{pointer} - 8], 0x{:x}", crate::layout::MBSTRING_IDENTITY_TRACKED)); // mark this allocation as carrying mbstring identity metadata
+        }
+    }
+}
+
+/// Returns whether the known cell has an owner in addition to the caller's retained pin.
+pub fn emit_has_other_owner(emitter: &mut (impl AssemblyEmitter + TargetAbi), done: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbz x0, {done}"));                    // an absent cell cannot have another owner
+            emitter.instruction("ldr w9, [x0, #-12]");                          // read the uniform heap reference count
+            emitter.instruction("cmp w9, #1");                                  // the pending write owns one retained cell reference
+            emitter.instruction("cset x0, hi");                                 // another owner keeps the selected parent attached
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rax, rax");                               // an absent cell cannot have another owner
+            emitter.instruction(&format!("jz {done}"));                         // retain the zero result for an absent cell
+            emitter.instruction("cmp DWORD PTR [rax - 12], 1");                 // compare the uniform heap reference count with the pending pin
+            emitter.instruction("seta al");                                     // another owner keeps the selected parent attached
+            emitter.instruction("movzx eax, al");                               // materialize the complete PHP boolean result
+        }
+    }
+}
+
+/// Branches when only the current owner holds the known allocation.
+pub fn emit_branch_if_at_most_one_owner(emitter: &mut (impl AssemblyEmitter + TargetAbi), done: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("ldr w9, [x0, #-12]");                          // load the allocation refcount
+            emitter.instruction("cmp w9, #1");                                  // a sole owner has no alias to preserve
+            emitter.instruction(&format!("b.ls {done}"));                       // skip the shared-owner path
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp DWORD PTR [rax - 12], 1");                 // compare the allocation refcount against one
+            emitter.instruction(&format!("jbe {done}"));                        // skip the shared-owner path
+        }
+    }
+}

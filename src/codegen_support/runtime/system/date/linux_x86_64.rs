@@ -46,6 +46,7 @@ use crate::codegen_support::abi;
 /// - `[rbp - 64]`: original concat-buffer offset (for global update)
 /// - `[rbp - 96..rbp - 128]`: scratch area for decimal digit staging in `__rt_date_write_int64_linux_x86_64`
 pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
+    let output = elephc_memoir::strings::strbuf::FramedStringBuffer { descriptor: 192, cursor: 40 };
     emitter.blank();
     emitter.comment("--- runtime: date / gmdate ---");
     // gmdate() shares this formatter, entering with the UTC flag set so the timestamp
@@ -59,7 +60,7 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before the date formatter uses stack-backed locals and helpers
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved timestamp, format metadata, and decimal scratch buffer
-    emitter.instruction("sub rsp, 160");                                        // formatter locals + decimal scratch + the c/r format-include save slots
+    emitter.instruction("sub rsp, 192");                                        // formatter locals + decimal scratch + the c/r format-include save slots
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the requested Unix timestamp so helper paths can reload it after libc and formatting calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save the format-string pointer so the main loop can reload it without depending on caller-saved registers
@@ -84,12 +85,7 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_date_decomposed_linux_x86_64");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the returned struct tm pointer so each format-token branch can reload the decomposed calendar fields
 
-    elephc_memoir::strings::concat_cursor::emit_read(emitter, "r8");              // load the current concat-buffer offset before appending the formatted date output
-    emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // preserve the original concat-buffer offset for the final global offset update
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r9");                     // load the base address of the shared concat buffer used for transient string results
-    emitter.instruction("add r9, r8");                                          // compute the initial write cursor inside the concat buffer from the saved relative offset
-    emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save the live write cursor so every token helper can append to the same destination buffer
-    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the formatted string start pointer for the final return value
+    output.emit_init(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // start scanning the format string at byte index zero
     emitter.instruction("mov QWORD PTR [rbp - 136], 0");                        // format-include save slot empty (not inside a c/r sub-format)
 
@@ -97,6 +93,9 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the current format-string byte index before checking for loop completion
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 24]");                       // stop once the byte index reaches the saved format length
     emitter.instruction("jae __rt_date_check_pop_linux_x86_64");                // reached the end: pop a c/r sub-format or finish
+    // Fixed-width tokens fit in one signed integer's decimal representation plus punctuation.
+    output.emit_ensure_fixed(emitter, 32);
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the token index after buffer growth
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the format-string pointer before reading the current format character
     emitter.instruction("movzx eax, BYTE PTR [r8 + rcx]");                      // load the current format character as an unsigned byte for the token dispatch ladder
 
@@ -640,13 +639,8 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 136], 0");                        // clear the in-sub marker
     emitter.instruction("jmp __rt_date_loop_linux_x86_64");                     // resume the main format
     emitter.label("__rt_date_done_linux_x86_64");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // return the formatted-string start pointer in the standard x86_64 string result register
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload the live output cursor so the final string length can be computed from the written byte count
-    emitter.instruction("sub rdx, rax");                                        // compute the formatted-string length from the distance between the output cursor and the start pointer
-    emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // reload the original concat-buffer offset that was active before formatting started
-    emitter.instruction("add r8, rdx");                                         // advance the global concat-buffer offset by the number of bytes written by the formatter
-    elephc_memoir::strings::concat_cursor::emit_write(emitter, "r8");             // publish the updated concat-buffer offset for later transient string helpers
-    emitter.instruction("add rsp, 160");                                        // release the formatter locals, scratch, and c/r save slots before returning
+    output.emit_finish(emitter, false);
+    emitter.instruction("add rsp, 192");                                        // release the formatter locals, scratch, and c/r save slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the formatted date string
     emitter.instruction("ret");                                                 // return the formatted date string pointer and length through the standard x86_64 string result registers
 
@@ -923,17 +917,12 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [r8 + 48]");                        // load tm_zone (char* abbreviation, offset 48)
     emitter.instruction("test rsi, rsi");                                       // no abbreviation available?
     emitter.instruction("jz __rt_date_T_done_linux_x86_64");                    // yes → emit nothing
-    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the live output cursor
-    emitter.label("__rt_date_T_copy_linux_x86_64");
-    emitter.instruction("mov al, BYTE PTR [rsi]");                              // load one abbreviation byte
-    emitter.instruction("test al, al");                                         // NUL terminator?
-    emitter.instruction("jz __rt_date_T_save_linux_x86_64");                    // yes → finish
-    emitter.instruction("mov BYTE PTR [r9], al");                               // store the byte into the output buffer
-    emitter.instruction("add r9, 1");                                           // advance the output cursor
-    emitter.instruction("add rsi, 1");                                          // advance the abbreviation pointer
-    emitter.instruction("jmp __rt_date_T_copy_linux_x86_64");                   // continue copying
-    emitter.label("__rt_date_T_save_linux_x86_64");
-    emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // publish the advanced output cursor
+    emitter.instruction("mov rdi, rsi");                                        // pass the abbreviation to strlen
+    emitter.bl_c("strlen");
+    emitter.instruction("mov rdx, rax");                                        // pass the actual abbreviation length to the buffer
+    emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // reload the decomposed timestamp
+    emitter.instruction("mov rsi, QWORD PTR [r8 + 48]");                        // reload the borrowed abbreviation
+    output.emit_append_external(emitter);
     emitter.label("__rt_date_T_done_linux_x86_64");
     emitter.instruction("jmp __rt_date_next_linux_x86_64");                     // continue with the next format byte
 
@@ -953,18 +942,7 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [rip + _php_tz_utc]");                        // address of the literal "UTC"
     emitter.instruction("mov rdx, 3");                                          // length of "UTC"
     emitter.label("__rt_date_e_copy_linux_x86_64");
-    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the live output cursor
-    emitter.instruction("xor rcx, rcx");                                        // copy index = 0
-    emitter.label("__rt_date_e_loop_linux_x86_64");
-    emitter.instruction("cmp rcx, rdx");                                        // copied every byte?
-    emitter.instruction("jae __rt_date_e_done_linux_x86_64");                   // yes → finish
-    emitter.instruction("mov al, BYTE PTR [rsi + rcx]");                        // load one identifier byte
-    emitter.instruction("mov BYTE PTR [r9 + rcx], al");                         // store it into the output buffer
-    emitter.instruction("add rcx, 1");                                          // advance the copy index
-    emitter.instruction("jmp __rt_date_e_loop_linux_x86_64");                   // continue copying
-    emitter.label("__rt_date_e_done_linux_x86_64");
-    emitter.instruction("add r9, rdx");                                         // advance the output cursor by the identifier length
-    emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // publish the advanced output cursor
+    output.emit_append_external(emitter);
     emitter.instruction("jmp __rt_date_next_linux_x86_64");                     // continue with the next format byte
 
     // -- helper: ISO-8601 week + year from struct tm → eax = week, r9d = year --

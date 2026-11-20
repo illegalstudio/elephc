@@ -910,3 +910,23 @@ try { $f[$r] = 1; } catch (TypeError $e) { echo "set: ", $e->getMessage(), "\n";
         "set: Cannot access offset of type resource on SplFixedArray\n"
     );
 }
+
+/// Legacy list serialization reserves the full byte payload before copying an item.
+#[test]
+fn test_spl_legacy_serialization_preserves_large_binary_item() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+function encode_list(int $length): void {
+    $list = new SplDoublyLinkedList();
+    $list->push(str_repeat("x\0", $length));
+    $list->push(false);
+    $encoded = $list->serialize();
+    echo strlen($encoded), "|", substr($encoded, 0, 14), "|",
+         ord($encoded[15]), "|", substr($encoded, -7);
+}
+encode_list(32768);
+"#,
+        524288,
+    );
+    assert_eq!(out, "65557|i:0;:s:65536:\"|0|\";:b:0;");
+}

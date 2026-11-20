@@ -135,19 +135,7 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_array_new");
     own(emitter, ARRAY);
     // The array consumes Mixed pointers and must retain that element shape during GC.
-    if arm {
-        emitter.instruction("ldr x9, [x0, #-8]");                               // preserve the array's allocation metadata
-        emitter.instruction("mov x10, #0x80ff");                                // retain the kind and persistent COW bits
-        emitter.instruction("and x9, x9, x10");                                 // clear the previous element-type metadata
-        emitter.instruction("orr x9, x9, #0x700");                              // stamp boxed Mixed element ownership
-        emitter.instruction("str x9, [x0, #-8]");                               // publish the shape before inserting the bucket
-    } else {
-        emitter.instruction("mov r9, QWORD PTR [rax - 8]");                     // preserve the array's allocation metadata
-        emitter.instruction("mov r10, 0xffffffff000080ff");                     // retain the heap marker, kind and COW bits
-        emitter.instruction("and r9, r10");                                     // clear the previous element-type metadata
-        emitter.instruction("or r9, 0x700");                                    // stamp boxed Mixed element ownership
-        emitter.instruction("mov QWORD PTR [rax - 8], r9");                     // publish the shape before inserting the bucket
-    }
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, elephc_memoir::ValueTag::new(7));
     load(emitter, owner(ARRAY), arg0);
     load(emitter, owner(BOXED_BUCKET), arg1);
     abi::emit_call_label(emitter, "__rt_array_push_int");

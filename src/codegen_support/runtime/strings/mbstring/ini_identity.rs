@@ -43,10 +43,7 @@ fn aarch64(emitter: &mut Emitter, operation: &str) {
     }
     if matches!(operation, "bind" | "copy" | "fresh" | "persist") {
         let pointer = if operation == "fresh" { "x1" } else { "x0" };
-        emitter.instruction(&format!("ldr w9, [{pointer}, #-8]"));              // load the allocation kind word before registering identity metadata
-        emitter.instruction(&format!("mov w10, #{}", crate::codegen_support::sentinels::MBSTRING_IDENTITY_TRACKED)); // materialize the tracked-identity header flag
-        emitter.instruction("orr w9, w9, w10");                                 // mark this allocation as carrying mbstring identity metadata
-        emitter.instruction(&format!("str w9, [{pointer}, #-8]"));              // publish the flag so the free path can skip untracked strings
+        elephc_memoir::heap_refcount::emit_mark_string_identity(emitter, pointer);
     }
     if matches!(operation, "fresh" | "literal") {
         emitter.instruction("mov x0, x1");                                      // pass the native string result pointer after preserving all live registers
@@ -96,7 +93,7 @@ fn x86_64(emitter: &mut Emitter, operation: &str) {
         emitter.instruction(&format!("movdqu XMMWORD PTR [rsp + {}], xmm{register}", register * 16));// preserve each complete vector value before calling Rust
     }
     if matches!(operation, "bind" | "copy" | "fresh" | "persist") {
-        emitter.instruction(&format!("or QWORD PTR [rax - 8], 0x{:x}", crate::codegen_support::sentinels::MBSTRING_IDENTITY_TRACKED)); // mark this allocation as carrying mbstring identity metadata
+        elephc_memoir::heap_refcount::emit_mark_string_identity(emitter, "rax");
     }
     if operation != "reset" {
         emitter.instruction("mov rdi, rax");                                    // pass the native owner or destination allocation to C

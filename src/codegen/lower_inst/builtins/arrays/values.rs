@@ -276,7 +276,7 @@ fn emit_assoc_array_value_append_aarch64(ctx: &mut FunctionContext<'_>, value_ty
             ctx.emitter.instruction("mov x1, x3");                              // move the associative-array string pointer into the string-persist input register
             ctx.emitter.instruction("mov x2, x4");                              // move the associative-array string length into the string-persist input register
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            emit_append_string_value_aarch64(ctx, "x1", "x2");
+            elephc_memoir::values::packed_slots::emit_append_string_value_aarch64(ctx.emitter, "x1", "x2");
         }
         PhpType::Mixed => {
             let reuse_box = ctx.next_label("avals_assoc_reuse_mixed");
@@ -289,15 +289,15 @@ fn emit_assoc_array_value_append_aarch64(ctx: &mut FunctionContext<'_>, value_ty
             ctx.emitter.instruction("mov x0, x3");                              // move the existing mixed box pointer into the incref helper input register
             abi::emit_call_label(ctx.emitter, "__rt_incref");
             ctx.emitter.label(&store_box);
-            emit_append_word_value_aarch64(ctx, "x0");
+            elephc_memoir::values::packed_slots::emit_append_word_value_aarch64(ctx.emitter, "x0");
         }
         other => {
             if other.is_refcounted() {
                 ctx.emitter.instruction("mov x0, x3");                          // move the borrowed heap pointer into the incref helper input register
                 abi::emit_call_label(ctx.emitter, "__rt_incref");
-                emit_append_word_value_aarch64(ctx, "x0");
+                elephc_memoir::values::packed_slots::emit_append_word_value_aarch64(ctx.emitter, "x0");
             } else if is_supported_assoc_array_value(other) {
-                emit_append_word_value_aarch64(ctx, "x3");
+                elephc_memoir::values::packed_slots::emit_append_word_value_aarch64(ctx.emitter, "x3");
             } else {
                 return Err(CodegenIrError::unsupported(format!(
                     "array_values associative value PHP type {:?}",
@@ -316,7 +316,7 @@ fn emit_assoc_array_value_append_x86_64(ctx: &mut FunctionContext<'_>, value_ty:
             ctx.emitter.instruction("mov rax, rcx");                            // move the associative-array string pointer into the string-persist input register
             ctx.emitter.instruction("mov rdx, r8");                             // move the associative-array string length into the string-persist input register
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-            emit_append_string_value_x86_64(ctx, "rax", "rdx");
+            elephc_memoir::values::packed_slots::emit_append_string_value_x86_64(ctx.emitter, "rax", "rdx");
         }
         PhpType::Mixed => {
             let reuse_box = ctx.next_label("avals_assoc_reuse_mixed");
@@ -329,15 +329,15 @@ fn emit_assoc_array_value_append_x86_64(ctx: &mut FunctionContext<'_>, value_ty:
             ctx.emitter.instruction("mov rax, rcx");                            // move the existing mixed box pointer into the incref helper input register
             abi::emit_call_label(ctx.emitter, "__rt_incref");
             ctx.emitter.label(&store_box);
-            emit_append_word_value_x86_64(ctx, "rax");
+            elephc_memoir::values::packed_slots::emit_append_word_value_x86_64(ctx.emitter, "rax");
         }
         other => {
             if other.is_refcounted() {
                 ctx.emitter.instruction("mov rax, rcx");                        // move the borrowed heap pointer into the incref helper input register
                 abi::emit_call_label(ctx.emitter, "__rt_incref");
-                emit_append_word_value_x86_64(ctx, "rax");
+                elephc_memoir::values::packed_slots::emit_append_word_value_x86_64(ctx.emitter, "rax");
             } else if is_supported_assoc_array_value(other) {
-                emit_append_word_value_x86_64(ctx, "rcx");
+                elephc_memoir::values::packed_slots::emit_append_word_value_x86_64(ctx.emitter, "rcx");
             } else {
                 return Err(CodegenIrError::unsupported(format!(
                     "array_values associative value PHP type {:?}",
@@ -347,54 +347,6 @@ fn emit_assoc_array_value_append_x86_64(ctx: &mut FunctionContext<'_>, value_ty:
         }
     }
     Ok(())
-}
-
-/// Appends a 16-byte string payload into the AArch64 result values array.
-fn emit_append_string_value_aarch64(ctx: &mut FunctionContext<'_>, ptr_reg: &str, len_reg: &str) {
-    ctx.emitter.instruction("ldr x9, [sp, #16]");                               // load the result values array pointer from the fixed stack layout
-    ctx.emitter.instruction("ldr x10, [x9]");                                   // load the current result values array length before appending
-    ctx.emitter.instruction("lsl x11, x10, #4");                                // convert the result length into a 16-byte string-slot offset
-    ctx.emitter.instruction("add x11, x9, x11");                                // advance from the array base to the selected string slot
-    ctx.emitter.instruction("add x11, x11, #24");                               // skip the fixed indexed-array header to reach the payload region
-    ctx.emitter.instruction(&format!("str {}, [x11]", ptr_reg));                // store the owned string pointer into the next result values slot
-    ctx.emitter.instruction(&format!("str {}, [x11, #8]", len_reg));            // store the owned string length into the next result values slot
-    ctx.emitter.instruction("add x10, x10, #1");                                // increment the result values array length after the append
-    ctx.emitter.instruction("str x10, [x9]");                                   // persist the updated result values array length in the header
-}
-
-/// Appends an 8-byte payload into the AArch64 result values array.
-fn emit_append_word_value_aarch64(ctx: &mut FunctionContext<'_>, value_reg: &str) {
-    ctx.emitter.instruction("ldr x9, [sp, #16]");                               // load the result values array pointer from the fixed stack layout
-    ctx.emitter.instruction("ldr x10, [x9]");                                   // load the current result values array length before appending
-    ctx.emitter.instruction("add x11, x9, #24");                                // point at the result values array payload region after the fixed header
-    ctx.emitter.instruction(&format!("str {}, [x11, x10, lsl #3]", value_reg)); // store the value payload into the next result values slot
-    ctx.emitter.instruction("add x10, x10, #1");                                // increment the result values array length after the append
-    ctx.emitter.instruction("str x10, [x9]");                                   // persist the updated result values array length in the header
-}
-
-/// Appends a 16-byte string payload into the x86_64 result values array.
-fn emit_append_string_value_x86_64(ctx: &mut FunctionContext<'_>, ptr_reg: &str, len_reg: &str) {
-    ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                   // load the result values array pointer from the fixed stack layout
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the current result values array length before appending
-    ctx.emitter.instruction("mov rcx, r11");                                    // copy the result length before scaling it into a string-slot offset
-    ctx.emitter.instruction("shl rcx, 4");                                      // convert the result length into a 16-byte string-slot offset
-    ctx.emitter.instruction("add rcx, r10");                                    // advance from the array base to the selected string slot
-    ctx.emitter.instruction("add rcx, 24");                                     // skip the fixed indexed-array header to reach the payload region
-    ctx.emitter.instruction(&format!("mov QWORD PTR [rcx], {}", ptr_reg));      // store the owned string pointer into the next result values slot
-    ctx.emitter.instruction(&format!("mov QWORD PTR [rcx + 8], {}", len_reg));  // store the owned string length into the next result values slot
-    ctx.emitter.instruction("add r11, 1");                                      // increment the result values array length after the append
-    ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // persist the updated result values array length in the header
-}
-
-/// Appends an 8-byte payload into the x86_64 result values array.
-fn emit_append_word_value_x86_64(ctx: &mut FunctionContext<'_>, value_reg: &str) {
-    ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                   // load the result values array pointer from the fixed stack layout
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the current result values array length before appending
-    ctx.emitter.instruction(                                                    // store the value payload into the next result values slot
-        &format!("mov QWORD PTR [r10 + r11 * 8 + 24], {}", value_reg)
-    );
-    ctx.emitter.instruction("add r11, 1");                                      // increment the result values array length after the append
-    ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // persist the updated result values array length in the header
 }
 
 /// Returns the indexed-array element slot width required for values of this PHP type.
@@ -411,32 +363,9 @@ fn emit_indexed_array_value_type_stamp(ctx: &mut FunctionContext<'_>, array_reg:
     let Some(value_type_tag) = indexed_array_value_type_tag(value_ty) else {
         return;
     };
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg)); // load the packed array kind word from the heap header
-            ctx.emitter.instruction("mov x12, #0x80ff");                        // preserve the indexed-array kind and persistent COW flag
-            ctx.emitter.instruction("and x10, x10, x12");                       // keep only the persistent indexed-array metadata bits
-            ctx.emitter.instruction(&format!("mov x11, #{}", value_type_tag));  // materialize the runtime array value_type tag
-            ctx.emitter.instruction("lsl x11, x11, #8");                        // move the value_type tag into the packed kind-word byte lane
-            ctx.emitter.instruction("orr x10, x10, x11");                       // combine the heap kind with the array value_type tag
-            ctx.emitter.instruction(&format!("str x10, [{}, #-8]", array_reg)); // persist the packed array kind word in the heap header
-        }
-        Arch::X86_64 => {
-            abi::emit_push_reg(ctx.emitter, "r12");
-            ctx.emitter.instruction(                                            // load the packed array kind word from the heap header
-                &format!("mov r10, QWORD PTR [{} - 8]", array_reg)
-            );
-            ctx.emitter.instruction("mov r12, 0xffffffff000080ff");             // materialize the heap-kind preservation mask without clobbering the array base
-            ctx.emitter.instruction("and r10, r12");                            // preserve heap magic plus indexed-array metadata bits
-            ctx.emitter.instruction(&format!("mov r12, {}", value_type_tag));   // materialize the runtime array value_type tag
-            ctx.emitter.instruction("shl r12, 8");                              // move the value_type tag into the packed kind-word byte lane
-            ctx.emitter.instruction("or r10, r12");                             // combine the preserved heap kind with the stamped value_type tag
-            ctx.emitter.instruction(                                            // persist the packed array kind word in the heap header
-                &format!("mov QWORD PTR [{} - 8], r10", array_reg)
-            );
-            abi::emit_pop_reg(ctx.emitter, "r12");
-        }
-    }
+    elephc_memoir::values::array_header::emit_array_value_type_stamp(
+        ctx.emitter, array_reg, elephc_memoir::ValueTag::new(value_type_tag as u8),
+    );
 }
 
 /// Returns the runtime array value_type tag for indexed array payload metadata.

@@ -381,9 +381,7 @@ fn emit_serialize_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // empty properties array capacity
     emitter.instruction("mov x1, #8");                                          // properties array stores boxed Mixed slots
     emitter.instruction("bl __rt_array_new");                                   // allocate empty serialized properties array
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load properties array packed kind word
-    emitter.instruction("orr x9, x9, #0x700");                                  // stamp properties as boxed Mixed slots
-    emitter.instruction("str x9, [x0, #-8]");                                   // persist properties Mixed value_type tag
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, elephc_memoir::ValueTag::new(7));
     emitter.instruction("mov x1, x0");                                          // pass properties array pointer as mixed payload
     emitter.instruction("mov x0, #4");                                          // runtime tag 4 = indexed array
     emitter.instruction("mov x2, xzr");                                         // array mixed payload uses one word
@@ -398,9 +396,7 @@ fn emit_serialize_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #3");                                          // serialized state has flags, dllist, and properties
     emitter.instruction("mov x1, #8");                                          // outer serialized array stores boxed Mixed slots
     emitter.instruction("bl __rt_array_new");                                   // allocate outer serialized state array
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load outer array packed kind word
-    emitter.instruction("orr x9, x9, #0x700");                                  // stamp outer array as boxed Mixed slots
-    emitter.instruction("str x9, [x0, #-8]");                                   // persist outer Mixed value_type tag
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, elephc_memoir::ValueTag::new(7));
     emitter.instruction("mov x9, #3");                                          // outer serialized state length
     emitter.instruction("str x9, [x0]");                                        // publish exact serialized state length
     emitter.instruction("add x10, x0, #24");                                    // point at outer serialized state slots
@@ -421,18 +417,16 @@ fn emit_serialize_array_aarch64(emitter: &mut Emitter) {
 /// each item to detect int/string/bool/null tags and encodes accordingly. Appends to the
 /// global `_concat_buf` and updates `_concat_off`.
 fn emit_serialize_aarch64(emitter: &mut Emitter) {
+    let output = elephc_memoir::strings::strbuf::FramedStringBuffer { descriptor: 128, cursor: 40 };
     emitter.label_global("__rt_spl_dll_serialize");
-    emitter.instruction("sub sp, sp, #128");                                    // reserve serialization cursor, item, and spill slots
+    emitter.instruction("sub sp, sp, #160");                                    // reserve serialization cursor, item, and spill slots
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish legacy serialization frame
     emitter.instruction("str x0, [sp, #0]");                                    // save receiver across item unboxing
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x9");
-    emitter.instruction("ldr x10, [x9]");                                       // load current concat-buffer offset
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "x11");
-    emitter.instruction("str x11, [sp, #72]");                                  // save concat-buffer base for final offset update
-    emitter.instruction("add x12, x11, x10");                                   // compute start pointer for this serialized string
-    emitter.instruction("str x12, [sp, #32]");                                  // save string start pointer
-    emitter.instruction("str x12, [sp, #40]");                                  // initialize write cursor
+    output.emit_init(emitter);
+    output.emit_ensure_fixed(emitter, 24);
+    emitter.instruction("ldr x12, [sp, #40]");                                  // reload the checked output cursor
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the list receiver
     emitter.instruction("mov w13, #105");                                       // ASCII 'i' starts the legacy flags field
     emitter.instruction("strb w13, [x12], #1");                                 // write 'i' and advance cursor
     emitter.instruction("mov w13, #58");                                        // ASCII ':' separates type and payload
@@ -456,6 +450,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload item count
     emitter.instruction("cmp x10, x11");                                        // have all list items been serialized?
     emitter.instruction("b.ge __rt_spl_dll_serialize_done");                    // finish once every item was emitted
+    output.emit_ensure_fixed(emitter, 24);
+    emitter.instruction("ldr x10, [sp, #24]");                                  // restore the item index after buffer growth
     emitter.instruction("ldr x12, [sp, #40]");                                  // reload output cursor
     emitter.instruction("mov w13, #58");                                        // ASCII ':' prefixes each legacy item payload
     emitter.instruction("strb w13, [x12], #1");                                 // write item separator
@@ -488,6 +484,12 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #40]");                                   // save updated output cursor
     emitter.instruction("b __rt_spl_dll_serialize_next_item");                  // continue with the next list item
     emitter.label("__rt_spl_dll_serialize_string");
+    emitter.instruction("ldr x1, [sp, #64]");                                   // load the byte length of the list item
+    emitter.instruction("adds x1, x1, #32");                                    // allow room for its serialized framing
+    emitter.instruction("b.cc __rt_spl_dll_string_room");                       // the required capacity is representable
+    abi::emit_jump(emitter, "__rt_alloc_overflow");
+    emitter.label("__rt_spl_dll_string_room");
+    output.emit_ensure(emitter);
     emitter.instruction("ldr x12, [sp, #40]");                                  // reload output cursor
     emitter.instruction("mov w13, #115");                                       // ASCII 's' marks string payloads
     emitter.instruction("strb w13, [x12], #1");                                 // write string tag
@@ -543,15 +545,9 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #24]");                                  // save updated item cursor
     emitter.instruction("b __rt_spl_dll_serialize_loop");                       // serialize the next item
     emitter.label("__rt_spl_dll_serialize_done");
-    emitter.instruction("ldr x9, [sp, #72]");                                   // reload concat-buffer base
-    emitter.instruction("ldr x10, [sp, #40]");                                  // reload final output cursor
-    emitter.instruction("sub x11, x10, x9");                                    // compute new global concat-buffer offset
-    elephc_memoir::strings::concat_cursor::emit_cursor_address(emitter, "x12");
-    emitter.instruction("str x11, [x12]");                                      // publish updated concat-buffer offset
-    emitter.instruction("ldr x1, [sp, #32]");                                   // return serialized string pointer
-    emitter.instruction("sub x2, x10, x1");                                     // return serialized string length
+    output.emit_finish(emitter, true);
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #128");                                    // release legacy serialization frame
+    emitter.instruction("add sp, sp, #160");                                    // release legacy serialization frame
     emitter.instruction("ret");                                                 // return serialized pointer/length pair
     emit_write_dec_aarch64(emitter);
 }
@@ -1565,9 +1561,7 @@ fn emit_serialize_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edi, edi");                                        // empty properties array capacity
     emitter.instruction("mov rsi, 8");                                          // properties array stores boxed Mixed slots
     emitter.instruction("call __rt_array_new");                                 // allocate empty serialized properties array
-    emitter.instruction("mov r9, QWORD PTR [rax - 8]");                         // load properties array packed kind word
-    emitter.instruction("or r9, 0x700");                                        // stamp properties as boxed Mixed slots
-    emitter.instruction("mov QWORD PTR [rax - 8], r9");                         // persist properties Mixed value_type tag
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, elephc_memoir::ValueTag::new(7));
     emitter.instruction("mov rdi, rax");                                        // pass properties array pointer as mixed payload
     emitter.instruction("mov rax, 4");                                          // runtime tag 4 = indexed array
     emitter.instruction("xor rsi, rsi");                                        // array mixed payload uses one word
@@ -1582,9 +1576,7 @@ fn emit_serialize_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, 3");                                          // serialized state has flags, dllist, and properties
     emitter.instruction("mov rsi, 8");                                          // outer serialized array stores boxed Mixed slots
     emitter.instruction("call __rt_array_new");                                 // allocate outer serialized state array
-    emitter.instruction("mov r9, QWORD PTR [rax - 8]");                         // load outer array packed kind word
-    emitter.instruction("or r9, 0x700");                                        // stamp outer array as boxed Mixed slots
-    emitter.instruction("mov QWORD PTR [rax - 8], r9");                         // persist outer Mixed value_type tag
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, elephc_memoir::ValueTag::new(7));
     emitter.instruction("mov QWORD PTR [rax], 3");                              // publish exact serialized state length
     emitter.instruction("mov r10, QWORD PTR [rbp - 64]");                       // reload boxed flags value
     emitter.instruction("mov QWORD PTR [rax + 24], r10");                       // state[0] = flags
@@ -1603,17 +1595,17 @@ fn emit_serialize_array_x86_64(emitter: &mut Emitter) {
 /// each item to detect int/string/bool/null tags and encodes accordingly. Appends to the
 /// global `_concat_buf` and updates `_concat_off`.
 fn emit_serialize_x86_64(emitter: &mut Emitter) {
+    let output = elephc_memoir::strings::strbuf::FramedStringBuffer { descriptor: 128, cursor: 40 };
     emitter.label_global("__rt_spl_dll_serialize");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for legacy serialization
     emitter.instruction("mov rbp, rsp");                                        // establish legacy serialization frame
-    emitter.instruction("sub rsp, 96");                                         // reserve receiver, cursor, payload, and loop spills
+    emitter.instruction("sub rsp, 128");                                        // reserve receiver, cursor, payload, and loop spills
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save receiver across item unboxing
-    elephc_memoir::strings::concat_cursor::emit_read(emitter, "r10");             // load current concat-buffer offset
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r11");                    // materialize concat-buffer base
-    emitter.instruction("mov QWORD PTR [rbp - 64], r11");                       // save concat-buffer base for final offset update
-    emitter.instruction("lea r12, [r11 + r10]");                                // compute start pointer for serialized string
-    emitter.instruction("mov QWORD PTR [rbp - 32], r12");                       // save serialized string start pointer
-    emitter.instruction("mov QWORD PTR [rbp - 40], r12");                       // initialize output cursor
+    emitter.instruction("mov QWORD PTR [rbp - 88], r12");                       // preserve the formatter's callee-saved cursor
+    output.emit_init(emitter);
+    output.emit_ensure_fixed(emitter, 24);
+    emitter.instruction("mov r12, QWORD PTR [rbp - 40]");                       // reload the checked output cursor
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the list receiver
     emitter.instruction("mov BYTE PTR [r12], 105");                             // write ASCII 'i' for legacy flags integer
     emitter.instruction("add r12, 1");                                          // advance output cursor after flags tag
     emitter.instruction("mov BYTE PTR [r12], 58");                              // write ASCII ':' after flags tag
@@ -1635,6 +1627,8 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload item cursor
     emitter.instruction("cmp r10, QWORD PTR [rbp - 24]");                       // have all list items been serialized?
     emitter.instruction("jge __rt_spl_dll_serialize_done_x86");                 // finish after the last item
+    output.emit_ensure_fixed(emitter, 24);
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // restore the item index after buffer growth
     emitter.instruction("mov r12, QWORD PTR [rbp - 40]");                       // reload output cursor
     emitter.instruction("mov BYTE PTR [r12], 58");                              // write ASCII ':' item separator
     emitter.instruction("add r12, 1");                                          // advance cursor after item separator
@@ -1666,6 +1660,12 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save updated output cursor
     emitter.instruction("jmp __rt_spl_dll_serialize_next_item_x86");            // continue with the next list item
     emitter.label("__rt_spl_dll_serialize_string_x86");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // load the byte length of the list item
+    emitter.instruction("add rsi, 32");                                         // allow room for its serialized framing
+    emitter.instruction("jnc __rt_spl_dll_string_room_x86");                    // the required capacity is representable
+    abi::emit_jump(emitter, "__rt_alloc_overflow");
+    emitter.label("__rt_spl_dll_string_room_x86");
+    output.emit_ensure(emitter);
     emitter.instruction("mov r12, QWORD PTR [rbp - 40]");                       // reload output cursor
     emitter.instruction("mov BYTE PTR [r12], 115");                             // write ASCII 's' string tag
     emitter.instruction("add r12, 1");                                          // advance cursor after string tag
@@ -1728,15 +1728,9 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save updated item cursor
     emitter.instruction("jmp __rt_spl_dll_serialize_loop_x86");                 // serialize the next item
     emitter.label("__rt_spl_dll_serialize_done_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 64]");                       // reload concat-buffer base
-    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload final output cursor
-    emitter.instruction("mov r12, r11");                                        // copy final cursor for global offset calculation
-    emitter.instruction("sub r12, r10");                                        // compute new concat-buffer offset
-    elephc_memoir::strings::concat_cursor::emit_write(emitter, "r12");            // publish updated concat-buffer offset
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return serialized string pointer
-    emitter.instruction("mov rdx, r11");                                        // copy final cursor for length calculation
-    emitter.instruction("sub rdx, rax");                                        // return serialized string length
-    emitter.instruction("add rsp, 96");                                         // release legacy serialization spills
+    output.emit_finish(emitter, true);
+    emitter.instruction("mov r12, QWORD PTR [rbp - 88]");                       // restore the caller's cursor register
+    emitter.instruction("add rsp, 128");                                        // release legacy serialization spills
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return serialized pointer/length pair
     emit_write_dec_x86_64(emitter);

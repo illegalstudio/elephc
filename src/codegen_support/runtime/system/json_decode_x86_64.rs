@@ -100,15 +100,9 @@ pub(super) fn emit_json_decode_linux_x86_64(emitter: &mut Emitter) {
     // -- reserve the decoded result before the decode loop writes anything --
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the decoded string cannot exceed the trimmed quoted slice length
     emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage
-    elephc_memoir::strings::concat_cursor::emit_base_address(emitter, "r8"); // classify the reservation by its arena offset
-    emitter.instruction("mov r9, rax");                                         // copy the reservation before deriving its offset
-    emitter.instruction("sub r9, r8");                                          // compute the candidate scratch offset
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r10", emitter.concat_capacity as i64); // load the arena capacity
-    emitter.instruction("cmp r9, r10");                                         // is the reservation outside the scratch window?
-    emitter.instruction("jb __rt_json_decode_mark_done_x");                     // scratch reservations need no transient header
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r8", crate::codegen_support::sentinels::x86_64_heap_kind_word(crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND) as i64); // materialize the transferable heap kind
-    emitter.instruction("mov QWORD PTR [rax - 8], r8");                         // let persistence adopt the reservation
-    emitter.label("__rt_json_decode_mark_done_x");
+    elephc_memoir::strings::concat_scratch::emit_mark_reserved_result_temporary(
+        emitter, "__rt_json_decode_mark_done_x", ["r8", "r9", "r10"],
+    );
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the decoded-string start pointer for the final result slice
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the current write pointer for the decode loop
 

@@ -300,3 +300,5 @@ pub fn emit_allocate_argument_pair(emitter: &mut impl crate::Emitter, destinatio
     emitter.emit_push_reg(result);
     emitter.emit_pop_reg(destination);
 }
+
+pub mod canonical;

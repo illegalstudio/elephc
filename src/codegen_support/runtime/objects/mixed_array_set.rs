@@ -150,12 +150,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #1");                                          // recognize shared PHP reference storage
     emitter.instruction("b.eq __rt_mixed_array_set_reference");                 // write through the existing reference identity
     emitter.label("__rt_mixed_array_set_release_slot");
-    emitter.instruction("ldr x10, [sp, #32]");                                  // reload the attached array before any destructor can reenter
-    emitter.instruction("ldr x9, [sp, #40]");                                   // recover the index after marker inspection
-    emitter.instruction("ldr x11, [sp, #24]");                                  // transfer the consumed replacement into the attached slot
-    emitter.instruction("add x12, x10, #24");                                   // locate the existing slot while its array remains valid
-    emitter.instruction("str x11, [x12, x9, lsl #3]");                          // publish before retiring the previous owner's final reference
-    abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_mixed", "x0");
+    elephc_memoir::values::packed_slots::emit_publish_mixed_overwrite_aarch64(emitter);
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     abi::emit_jump(emitter, "__rt_mixed_array_set_done");
     emitter.label("__rt_mixed_array_set_skip_release");
@@ -493,11 +488,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [rax + 16], 1");                         // inspect the persistent reference marker
     emitter.instruction("je __rt_mixed_array_set_reference");                   // write through the existing reference identity
     emitter.label("__rt_mixed_array_set_release_slot");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the attached array before any destructor can reenter
-    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // recover the index after marker inspection
-    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // transfer the consumed replacement into the attached slot
-    emitter.instruction("mov QWORD PTR [r10 + 24 + r9 * 8], r11");              // publish before retiring the previous owner's final reference
-    abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_mixed", "rax");
+    elephc_memoir::values::packed_slots::emit_publish_mixed_overwrite_x86_64(emitter);
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     abi::emit_jump(emitter, "__rt_mixed_array_set_done");
     emitter.label("__rt_mixed_array_set_skip_release");

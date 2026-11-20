@@ -117,7 +117,11 @@ fn lower_array_shift_aarch64(
     ctx.emitter.instruction("ldr x9, [x0]");                                    // load the indexed-array length before deciding whether shift is empty
     ctx.emitter.instruction(&format!("cbz x9, {}", empty_label));               // return boxed null when array_shift() runs on an empty array
     emit_array_shift_save_first_aarch64(ctx, elem_ty)?;
-    emit_array_shift_compact_aarch64(ctx, elem_ty);
+    let loop_label = ctx.next_label("array_shift_loop");
+    let compact_done = ctx.next_label("array_shift_compact_done");
+    elephc_memoir::values::array_shift::emit_array_shift_compact_aarch64(
+        ctx.emitter, matches!(elem_ty, PhpType::Str), &loop_label, &compact_done,
+    );
     ctx.emitter.instruction("sub x9, x9, #1");                                  // decrement the indexed-array length after removing the first element
     ctx.emitter.instruction("str x9, [x0]");                                    // persist the shortened indexed-array length in the header
     emit_array_shift_restore_first_aarch64(ctx, elem_ty)?;
@@ -142,7 +146,11 @@ fn lower_array_shift_x86_64(
     ctx.emitter.instruction("test r10, r10");                                   // check whether the indexed array has any live elements
     ctx.emitter.instruction(&format!("jz {}", empty_label));                    // return boxed null when array_shift() runs on an empty array
     emit_array_shift_save_first_x86_64(ctx, elem_ty)?;
-    emit_array_shift_compact_x86_64(ctx, elem_ty);
+    let loop_label = ctx.next_label("array_shift_loop");
+    let compact_done = ctx.next_label("array_shift_compact_done");
+    elephc_memoir::values::array_shift::emit_array_shift_compact_x86_64(
+        ctx.emitter, matches!(elem_ty, PhpType::Str), &loop_label, &compact_done,
+    );
     ctx.emitter.instruction("sub r10, 1");                                      // decrement the indexed-array length after removing the first element
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // persist the shortened indexed-array length in the header
     emit_array_shift_restore_first_x86_64(ctx, elem_ty)?;
@@ -236,64 +244,6 @@ fn emit_array_shift_save_first_x86_64(
         }
     }
     Ok(())
-}
-
-/// Slides AArch64 indexed-array payloads one slot left after removing the first element.
-fn emit_array_shift_compact_aarch64(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) {
-    let loop_label = ctx.next_label("array_shift_loop");
-    let done_label = ctx.next_label("array_shift_compact_done");
-    ctx.emitter.instruction("mov x13, #1");                                     // start the source cursor at the second live element
-    ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp x13, x9");                                     // compare the source cursor with the original indexed-array length
-    ctx.emitter.instruction(&format!("b.ge {}", done_label));                   // finish compaction after moving every trailing element
-    match elem_ty {
-        PhpType::Str => {
-            ctx.emitter.instruction("lsl x14, x13, #4");                        // scale the source cursor by the 16-byte string slot size
-            ctx.emitter.instruction("add x15, x10, x14");                       // compute the source string slot address
-            ctx.emitter.instruction("sub x14, x14, #16");                       // convert the source byte offset into the destination byte offset
-            ctx.emitter.instruction("add x14, x10, x14");                       // compute the destination string slot address
-            ctx.emitter.instruction("ldp x16, x17, [x15]");                     // load the trailing string payload that slides toward the front
-            ctx.emitter.instruction("stp x16, x17, [x14]");                     // store the trailing string payload into the previous slot
-        }
-        _ => {
-            ctx.emitter.instruction("ldr x14, [x10, x13, lsl #3]");             // load the trailing pointer-sized payload that slides toward the front
-            ctx.emitter.instruction("sub x15, x13, #1");                        // compute the previous slot index after removing the first element
-            ctx.emitter.instruction("str x14, [x10, x15, lsl #3]");             // store the trailing payload into the previous slot
-        }
-    }
-    ctx.emitter.instruction("add x13, x13, #1");                                // advance to the next trailing source slot
-    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue compacting until the original length is exhausted
-    ctx.emitter.label(&done_label);
-}
-
-/// Slides x86_64 indexed-array payloads one slot left after removing the first element.
-fn emit_array_shift_compact_x86_64(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) {
-    let loop_label = ctx.next_label("array_shift_loop");
-    let done_label = ctx.next_label("array_shift_compact_done");
-    ctx.emitter.instruction("mov rcx, 1");                                      // start the source cursor at the second live element
-    ctx.emitter.label(&loop_label);
-    ctx.emitter.instruction("cmp rcx, r10");                                    // compare the source cursor with the original indexed-array length
-    ctx.emitter.instruction(&format!("jge {}", done_label));                    // finish compaction after moving every trailing element
-    match elem_ty {
-        PhpType::Str => {
-            ctx.emitter.instruction("mov rdx, rcx");                            // copy the string source cursor before scaling it
-            ctx.emitter.instruction("shl rdx, 4");                              // scale the source cursor by the 16-byte string slot size
-            ctx.emitter.instruction("lea rdi, [r11 + rdx]");                    // compute the source string slot address
-            ctx.emitter.instruction("sub rdx, 16");                             // convert the source byte offset into the destination byte offset
-            ctx.emitter.instruction("lea rsi, [r11 + rdx]");                    // compute the destination string slot address
-            ctx.emitter.instruction("mov rdx, QWORD PTR [rdi]");                // load the trailing string pointer that slides toward the front
-            ctx.emitter.instruction("mov QWORD PTR [rsi], rdx");                // store the trailing string pointer into the previous slot
-            ctx.emitter.instruction("mov rdx, QWORD PTR [rdi + 8]");            // load the trailing string length that slides toward the front
-            ctx.emitter.instruction("mov QWORD PTR [rsi + 8], rdx");            // store the trailing string length into the previous slot
-        }
-        _ => {
-            ctx.emitter.instruction("mov rdx, QWORD PTR [r11 + rcx * 8]");      // load the trailing pointer-sized payload that slides toward the front
-            ctx.emitter.instruction("mov QWORD PTR [r11 + rcx * 8 - 8], rdx");  // store the trailing payload into the previous slot
-        }
-    }
-    ctx.emitter.instruction("add rcx, 1");                                      // advance to the next trailing source slot
-    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue compacting until the original length is exhausted
-    ctx.emitter.label(&done_label);
 }
 
 /// Restores the preserved AArch64 first payload into the canonical result registers.

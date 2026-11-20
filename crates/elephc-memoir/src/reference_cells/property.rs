@@ -145,3 +145,32 @@ pub fn emit_store_owned_string_property<E: TargetAbi>(
     abi::emit_store_to_address(emitter, cell_reg, object_reg, offset);
     abi::emit_store_zero_to_address(emitter, object_reg, offset + 8);
 }
+
+/// Replaces the property cell and leaves its previous owner in the caller's retirement slot.
+///
+/// The caller owns the frame, with the property slot address at offset 8 and the displaced
+/// owner at offset 16. The new cell is returned for type-source rebinding before retirement.
+pub fn emit_replace_with_uninitialized(emitter: &mut impl Emitter) {
+    let result = abi::int_result_reg(emitter);
+    let scratch = abi::secondary_scratch_reg(emitter);
+    abi::emit_load_from_address(emitter, scratch, result, 0);
+    abi::store_at_offset(emitter, scratch, 16);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x0, [{scratch}, #-8]"));          // read the old managed cell's payload descriptor
+            emitter.instruction("ubfx x0, x0, #8, #7");                         // preserve the declared native payload shape
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rdi, QWORD PTR [{scratch} - 8]")); // read the old managed cell's payload descriptor
+            emitter.instruction("shr rdi, 8");                                  // position the payload tag for cell allocation
+            emitter.instruction("and edi, 127");                                // exclude heap-kind and collector flag bits
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_reference_cell_new");
+    abi::emit_load_int_immediate(emitter, scratch, emitter.uninitialized_property_sentinel());
+    abi::emit_store_to_address(emitter, scratch, result, 0);
+    abi::emit_store_zero_to_address(emitter, result, 8);
+    abi::load_at_offset(emitter, scratch, 8);
+    abi::emit_store_to_address(emitter, result, scratch, 0);
+    abi::emit_store_zero_to_address(emitter, scratch, 8);
+}

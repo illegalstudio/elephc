@@ -172,13 +172,6 @@ pub(crate) const JSON_REFERENCE_PROPERTY_FLAG: u64 = 1 << 8;
 /// JSON omits declared properties whose native initialization marker is still unset.
 pub(crate) const JSON_DECLARED_PROPERTY_FLAG: u64 = 1 << 9;
 
-/// Heap-header flag marking a string whose native identity is registered with mbstring.
-///
-/// Heap identity registration hooks (bind, copy, fresh, and persist) set this bit.
-/// Collector passes preserve it on non-graph string headers, and `__rt_heap_free()` uses it
-/// to skip the full bridge callback for strings without native identity metadata.
-pub(crate) use elephc_memoir::layout::MBSTRING_IDENTITY_TRACKED;
-
 /// Heap-owned callable descriptor with typed capture metadata.
 pub(crate) use elephc_memoir::layout::CALLABLE_HEAP_KIND;
 
@@ -381,6 +374,7 @@ pub(crate) fn emit_float_result_bits_to_int_result(emitter: &mut Emitter) {
 /// caller fills the kind). Emitters must use this instead of a hand-typed literal — a
 /// transposed magic assembles fine but makes every refcount operation on the stamped object
 /// a silent no-op (issue #482).
+#[cfg(test)]
 pub(crate) use elephc_memoir::layout::x86_64_heap_kind_word;
 
 /// Byte offset of the creation line inside the 56-byte compact Throwable payload.

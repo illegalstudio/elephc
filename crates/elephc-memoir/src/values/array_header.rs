@@ -96,3 +96,11 @@ pub fn emit_array_value_type_inherit(
         }
     }
 }
+
+/// Stamps a freshly returned packed array, using only caller-saved registers.
+pub fn emit_result_value_type_stamp(emitter: &mut impl Emitter, tag: ValueTag) {
+    match emitter.arch() {
+        Arch::AArch64 => emit_array_value_type_stamp(emitter, "x0", tag),
+        Arch::X86_64 => emit_value_type_stamp_x86_64(emitter, "rax", tag, "r11"),
+    }
+}
