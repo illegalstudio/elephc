@@ -1325,3 +1325,38 @@ echo get_class($t), ":", $t->name, ":", $t instanceof ObjectType ? "y" : "n";
     assert!(!notes.contains(ERASED_NOTE), "{notes}");
     assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "BackedEnumType:Suit:y");
 }
+
+/// Erasing a PHPDoc template's file takes the files that write type arguments on it in the SAME
+/// re-run. The refusal here (a bare `Box` parameter given a subclass) implicates `Box.php` and
+/// `SBox.php`; `Holder.php` annotates `@var Box<T>` and would be refused once `Box` is no
+/// template, which used to cost another whole compile per file. `ELEPHC_DOCBLOCK_ERASURE_ROUND=7`
+/// leaves a build exactly one re-run, so only the closure can finish.
+#[test]
+fn test_docblock_erasure_takes_dependents_in_one_rerun() {
+    let autoloader = "<?php\nspl_autoload_register(function (string $class): void {\n    $file = __DIR__ . \"/src/\" . $class . \".php\";\n    if (is_file($file)) { require $file; }\n});\n";
+    let main = format!(
+        "{autoloader}function take(Box $x): string {{ return get_class($x); }}\n$h = new Holder();\n$h->box = new Box(1);\necho take(new Box(2)), take(new SBox('x')), get_class($h->box), \"\\n\";\n"
+    );
+    let files = [
+        ("main.php", main.as_str()),
+        (
+            "src/Box.php",
+            "<?php\n/** @template T */\nclass Box {\n    /** @param T $v */\n    public function __construct(public $v) {}\n}\n",
+        ),
+        (
+            "src/SBox.php",
+            "<?php\n/** @extends Box<string> */\nclass SBox extends Box {}\n",
+        ),
+        (
+            "src/Holder.php",
+            "<?php\n/**\n * @template T\n */\nclass Holder {\n    /** @var Box<T> */\n    public $box;\n}\n",
+        ),
+    ];
+    let (compile_stderr, stdout, _) = compile_cli_files_with_env_and_run(
+        &files,
+        "main.php",
+        &[("ELEPHC_DOCBLOCK_ERASURE_ROUND", "7")],
+    );
+    assert_eq!(stdout, "BoxSBoxBox\n", "{compile_stderr}");
+    assert!(compile_stderr.contains("Holder.php"), "{compile_stderr}");
+}
