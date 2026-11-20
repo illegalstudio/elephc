@@ -41,6 +41,7 @@ pub(super) fn evaluate(expr: &EvalExpr, context: &mut ElephcEvalContext,
 /// Takes a producer snapshot without inferring a proof from its evaluated runtime tag.
 fn source_type(expr: &EvalExpr, context: &ElephcEvalContext, scope: &ElephcEvalScope) -> Option<Type> {
     local_binding_origins::source_view(expr, context, scope).as_ref().map(generic_type)
+        .or_else(|| matches!(expr, EvalExpr::Array(_)).then(|| Type::atom("array")))
 }
 
 /// Roots each detached operand before evaluating the next source and preserves failure cleanup.

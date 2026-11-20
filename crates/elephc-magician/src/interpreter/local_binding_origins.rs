@@ -16,6 +16,8 @@ mod arrays;
 mod array_mutations;
 pub(super) use array_mutations::{finish_array_mutation, replacement_element_source};
 mod source_views;
+mod declared_sources;
+pub(super) use declared_sources::resolve_type as resolve_declared_source_type;
 
 pub(super) use source_views::{LocalAssignmentProducer, prepare_assignment, source_view, evaluate_assignment};
 
@@ -83,11 +85,12 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
                 .map(|contract| parameter_type(&builtin_producer_type(contract.returns)));
             builtin.or_else(|| context.function(&name).and_then(|function| function.return_type()).cloned())
                 .or_else(|| context.native_function(&name).and_then(|function| function.return_type().cloned()))
-                .map(|ty| if arrays { ty } else { parameter_type(&binding_kind_type(generic_type(&ty))) })
+                .map(|ty| if arrays || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { ty }
+                    else { parameter_type(&binding_kind_type(generic_type(&ty))) })
         }
         EvalExpr::DynamicCall { .. } | EvalExpr::DynamicMethodCall { .. }
             | EvalExpr::DynamicStaticMethodCall { .. } => None,
-        _ => None,
+        _ => declared_sources::producer(expr, context, scope),
     }
 }
 

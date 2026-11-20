@@ -238,8 +238,8 @@ pub(in crate::interpreter) fn eval_source_return_expression(expr: &EvalExpr,
     let (value, source) = mixed_eval::evaluate(expr, context, scope, values)?;
     let result = (|| {
         if let Some(contract) = context.return_source_contract().cloned() {
-            let target = resolve_return_source_type(&crate::eval_ir::generic_type(&contract.ty),
-                &contract, context)?;
+            let target = local_binding_origins::resolve_declared_source_type(&crate::eval_ir::generic_type(&contract.ty),
+                contract.declaring_class.as_deref(), contract.called_class.as_deref(), context)?;
             let expected = crate::eval_ir::parameter_type(&target);
             let source = source.as_ref().map(|source| ArgumentSource::capture(crate::eval_ir::parameter_type(source), context));
             mixed_source_proofs::require_argument(&expected, source.as_ref(), value, false, context, values)?;
@@ -247,23 +247,4 @@ pub(in crate::interpreter) fn eval_source_return_expression(expr: &EvalExpr,
         Ok(value)
     })();
     finish_declared_return_value(value, result, context, values)
-}
-
-/// Resolves class keywords recursively using the return declaration's original owner.
-fn resolve_return_source_type(ty: &elephc_generics::Type,
-    contract: &crate::context::ReturnSourceContract, context: &ElephcEvalContext,
-) -> Result<elephc_generics::Type, EvalStatus> {
-    use elephc_generics::Type;
-    let resolve = |ty: &Type| resolve_return_source_type(ty, contract, context);
-    Ok(match ty {
-        Type::Atom(name) if matches!(name.to_ascii_lowercase().as_str(), "self" | "static" | "parent") =>
-            Type::atom(eval_declared_type_runtime_class_name(name, contract.declaring_class.as_deref(),
-                contract.called_class.as_deref(), context)?),
-        Type::Apply(name, arguments) => Type::Apply(name.clone(), arguments.iter().map(resolve).collect::<Result<_, _>>()?),
-        Type::Union(members) => Type::Union(members.iter().map(resolve).collect::<Result<_, _>>()?),
-        Type::Intersection(members) => Type::Intersection(members.iter().map(resolve).collect::<Result<_, _>>()?),
-        Type::Nullable(inner) => Type::Nullable(Box::new(resolve(inner)?)),
-        Type::Callable(params, result) => Type::Callable(params.iter().map(resolve).collect::<Result<_, _>>()?, Box::new(resolve(result)?)),
-        ty => ty.clone(),
-    })
 }

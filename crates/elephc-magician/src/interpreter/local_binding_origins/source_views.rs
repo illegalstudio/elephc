@@ -31,6 +31,12 @@ pub(in crate::interpreter) fn source_view(expr: &EvalExpr,
     if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
         && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { return None; }
     match expr {
+        EvalExpr::LoadVar(name) if name == "this"
+            && scope.entry(name).is_some_and(|entry| entry.flags().is_visible()) => {
+            context.current_called_class_scope().filter(|name| !name.is_empty())
+                .or_else(|| context.current_class_scope().filter(|name| !name.is_empty()))
+                .map(|class| parameter_type(&declared_sources::nominal_type(class)))
+        },
         EvalExpr::LoadVar(name) => {
             let view = scope.local_guard_source_view(name, context).or_else(|| scope.local_type(name))
                 .or_else(|| scope.local_source_view(name, context)).cloned();
