@@ -87,12 +87,14 @@ pub fn emit_publish_mixed_overwrite_x86_64(emitter: &mut impl Emitter) {
 }
 
 /// Frame slots for a relocated indexed array attached to a Mixed cell.
+///
+/// Offsets are relative to the current SP on AArch64, and distances below RBP on x86_64.
 pub struct AttachedPackedSlots {
-    /// Distance below the frame pointer of the array address.
+    /// Slot holding the current array address.
     pub array: usize,
-    /// Distance below the frame pointer of the requested index.
+    /// Slot holding the requested index.
     pub index: usize,
-    /// Distance below the frame pointer of the owner cell.
+    /// Slot holding the owner cell.
     pub owner: usize,
 }
 
@@ -108,19 +110,30 @@ impl AttachedPackedSlots {
             Arch::X86_64 => ("r10", "r9", "r11", "jb"),
         };
         emitter.label(&check);
-        emitter.load_at_offset(array, self.array);
-        emitter.load_at_offset(index, self.index);
+        Self::emit_load_slot(emitter, array, self.array);
+        Self::emit_load_slot(emitter, index, self.index);
         emitter.emit_load_from_address(capacity, array, 8);
         emitter.instruction(&format!("cmp {index}, {capacity}"));               // compare the requested index with the allocated slot count
         emitter.instruction(&format!("{fits} {ready}"));                        // use the current array when the index fits
         emitter.emit_reg_move(emitter.int_arg_reg_name(0), array);
         emitter.emit_call_label("__rt_array_grow");
         let result = emitter.int_result_reg();
-        emitter.store_at_offset(result, self.array);
-        emitter.load_at_offset(array, self.owner);
+        match emitter.arch() {
+            Arch::AArch64 => emitter.instruction(&format!("str {result}, [sp, #{}]", self.array)), // save the relocated pointer in the active SP-relative frame
+            Arch::X86_64 => emitter.store_at_offset(result, self.array),
+        }
+        Self::emit_load_slot(emitter, array, self.owner);
         emitter.emit_store_to_address(result, array, 8);
         emitter.emit_jump(&check);
         emitter.label(&ready);
+    }
+
+    /// Loads a slot without translating its offset to a different frame base.
+    fn emit_load_slot(emitter: &mut impl Emitter, register: &str, offset: usize) {
+        match emitter.arch() {
+            Arch::AArch64 => emitter.instruction(&format!("ldr {register}, [sp, #{offset}]")), // resolve an SP-relative caller slot
+            Arch::X86_64 => emitter.load_at_offset(register, offset),
+        }
     }
 }
 
