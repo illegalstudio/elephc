@@ -169,7 +169,10 @@ pub(in crate::interpreter) fn eval_preflight_property_reference_source(
                 value
             }
         };
-        if !eval_declared_value_type_accepts_exact(declared, Some(owner), Some(owner), value, context, values)? {
+        let structural_array = matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
+            && declared_has_structural_array(declared);
+        if !structural_array
+            || !eval_declared_value_type_accepts_exact(declared, Some(owner), Some(owner), value, context, values)? {
             let expression = EvalExpr::LoadVar(source.to_string());
             let packet = local_binding_origins::argument_source(&expression, context, scope).or_else(||
                 local_binding_origins::source_view(&expression, context, scope).map(|ty| ArgumentSource::capture(ty, context)));
@@ -195,4 +198,18 @@ pub(in crate::interpreter) fn eval_preflight_property_reference_source(
         }
     };
     eval_validate_property_value(owner, property, value, context, values)
+}
+
+/// Recognizes declarations whose array element contract can validate the current value directly.
+fn declared_has_structural_array(declared: &EvalParameterType) -> bool {
+    fn contains(ty: &elephc_generics::Type) -> bool {
+        use elephc_generics::Type;
+        match ty {
+            Type::Apply(name, arguments) if name == "array" => !arguments.is_empty(),
+            Type::Nullable(inner) => contains(inner),
+            Type::Union(members) | Type::Intersection(members) => members.iter().any(contains),
+            ty => crate::eval_ir::array_contents_schema(ty).is_some(),
+        }
+    }
+    contains(&crate::eval_ir::generic_type(declared))
 }
