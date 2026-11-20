@@ -772,7 +772,9 @@ snapshot may contain optional per-key entry evidence for a literal argument arra
 this evidence is separate from its inferred homogeneous content constraint. Stored
 arrays and value copies preserve entry snapshots, while binding generations and
 canonical reference writes invalidate stale evidence. Entry proofs keep their
-original write epochs. Reading a stored snapshot retains the container's declared
+original write epochs. Observation stamps use a common monotonic sequence across
+eval contexts, while each context retains weak per-allocation last-write records.
+Reading a stored snapshot retains the container's declared
 alternatives or observed predicate view, so element evidence cannot narrow an
 explicit `mixed` container by itself. Spread, callback-array and reflection
 invocation share the same entry projection and owner cleanup adapters. Native
