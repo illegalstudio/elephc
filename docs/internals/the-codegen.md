@@ -850,6 +850,21 @@ private shadows) inline, tried before the shared public selector. A function
 that owns an eval context keeps the inline expansion, because the selector
 cannot reach that frame slot.
 
+Inside a selector the candidates are data, not code
+(`src/codegen/lower_inst/callables/selector_tables.rs`): function and builtin
+names, callable-array instance methods and invokable classes are `.data` rows
+that one loop per shape scans in first-match order, and a matched receiver row
+binds through one shared sequence. Adding a class or a function therefore grows
+a selector by a row, not by a compare-and-bind block.
+
+Two conversions need less than a full selector. A `Closure::fromCallable()` of
+a value declared `callable` resolves runtime names exactly like invoking that
+value (`Immediate::DeclaredCallableFactory`): user functions, static methods and
+literal builtin names, with the same named `Error` for a builtin chosen only at
+run time. A `Closure|null` value (`?Closure`) can only hold a descriptor, so its
+invocation calls the descriptor directly and links no selector at all, unless
+the program has eval support, whose closures are objects.
+
 The EIR module fixed point can specialize an already-direct numeric closure
 call when every actual argument, including captures, is exactly `int` or
 `float`. `src/ir_passes/numeric_closure_calls.rs` recognizes bounded

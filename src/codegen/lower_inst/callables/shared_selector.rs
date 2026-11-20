@@ -255,25 +255,9 @@ fn emit_scope_extras(
         emit_strip_callable_name_separator(ctx, ptr_reg, len_reg);
         abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
         let matched_label = ctx.next_label("scope_callable_string_matched");
-        let selector = callable_dispatch::RuntimeCallableSelector::StringNameStack {
-            ptr_offset: 0,
-            len_offset: 8,
-            call_reg: abi::int_result_reg(ctx.emitter),
-        };
-        for case in &string_cases {
-            let next_case = ctx.next_label("scope_callable_string_next");
-            let case_matched = ctx.next_label("scope_callable_string_match");
-            callable_dispatch::emit_branch_if_callable_case_mismatch(
-                &selector,
-                case,
-                &next_case,
-                ctx.emitter,
-                &case_matched,
-                ctx.data,
-            );
-            abi::emit_jump(ctx.emitter, &matched_label);
-            ctx.emitter.label(&next_case);
-        }
+        let string_miss = ctx.next_label("scope_callable_string_miss");
+        selector_tables::emit_string_case_table_lookup(ctx, &string_cases, &matched_label, &string_miss);
+        ctx.emitter.label(&string_miss);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         abi::emit_jump(ctx.emitter, &public_label);
         ctx.emitter.label(&matched_label);
@@ -291,13 +275,15 @@ fn emit_scope_extras(
         )?;
         let selected_label = ctx.next_label("scope_callable_array_done");
         let static_selected_label = ctx.next_label("scope_callable_array_static_done");
-        for target in &instance_targets {
-            let next_label = ctx.next_label("scope_callable_array_instance_next");
-            emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
-            emit_runtime_array_instance_descriptor_value(ctx, target)?;
-            abi::emit_jump(ctx.emitter, &selected_label);
-            ctx.emitter.label(&next_label);
-        }
+        let static_label = ctx.next_label("scope_callable_array_static");
+        selector_tables::emit_instance_target_table_lookup(
+            ctx,
+            &instance_targets,
+            selector_tables::ReceiverSelector::CallableArray,
+            &selected_label,
+            &static_label,
+        )?;
+        ctx.emitter.label(&static_label);
         for case in &static_cases {
             let next_label = ctx.next_label("scope_callable_array_static_next");
             emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
@@ -324,31 +310,15 @@ fn emit_scope_extras(
         ctx.emitter.label(label);
         emit_push_mixed_unbox_payload(ctx);
         let selected_label = ctx.next_label("scope_callable_object_done");
-        for target in &invokable_targets {
-            let next_label = ctx.next_label("scope_callable_object_next");
-            emit_branch_if_saved_receiver_class_id_mismatch(
-                ctx,
-                target.class_id,
-                MIXED_VALUE_PAYLOAD_OFFSET,
-                &next_label,
-            );
-            let template = runtime_instance_method_descriptor_template(
-                ctx,
-                &target.class_name,
-                &target.method_name,
-                &target.method_key,
-                &target.impl_class,
-                &target.sig,
-            )?;
-            emit_runtime_descriptor_with_saved_receiver_capture(
-                ctx,
-                &template.descriptor_label,
-                &PhpType::Object(target.class_name.clone()),
-                MIXED_VALUE_PAYLOAD_OFFSET,
-            );
-            abi::emit_jump(ctx.emitter, &selected_label);
-            ctx.emitter.label(&next_label);
-        }
+        let object_miss = ctx.next_label("scope_callable_object_miss");
+        selector_tables::emit_instance_target_table_lookup(
+            ctx,
+            &invokable_targets,
+            selector_tables::ReceiverSelector::InvokableObject,
+            &selected_label,
+            &object_miss,
+        )?;
+        ctx.emitter.label(&object_miss);
         abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
         abi::emit_jump(ctx.emitter, &public_label);
         ctx.emitter.label(&selected_label);
@@ -423,10 +393,10 @@ mod tests {
             for function in ["First::__construct", "Second::__construct", "callFirst", "callSecond"] {
                 let body = function_body(&assembly, function);
                 assert!(
-                    !body.contains("mixed_string_descriptor_next")
-                        && !body.contains("mixed_callable_value_array_instance_next")
-                        && !body.contains("mixed_callable_value_object_next"),
-                    "{name}: {function} must not copy the public candidate inventory"
+                    !body.contains("mixed_callable_value_string")
+                        && !body.contains("mixed_callable_value_array")
+                        && !body.contains("mixed_callable_value_object"),
+                    "{name}: {function} must not copy the public candidate selector"
                 );
                 selectors.push(called_selector(body).to_string());
             }
@@ -440,12 +410,42 @@ mod tests {
                 );
             }
             assert!(
-                function_body(&assembly, "First::__construct").contains("scope_callable_array_instance_next"),
+                function_body(&assembly, "First::__construct").contains("scope_callable_array"),
                 "{name}: First keeps its private method inline"
             );
             assert!(
                 !function_body(&assembly, "Second::__construct").contains("scope_callable_"),
                 "{name}: Second has no scope-only candidates"
+            );
+        }
+    }
+    /// Invoking a `?Closure` value needs no candidate selector, so a program whose only dynamic
+    /// call goes through one links neither the argument normalizer nor any builtin wrapper.
+    #[test]
+    fn nullable_closure_invocations_link_no_selector_on_every_target() {
+        let source = "<?php
+            final class Job {
+                private ?Closure $run = null;
+                public function set(Closure $run): void { $this->run = $run; }
+                public function go(): mixed { $run = $this->run; return $run === null ? null : $run(); }
+            }
+            $job = new Job();
+            $job->set(fn(): int => 1);
+            echo $job->go();";
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let module = crate::ir_lower::tests::lower_source_at_for_target(
+                source,
+                std::path::Path::new("main.php"),
+                std::path::Path::new("."),
+                Target::parse(name).unwrap(),
+            );
+            let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            assert!(function_body(&assembly, "Job::go").contains("closure_union_done"), "{name}");
+            assert!(
+                !assembly.contains("_eir_callable_argument_normalizer:")
+                    && !assembly.contains("_callable_builtin_")
+                    && !assembly.contains("_eir_callable_selector_"),
+                "{name}: a Closure-only invocation must not link a candidate selector"
             );
         }
     }

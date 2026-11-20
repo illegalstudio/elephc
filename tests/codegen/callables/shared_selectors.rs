@@ -73,3 +73,39 @@ foreach ([name("sec", "ret"), name("miss", "ing")] as $method) {
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "ir-opt={optimize}: {}", output.stderr);
     }
 }
+
+/// `?Closure` properties and locals invoke their descriptor directly, including after the
+/// property is cleared during the call and when the closure throws.
+#[test]
+fn test_nullable_closure_values_invoke_without_a_selector() {
+    let source = r#"<?php
+final class Timer {
+    private ?Closure $callback;
+    public function __construct(callable $callback) { $this->callback = Closure::fromCallable($callback); }
+    public function dispatch(): string {
+        $callback = $this->callback;
+        if ($callback === null) { return "cancelled"; }
+        $this->callback = null;
+        return $callback("tick");
+    }
+}
+function upper(string $s): string { return strtoupper($s); }
+$timer = new Timer(fn(string $s): string => "fired:" . $s);
+echo $timer->dispatch(), "|", $timer->dispatch(), "|";
+echo (new Timer("upper"))->dispatch(), "|";
+$fail = new Timer(function (string $s): string { throw new RuntimeException("boom:" . $s); });
+try { $fail->dispatch(); } catch (RuntimeException $e) { echo $e->getMessage(), "|"; }
+function maybe(bool $set): ?Closure { return $set ? fn(): string => "set" : null; }
+$maybe = maybe(false);
+echo $maybe === null ? "null" : $maybe(), "|";
+$maybe = maybe(true);
+echo $maybe === null ? "null" : $maybe(), "\n";
+"#;
+    for optimize in [true, false] {
+        let output = if optimize { compile_and_run_with_heap_debug(source) }
+            else { without_ir_opt(|| compile_and_run_with_heap_debug(source)) };
+        assert!(output.success, "ir-opt={optimize}: stdout={} stderr={}", output.stdout, output.stderr);
+        assert_eq!(output.stdout, "fired:tick|cancelled|TICK|boom:tick|null|set\n", "ir-opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "ir-opt={optimize}: {}", output.stderr);
+    }
+}
