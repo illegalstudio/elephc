@@ -24,6 +24,7 @@
 //!   hooks are honored, and `$this->params` is seeded before `onCreate()`.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::buffers::stream_scratch;
 
 mod attach;
 pub use attach::emit_stream_filter_attach_user;
@@ -229,26 +230,14 @@ pub fn emit_apply_user_stream_filter(emitter: &mut Emitter) {
     emitter.instruction("b __rt_user_filter_brigade_invoke");                   // tail-call the brigade dispatcher with (x0=obj, x1=buf, x2=len, x3=method)
 
     emitter.label("__rt_aufs_simple");
-    // -- copy the input bytes into _stream_filter_buf so the method's concat_buf
-    //    writes don't overlap with its input (the fread path's bytes live in
-    //    concat_buf, and the method's prologue typically rewinds _concat_off). --
-    abi::emit_symbol_address(emitter, "x9", "_stream_filter_buf");
-    emitter.instruction("mov x10, #0");                                         // byte copy index
-    emitter.label("__rt_aufs_copy");
-    emitter.instruction("cmp x10, x2");                                         // copied every byte?
-    emitter.instruction("b.ge __rt_aufs_copy_done");                            // full input copied
-    emitter.instruction("ldrb w11, [x1, x10]");                                 // load a source byte
-    emitter.instruction("strb w11, [x9, x10]");                                 // store into the isolated scratch buffer
-    emitter.instruction("add x10, x10, #1");                                    // advance the copy index
-    emitter.instruction("b __rt_aufs_copy");                                    // continue copying
-    emitter.label("__rt_aufs_copy_done");
-    emitter.instruction("mov x1, x9");                                          // method receives the scratch-buffer pointer as its $data ptr
+    stream_scratch::emit_stage_callback_input(emitter, "x8");
 
     // -- call filter($this=x0, string=x1/x2) → returns string in x1/x2 --
     emitter.instruction("blr x8");                                              // invoke the user filter method
     abi::emit_branch_if_php_return_owned(emitter, "__rt_aufs_owned");
     abi::emit_call_label(emitter, "__rt_str_persist");
     emitter.label("__rt_aufs_owned");
+    stream_scratch::emit_finish_callback_input(emitter);
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the post-filter string in x1/x2
@@ -296,31 +285,14 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_user_filter_brigade_invoke");                 // tail-call into the brigade dispatcher
 
     emitter.label("__rt_aufs_simple_x");
-    emitter.instruction("mov r10, r8");                                         // existing simple-string path expects the method ptr in r10
-    // -- copy the input bytes into _stream_filter_buf so the method's concat_buf
-    //    writes don't overlap with its input (fread bytes live in concat_buf and
-    //    the method's prologue typically rewinds _concat_off). --
-    emitter.instruction("push r10");                                            // save filter method ptr across the copy loop
-    emitter.instruction("push rdi");                                            // save $this across the copy loop
-    abi::emit_symbol_address(emitter, "r10", "_stream_filter_buf");             // load runtime data address
-    emitter.instruction("xor r9, r9");                                          // byte copy index
-    emitter.label("__rt_aufs_copy_x86");
-    emitter.instruction("cmp r9, rdx");                                         // copied every byte?
-    emitter.instruction("jge __rt_aufs_copy_done_x86");                         // full input copied
-    emitter.instruction("movzx r11d, BYTE PTR [rsi + r9]");                     // load a source byte
-    emitter.instruction("mov BYTE PTR [r10 + r9], r11b");                       // store into the isolated scratch buffer
-    emitter.instruction("inc r9");                                              // advance the copy index
-    emitter.instruction("jmp __rt_aufs_copy_x86");                              // continue copying
-    emitter.label("__rt_aufs_copy_done_x86");
-    emitter.instruction("mov rsi, r10");                                        // method receives the scratch-buffer pointer as its $data ptr
-    emitter.instruction("pop rdi");                                             // restore $this
-    emitter.instruction("pop r10");                                             // restore filter method ptr
+    stream_scratch::emit_stage_callback_input(emitter, "r8");
 
     // -- call filter($this=rdi, string=rsi/rdx) → returns string in rax/rdx --
-    emitter.instruction("call r10");                                            // invoke the user filter method
+    emitter.instruction("call r8");                                             // invoke the user filter method
     abi::emit_branch_if_php_return_owned(emitter, "__rt_aufs_owned_x86");
     abi::emit_call_label(emitter, "__rt_str_persist");
     emitter.label("__rt_aufs_owned_x86");
+    stream_scratch::emit_finish_callback_input(emitter);
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the post-filter string in rax/rdx
 
