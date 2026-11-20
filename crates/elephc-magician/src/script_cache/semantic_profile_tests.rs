@@ -49,6 +49,17 @@ impl Drop for Fixture {
     }
 }
 
+/// Moves `path`'s mtime to an exact whole second for deterministic revalidation.
+fn set_mtime(path: &std::path::Path, seconds: u64) {
+    let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds);
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(when)
+        .unwrap();
+}
+
 /// Returns the checked-literal policy without requiring runtime activation of a staged flag.
 fn checked_literals() -> SemanticProfile {
     SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true)
@@ -93,6 +104,65 @@ fn strict_cache_failed_cross_profile_fill_keeps_the_warm_variant() {
         &fixture.source, SemanticProfile::PERMISSIVE,
     ).unwrap();
     assert!(Arc::ptr_eq(&permissive, &again), "the permissive context must keep its warm script");
+}
+
+/// PHP-visible cache status aggregates independently reusable profile variants by path.
+#[test]
+fn strict_cache_status_aggregates_profile_variants_by_path() {
+    let _guard = store::lock_for_test();
+    let fixture = Fixture::new();
+    fixture.configure(true);
+    std::fs::write(&fixture.source, b"<?php return 1;").unwrap();
+
+    for profile in [SemanticProfile::PERMISSIVE, checked_literals()] {
+        store::load_script_with_semantics(&fixture.source, profile).unwrap();
+        store::load_script_with_semantics(&fixture.source, profile).unwrap();
+    }
+
+    let stats = store::stats();
+    let scripts = store::cached_scripts();
+    assert_eq!(scripts.len(), 1, "OPcache exposes one row for one canonical path");
+    assert_eq!(scripts[0].hits, stats.hits, "the row sums hits from both profiles");
+    assert_eq!(
+        scripts[0].memory_consumption, stats.used_memory,
+        "the row sums the memory retained by both profiles"
+    );
+}
+
+/// A stale discarded profile cannot hide or invalidate a fresh live sibling.
+#[test]
+fn strict_cache_discarded_stale_profile_keeps_fresh_sibling_visible() {
+    let _guard = store::lock_for_test();
+    let fixture = Fixture::new();
+    config::set_config(config::ScriptCacheConfig {
+        enabled: true,
+        validate_timestamps: true,
+        revalidate_freq: 0,
+        file_update_protection: 2,
+        ..config::ScriptCacheConfig::disabled()
+    });
+    file_cache::set_file_cache_config(file_cache::FileCacheConfig::default());
+    std::fs::write(&fixture.source, b"<?php return 1;").unwrap();
+    config::stamp_request_time(1_000_000);
+    set_mtime(&fixture.source, 990_000);
+    store::load_script_with_semantics(&fixture.source, SemanticProfile::PERMISSIVE).unwrap();
+
+    std::fs::write(&fixture.source, b"<?php return 2;").unwrap();
+    set_mtime(&fixture.source, 1_000_000);
+    store::load_script_with_semantics(&fixture.source, SemanticProfile::PERMISSIVE).unwrap();
+
+    config::stamp_request_time(1_000_010);
+    store::load_script_with_semantics(&fixture.source, checked_literals()).unwrap();
+    let scripts = store::cached_scripts();
+    assert_eq!(scripts.len(), 1, "discarded and live variants share one visible row");
+    assert_eq!(scripts[0].timestamp, 1_000_000, "the live variant supplies freshness");
+    assert_eq!(scripts[0].memory_consumption, store::stats().used_memory);
+
+    assert!(store::invalidate(&fixture.source, false));
+    assert!(
+        store::is_cached_with_semantics(&fixture.source, checked_literals()),
+        "the stale discarded variant must not retire its fresh sibling"
+    );
 }
 
 /// Rejects disk entries from another profile, including ABI mismatches before replay.

@@ -915,11 +915,12 @@ implementation must keep.
 
 ### The unit and the load path
 
-The unit is the FILE, keyed by its canonical path. `segments::parse_script`
+The PHP-visible unit is the FILE, keyed by its canonical path. Internally, each
+semantic profile has an independent parser entry for that path. `segments::parse_script`
 parses a whole file as PHP compiles it: the tags cut it, inline HTML becomes
 `echo` of its exact bytes, and the pieces join into one token stream parsed
 once, so a block may span the tags and a parse error anywhere fails the whole
-file. An entry holds that one program (or the parse error).
+file. A profile entry holds that one program (or the parse error).
 
 `store::load_script` serves a warm entry, or fills one in this order, which is
 php-src's and is pinned by tests:
@@ -948,6 +949,12 @@ failed revalidation marks the entry discarded BEFORE the fill decides on the
 replacement, so a refused replacement never leaves the old version live. The
 request time is fixed per request: `__elephc_eval_configure_opcache` stamps it,
 once in the CLI prologue and once per `--web` request.
+
+Discarded profile variants no longer participate in path staleness checks, so a
+stale retired variant cannot invalidate a fresh live sibling. OPcache status
+still exposes one row per path: it sums hits and retained memory across profile
+variants, takes freshness from the most recently used live variant, and reports
+timestamp `0` only when every variant for that path is discarded.
 
 ### Capacity
 

@@ -1,8 +1,9 @@
 //! Purpose:
-//! The process-wide runtime script cache: one entry per canonical path holding the
-//! parsed form of a dynamically included PHP file (one program, see `segments`), plus
-//! the statistics the OPcache API reports about it. The invariants are written up in
-//! `docs/internals/eval-runtime.md`, "Runtime script cache".
+//! The process-wide runtime script cache: independently reusable parser entries per
+//! canonical path and semantic profile, holding the parsed form of a dynamically
+//! included PHP file (one program, see `segments`), plus the statistics the OPcache API
+//! reports about it. The invariants are written up in `docs/internals/eval-runtime.md`,
+//! "Runtime script cache".
 //!
 //! Called from:
 //! - `crate::interpreter::include_exec` for every runtime include/require.
@@ -25,8 +26,8 @@
 
 use super::config::{config, ScriptCacheConfig};
 use super::segments::{segment_script_with_semantics, ParseMode, ScriptSegment};
-use std::collections::HashMap;
 use elephc_semantics::SemanticProfile;
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -749,18 +750,23 @@ pub fn invalidate(path: &Path, force: bool) -> bool {
 /// entry valid. Comparing the size here too made such a file stale and retired an entry
 /// reference keeps.
 ///
-/// A path with NO entry is not stale; there is nothing to be stale about, and reporting it
-/// so would make the predicate above take a branch that has no work to do. A file that can
-/// no longer be stated IS stale: it was cached and is now unreadable, which is the strongest
-/// possible reason not to keep serving it.
+/// A path with NO live entry is not stale; there is nothing to be stale about, and reporting
+/// it so would make the predicate above take a branch that has no work to do. Discarded
+/// profile variants are ignored because they can no longer be served and must not retire a
+/// fresh sibling. A file that can no longer be stated IS stale: it was cached and is now
+/// unreadable, which is the strongest possible reason not to keep serving it.
 ///
 /// NO `is_unrecorded` SHORT-CIRCUIT HERE, unlike the include and query paths: php-src's
 /// `accel_invalidate` calls `do_validate_timestamps` directly, so an entry admitted without
 /// a timestamp compares `0` against the real mtime and is stale.
 fn entry_is_stale(key: &Path) -> bool {
     let cache = lock_script_cache();
-    let timestamps: Vec<i64> = cache.entries.iter()
-        .filter_map(|(entry_key, entry)| (entry_key.path == key).then_some(entry.timestamp))
+    let timestamps: Vec<i64> = cache
+        .entries
+        .iter()
+        .filter_map(|(entry_key, entry)| {
+            (entry_key.path == key && !entry.discarded).then_some(entry.timestamp)
+        })
         .collect();
     if timestamps.is_empty() {
         return false;
@@ -947,22 +953,51 @@ pub fn stats() -> ScriptCacheStats {
     }
 }
 
-/// Returns one entry per cached script, sorted by path for a deterministic surface.
+/// Returns one PHP-visible row per cached path, sorted for a deterministic surface.
 ///
-/// A discarded entry reports `timestamp = 0`, which is the single field php-src moves
-/// on a discard and the one the compile-time manifest emulation already moves.
+/// Semantic profiles remain separate internal artifacts, but OPcache exposes a map keyed
+/// only by path. Their hits and footprints are therefore summed into that one row, while
+/// freshness fields come from the most recently used live variant. Discarded siblings do
+/// not hide a live row. A path whose variants are all discarded reports `timestamp = 0`,
+/// which is the single field php-src moves on a discard and the one the compile-time
+/// manifest emulation already moves.
 pub fn cached_scripts() -> Vec<CachedScriptInfo> {
     let cache = lock_script_cache();
-    let mut scripts: Vec<CachedScriptInfo> = cache
-        .entries
-        .iter()
-        .map(|(key, entry)| CachedScriptInfo {
-            full_path: key.path.clone(),
-            hits: entry.hits,
-            memory_consumption: entry.footprint,
-            last_used_timestamp: entry.last_used,
-            timestamp: if entry.discarded { 0 } else { entry.timestamp },
-            revalidate_at: entry.revalidate_at,
+    let mut entries_by_path: HashMap<&Path, Vec<&Entry>> = HashMap::new();
+    for (key, entry) in &cache.entries {
+        entries_by_path.entry(&key.path).or_default().push(entry);
+    }
+    let mut scripts: Vec<CachedScriptInfo> = entries_by_path
+        .into_iter()
+        .map(|(path, entries)| {
+            let newest_live = entries
+                .iter()
+                .copied()
+                .filter(|entry| !entry.discarded)
+                .max_by_key(|entry| (entry.last_used, entry.timestamp, entry.revalidate_at));
+            let representative = newest_live.unwrap_or_else(|| {
+                entries
+                    .iter()
+                    .copied()
+                    .max_by_key(|entry| (entry.last_used, entry.timestamp, entry.revalidate_at))
+                    .expect("a grouped cache path must contain an entry")
+            });
+            CachedScriptInfo {
+                full_path: path.to_path_buf(),
+                hits: entries.iter().map(|entry| entry.hits).sum(),
+                memory_consumption: entries.iter().map(|entry| entry.footprint).sum(),
+                last_used_timestamp: entries
+                    .iter()
+                    .map(|entry| entry.last_used)
+                    .max()
+                    .expect("a grouped cache path must contain an entry"),
+                timestamp: if newest_live.is_some() {
+                    representative.timestamp
+                } else {
+                    0
+                },
+                revalidate_at: representative.revalidate_at,
+            }
         })
         .collect();
     scripts.sort_by(|left, right| left.full_path.cmp(&right.full_path));
