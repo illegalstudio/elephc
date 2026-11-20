@@ -1520,12 +1520,7 @@ pub(crate) fn halt_compiler_scope_error<T: SourceToken>(source: &[u8], tokens: &
             if depth == 0 && top_level_previous {
                 continue;
             }
-            return Some(unexpected_token_at(
-                source,
-                tokens[index].pos(),
-                tokens[index].len(),
-                None,
-            ));
+            return Some(token_at_index_error(source, tokens, index));
         }
     }
     None
@@ -1575,7 +1570,7 @@ pub(crate) fn reserved_list_error<T: SourceToken>(source: &[u8], tokens: &[T]) -
             next_id == tok::T_AS
         };
         if !allowed {
-            return Some(unexpected_token_at(source, token.pos(), token.len(), None));
+            return Some(token_at_index_error(source, tokens, index));
         }
     }
     None

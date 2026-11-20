@@ -199,14 +199,16 @@ fn validate_foreach_target(
     pos: &mut usize,
     span: Span,
 ) -> Result<(), CompileError> {
-    // Zend requires a variable or destructuring target here. An ungrouped arrow
-    // function fails at its keyword, before parsing its signature or body.
+    // Ungrouped closures and match expressions fail at their opening keyword.
+    // In this position `static` can only start a scoped member.
     match tokens.get(*pos..) {
-        Some([(Token::Fn, metadata), ..]) => {
-            return Err(CompileError::new(metadata.span, "Unexpected arrow function in foreach target"));
+        Some([(Token::Fn | Token::Function | Token::Match, metadata), ..]) => {
+            return Err(CompileError::new(metadata.span, "Expected variable or destructuring in foreach target"));
         }
-        Some([(Token::Static, _), (Token::Fn, metadata), ..]) => {
-            return Err(CompileError::new(metadata.span, "Expected '::' after 'static' in foreach target"));
+        Some([(Token::Static, metadata), rest @ ..])
+            if !matches!(rest.first(), Some((Token::DoubleColon, _))) =>
+        {
+            return Err(CompileError::new(metadata.span, "Expected '::' after 'static'"));
         }
         _ => {}
     }

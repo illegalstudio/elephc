@@ -174,16 +174,15 @@ pub(crate) fn diagnostic_override<T: SourceToken>(
     if raw_message == "Expected '=' after constant name" {
         return Some(with_expectation(mapped.clone(), "\"=\""));
     }
-    let static_arrow_target = raw_message == "Expected '::' after 'static' in foreach target";
-    if static_arrow_target || raw_message == "Unexpected arrow function in foreach target" {
-        let diagnostic = ValidationError {
-            message: "syntax error, unexpected token \"fn\"".into(),
-            ..mapped.clone()
-        };
-        return Some(if static_arrow_target {
-            with_expectation(diagnostic, "\"::\"")
-        } else {
-            diagnostic
+    if raw_message == "Expected '::' after 'static'" {
+        return Some(match token_after_keyword(tokens, mapped.pos, tok::T_STATIC) {
+            Some(next) if tokens[next].id() == tok::T_CLOSE_TAG => ValidationError {
+                message: "syntax error, unexpected token \";\", expecting \"::\"".into(),
+                pos: tokens[next].pos(),
+                lexical: false,
+            },
+            Some(next) => with_expectation(token_at_index_error(source, tokens, next), "\"::\""),
+            None => end_of_file_expecting(source.len(), Some("\"::\"")),
         });
     }
     if raw_message.starts_with("Expected parent class name after 'extends'") {
@@ -333,10 +332,12 @@ pub(crate) fn diagnostic_override<T: SourceToken>(
             });
         }
     }
-    if raw_message == "array must be followed by '('" {
-        return Some(ValidationError {
-            ..with_expectation(mapped.clone(), "\"(\"")
-        });
+    if matches!(raw_message, "array must be followed by '('" | "list must be followed by '('") {
+        let mut diagnostic = mapped.clone();
+        if source.get(mapped.pos..).is_some_and(|rest| rest.starts_with(b"?>")) {
+            diagnostic.message = "syntax error, unexpected token \";\"".into();
+        }
+        return Some(with_expectation(diagnostic, "\"(\""));
     }
     if raw_message == "Reserved type name" {
         let token = tokens
@@ -971,10 +972,14 @@ pub(crate) fn token_error_at<T: SourceToken>(
                     lexical: false,
                 },
                 id if id == tok::T_START_HEREDOC => heredoc_token_error(source, pos, len),
-                // Keywords, operators and punctuation all report their source spelling in
-                // Zend's diagnostics; only variables, numbers and identifiers get the
-                // dedicated noun.
-                _ => unexpected_token_at(source, pos, len, None),
+                _ => match crate::scanner::keyword_diagnostic_spelling(token.id(), &source[pos..pos + len]) {
+                    Some(keyword) => ValidationError {
+                        message: format!("syntax error, unexpected token \"{keyword}\""),
+                        pos,
+                        lexical: false,
+                    },
+                    None => unexpected_token_at(source, pos, len, None),
+                },
             }
         }
     }

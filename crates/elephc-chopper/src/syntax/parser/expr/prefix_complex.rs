@@ -989,6 +989,17 @@ pub(super) fn parse_named_expr(
             "array must be followed by '('",
         ));
     }
+    if validation_only()
+        && name.kind == crate::syntax::names::NameKind::Unqualified
+        && name.parts.len() == 1
+        && name.parts[0].eq_ignore_ascii_case("list")
+        && !matches!(tokens.get(*pos), Some((Token::LParen, _)))
+    {
+        return Err(CompileError::new(
+            tokens.get(*pos).map_or(span, |(_, metadata)| metadata.span),
+            "list must be followed by '('",
+        ));
+    }
     // `buffer_new<T>` is elephc-only syntax: PHP reads the angle brackets as comparisons, so
     // TOKEN_PARSE leaves the expression to its own rules.
     if !validation_only() && name.parts.len() == 1

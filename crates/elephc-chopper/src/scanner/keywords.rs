@@ -59,6 +59,29 @@ pub(crate) fn keyword_id(word: &[u8]) -> Option<i64> {
         .copied()
 }
 
+/// Returns Zend's grammar spelling for a keyword diagnostic, preserving ordinary names.
+pub(crate) fn keyword_diagnostic_spelling(token: i64, source: &[u8]) -> Option<String> {
+    use elephc_builtin_contract::token_const_id;
+
+    if token == const { token_const_id("T_YIELD_FROM") } {
+        return Some("yield from".into());
+    }
+    let visibility_set = [
+        const { token_const_id("T_PUBLIC_SET") },
+        const { token_const_id("T_PROTECTED_SET") },
+        const { token_const_id("T_PRIVATE_SET") },
+    ];
+    if !visibility_set.contains(&token) && keyword_id(source) != Some(token) {
+        return None;
+    }
+    let text = std::str::from_utf8(source).ok()?;
+    if text.starts_with("__") && text.ends_with("__") {
+        Some(text.to_ascii_uppercase())
+    } else {
+        Some(text.to_ascii_lowercase())
+    }
+}
+
 /// Returns the cast token for the word between parentheses, or `None`.
 pub(crate) fn cast_id(word: &[u8]) -> Option<i64> {
     if word.len() > MAX_CAST_LEN {
