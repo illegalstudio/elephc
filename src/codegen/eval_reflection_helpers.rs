@@ -138,7 +138,9 @@ fn emit_reflection_attribute_new_aarch64(
     emitter.instruction("ldr x1, [sp, #24]");                                   // move the ReflectionAttribute object pointer into the Mixed payload
     emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
     emitter.instruction("bl __rt_mixed_from_value");                            // box the ReflectionAttribute object for eval
-    super::eval_reflection_owner_helpers::retire_reflection_owner_allocation_after_boxing(emitter, 40);
+    // The object sits at [sp, #24] and the frame pointer is sp + 80; the helper takes an offset
+    // BELOW the frame pointer, so the slot is 80 - 24 = 56 (40 read the target-bitmask slot).
+    super::eval_reflection_owner_helpers::retire_reflection_owner_allocation_after_boxing(emitter, 56);
     emitter.instruction(&format!("b {}", done_label));                          // skip the fail-closed return path after boxing
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
