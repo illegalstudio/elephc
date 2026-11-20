@@ -50,7 +50,7 @@ function preg_match(string $pattern, string $subject, array $matches = null, int
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
 - **Adapter reason**: `by-reference-or-lvalue`.
-- **Eval signature compatibility**: `additional-optional-parameters`.
+- **Eval signature compatibility**: `runtime-default-representation`.
 - **Dispatch hooks**: `direct`, `values`
 - **By-reference parameters**: `$matches`.
 

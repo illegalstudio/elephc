@@ -134,6 +134,27 @@ eval($source);
     );
 }
 
+/// Named `offset:` / `flags:` that skip `$matches` bind through callables on both backends,
+/// without a by-reference warning for the omitted `$matches`.
+#[test]
+fn test_preg_match_named_offset_through_callables() {
+    let body = r#"set_error_handler(function ($no, $msg) { echo "[", $msg, "]"; return true; });
+echo call_user_func_array('preg_match', ['pattern' => '/a/', 'subject' => 'ba', 'offset' => 1]), call_user_func_array('preg_match', ['/a/', 'ba', 'offset' => 2]), "|";
+$f = preg_match(...);
+echo $f('/a/', 'ba', offset: 2), $f(pattern: '/a/', subject: 'bab', offset: 2, flags: 0), "|";
+$g = preg_match_all(...);
+echo call_user_func_array('preg_match_all', ['pattern' => '/a/', 'subject' => 'baa', 'offset' => 2]), $g('/a/', 'baaa', offset: 1), "|";
+var_dump(call_user_func_array('preg_match', ['pattern' => '/a/', 'subject' => 'ba', 'offset' => 5]));
+echo preg_last_error(), "|";
+try { call_user_func_array('preg_match', ['pattern' => '/a/', 'subject' => 'ba', 'flags' => 99]); } catch (ValueError $e) { echo $e->getMessage(), "|"; }
+try { $g('/a/', 'ba', flags: 99); } catch (ValueError $e) { echo $e->getMessage(); }
+"#;
+    let expected = "10|00|13|bool(false)\n1|preg_match(): Argument #4 ($flags) must be a PREG_* constant|\
+                    preg_match_all(): Argument #4 ($flags) must be a PREG_* constant";
+    assert_eq!(compile_and_run_with_regex(&format!("<?php\n{body}")), expected, "aot");
+    assert_eq!(compile_and_run_with_regex(&opaque_eval(body)), expected, "eval");
+}
+
 /// Boxed `$flags` / `$offset` values are cast to integers, so a capture can drive the next search.
 #[test]
 fn test_preg_match_boxed_offset_and_flags() {
