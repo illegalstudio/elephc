@@ -2013,11 +2013,16 @@ fn lower_property_probe_without_native(
     // Runtime-name probes must suppress typed uninitialized reads just like coalesce.
     // In particular, isset() on the C|false receiver after a rejected readonly fallback
     // must answer false rather than take DynamicPropGet's ordinary typed-slot guard.
-    if property_can_be_uninitialized(ctx, object.value, property)
+    let can_be_uninitialized = if matches!(mode, PropertyFetchMode::Isset | PropertyFetchMode::Empty) {
+        property_can_be_uninitialized_for_presence(ctx, object.value, property)
+    } else {
+        property_can_be_uninitialized(ctx, object.value, property)
+    };
+    if can_be_uninitialized
         || union_hook_probe_class(ctx, object.value, property).is_some() {
         return lower_initialized_property_value(ctx, object, property, expr);
     }
-    lower_property_fetch_mode_from_value(ctx, object, property, PropertyFetchMode::Probe, expr)
+    lower_property_fetch_mode_from_value(ctx, object, property, mode, expr)
 }
 
 /// Lowers `$object->name` as a silent probe in one explicit fetch mode (`Probe` or `Coalesce`).
@@ -2051,7 +2056,7 @@ pub(super) fn lower_property_empty_probe_from_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
-    if property_can_be_uninitialized(ctx, object.value, property)
+    if property_can_be_uninitialized_for_presence(ctx, object.value, property)
         || union_hook_probe_class(ctx, object.value, property).is_some() {
         return lower_initialized_property_value(ctx, object, property, expr);
     }
@@ -2068,7 +2073,7 @@ pub(super) fn lower_property_isset_probe_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     // As for `??`: a typed slot that may still be uninitialized is probed, never read.
-    if property_can_be_uninitialized(ctx, object.value, property)
+    if property_can_be_uninitialized_for_presence(ctx, object.value, property)
         || union_hook_probe_class(ctx, object.value, property).is_some() {
         return lower_initialized_property_value(ctx, object, property, expr);
     }

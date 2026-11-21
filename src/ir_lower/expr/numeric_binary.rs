@@ -439,10 +439,21 @@ fn is_gradual_bitwise_operand(
     ctx: &LoweringContext<'_, '_>,
     value: LoweredValue,
 ) -> bool {
-    matches!(
-        ctx.builder.value_php_type(value.value).codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) && !is_numeric_only_reduction(ctx, value)
+    let ty = ctx.builder.value_php_type(value.value);
+    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && !is_numeric_only_reduction(ctx, value)
+        // An object with a native integer cast (SimpleXML) converts to its number first; the
+        // string-versus-integer dispatch would read the object as 0. `coerce_bitwise_operands`
+        // owns that conversion.
+        && !(object_operators::can_contain_object(&ty) && program_has_native_int_casts(ctx))
+}
+
+/// Whether the program declares a class whose objects convert to integers natively.
+fn program_has_native_int_casts(ctx: &LoweringContext<'_, '_>) -> bool {
+    ctx.classes.keys().any(|name| {
+        elephc_builtin_contract::lookup_class(name).and_then(|class| class.operators)
+            .and_then(|operators| operators.cast_method(elephc_builtin_contract::ObjectCast::Int)).is_some()
+    })
 }
 
 /// Returns whether a boxed value is provably an `int|float`, never a string or an array.

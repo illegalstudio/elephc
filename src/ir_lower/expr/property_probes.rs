@@ -12,6 +12,23 @@
 
 use super::*;
 
+/// The `isset()`/`empty()` form of [`property_can_be_uninitialized`].
+///
+/// Those constructs ask `__isset` alone (never `__get`) of a receiver that answers through magic.
+/// An opaque receiver (`mixed`, a union of classes) has no slot to name, and the "initialized,
+/// then read" ladder would run the ordinary read -- and so `__get` -- for a class without
+/// `__isset`. The runtime-name presence fetch is mode-aware and stays quiet for an uninitialized
+/// typed slot, so only a receiver with one known class takes the ladder.
+pub(super) fn property_can_be_uninitialized_for_presence(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> bool {
+    let object_ty = ctx.builder.value_php_type(object);
+    property_probe_object_class(&object_ty).is_some()
+        && property_can_be_uninitialized(ctx, object, property)
+}
+
 /// Returns true when reading `property` on `object` can hit PHP's
 /// "must not be accessed before initialization" fatal.
 ///
