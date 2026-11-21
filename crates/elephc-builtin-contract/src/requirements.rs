@@ -83,8 +83,15 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "pcntl_wifstopped",
             "pcntl_wstopsig",
             "pcntl_wtermsig",
+            "posix_errno",
+            "posix_get_last_error",
+            "posix_geteuid",
+            "posix_getpgrp",
+            "posix_isatty",
+            "posix_kill",
             "posix_setpgid",
             "posix_setsid",
+            "posix_strerror",
         ],
     ) {
         return PCNTL;

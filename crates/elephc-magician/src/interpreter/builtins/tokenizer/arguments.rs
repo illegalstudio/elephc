@@ -84,36 +84,5 @@ pub(super) fn tokenizer_int(
     value: RuntimeCellHandle, name: &str, number: usize, parameter: &str,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
-    let tag = values.type_tag(value)?;
-    if tag == EVAL_TAG_STRING {
-        let bytes = values.string_bytes(value)?;
-        if let Ok(source) = std::str::from_utf8(&bytes) {
-            // PHP numeric strings also accept vertical tab, unlike Rust's ASCII whitespace set.
-            let numeric = source.trim_matches(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}'));
-            if let Ok(integer) = numeric.parse::<i64>() { return Ok(integer); }
-            if let Ok(float) = numeric.parse::<f64>() {
-                if fits_php_int(float) {
-                    if float.trunc() != float {
-                        values.warning(&format!("Deprecated: Implicit conversion from float-string \"{source}\" to int loses precision\n"))?;
-                    }
-                    return Ok(float.trunc() as i64);
-                }
-            }
-        }
-    } else if tag == EVAL_TAG_FLOAT {
-        let float = f64::from_bits(values.raw_value_word(value)?);
-        if fits_php_int(float) { return eval_int_value(value, values); }
-    } else if tag == EVAL_TAG_INT || tag == EVAL_TAG_BOOL {
-        return eval_int_value(value, values);
-    } else if tag == EVAL_TAG_NULL {
-        values.warning(&format!("Deprecated: {name}(): Passing null to parameter #{number} (${parameter}) of type int is deprecated\n"))?;
-        return Ok(0);
-    }
-    let given = eval_given_type_name(value, context, values)?;
-    eval_throw_type_error(&format!("{name}(): Argument #{number} (${parameter}) must be of type int, {given} given"), context, values)
-}
-
-/// Mirrors Zend's inclusive lower bound and exclusive rounded upper bound for doubles.
-fn fits_php_int(value: f64) -> bool {
-    value.is_finite() && value >= i64::MIN as f64 && value < -(i64::MIN as f64)
+    eval_int_param(value, name, number, parameter, context, values)
 }

@@ -24,7 +24,7 @@ description: "Compiler internals for pcntl_strerror(): lowering path, type check
 - **Validation**: `shared`
 - **Result type source**: `declared`
 - **Result ownership**: `fresh`
-- **Effects**: `static (1 declared effects)`
+- **Effects**: `shared`
 - **Requirements**: `static (1 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
