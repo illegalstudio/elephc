@@ -43,7 +43,7 @@ $box->inspect(target: $changed, observed: rewriteArgument($changed));
 echo $changed, '|';
 function conditionalScope(bool $enabled): void {
     $knownNull = null;
-    if ($enabled) { (function() use (&$branch) {}); }
+    if ($enabled) { $capture = function() use (&$branch) {}; }
     $names = get_defined_vars();
     echo array_key_exists('knownNull', $names) ? 'null:' : 'lost-null:';
     echo array_key_exists('branch', $names) ? 'present|' : 'absent|';
