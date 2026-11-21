@@ -1650,7 +1650,7 @@ fn validate_stmt(
                 profile,
                 current_class,
             )?;
-            *locals = merge_exits(&[first_exit, repeated_exit]);
+            *locals = merge_loop_exits(body, &[first_exit, repeated_exit]);
         }
         StmtKind::Foreach {
             key_var,
@@ -1665,7 +1665,7 @@ fn validate_stmt(
             }
             iteration.set(value_var, ValueFact::Unknown);
             validate_block(body, &mut iteration, properties, profile, current_class)?;
-            *locals = merge_exits(&[entry, iteration]);
+            *locals = merge_loop_exits(body, &[entry, iteration]);
         }
         StmtKind::DoWhile { body, condition } => {
             validate_block(body, locals, properties, profile, current_class)?;
@@ -1693,7 +1693,7 @@ fn validate_stmt(
                 current_class,
             )?
             .when_false;
-            *locals = merge_exits(&[first_exit, repeated_exit]);
+            *locals = merge_loop_exits(body, &[first_exit, repeated_exit]);
         }
         StmtKind::For {
             init,
@@ -1752,7 +1752,7 @@ fn validate_stmt(
                 profile,
                 current_class,
             )?;
-            *locals = merge_exits(&[first_exit, repeated_exit]);
+            *locals = merge_loop_exits(body, &[first_exit, repeated_exit]);
         }
         StmtKind::Switch { cases, default, .. } => {
             let entry = locals.clone();
@@ -1844,6 +1844,15 @@ fn validate_branch(
     let mut exit = entry.clone();
     validate_block(body, &mut exit, properties, profile, current_class)?;
     Ok(exit)
+}
+
+/// Merges loop fallthroughs unless a break can bypass the modeled backedge state.
+fn merge_loop_exits(body: &[Stmt], exits: &[LocalFacts]) -> LocalFacts {
+    if crate::termination::block_may_break_current_loop(body) {
+        LocalFacts::default()
+    } else {
+        merge_exits(exits)
+    }
 }
 
 /// Keeps only facts that agree on every possible control-flow exit.
