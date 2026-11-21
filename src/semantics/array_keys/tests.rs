@@ -97,6 +97,39 @@ fn strict_array_key_source_validation_keeps_original_domains() {
     }
 }
 
+/// Target pruning cannot hide invalid keys written through proven local or property arrays.
+#[test]
+fn strict_array_key_source_validation_audits_target_guarded_writes() {
+    for source in [
+        "<?php $values = ['ok' => 1]; if (PHP_OS_FAMILY === 'Windows') { $values[true] = 2; }",
+        "<?php $values = []; $key = true; if (PHP_OS_FAMILY === 'Windows') { $values[$key] = 2; }",
+        "<?php class KeyWrites { public array $items = []; } $value = new KeyWrites(); if (PHP_OS_FAMILY === 'Windows') { $value->items[1.5] = 2; }",
+        "<?php class StaticKeyWrites { public static array $items = []; } if (PHP_OS_FAMILY === 'Windows') { StaticKeyWrites::$items[null] = 2; }",
+        "<?php function guarded_keys(): void { $values = []; if (PHP_OS_FAMILY === 'Windows') { $values[false] = 2; } }",
+        "<?php function guarded_typed_key(array $values, bool $key): void { if (PHP_OS_FAMILY === 'Windows') { $values[$key] = 2; } }",
+    ] {
+        let error = crate::semantics::validate_source(
+            &parse(source, SourceMode::Php),
+            profile(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("strict-array-keys"), "{source}: {error:?}");
+    }
+}
+
+/// Source auditing leaves string offsets and ArrayAccess dimensions to their own contracts.
+#[test]
+fn strict_array_key_source_validation_keeps_non_array_target_writes() {
+    for source in [
+        "<?php $text = 'ab'; if (PHP_OS_FAMILY === 'Windows') { $text[true] = 'x'; }",
+        "<?php class StringKeyWrites { public string $items = 'ab'; public static string $shared = 'ab'; } $value = new StringKeyWrites(); if (PHP_OS_FAMILY === 'Windows') { $value->items[1.5] = 'x'; StringKeyWrites::$shared[false] = 'y'; }",
+        "<?php class KeyAccessWrite implements ArrayAccess { public function offsetExists(mixed $key): bool { return true; } public function offsetGet(mixed $key): mixed { return 1; } public function offsetSet(mixed $key, mixed $value): void {} public function offsetUnset(mixed $key): void {} } $value = new KeyAccessWrite(); if (PHP_OS_FAMILY === 'Windows') { $value[true] = 2; }",
+    ] {
+        crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+}
+
 /// Typed selectors are checked on array places without normalizing away their original kinds.
 #[test]
 fn strict_array_key_checker_validates_original_array_places() {

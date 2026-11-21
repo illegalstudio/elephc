@@ -11,6 +11,9 @@ use crate::{errors::CompileError, span::Span, types::PhpType};
 use elephc_semantics::{SemanticProfile, StrictFeature,
     conversions::{plan_conversion, ConversionPlan, ConversionSite, ValueKind}};
 
+mod source_writes;
+pub(crate) use source_writes::validate_source_writes;
+
 pub(crate) use elephc_semantics::array_keys::EXACT_KEY_MESSAGE;
 
 /// Plans original key membership without enabling coercion, indexing or array element policies.

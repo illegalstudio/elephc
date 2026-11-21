@@ -25,6 +25,9 @@ pub fn validate_source(program: &Program, profile: SemanticProfile) -> Result<()
     if !SOURCE_GUARANTEES.iter().copied().any(|feature| profile.contains(feature)) { return Ok(()); }
     crate::compiler_stack::with_compiler_stack(|| {
         super::numeric_constants::validate(program, profile)?;
+        if profile.contains(StrictFeature::ArrayKeys) {
+            super::array_keys::validate_source_writes(program, profile)?;
+        }
         let mut validator = SourceValidator { depth: 0, error: None, profile,
             source_modes: Default::default(), quiet_operations: Vec::new(), quiet_frames: Vec::new() };
         walk_program(program, &mut validator);
@@ -213,7 +216,13 @@ impl AstVisitor for SourceValidator {
         match parsed {
             Ok(program) => {
                 self.depth += 1;
-                match super::numeric_constants::validate(&program, self.profile) {
+                match super::numeric_constants::validate(&program, self.profile).and_then(|()| {
+                    if self.profile.contains(StrictFeature::ArrayKeys) {
+                        super::array_keys::validate_source_writes(&program, self.profile)
+                    } else {
+                        Ok(())
+                    }
+                }) {
                     Ok(()) => walk_program(&program, self),
                     Err(error) => self.error = Some(error),
                 }
