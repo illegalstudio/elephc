@@ -23,7 +23,11 @@ pub mod handshake;
 pub mod push;
 pub mod resources;
 
+mod apm_rules;
+
+mod apm_errors;
 mod apm_runtime;
+mod apm_trace;
 pub use apm_runtime::{apm_snapshot_text, reset_routes};
 use apm_runtime::*;
 
@@ -180,14 +184,17 @@ const ROUTES_RESET_TICKET_OFFSET: usize = ROUTES_GENERATION_OFFSET + 8;
 /// Byte offset of the route-table gate (`apm_runtime::TableGate`): the
 /// processes using the table and whether a reset is emptying it.
 const ROUTES_GATE_OFFSET: usize = ROUTES_RESET_TICKET_OFFSET + 8;
+/// Byte offset of the error table (`apm_errors`): the errors of failed
+/// transactions, grouped per transaction, class and place.
+const ERROR_TABLE_OFFSET: usize = ROUTES_GATE_OFFSET + 8;
 /// Shared-region byte size: the ring, then the route table, then the per-route
 /// event counters, then the control word, then the replay table, then the
 /// transaction table, then the in-flight table, then the new-route budget, the
-/// route-table generation, the reset ticket and the table gate. All offsets
-/// are derived from the sizes above, and the whole internal layout is
-/// inherited across a `--web` fork so route ids, counters, and replay state
-/// stay shared.
-const REGION_BYTES: usize = ROUTES_GATE_OFFSET + 8;
+/// route-table generation, the reset ticket, the table gate and the error
+/// table. All offsets are derived from the sizes above, and the whole internal
+/// layout is inherited across a `--web` fork so route ids, counters, and replay
+/// state stay shared.
+const REGION_BYTES: usize = ERROR_TABLE_OFFSET + apm_errors::ERROR_TABLE_BYTES;
 
 /// The shared "someone asked" word, or `None` before the region is mapped.
 ///
@@ -776,6 +783,9 @@ pub unsafe extern "C" fn elephc_probe_set_route(route: *const u8, len: usize) {
     observe_shared_ask();
     // Looks the route up and may intern it: not while a reset empties the table.
     let _gate = TableGate::enter(REGION.load(Ordering::Relaxed));
+    // A new request, or none: whatever the last one was, it is over.
+    apm_rules::set_request_ignored(false);
+    apm_errors::clear();
     // Defensive: a bridge bug passing a wild length must not read out of bounds.
     if route.is_null() || len == 0 || len > 4096 {
         // A request ending here was not recorded by this process (an isolated
@@ -814,6 +824,15 @@ pub unsafe extern "C" fn elephc_probe_set_route(route: *const u8, len: usize) {
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
         return;
     };
+    // A route the project's `[apm]` rules exclude counts nothing — no row, no
+    // in-flight row, no work — and is named only for the sampler, as without `--apm`.
+    let excluded = apm && !apm_rules::counts(text);
+    apm_rules::set_request_ignored(excluded);
+    let apm = apm && !excluded;
+    if !asked && !apm {
+        CURRENT_ROUTE.store(0, Ordering::Relaxed);
+        return;
+    }
     let id = if !apm {
         // The table this id is looked up in, which samples check against.
         let base = REGION.load(Ordering::Relaxed);

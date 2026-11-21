@@ -185,7 +185,7 @@ fn exact_answer() -> String {
         return NO_PROFILER.to_string();
     }
     match exact_slice() {
-        Some(profile) if !profile.is_empty() => profile,
+        Some(profile) if !profile.is_empty() => mark_excluded(profile),
         // "No request completed" is one explanation for an empty wait, and it is
         // the wrong one when requests ARE completing and being refused the
         // rendezvous. A slot held by a process the instrumentation could not
@@ -206,6 +206,50 @@ fn exact_answer() -> String {
             ),
         },
     }
+}
+
+/// The line an exact slice's answer carries when its transaction is one the project's
+/// `[apm]` rules exclude: an automatic capture drops it, so a health check polled every
+/// second does not take the captures useful requests should get (review). An operator's
+/// own `monitor --exact` still shows it.
+pub const EXCLUDED_MARK: &str = "elephc-apm: excluded";
+
+/// Appends `EXCLUDED_MARK` to a slice whose trace line names an excluded transaction.
+fn mark_excluded(mut profile: String) -> String {
+    let route = profile
+        .lines()
+        .find_map(|line| line.strip_prefix("elephc-instr-trace: "))
+        .and_then(|fields| fields.split_whitespace().find_map(|field| field.strip_prefix("route=")))
+        .filter(|route| *route != "-")
+        .map(decode_field);
+    if route.is_some_and(|route| !crate::apm_rules::counts(&route)) {
+        if !profile.ends_with('\n') {
+            profile.push('\n');
+        }
+        profile.push_str(EXCLUDED_MARK);
+        profile.push('\n');
+    }
+    profile
+}
+
+/// Reverses the instrumentation's percent-encoding of a trace-line field; a malformed
+/// escape is kept as written.
+fn decode_field(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Some(byte) = std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Per-connection I/O timeout, so a stalled handshake ends rather than lasting
@@ -860,6 +904,22 @@ pub(crate) fn os_random<const N: usize>() -> Option<[u8; N]> {
 mod tests {
     //! The instrumentation's half of the rendezvous, stubbed so this crate's
     //! tests link on their own. A shipped binary always has the real ones.
+
+    /// A slice of an excluded transaction is marked, its route decoded first; one the
+    /// rules count, or one with no route, is left as it is (review).
+    #[test]
+    fn slices_of_excluded_transactions_are_marked() {
+        let _guard = crate::tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::apm_rules::set_test_rules(Some("-GET /health\n"));
+        let slice = |route: &str| format!("elephc-instr-trace: trace=a span=b parent=- start=1 route={route}\nelephc-instr: main calls=1\n");
+        let health = super::mark_excluded(slice("GET%20/health"));
+        let orders = super::mark_excluded(slice("GET%20/orders"));
+        let none = super::mark_excluded(slice("-"));
+        crate::apm_rules::set_test_rules(None);
+        assert!(health.lines().any(|line| line == super::EXCLUDED_MARK), "{health}");
+        assert!(!orders.contains(super::EXCLUDED_MARK) && !none.contains(super::EXCLUDED_MARK));
+        assert_eq!(super::decode_field("caf%C3%A9%2"), "café%2");
+    }
 
     /// A unique scratch path for one test, without pulling in a temp-dir crate.
     fn scratch(tag: &str) -> std::path::PathBuf {

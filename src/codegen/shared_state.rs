@@ -76,6 +76,9 @@ pub(crate) struct SharedCodegenState {
     /// `--apm-collector`: the collector's address is embedded at
     /// `frame::APM_COLLECTOR_SYMBOL` for the APM init to read.
     pub(crate) apm_collector: bool,
+    /// The probe's start-up text (`[apm]` rules, build identity) is embedded at
+    /// `apm_init::APM_RULES_SYMBOL` for the prologue to publish to the probe.
+    pub(crate) apm_rules: bool,
     /// Counted functions as `(display name, counter symbol)`, in emission order. Main's
     /// epilogue renders the exit dump from this list — main is emitted last, so the
     /// registry is complete by then.
@@ -84,6 +87,9 @@ pub(crate) struct SharedCodegenState {
     /// name table `elephc_instr_init` reads; main is emitted last, so it is
     /// complete by then.
     instr_registry: Vec<String>,
+    /// Where each instrumented function is declared, `path:line`, in id order (empty
+    /// when unknown). The profile names the function a query came from by it.
+    instr_locations: Vec<String>,
     /// Classes whose module-level complete `ReflectionClass` builder was requested, as
     /// `(php symbol key, class name, label)` in request order. Builders are emitted after the
     /// module's bodies, and emitting one can request more (its members' declaring classes).
@@ -291,7 +297,22 @@ impl SharedCodegenState {
         }
         let id = self.instr_registry.len();
         self.instr_registry.push(display_name);
+        self.instr_locations.push(String::new());
         id
+    }
+
+    /// Notes where function `id` is declared, unless a variant already did.
+    pub(super) fn note_instr_location(&mut self, id: usize, location: String) {
+        if let Some(slot) = self.instr_locations.get_mut(id) {
+            if slot.is_empty() {
+                *slot = location;
+            }
+        }
+    }
+
+    /// Returns the declaration locations in id order, parallel to `instr_registry`.
+    pub(super) fn instr_locations(&self) -> &[String] {
+        &self.instr_locations
     }
 
     /// Returns the instrumented function names in id order.

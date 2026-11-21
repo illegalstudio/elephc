@@ -45,18 +45,61 @@
     return out;
   }
   function writeHash() {
-    const kept = (location.hash || "").replace(/^#/, "").split("&").filter(kv => kv && !/^(a|ar|at)=/.test(kv));
+    const kept = (location.hash || "").replace(/^#/, "").split("&").filter(kv => kv && !/^(a|ar|at|afrom|ato|acmp)=/.test(kv));
     kept.push("a=" + (state.on ? 1 : 0));
     if (state.route) kept.push("ar=" + encodeURIComponent(state.route));
-    if (LIVE) kept.push("at=" + state.range);
+    if (LIVE && state.compare) kept.push("acmp=" + state.compare);
+    // A picked period, or else the range: a shared link opens the same span.
+    if (LIVE && state.period) kept.push("afrom=" + state.period.from, "ato=" + state.period.to);
+    else if (LIVE) kept.push("at=" + state.range);
     history.replaceState(null, "", "#" + kept.join("&"));
+  }
+  // `afrom`/`ato` in a link: a period of dates, in Unix milliseconds.
+  function periodFrom(h) {
+    const from = Number(h.afrom), to = Number(h.ato);
+    return from > 0 && to > from ? { from, to } : null;
+  }
+
+  // `acmp` in a link: what the view is compared with, the same span earlier by how much.
+  const COMPARE = { prev: null, day: 86400000, week: 604800000 };
+  function compareFrom(h) {
+    return Object.prototype.hasOwnProperty.call(COMPARE, h.acmp) ? h.acmp : "";
+  }
+  // How far back the compared span is: the span's own length for "the period before".
+  const compareOffset = data => state.compare === "prev" ? data.range_ms : COMPARE[state.compare];
+  // A change against the compared period, as a percentage tag; `lowerIsBetter` for latency
+  // and errors; `fmt` writes the compared value in the tag's tooltip. Nothing when either
+  // side is missing or the base is zero.
+  function delta(now, before, lowerIsBetter, fmt) {
+    if (!state.base || now == null || before == null || !(before > 0)) return "";
+    const pct = (now - before) * 100 / before;
+    const was = `title="was ${escapeHtml(fmt(before))}"`;
+    if (Math.abs(pct) < 0.5) return `<span class="delta" ${was}>±0%</span>`;
+    const worse = lowerIsBetter ? pct > 0 : pct < 0;
+    const text = (pct > 0 ? "+" : "−") + (Math.abs(pct) >= 10 ? Math.abs(pct).toFixed(0) : Math.abs(pct).toFixed(1)) + "%";
+    return `<span class="delta ${worse ? "worse" : "better"}" ${was}>${text}</span>`;
+  }
+
+  // A drag across a chart in progress, and whether a refresh was held back for it.
+  const drag = { on: false, missed: false };
+  function endDrag() {
+    drag.on = false;
+    if (drag.missed) { drag.missed = false; render(); }
   }
 
   const hash = readHash();
+  // The section a link opens on (`as`), until it has been shown.
+  let OPEN_SECTION = /^apm-s-[a-z]+$/.test(hash.as || "") ? hash.as : "";
   const state = {
     on: hash.a !== "0",
     // A range in the link wins over the one this browser used last.
     range: RANGES.includes(Number(hash.at)) ? Number(hash.at) : Number(store.get("elephc-apm-range")) || 900,
+    // A period of dates picked on the page, which wins over the range: null for the last
+    // `range` seconds.
+    period: periodFrom(hash),
+    // The period the view is compared with (`COMPARE`), "" for none, and its series.
+    compare: compareFrom(hash),
+    base: null,
     route: hash.ar || "",
     // The kind of transaction the table shows ("" for every kind).
     kind: "",
@@ -166,6 +209,13 @@
       el("text", { x: x(t), y: h - 6, "text-anchor": k === 0 ? "start" : k === ticks ? "end" : "middle", class: "axis" }, svg)
         .textContent = fmtTime(t, long);
     }
+    // Deploys inside the span: a dashed rule on every chart, named on the one that asks.
+    for (const d of state.data.deploys || []) {
+      if (d.t < t0 || d.t > t1) continue;
+      const dx = x(d.t);
+      el("line", { x1: dx, x2: dx, y1: m.t, y2: h - m.b, class: "deploy" }, svg);
+      if (opts.deployLabels) el("text", { x: dx + 3, y: m.t + 9, class: "deploy-label" }, svg).textContent = d.label || "deploy";
+    }
     for (const s of series) {
       let d = "", area = "", run = [];
       const flush = () => {
@@ -179,8 +229,9 @@
       };
       for (const p of points) { if (p.gap || p[s.key] == null) flush(); else run.push(p); }
       flush();
-      if (area) el("path", { d: area, fill: s.color, "fill-opacity": 0.14, stroke: "none" }, svg);
-      el("path", { d, fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+      // A compared period's line is dashed, with no area under it.
+      if (area && !s.dash) el("path", { d: area, fill: s.color, "fill-opacity": 0.14, stroke: "none" }, svg);
+      el("path", { d, fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round", "stroke-dasharray": s.dash ? "5 4" : "none" }, svg);
       points.forEach((p, i) => {
         if (p.gap || p[s.key] == null) return;
         const joined = q => q && !q.gap && q[s.key] != null;
@@ -203,6 +254,37 @@
     tip.className = "ptip";
     host.appendChild(tip);
     const hit = el("rect", { x: m.l, y: 0, width: Math.max(0, w - m.l - m.r), height: h, fill: "transparent" }, svg);
+    // Dragging across a chart picks that stretch as the period: every view follows it.
+    if (LIVE) {
+      const at = px => t0 + (Math.min(Math.max(px, m.l), w - m.r) - m.l) * (t1 - t0) / Math.max(1, w - m.l - m.r);
+      const band = el("rect", { y: m.t, height: Math.max(0, h - m.t - m.b), class: "zoom", visibility: "hidden" }, svg);
+      let start = null;
+      const px = ev => ev.clientX - svg.getBoundingClientRect().left;
+      hit.addEventListener("mousedown", ev => { start = px(ev); drag.on = true; ev.preventDefault(); });
+      hit.addEventListener("mousemove", ev => {
+        if (start == null) return;
+        const now = px(ev);
+        band.setAttribute("x", Math.min(start, now)); band.setAttribute("width", Math.abs(now - start));
+        band.setAttribute("visibility", "visible");
+      });
+      hit.addEventListener("mouseup", ev => {
+        if (start == null) return;
+        const end = px(ev);
+        const from = Math.round(at(Math.min(start, end))), to = Math.round(at(Math.max(start, end)));
+        start = null;
+        band.setAttribute("visibility", "hidden");
+        // A click is a click: only a drag of a few pixels, over a second at least, picks a period.
+        if (Math.abs(x(to) - x(from)) >= 6 && to - from >= 1000) { drag.on = false; drag.missed = false; setPeriod({ from, to }); }
+        else endDrag();
+      });
+      // Leaving the chart mid-drag gives the drag up.
+      hit.addEventListener("mouseleave", () => {
+        if (start == null) return;
+        start = null;
+        band.setAttribute("visibility", "hidden");
+        endDrag();
+      });
+    }
     const show = px => {
       let best = null, bestDx = Infinity;
       for (const p of usable) { const dx = Math.abs(x(p.t) - px); if (dx < bestDx) { bestDx = dx; best = p; } }
@@ -214,7 +296,7 @@
         const v = best[s.key];
         if (v == null) { dots[i].setAttribute("visibility", "hidden"); return; }
         dots[i].setAttribute("cx", bx); dots[i].setAttribute("cy", y(v)); dots[i].setAttribute("visibility", "visible");
-        rows += `<div class="row"><i style="background:${s.color}"></i><span>${s.label}</span> ${opts.fmt(v)}</div>`;
+        rows += `<div class="row"><i style="background:${s.color}"></i><span>${escapeHtml(s.label)}</span> ${opts.fmt(v)}</div>`;
       });
       tip.innerHTML = `<div class="t">${fmtTime(best.t, long)} · ${fmtCount(best.n)}</div>` + rows;
       tip.style.display = "block";
@@ -233,14 +315,17 @@
 
   function renderTiles(data) {
     const s = data.selected;
+    // The compared period's figures, each tile's value followed by its change.
+    const b = state.base && state.base.selected;
     const span = fmtSpan(data.measured_ms || data.range_ms);
-    $("apm-k-rps").textContent = s ? fmtRateUnit(s.rps) : "–";
+    $("apm-k-rps").innerHTML = s ? escapeHtml(fmtRateUnit(s.rps)) + delta(s.rps, b && b.rps, false, fmtRateUnit) : "–";
     $("apm-k-rps-sub").textContent = s ? fmtCount(s.n) + " over " + span : "nothing recorded";
-    $("apm-k-p95").textContent = s && s.n ? fmtNs(s.p95_ns) : "–";
+    $("apm-k-p95").innerHTML = s && s.n ? escapeHtml(fmtNs(s.p95_ns)) + delta(s.p95_ns, b && b.n && b.p95_ns, true, fmtNs) : "–";
     $("apm-k-p95-sub").textContent = s && s.n ? "p50 " + fmtNs(s.p50_ns) + " · p99 " + fmtNs(s.p99_ns) : " ";
-    $("apm-k-5xx").textContent = s && s.n ? fmtPct(s.server_error_pct) : "–";
-    $("apm-k-5xx-sub").textContent = s && s.n ? "4xx " + fmtPct(s.client_error_pct) : " ";
-    $("apm-k-mean").textContent = s && s.n ? fmtNs(s.mean_ns) : "–";
+    // An error rate compared from zero has no percentage: the base's own rate says it.
+    $("apm-k-5xx").innerHTML = s && s.n ? escapeHtml(fmtPct(s.server_error_pct)) + delta(s.server_error_pct, b && b.n && b.server_error_pct, true, fmtPct) : "–";
+    $("apm-k-5xx-sub").textContent = s && s.n ? "4xx " + fmtPct(s.client_error_pct) + (b && b.n ? " · was " + fmtPct(b.server_error_pct) : "") : " ";
+    $("apm-k-mean").innerHTML = s && s.n ? escapeHtml(fmtNs(s.mean_ns)) + delta(s.mean_ns, b && b.n && b.mean_ns, true, fmtNs) : "–";
     $("apm-k-mean-sub").textContent = s && s.n && !data.route ? "across " + data.routes.length + " transaction" + (data.routes.length === 1 ? "" : "s") : " ";
   }
 
@@ -294,17 +379,19 @@
     const { key: sortKey, dir } = state.sort;
     rows.sort((a, b) => (a[sortKey] < b[sortKey] ? -1 : a[sortKey] > b[sortKey] ? 1 : 0) * dir);
     const maxShare = Math.max(1, ...rows.map(r => r.time_pct));
-    const cells = r => `
+    // Each row's figures in the compared period, for the rate and p95 changes.
+    const before = new Map(((state.base && state.base.routes) || []).map(r => [r.route, r]));
+    const cells = (r, b) => `
       <td class="route" title="${escapeHtml(r.route)}">${escapeHtml(r.route)}</td>
-      <td>${fmtCount(r.n)}</td><td>${fmtRateUnit(r.rps)}</td><td>${fmtNs(r.mean_ns)}</td>
-      <td>${fmtNs(r.p50_ns)}</td><td>${fmtNs(r.p95_ns)}</td><td>${fmtNs(r.p99_ns)}</td>
+      <td>${fmtCount(r.n)}</td><td>${fmtRateUnit(r.rps)}${delta(r.rps, b && b.rps, false, fmtRateUnit)}</td><td>${fmtNs(r.mean_ns)}</td>
+      <td>${fmtNs(r.p50_ns)}</td><td>${fmtNs(r.p95_ns)}${delta(r.p95_ns, b && b.n && b.p95_ns, true, fmtNs)}</td><td>${fmtNs(r.p99_ns)}</td><td title="${r.mem_p95_bytes ? "p95 " + fmtBytes(r.mem_p95_bytes) : ""}">${r.mem_mean_bytes ? fmtBytes(r.mem_mean_bytes) : "–"}</td>
       <td>${fmtPct(r.client_error_pct)}</td><td class="${r.server_error_pct > 0 ? "err" : ""}">${fmtPct(r.server_error_pct)}</td>
       <td>${r.queries_per_txn ? r.queries_per_txn.toFixed(1) : "–"}</td>`;
-    body.innerHTML = rows.length ? "" : `<tr><td colspan="11" style="text-align:left;color:var(--muted)">Nothing recorded in this range.</td></tr>`;
+    body.innerHTML = rows.length ? "" : `<tr><td colspan="12" style="text-align:left;color:var(--muted)">Nothing recorded in this range.</td></tr>`;
     for (const r of rows) {
       const tr = document.createElement("tr");
       if (r.route === data.route) tr.className = "selected";
-      tr.innerHTML = cells(r) + `<td><span class="share">${fmtPct(r.time_pct)}<span class="mini"><i style="width:${(r.time_pct / maxShare * 100).toFixed(1)}%"></i></span></span></td>`;
+      tr.innerHTML = cells(r, before.get(r.route)) + `<td><span class="share">${fmtPct(r.time_pct)}<span class="mini"><i style="width:${(r.time_pct / maxShare * 100).toFixed(1)}%"></i></span></span></td>`;
       // An exported page carries the series of its busiest routes only: a
       // quieter row cannot be charted alone, and says so rather than
       // silently charting everything (review).
@@ -316,7 +403,7 @@
       }
       body.appendChild(tr);
     }
-    foot.innerHTML = rows.length > 1 ? `<tr>${cells({ ...data.total, route: "All" })}<td></td></tr>` : "";
+    foot.innerHTML = rows.length > 1 ? `<tr>${cells({ ...data.total, route: "All" }, state.base && state.base.total)}<td></td></tr>` : "";
     document.querySelectorAll("#apm-routes th").forEach(th => {
       th.setAttribute("aria-sort", th.dataset.key === sortKey ? (dir < 0 ? "descending" : "ascending") : "none");
     });
@@ -330,20 +417,23 @@
     card.hidden = false;
     $("apm-nav-traces").hidden = false;
     const body = document.querySelector("#apm-traces tbody");
-    if (!APM.captureEvery) {
-      $("apm-traces-unit").textContent = "";
-      body.innerHTML = `<tr><td colspan="7" class="hint">Start the collector with <code>--capture-every 5</code> to keep the exact profile of the slowest requests of each route and of every failure.</td></tr>`;
-      setNav("traces", "off", "Not capturing");
-      return;
-    }
     try {
-      const res = await fetch("/api/traces", { cache: "no-store" });
+      // The captures of the span in view: memory's and, by date, the store's. Asked for
+      // even when this collector does not capture: the store can hold another run's, a
+      // script's runs or the sampled profiles taken from the page (review).
+      const res = await fetch("/api/traces?" + spanQuery(), { cache: "no-store" });
       const data = await res.json();
-      $("apm-traces-unit").textContent = "one request captured every " + data.captureEvery + " s";
+      const every = data.captureEvery;
+      $("apm-traces-unit").textContent = every ? "one request captured every " + every + " s" : "";
       const rows = data.traces.filter(t => !state.route || t.route === state.route);
       const failed = rows.filter(t => t.failed).length;
-      setNav("traces", String(rows.length), failed ? failed + " failed" : "One captured every " + data.captureEvery + " s");
-      body.innerHTML = rows.length ? "" : `<tr><td colspan="7" class="hint">No request captured${state.route ? " for this route" : ""} yet.</td></tr>`;
+      if (!rows.length && !every) {
+        body.innerHTML = `<tr><td colspan="7" class="hint">Start the collector with <code>--capture-every 5</code> to keep the exact profile of the slowest requests of each route and of every failure.</td></tr>`;
+        setNav("traces", "off", "Not capturing");
+        return;
+      }
+      setNav("traces", String(rows.length), failed ? failed + " failed" : every ? "One captured every " + every + " s" : "Stored captures");
+      body.innerHTML = rows.length ? "" : `<tr><td colspan="7" class="hint">No request captured${state.route ? " for this route" : ""} ${state.period ? "in this period" : "yet"}.</td></tr>`;
       for (const t of rows.slice(0, 20)) {
         const tr = document.createElement("tr");
         tr.innerHTML = `<td class="route" title="${escapeHtml(t.route)}">${escapeHtml(t.route)}</td>
@@ -424,7 +514,9 @@
     const res = data.resources;
     $("apm-nav-resources").hidden = !res;
     if (res) setNav("resources", fmtPctCpu(cpuPct(res.cores, res.cores_available)), fmtBytes(res.memory_bytes) + " · " + res.processes + " process" + (res.processes === 1 ? "" : "es"));
-    const spanLabel = LIVE ? "last " + fmtSpan(data.range_ms) : "recorded runs";
+    const spanLabel = !LIVE ? "recorded runs"
+      : state.period ? fmtTime(state.period.from, true) + " → " + fmtTime(state.period.to, true)
+      : "last " + fmtSpan(data.range_ms);
     $("apm-side-span").textContent = spanLabel;
   }
   const main = $("apm-main");
@@ -463,6 +555,10 @@
   main.addEventListener("scroll", spy, { passive: true });
 
   function render() {
+    // A drag across a chart is not redrawn under the pointer: the live refresh
+    // rebuilt the charts every second and dropped the drag's start (the
+    // missed refresh runs when the drag ends).
+    if (drag.on) { drag.missed = true; return; }
     const data = state.data;
     if (!data || !state.on) return;
     const status = $("apm-status");
@@ -483,16 +579,285 @@
       const n = p.n || 0;
       return { ...p, e4: n ? p.status[3] * 100 / n : null, e5: n ? p.status[4] * 100 / n : null };
     });
+    // The compared period, shifted onto this one: a dashed line beside throughput and p95.
+    const compared = overlay(points, state.base, compareOffset(data));
+    const was = COMPARE_LABEL[state.compare];
+    const rps = state.base ? [...RPS, { key: "rps_b", label: was, color: "var(--muted)", dash: true }] : RPS;
+    const lat = state.base ? [...LAT, { key: "p95_b", label: "p95 " + was, color: "var(--muted)", dash: true }] : LAT;
     renderTiles(data);
-    key($("apm-l-lat"), LAT);
+    renderDeploys(data);
+    key($("apm-l-lat"), lat);
     key($("apm-l-err"), ERR);
-    chart($("apm-c-rps"), points, RPS, { area: true, fmt: fmtRate, label: "Transactions per second over time" });
-    chart($("apm-c-lat"), points, LAT, { fmt: fmtNs, label: "Latency percentiles over time" });
+    chart($("apm-c-rps"), compared, rps, { area: true, fmt: fmtRate, label: "Transactions per second over time", deployLabels: true });
+    chart($("apm-c-lat"), compared, lat, { fmt: fmtNs, label: "Latency percentiles over time" });
     chart($("apm-c-err"), points, ERR, { cap: 100, fmt: v => +v.toFixed(2) + "%", label: "Error rate over time" });
     renderTable(data);
+    renderScripts(data);
+    renderApps(data);
+    renderErrors(data);
     renderResources(data, points);
     renderNav(data);
+    // A link naming a section (`as=apm-s-apps`) opens on it, once it has drawn: a shared
+    // link to the Apps or the Scripts lands there, not on the overview.
+    if (OPEN_SECTION) {
+      const section = $(OPEN_SECTION);
+      if (section && !section.hidden) {
+        OPEN_SECTION = "";
+        pinned = section.id;
+        section.scrollIntoView({ block: "start" });
+      }
+    }
     spy();
+  }
+
+  // A cron job's runs are a few an hour, which a throughput chart flattens into
+  // dots. Each script gets a strip with one mark per run instead: its height the
+  // run's duration, a failed run full height and wider, so it reads without its
+  // colour. A row charts its script; the charted script also gets its runs one
+  // by one, with the last few listed.
+  // How a mark's failed runs exited: `exit 255`, `exit 255 ×3 · exit 1`; plain "failed"
+  // for runs stored before the codes were kept.
+  function exitText(r) {
+    const exits = (r.exits || []).filter(e => e[0] !== 0);
+    if (!exits.length) return r.n > 1 ? r.failed + " of " + r.n + " failed" : "failed";
+    const codes = exits.map(e => "exit " + e[0] + (e[1] > 1 ? " ×" + e[1] : "")).join(" · ");
+    return r.n > r.failed ? codes + " (" + r.failed + " of " + r.n + ")" : codes;
+  }
+
+  function renderScripts(data) {
+    const scripts = data.runs || [];
+    const section = $("apm-s-scripts");
+    const shown = scripts.length > 0;
+    section.hidden = !shown;
+    $("apm-nav-scripts").hidden = !shown;
+    if (!shown) return;
+    const to = data.now, from = to - data.range_ms;
+    const span = Math.max(1, to - from);
+    // The totals cover every run in the period, not only the last ones drawn (review).
+    const runsOf = s => s.total != null ? s.total : s.runs.reduce((n, r) => n + r.n, 0);
+    const failedOf = s => s.failed != null ? s.failed : s.runs.reduce((n, r) => n + r.failed, 0);
+    const allFailed = scripts.reduce((n, s) => n + failedOf(s), 0);
+    // The badge counts what needs a look, the failed runs; with none it counts the scripts.
+    const many = scripts.length + " script" + (scripts.length === 1 ? "" : "s");
+    setNav("scripts", String(allFailed || scripts.length),
+      allFailed ? many + " · " + allFailed + " failed run" + (allFailed === 1 ? "" : "s") : many + ", every run succeeded", allFailed ? "fail" : "");
+    const list = $("apm-scripts");
+    list.innerHTML = "";
+    for (const s of scripts) {
+      const runs = runsOf(s), failed = failedOf(s);
+      const top = Math.max(1, ...s.runs.map(r => r.mean));
+      // The p95 of the runs' own durations, not of the folded minutes' means (review).
+      const p95 = s.p95;
+      const last = s.runs[s.runs.length - 1];
+      const marks = s.runs.map(r => {
+        const x = Math.max(0, Math.min(1, (r.t - from) / span)) * 476 + 2;
+        // A stored minute can fold several runs: all of them failed reads as a failed
+        // run; only some of them, as a run with a red cap.
+        const bad = r.failed > 0 && r.failed >= r.n, some = r.failed > 0 && !bad;
+        const h = bad ? 34 : Math.max(3, 30 * r.mean / top);
+        const cap = some ? `<rect x="${(x - 2).toFixed(1)}" y="${(35 - h).toFixed(1)}" width="4" height="${Math.min(h, 5).toFixed(1)}" rx="2" class="bad"></rect>` : "";
+        return `<rect x="${(x - (bad ? 3.5 : 2)).toFixed(1)}" y="${(35 - h).toFixed(1)}" width="${bad ? 7 : 4}" height="${h.toFixed(1)}" rx="2" class="${bad ? "bad" : "ok"}"><title>${escapeHtml(fmtTime(r.t, true))} · ${escapeHtml(fmtNs(r.mean))}${r.n > 1 ? " (mean of " + r.n + ")" : ""}${r.failed ? " · " + escapeHtml(exitText(r)) : ""}</title></rect>` + cap;
+      }).join("");
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "script-row" + (state.route === s.name ? " sel" : "");
+      row.innerHTML = `<span class="sn"><span class="n">${escapeHtml(s.name.replace(/^CLI /, ""))}</span>` +
+        `<span class="m2">${fmtCount(runs)} run${runs === 1 ? "" : "s"}${s.points > s.runs.length ? " · the last " + s.runs.length + " drawn" : ""}</span></span>` +
+        `<svg viewBox="0 0 480 36" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(s.name)}: one mark per run"><line x1="0" x2="480" y1="35.5" y2="35.5"></line>${marks}</svg>` +
+        `<span class="sf${failed ? " bad" : ""}">${failed ? failed + " failed" : "none failed"}</span>` +
+        `<span class="sp">p95 ${fmtNs(p95)}</span>` +
+        `<span class="sl">${escapeHtml(fmtTime(last.t, data.range_ms > 86400000))}</span>`;
+      row.addEventListener("click", () => setRoute(s.name === state.route ? "" : s.name));
+      list.appendChild(row);
+    }
+    renderScriptDetail(data, scripts.find(s => s.name === state.route), from, span);
+  }
+
+  // The charted script's runs one by one: a dot per run at its duration, a cross
+  // for a failed one, and the last runs listed.
+  function renderScriptDetail(data, script, from, span) {
+    const host = $("apm-script-detail");
+    host.hidden = !script;
+    if (!script) { host.innerHTML = ""; return; }
+    const runs = script.runs;
+    const top = niceMax(Math.max(1, ...runs.map(r => r.mean)));
+    const W = 1000, H = 200, L = 64, T = 12, B = 22;
+    const x = t => L + Math.max(0, Math.min(1, (t - from) / span)) * (W - L - 8);
+    const y = v => T + (H - T - B) * (1 - v / top);
+    const grid = [0, 0.25, 0.5, 0.75, 1].map(f => `<line class="grid" x1="${L}" x2="${W - 8}" y1="${y(top * f).toFixed(1)}" y2="${y(top * f).toFixed(1)}"></line>` +
+      `<text class="axis" x="${L - 8}" y="${(y(top * f) + 4).toFixed(1)}" text-anchor="end">${escapeHtml(fmtNs(top * f))}</text>`).join("");
+    const path = runs.map((r, i) => (i ? "L" : "M") + x(r.t).toFixed(1) + " " + y(r.mean).toFixed(1)).join("");
+    const dots = runs.map(r => {
+      const cx = x(r.t), cy = y(r.mean);
+      if (r.failed && r.failed < r.n) {
+        return `<circle class="some" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="5"><title>${escapeHtml(fmtTime(r.t, true))} · ${escapeHtml(fmtNs(r.mean))} mean · ${escapeHtml(exitText(r))}</title></circle>`;
+      }
+      return r.failed
+        ? `<path class="bad" d="M${(cx - 6).toFixed(1)} ${(cy - 6).toFixed(1)}l12 12M${(cx + 6).toFixed(1)} ${(cy - 6).toFixed(1)}l-12 12"><title>${escapeHtml(fmtTime(r.t, true))} · ${escapeHtml(fmtNs(r.mean))} · ${escapeHtml(exitText(r))}</title></path>`
+        : `<circle class="ok" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="4.5"><title>${escapeHtml(fmtTime(r.t, true))} · ${escapeHtml(fmtNs(r.mean))}</title></circle>`;
+    }).join("");
+    const lastRuns = runs.slice(-8).reverse().map(r =>
+      `<tr><td>${escapeHtml(fmtTime(r.t, true))}</td>` +
+      `<td><span class="rs ${r.failed ? "bad" : "ok"}">${r.failed ? escapeHtml(exitText(r)) : (r.n > 1 ? r.n + " ok" : "ok")}</span></td>` +
+      `<td>${escapeHtml(fmtNs(r.mean))}${r.n > 1 ? " mean" : ""}</td><td>${r.n ? fmtCount(Math.round(r.q / r.n)) : "–"}</td></tr>`).join("");
+    host.innerHTML = `<h3>${escapeHtml(script.name)}<span class="unit">duration of each run</span></h3>` +
+      `<div class="key"><span><i style="background:var(--apm-one)"></i>run</span><span><i style="background:var(--err-5xx)"></i>failed</span></div>` +
+      `<svg viewBox="0 0 ${W} ${H}" class="runs" role="img" aria-label="Duration of each run of ${escapeHtml(script.name)}">${grid}` +
+      `<path class="trend" d="${path}"></path>${dots}</svg>` +
+      `<div class="table-wrap"><table class="last-runs"><thead><tr><th>Ended</th><th>Status</th><th>Duration</th><th>Queries</th></tr></thead>` +
+      `<tbody>${lastRuns}</tbody></table></div>`;
+  }
+
+  // Programs that send to a listening collector — an app on a phone, a library in
+  // its host, a consumer: their versions, newest first, with a flag on one that
+  // fails clearly more than the version before it; then each instance, sending,
+  // silent or gone.
+  function renderApps(data) {
+    const apps = data.apps;
+    const section = $("apm-s-apps");
+    const shown = !!(apps && apps.instances && apps.instances.length);
+    section.hidden = !shown;
+    $("apm-nav-apps").hidden = !shown;
+    if (!shown) return;
+    const sending = apps.instances.filter(i => i.state === "sending").length;
+    const silent = apps.instances.filter(i => i.state === "silent").length;
+    setNav("apps", String(sending), sending + " sending" + (silent ? " · " + silent + " silent" : ""), silent ? "fail" : "");
+    // Versions keep one colour each, in the order they appeared: the newest the brand's.
+    const versions = apps.versions.slice().sort((a, b) => b.first - a.first);
+    const colour = {};
+    // A version is its whole build id; its label, or when it has none its build time, is
+    // what is shown: two unlabelled builds stay two rows (review).
+    const buildName = v => v.build || (v.built ? "built " + fmtTime(v.built * 1000, true) : "unlabelled build");
+    versions.forEach((v, i) => { colour[v.program + "\u0000" + v.id] = i < 3 ? "var(--ver-" + (i + 1) + ")" : "var(--muted)"; });
+    const dot = v => `<i class="vdot" style="background:${colour[v.program + "\u0000" + v.id] || "var(--muted)"}"></i>`;
+    const programs = new Set(versions.map(v => v.program));
+    const name = v => (programs.size > 1 ? escapeHtml(v.program) + " " : "") + escapeHtml(buildName(v));
+    const total = Math.max(1, versions.reduce((n, v) => n + v.instances, 0));
+    // Each version's error rate over the span, the three newest in their colours: when a
+    // new build started failing, against its deploy's dashed rule.
+    const charted = versions.filter(v => (v.slices || []).some(s => s[0] > 0)).slice(0, 3);
+    const slices = charted.length ? charted[0].slices.length : 0;
+    const step = data.range_ms / Math.max(1, slices);
+    const vpoints = Array.from({ length: slices }, (_, i) => {
+      const p = { t: data.now - data.range_ms + (i + 0.5) * step, n: 0 };
+      charted.forEach((v, k) => {
+        const [calls, failed] = v.slices[i];
+        p.n += calls;
+        p["v" + k] = calls ? 100 * failed / calls : null;
+      });
+      return p;
+    });
+    const vseries = charted.map((v, k) => ({ key: "v" + k, label: (programs.size > 1 ? v.program + " " : "") + buildName(v), color: colour[v.program + "\u0000" + v.id] }));
+    key($("apm-l-apps"), vseries);
+    chart($("apm-c-apps"), vpoints, vseries, { cap: 100, fmt: v => +v.toFixed(2) + "%", label: "Error rate of each version over time", deployLabels: true });
+    const vbody = document.querySelector("#apm-versions tbody");
+    vbody.innerHTML = "";
+    versions.forEach((v, i) => {
+      // The version before it, of the same program: a new build that fails
+      // twice as often, by half a point or more, is flagged with the ratio.
+      const before = versions.slice(i + 1).find(o => o.program === v.program);
+      const ratio = before && before.errors > 0 ? v.errors / before.errors : null;
+      const flagged = before && v.errors >= 0.5 && v.errors - before.errors >= 0.5 && (ratio === null || ratio >= 2);
+      const flag = flagged ? `<span class="vflag">${ratio ? "×" + ratio.toFixed(1) : "new"}</span>` : "";
+      const tr = document.createElement("tr");
+      tr.className = "fixed";
+      tr.innerHTML = `<td><span class="vname">${dot(v)}<span><b>${name(v)}</b><small>first seen ${escapeHtml(fmtTime(v.first, true))}</small></span></span></td>` +
+        `<td><span class="share"><span>${fmtCount(v.instances)}</span><span class="mini"><i style="width:${(100 * v.instances / total).toFixed(1)}%"></i></span></span></td>` +
+        `<td>${fmtCount(v.n)}</td><td>${fmtRateUnit(v.rps)}</td>` +
+        `<td${flagged ? ' class="err"' : ""}>${fmtPct(v.errors)}${flag}</td><td>${fmtNs(v.p95)}</td><td>${v.mem ? fmtBytes(v.mem) : "–"}</td>`;
+      vbody.appendChild(tr);
+    });
+    const order = { sending: 0, silent: 1, gone: 2 };
+    const instances = apps.instances.slice().sort((a, b) => order[a.state] - order[b.state] || b.last - a.last);
+    const LISTED = 50;
+    $("apm-instances-unit").textContent = sending + " sending · " + silent + " silent · " + (apps.instances.length - sending - silent) + " gone" +
+      (instances.length > LISTED ? " · the " + LISTED + " most recent listed" : "");
+    const ibody = document.querySelector("#apm-instances tbody");
+    ibody.innerHTML = "";
+    for (const inst of instances.slice(0, LISTED)) {
+      const v = versions.find(o => o.program === inst.program && o.id === inst.id) || inst;
+      const tr = document.createElement("tr");
+      tr.className = "fixed";
+      tr.innerHTML = `<td class="route" title="${escapeHtml(inst.source)}">${escapeHtml(inst.source)}</td>` +
+        `<td><span class="istate ${inst.state}">${inst.state}</span></td>` +
+        `<td><span class="vname">${dot(v)}${escapeHtml(v.id === inst.id && v !== inst ? buildName(v) : inst.build || "unlabelled build")}</span></td>` +
+        `<td>${escapeHtml(fmtTime(inst.last, true))}</td><td>${fmtCount(inst.n)}</td>` +
+        `<td${inst.errors >= 1 ? ' class="err"' : ""}>${fmtPct(inst.errors)}</td><td>${inst.mem ? fmtBytes(inst.mem) : "–"}</td>`;
+      ibody.appendChild(tr);
+    }
+  }
+
+  // The errors failed transactions ended with, grouped by exception and place: a row charts
+  // its transaction, like the transactions table's.
+  function renderErrors(data) {
+    const errors = data.errors;
+    const section = $("apm-s-errors");
+    const shown = !!(errors && errors.list && errors.list.length);
+    section.hidden = !shown;
+    $("apm-nav-errors").hidden = !shown;
+    if (!shown) return;
+    const more = errors.groups > errors.list.length ? " · the " + errors.list.length + " most frequent shown" : "";
+    $("apm-errors-unit").textContent = fmtCount(errors.total) + " in " + errors.groups + " group" + (errors.groups === 1 ? "" : "s") + more;
+    setNav("errors", fmtCount(errors.total), errors.groups + " group" + (errors.groups === 1 ? "" : "s"), "err");
+    const body = document.querySelector("#apm-errors tbody");
+    body.innerHTML = "";
+    for (const e of errors.list) {
+      const tr = document.createElement("tr");
+      // The class's own name first: the namespace is in the tooltip.
+      const short = e.class.slice(e.class.lastIndexOf("\\") + 1);
+      const file = e.at.replace(/^.*\//, "");
+      tr.innerHTML = `<td class="route" title="${escapeHtml(e.class)}">${escapeHtml(short)}</td>` +
+        `<td class="route" title="${escapeHtml(e.at)}">${escapeHtml(file)}</td>` +
+        `<td class="route" title="${escapeHtml(e.route)}">${escapeHtml(e.route)}</td>` +
+        `<td class="err">${fmtCount(e.n)}</td><td>${e.last ? fmtTime(e.last, data.range_ms > 86400000) : "–"}</td>` +
+        `<td>${e.trace ? `<code title="${escapeHtml(e.trace)}">${escapeHtml(e.trace.slice(0, 8))}…</code>` : "–"}</td>`;
+      if (LIVE) tr.addEventListener("click", () => setRoute(e.route === state.route ? "" : e.route));
+      body.appendChild(tr);
+    }
+  }
+
+  // What the compared line is called on the charts.
+  const COMPARE_LABEL = { prev: "before", day: "a day earlier", week: "a week earlier" };
+  // The compared period's throughput and p95 on this period's points: each point takes the
+  // compared point `offset` earlier, within half a step. A step either side has none.
+  function overlay(points, base, offset) {
+    if (!base || !base.points || points.length < 2 || offset == null) return points;
+    const half = (points[1].t - points[0].t) / 2;
+    const earlier = base.points.filter(q => !q.gap);
+    let j = 0;
+    return points.map(p => {
+      if (p.gap) return p;
+      while (j < earlier.length && earlier[j].t + offset < p.t - half) j++;
+      const q = earlier[j];
+      if (!q || Math.abs(q.t + offset - p.t) > half) return p;
+      return { ...p, rps_b: q.rps, p95_b: q.n ? q.p95 : null };
+    });
+  }
+
+  // The deploys of the span: each one a button that compares the time since it with as
+  // long before it.
+  function renderDeploys(data) {
+    const host = $("apm-deploys");
+    const list = data.deploys || [];
+    host.hidden = !LIVE || !list.length;
+    if (host.hidden) return;
+    const services = new Set(list.map(d => d.service));
+    host.innerHTML = "<span>Deploys</span>";
+    for (const d of list) {
+      const button = document.createElement("button");
+      button.type = "button";
+      const name = d.label || "build of " + fmtTime(d.built * 1000, true);
+      button.textContent = name + " · " + fmtTime(d.t, true) + (services.size > 1 ? " · " + d.service : "");
+      button.title = "Compare the time since this deploy with as long before it";
+      button.addEventListener("click", () => compareDeploy(d));
+      host.appendChild(button);
+    }
+  }
+  function compareDeploy(d) {
+    const now = state.data ? state.data.now : Date.now();
+    const length = Math.max(60000, Math.min(now - d.t, state.data ? state.data.range_ms : 900000));
+    state.compare = "prev";
+    setPeriod({ from: d.t, to: d.t + length });
   }
 
   function renderResources(data, points) {
@@ -531,9 +896,19 @@
     if (inflight) { again = true; return; }
     inflight = true;
     try {
-      const q = "range=" + state.range + (state.route ? "&route=" + encodeURIComponent(state.route) : "");
-      const res = await fetch("/api/series?" + q, { cache: "no-store" });
-      state.data = await res.json();
+      const routeQuery = state.route ? "&route=" + encodeURIComponent(state.route) : "";
+      const res = await fetch("/api/series?" + spanQuery() + routeQuery, { cache: "no-store" });
+      const data = await res.json();
+      // The compared period: the same span, as far back as the comparison says.
+      let base = null;
+      if (state.compare) {
+        const offset = compareOffset(data);
+        const from = data.now - data.range_ms - offset, to = data.now - offset;
+        const earlier = await fetch("/api/series?from=" + from + "&to=" + to + routeQuery, { cache: "no-store" });
+        base = await earlier.json();
+      }
+      state.data = data;
+      state.base = base;
       render();
       loadTraces();
       loadAlerts();
@@ -546,11 +921,39 @@
     }
   }
 
+  // The span the API is asked for: the picked period, or the last `range` seconds.
+  function spanQuery() {
+    return state.period ? "from=" + state.period.from + "&to=" + state.period.to : "range=" + state.range;
+  }
+  // A `datetime-local` value is the viewer's local time, to the minute.
+  const toLocalInput = ms => {
+    const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000);
+    return d.toISOString().slice(0, 16);
+  };
+  function showPeriod() {
+    const form = $("apm-period");
+    form.classList.toggle("on", !!state.period);
+    const span = state.period || { from: (state.data ? state.data.now : Date.now()) - state.range * 1000, to: state.data ? state.data.now : Date.now() };
+    $("apm-from").value = toLocalInput(span.from);
+    $("apm-to").value = toLocalInput(span.to);
+    document.querySelectorAll("#apm-ranges button").forEach(b =>
+      b.setAttribute("aria-pressed", String(!state.period && Number(b.dataset.range) === state.range)));
+    $("apm-compare").value = state.compare;
+    $("apm-compare-box").classList.toggle("on", !!state.compare);
+  }
   function setRange(range) {
     state.range = range;
+    state.period = null;
     store.set("elephc-apm-range", String(range));
     writeHash();
-    document.querySelectorAll("#apm-ranges button").forEach(b => b.setAttribute("aria-pressed", String(Number(b.dataset.range) === range)));
+    showPeriod();
+    load();
+  }
+  // A period of dates: the tiles, charts, table and captures all show it.
+  function setPeriod(period) {
+    state.period = period;
+    writeHash();
+    showPeriod();
     load();
   }
   function setRoute(route) {
@@ -640,9 +1043,23 @@
 
   if (LIVE) {
     $("apm-ranges").querySelectorAll("button").forEach(b => b.addEventListener("click", () => setRange(Number(b.dataset.range))));
+    $("apm-period").addEventListener("submit", ev => {
+      ev.preventDefault();
+      const from = new Date($("apm-from").value).getTime(), to = new Date($("apm-to").value).getTime();
+      if (from > 0 && to > from) setPeriod({ from, to });
+    });
+    $("apm-compare").addEventListener("change", ev => {
+      state.compare = compareFrom({ acmp: ev.target.value });
+      writeHash();
+      showPeriod();
+      load();
+    });
   } else {
-    // An export holds one span — every recorded run — so there is no range to pick.
+    // An export holds one span — every recorded run — so there is no range to pick, nor
+    // another period to compare it with.
     $("apm-ranges").style.display = "none";
+    $("apm-period").style.display = "none";
+    $("apm-compare-box").style.display = "none";
   }
   $("apm-clear").addEventListener("click", () => setRoute(""));
   document.querySelectorAll("#apm-routes th").forEach(th => th.addEventListener("click", () => {
@@ -661,13 +1078,18 @@
     const on = next.a !== "0";
     const route = next.ar || "";
     if (route !== state.route) { state.route = route; if (on) load(); }
-    // A link to another range is followed too (review).
+    // A link to another range, or to a period, is followed too (review).
+    const period = periodFrom(next);
     const range = Number(next.at);
-    if (LIVE && RANGES.includes(range) && range !== state.range) setRange(range);
+    if (LIVE && period && (!state.period || period.from !== state.period.from || period.to !== state.period.to)) setPeriod(period);
+    else if (LIVE && !period && RANGES.includes(range) && (range !== state.range || state.period)) setRange(range);
+    const compare = compareFrom(next);
+    if (LIVE && compare !== state.compare) { state.compare = compare; showPeriod(); if (on) load(); }
     if (on !== state.on) setMode(on);
   });
   if (LIVE) {
-    setRange(RANGES.includes(state.range) ? state.range : 900);
+    if (state.period) setPeriod(state.period);
+    else setRange(RANGES.includes(state.range) ? state.range : 900);
     try {
       const events = new EventSource("/api/stream");
       // A long range reads days of stored history; a new window every second
@@ -676,7 +1098,9 @@
       events.onmessage = () => {
         if (!state.on) return;
         const now = Date.now();
-        if (state.range > 3600 && now - lastLoad < 10000) return;
+        // A period that ended does not change: nothing new to read.
+        if (state.period && state.period.to < now - 60000) return;
+        if ((state.period || state.range > 3600) && now - lastLoad < 10000) return;
         lastLoad = now;
         load();
       };

@@ -25,7 +25,7 @@ use crate::native_deps::{native_help, parse_native_args, NativeCommand, NativePa
 /// a mistyped capability would advertise the two names this whole flag exists to
 /// retire. Naming them once here keeps the flag and its exclusion from drifting
 /// apart.
-const MONITORING_BRIDGES: [&str; 2] = ["instrument", "probe"];
+pub(crate) const MONITORING_BRIDGES: [&str; 2] = ["instrument", "probe"];
 
 /// Non-bridge runtime capabilities accepted by `--with-<name>`. `mysqli` is not
 /// a bridge of its own: it force-injects the mysqli prelude, which links the
@@ -276,6 +276,10 @@ pub(crate) struct CliConfig {
     pub(crate) apm_collector: Option<String>,
     /// Methods and functions counted as transactions (`--apm-transaction`).
     pub(crate) apm_transactions: Vec<String>,
+    /// Route and command patterns counted, and only them (`[apm] include` in `elephc.toml`).
+    pub(crate) apm_include: Vec<String>,
+    /// Route and command patterns never counted (`[apm] exclude` in `elephc.toml`).
+    pub(crate) apm_exclude: Vec<String>,
     /// Suppresses live/completed progress and bridge-library "Linking" event lines,
     /// forcing plain output regardless of whether stderr is a terminal.
     /// Errors, warnings, and the final success line are unaffected.
@@ -779,6 +783,8 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         with_crates,
         apm_collector,
         apm_transactions,
+        apm_include: Vec::new(),
+        apm_exclude: Vec::new(),
         quiet,
         ini_overrides,
     };
@@ -862,7 +868,7 @@ pub(crate) fn refuse_startup_memory_limit_below_floor(overrides: &mut Vec<(Strin
 
 /// Checks a `--apm-collector` address: `host:port`, with a port a program
 /// can connect to. Resolution is the program's, at run time.
-fn check_collector_address(address: &str) -> Result<(), String> {
+pub(crate) fn check_collector_address(address: &str) -> Result<(), String> {
     let Some((host, port)) = address.rsplit_once(':') else {
         return Err("expected HOST:PORT".to_string());
     };

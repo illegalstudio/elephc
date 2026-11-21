@@ -2515,13 +2515,26 @@ fn test_cli_monitor_apm_records_script_runs() {
 
     // One line per run, across however many day files the runs straddled
     // (a run at 23:59:59 UTC and the next at 00:00:01 land in two).
-    let lines: usize = fs::read_dir(&store)
+    let day_files = |prefix: &str| -> usize {
+        fs::read_dir(&store)
+            .expect("the store exists")
+            .flatten()
+            .filter(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                name.starts_with(prefix) && !name.starts_with("apm-captures-") && name.ends_with(".jsonl")
+            })
+            .map(|entry| fs::read_to_string(entry.path()).expect("a day file is readable").lines().count())
+            .sum()
+    };
+    assert_eq!(day_files("apm-"), 3, "one stored window per run");
+    // Each run's exact profile is kept beside it, dated, for the page to find by period.
+    let captures: usize = fs::read_dir(&store)
         .expect("the store exists")
         .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with("apm-"))
-        .map(|entry| fs::read_to_string(entry.path()).expect("a day file is readable").lines().count())
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("apm-captures-"))
+        .map(|entry| fs::read_to_string(entry.path().join("index.jsonl")).unwrap_or_default().lines().count())
         .sum();
-    assert_eq!(lines, 3, "one stored window per run");
+    assert_eq!(captures, 3, "one stored profile per run");
     // A wrapped cron run leaves nothing next to the script: the Speedscope
     // export is written only when --out asks for it (review).
     assert!(
