@@ -82,6 +82,19 @@ fn run_with_optional_c_source(module: &crate::ir::Module, c_source: Option<&str>
 fn reference_validation_archive() -> &'static std::path::Path {
     static ARCHIVE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     ARCHIVE.get_or_init(|| {
+        if std::env::var("ELEPHC_TEST_PREBUILT_BRIDGES").is_ok_and(|value|
+            value == "1" || value.eq_ignore_ascii_case("true")) {
+            let target = std::env::var_os("CARGO_TARGET_DIR")
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("ELEPHC_CI_TEST_ROOT")
+                    .map(PathBuf::from).map(|root| root.join("target")))
+                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+            let archive = target.join("debug/libelephc_reference.a");
+            assert!(archive.is_file(),
+                "ELEPHC_TEST_PREBUILT_BRIDGES is set but {} is missing from the nextest archive",
+                archive.display());
+            return archive;
+        }
         let output = Command::new("cargo").args(["build", "-j1", "--package", "elephc-reference",
             "--lib", "--message-format=json"])
             .current_dir(env!("CARGO_MANIFEST_DIR")).output().expect("build native reference bridge");
