@@ -9,30 +9,62 @@
 
 use super::*;
 
-/// Detaches a boxed local before a write can replace its array payload or modify shared cells.
-/// Reference locals borrow their canonical child; value aliases keep the original box.
+/// Detaches an ordinary boxed local before a write can replace its array payload or modify shared
+/// cells. Reference locals keep their canonical child for nested in-place container updates.
 pub(in crate::ir_lower) fn load_array_local_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     span: Span,
 ) -> LoweredValue {
+    load_array_local_for_write_impl(ctx, name, span, false)
+}
+
+/// Detaches the boxed child selected by a direct indexed write and republishes it through a
+/// reference cell. PHP aliases keep sharing the binding while an in-flight value owner retains
+/// the previous child across diagnostics or other user callbacks.
+pub(in crate::ir_lower) fn load_array_local_for_direct_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    span: Span,
+) -> LoweredValue {
+    load_array_local_for_write_impl(ctx, name, span, true)
+}
+
+/// Implements ordinary and direct indexed receiver selection with explicit ref-cell detachment.
+fn load_array_local_for_write_impl(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    span: Span,
+    detach_ref_bound: bool,
+) -> LoweredValue {
     ctx.with_independent_write_receiver(|ctx| {
         let value = ctx.load_local_for_mutation(name, Some(span));
         let ty = ctx.builder.value_php_type(value.value);
         if ty.codegen_repr() != PhpType::Mixed
-            || ctx.is_ref_bound_local(name)
+            || ctx.is_ref_bound_local(name) && !detach_ref_bound
             || ctx.append_update_cell_aliases.contains(name)
         {
             return value;
         }
-        let detached = ctx.emit_owned_value(
-            Op::MixedClone,
-            vec![value.value],
-            None,
-            ty.clone(),
-            Op::MixedClone.default_effects(),
-            Some(span),
-        );
+        let detached = if ctx.is_ref_bound_local(name) {
+            ctx.emit_owned_value(
+                Op::RuntimeCall,
+                vec![value.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedCellCopyForWrite)),
+                ty.clone(),
+                effects_lookup::runtime_effects(),
+                Some(span),
+            )
+        } else {
+            ctx.emit_owned_value(
+                Op::MixedClone,
+                vec![value.value],
+                None,
+                ty.clone(),
+                Op::MixedClone.default_effects(),
+                Some(span),
+            )
+        };
         ctx.store_call_argument_local(name, detached, ty, Some(span));
         ctx.load_local_for_mutation(name, Some(span))
     })
@@ -52,8 +84,8 @@ fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value:
     let value = lower_expr(ctx, value);
     // PHP selects the current append target after RHS effects, including reference writes.
     // Loading here also gives the ordinary parent guards the RHS-updated storage type.
-    // Append's final-storage normalization mutates a bound box directly. Other indexed
-    // writers still require the detached cell published by load_array_local_for_write.
+    // Append's final-storage normalization mutates a bound box directly. Direct indexed writers
+    // use `load_array_local_for_direct_write` when they may replace the boxed child.
     // PHP 8 auto-vivifies a missing variable on `$a[] = ...`. The checker admitted the
     // write, so declare a generic boxed array local before loading it for the append.
     if !ctx.has_local_slot(array) && !ctx.is_ref_bound_local(array) {

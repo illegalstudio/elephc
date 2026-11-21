@@ -270,7 +270,11 @@ fn lower_array_assign_selected(
         string_offset_writes::lower_string_offset_assign(ctx, array, index, value, span);
         return;
     }
-    let array_value = load_array_local_for_write(ctx, array, span);
+    let array_value = super::array_write_storage::load_array_local_for_direct_write(
+        ctx,
+        array,
+        span,
+    );
     if let Some(increment) = incdec {
         if super::native_dimension_incdec::lower(ctx, array_value, index, increment, value_incdec_locals(value), span,
             |ctx, array_value| lower_array_assign_from_value(ctx, array, array_value, index, value, span, key_already_diagnosed, incdec))
