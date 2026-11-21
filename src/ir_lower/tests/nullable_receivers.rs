@@ -367,17 +367,35 @@ fn nullable_container_arguments_preserve_source_order_and_owners() {
     }
 }
 
-/// Nullability preserves existing explicit diagnostics for unsupported opaque non-scalar inputs.
+/// Opaque container inputs retain their distinct runtime declaration policies.
 #[test]
-fn nullable_container_arguments_keep_opaque_subset_diagnostics() {
+fn nullable_container_arguments_preserve_opaque_contract_policies_on_every_target() {
     for declaration in ["array", "iterable", "callable"] {
         let source = format!("<?php function opaqueNullableInput():mixed{{return null;}} \
             function checkedNullableInput({declaration} $value):void{{}}checkedNullableInput(opaqueNullableInput());");
         let program = crate::parser::parse(&crate::lexer::tokenize(&source).unwrap()).unwrap();
-        for enabled in [false, true] {
-            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, enabled);
-            let error = crate::types::checker::check_staged_semantics(&program, Target::detect_host(), profile).unwrap_err();
-            assert!(error.message.contains("got mixed") && error.message.contains(declaration), "{error:?}");
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for enabled in [false, true] {
+                let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Nullability, enabled);
+                let result = crate::types::checker::check_staged_semantics(
+                    &program,
+                    Target::parse(target).unwrap(),
+                    profile,
+                );
+                if declaration == "callable" {
+                    result.unwrap_or_else(|error| {
+                        panic!("{target}, callable, nullability={enabled}: {error:?}")
+                    });
+                } else {
+                    let error = result
+                        .expect_err("opaque structural contract must remain unsupported");
+                    assert!(
+                        error.message.contains("got mixed")
+                            && error.message.contains(declaration),
+                        "{target}, {declaration}, nullability={enabled}: {error:?}",
+                    );
+                }
+            }
         }
     }
 }

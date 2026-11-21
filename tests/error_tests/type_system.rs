@@ -3011,7 +3011,7 @@ fn test_mixed_storage_store_sites_are_recorded_once() {
     assert_eq!(
         mixed_warnings[0].message,
         "$a is assigned incompatible types (int and string); it is compiled as boxed mixed \
-         storage (compile with --strict-locals to make this an error)"
+         storage (compile with --strict-locals to enforce binding contracts)"
     );
     // The LATER span of the first failing pair: the `else` branch's assignment, at column 41.
     assert_eq!(
