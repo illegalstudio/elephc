@@ -2783,13 +2783,12 @@ fn test_marking_survives_a_type_guard_on_the_marked_name() {
     );
 }
 
-/// Control for the test above: `--strict-locals` marks nothing, so the DIVERGENT assignment is the
-/// error it always was. The guard changes nothing about that half.
+/// Strict locals gives mutually exclusive first producers independent runtime binding origins.
+/// The guarded store is therefore checked against the origin selected on the executed path.
 #[test]
 fn test_marking_survives_a_type_guard_control_under_strict() {
-    expect_error_strict(
+    expect_no_error_strict(
         "<?php if ($argc > 1) { $a = 1; } else { $a = \"s\"; } if (is_int($a)) { $a = \"z\"; } echo $a;",
-        "cannot reassign $a from int to string",
     );
 }
 
@@ -3260,26 +3259,24 @@ fn test_a_top_level_reference_assignment_does_not_disturb_marking() {
     );
 }
 
-/// `is_array($a)` narrows too, so a conflicting store inside its branch is not evidence.
+/// `is_array($a)` narrows too, so a conflicting store inside its branch does not require boxed
+/// permissive storage.
 ///
 /// The recogniser skipped it because `GuardTarget::AnyArray` has no single `PhpType`, on the
-/// reasoning that missing a guard "costs only a spurious warning". It is the same truthfulness
-/// violation this feature removed everywhere else: measured, `$a = 1; if (is_array($a)) { $a = "x"; }`
-/// warned "compile with --strict-locals to make this an error" while `--strict-locals` compiled it
-/// CLEAN — the only such hit in a ~120-fixture sweep.
+/// reasoning that missing a guard "costs only a spurious warning". The permissive checker accepts
+/// the guarded assignment without changing the local's physical storage.
 ///
 /// The target is modelled as `Mixed`, which is what `GuardTarget::AnyArray::fallback_type` yields
 /// whenever the guarded name is not already array-typed. It cannot be one for a name this scan
 /// marks: `has_exact_syntactic_type` refuses array literals and `(array)` casts outright, so a
-/// markable name's replay never holds an array. Over-recognising for an array-typed pre-bound name
-/// would only suppress a mark, which reverts that body to the pre-feature error rather than to a
-/// wrong answer.
+/// markable name's replay never holds an array. Strict locals separately preserves the original
+/// integer binding contract, so its rejection does not make this a permissive storage conflict.
 #[test]
-fn test_an_is_array_guard_does_not_produce_false_advice() {
+fn test_an_is_array_guard_does_not_force_mixed_storage() {
     let source = "<?php $a = 1; if (is_array($a)) { $a = \"x\"; } echo $a;";
     expect_no_warning(source, "boxed mixed storage");
     expect_no_error(source);
-    expect_no_error_strict(source);
+    expect_error_strict(source, "cannot reassign $a from int to string");
 }
 
 /// Controls: the guards whose warning is TRUE keep it. `is_object` is not a narrowing predicate the
