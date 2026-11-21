@@ -444,7 +444,10 @@ echo popConcreteString($argc), shiftConcreteString($argc);
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         for empty_branch in ["array_pop_empty", "array_shift_empty"] {
             let removed_slot = asm.split(empty_branch).nth(1).unwrap_or_else(|| panic!("{target}: {asm}"));
-            assert!(removed_slot.contains("__rt_heap_alloc"), "{target}: {removed_slot}");
+            assert!(
+                removed_slot.contains("__rt_mixed_from_owned_string"),
+                "{target}: {removed_slot}",
+            );
             assert!(!removed_slot.contains("__rt_mixed_from_value"), "{target}: {removed_slot}");
         }
     }
