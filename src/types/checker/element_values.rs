@@ -16,7 +16,7 @@
 //!   An ordinary assigned local is not proof: its checked type can drop a stored `null`.
 //! - A global or a by-reference captured local is a boxed cell other code can rewrite, so it
 //!   contributes `mixed` to the container's checked element type instead of a view.
-//! - A proven branch merge publishes its view on the locals its arms read as well, so the
+//! - A scalar branch merge publishes its type on each proven local its arms read, so the
 //!   merge itself is concrete and a literal's predicted storage matches its lowered items.
 //! - Conflicting authoritative visits disable the site, and storage probes publish nothing.
 
@@ -43,7 +43,7 @@ impl Checker {
             return;
         }
         let view = self.projectable_element_view(value, ty, env);
-        self.publish_merge_arm_views(value, view.as_ref());
+        self.publish_merge_arm_views(value, ty, env);
         self.publish_element_value_view(value.span, view);
     }
 
@@ -63,31 +63,30 @@ impl Checker {
             .or_insert(view);
     }
 
-    /// Publishes a branch merge's view on each local its arms read.
+    /// Publishes a branch merge's scalar type on each proven local its arms read.
     ///
     /// A merge of a boxed arm and a concrete one materializes in a boxed temp, whose storage a
-    /// literal is predicted from before any item is lowered. Projecting the arms themselves
-    /// makes the merge concrete instead: every arm then produces the proven scalar, so the
-    /// predicted storage, the merge temp and the stored element agree for every kind of site.
-    /// An unproven merge publishes `None` on the same arms, which disables them like any other
-    /// conflicting visit.
-    fn publish_merge_arm_views(&mut self, value: &Expr, view: Option<&ElementValueView>) {
-        let arms: [&Expr; 2] = match &value.kind {
-            ExprKind::ErrorSuppress(inner) => return self.publish_merge_arm_views(inner, view),
-            ExprKind::Ternary { then_expr, else_expr, .. } => [then_expr, else_expr],
-            ExprKind::ShortTernary { value, default }
-            | ExprKind::NullCoalesce { value, default } => [value, default],
-            _ => return,
+    /// literal is predicted from before any item is lowered. Projecting the proven arms
+    /// themselves makes the merge concrete instead, so the predicted storage, the merge temp
+    /// and the stored element agree for every kind of site.
+    ///
+    /// Each arm is judged on its own: reading a proven local as the scalar it holds is exact
+    /// whatever the other arms are, so a sibling call or constant does not withhold it. An arm
+    /// local that is not proven, and every arm of a merge that is not one scalar, publishes
+    /// `None`, which disables the arm like any other conflicting visit.
+    fn publish_merge_arm_views(&mut self, value: &Expr, ty: &PhpType, env: &TypeEnv) {
+        let Some(arms) = merge_arms(value) else {
+            return;
         };
+        let scalar = is_projectable_scalar(ty);
         for arm in arms {
             if let ExprKind::Variable(name) = &arm.kind {
-                let arm_view = view.map(|view| ElementValueView {
-                    ty: view.ty.clone(),
-                    local: Some(name.clone()),
+                let arm_view = (scalar && self.element_value_is_proven(arm, ty, env)).then(|| {
+                    ElementValueView { ty: ty.clone(), local: Some(name.clone()) }
                 });
                 self.publish_element_value_view(arm.span, arm_view);
             } else {
-                self.publish_merge_arm_views(arm, view);
+                self.publish_merge_arm_views(arm, ty, env);
             }
         }
     }
@@ -103,7 +102,7 @@ impl Checker {
         ty: &PhpType,
         env: &TypeEnv,
     ) -> Option<ElementValueView> {
-        let scalar = matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str);
+        let scalar = is_projectable_scalar(ty);
         let local = match &value.kind {
             ExprKind::Variable(name) => Some(name.clone()),
             _ => None,
@@ -129,9 +128,9 @@ impl Checker {
     /// while it has a recorded proof (`Checker::proven_local_views`: an array `foreach` binding,
     /// or the complement of a guard that exits on every other path) or is read inside an open
     /// guard region that has not stored it, where its type is the guard's view or complement.
-    /// A branch merge is as proven as its arms, and a literal arm is its own type. Any other
-    /// expression publishes nothing: its operand is concrete already, or boxed for a reason
-    /// this pass cannot see.
+    /// A branch merge (`?:`, `??`, `match`) is as proven as its arms, and a literal arm is its
+    /// own type. Any other expression publishes nothing: its operand is concrete already, or
+    /// boxed for a reason this pass cannot see.
     pub(crate) fn element_value_is_proven(&self, value: &Expr, ty: &PhpType, env: &TypeEnv) -> bool {
         match &value.kind {
             ExprKind::Variable(name) => {
@@ -145,17 +144,9 @@ impl Checker {
             | ExprKind::FloatLiteral(_)
             | ExprKind::BoolLiteral(_)
             | ExprKind::StringLiteral(_) => true,
-            ExprKind::ErrorSuppress(inner) => self.element_value_is_proven(inner, ty, env),
-            ExprKind::Ternary { then_expr, else_expr, .. } => {
-                self.element_value_is_proven(then_expr, ty, env)
-                    && self.element_value_is_proven(else_expr, ty, env)
-            }
-            ExprKind::ShortTernary { value, default }
-            | ExprKind::NullCoalesce { value, default } => {
-                self.element_value_is_proven(value, ty, env)
-                    && self.element_value_is_proven(default, ty, env)
-            }
-            _ => false,
+            _ => merge_arms(value).is_some_and(|arms| {
+                arms.into_iter().all(|arm| self.element_value_is_proven(arm, ty, env))
+            }),
         }
     }
 
@@ -306,5 +297,33 @@ impl Checker {
             || self.by_ref_captured_locals.contains(name)
             || self.boxed_ref_aliased_locals.contains(name)
             || self.top_level_binding_is_program_global(name)
+    }
+}
+
+/// Returns whether a checked type is a scalar a boxed operand is cast to exactly.
+fn is_projectable_scalar(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str)
+}
+
+/// Returns the expressions one of which becomes the value of a branch merge.
+///
+/// `@expr` is its operand, a ternary and `??` / `?:` have two results, and a `match` has one
+/// per arm plus its default. `None` for every expression that is not a merge.
+fn merge_arms(value: &Expr) -> Option<Vec<&Expr>> {
+    match &value.kind {
+        ExprKind::ErrorSuppress(inner) => Some(vec![inner.as_ref()]),
+        ExprKind::Ternary { then_expr, else_expr, .. } => {
+            Some(vec![then_expr.as_ref(), else_expr.as_ref()])
+        }
+        ExprKind::ShortTernary { value, default } | ExprKind::NullCoalesce { value, default } => {
+            Some(vec![value.as_ref(), default.as_ref()])
+        }
+        ExprKind::Match { arms, default, .. } => Some(
+            arms.iter()
+                .map(|(_, result)| result)
+                .chain(default.as_deref())
+                .collect(),
+        ),
+        _ => None,
     }
 }

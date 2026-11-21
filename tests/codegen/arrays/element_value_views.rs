@@ -409,3 +409,35 @@ unset($single, $keyed, $nested, $strings);
         1,5,5|y|1,2,5|1,3,0\n\
         ppp,a|y|{\"value\":\"none\",\"key\":\"nokey\"}");
 }
+
+/// A literal assigned to a fresh local, with no seed and no declared return to rebuild it, is
+/// read by its callers as the type the checker gave it: `??`, `?:` and `match` arms that read
+/// a loop binding, and a ternary whose other arm is a call. The bool source holds a `bool`
+/// value, not the literal `false`, whose own marker type is a separate checker gap.
+#[test]
+fn test_element_views_merge_arms_keep_unseeded_literal_storage() {
+    let source = r#"<?php
+function intCoalesce() { foreach (['a' => 5] as $v) { $out = [$v ?? 0]; } return $out; }
+function floatCoalesce() { foreach (['a' => 1.5] as $v) { $out = [$v ?? 2.0]; } return $out; }
+function stringCoalesce() { foreach (['a' => str_repeat('p', 3)] as $v) { $out = [$v ?? 'x']; } return $out; }
+function boolPair(bool $t) { $src = ['a' => $t]; foreach ($src as $v) { $out = [$v ?? true, $v ?: true]; } return $out; }
+function mixedOrder() { foreach (['a' => 0] as $v) { $out = [$v ?? 7, $v ?: 1]; } return $out; }
+function nestedCoalesce() { foreach (['a' => 5] as $v) { $out = [true ? ($v ?? 0) : 1]; } return $out; }
+function matchArm(bool $c) { foreach (['a' => 5] as $v) { $out = [match ($c) { true => $v, default => 0 }]; } return $out; }
+function callSibling(bool $c) { foreach (['a' => 5] as $v) { $out = [$c ? $v : strlen('ab')]; } return $out; }
+function callBeside(bool $c) { foreach (['a' => 5] as $v) { $out = [$v, $c ? $v : strlen('ab')]; } return $out; }
+function keyedCoalesce() { foreach (['a' => 5] as $k => $v) { $out = ['v' => $v ?? 0, 'k' => $k ?? 'none']; } return $out; }
+$i = intCoalesce(); $f = floatCoalesce(); $s = stringCoalesce(); $b = boolPair(false); $m = mixedOrder();
+echo implode(',', $i), '|';
+foreach ($f as $x) { echo $x + 0.25, ';'; }
+echo '|';
+foreach ($s as $x) { echo $x, ':', strlen($x), ';'; }
+echo '|', implode(',', $b), '|', in_array(true, $b, true) ? 'y' : 'n', in_array(false, $b, true) ? 'y' : 'n', '|', implode(',', $m), '|', implode(',', nestedCoalesce()), "\n";
+echo implode(',', matchArm(true)), '|', implode(',', matchArm(false)), '|', implode(',', callSibling(true)), '|', implode(',', callSibling(false)), '|', implode(',', callBeside(true)), '|', implode(',', callBeside(false)), '|', array_sum(callBeside(true)), "\n";
+$k = keyedCoalesce(); echo $k['v'] + 1, ':', strlen($k['k']), ':', $k['k'];
+unset($i, $f, $s, $b, $m, $k, $x);
+"#;
+    assert_clean_output(source, "5|1.75;|ppp:3;|,1|yy|0,1|5\n\
+        5|0|5|2|5,5|5,2|10\n\
+        6:1:a");
+}

@@ -372,13 +372,15 @@ while the boxed cell can still hold the `null`, and casting that box would store
   `Checker::proven_local_views` and end at the first store to the name; a loop
   binding also ends with its loop, after which the name holds whatever it held
   before a source that turned out to be empty.
-- **A branch merge** (`?:`, `??`) is as proven as its arms, and a literal arm is
-  its own type. A proven merge also publishes its view on each local its arms
-  read, so the arms produce the scalar themselves and the merge is concrete: a
-  literal's storage is predicted from its items before any of them is lowered,
-  and a boxed merge temp would have been stored raw in a keyed literal. Any
-  other expression publishes nothing: its operand is concrete already, or boxed
-  for a reason this pass cannot see.
+- **A branch merge** (`?:`, `??`, `match`) is as proven as its arms, and a
+  literal arm is its own type. A scalar merge also publishes its type on each
+  proven local its arms read, each arm judged on its own, so the arms produce the
+  scalar themselves and the merge is concrete: a literal's storage is predicted
+  from its items before any of them is lowered, and a boxed merge temp would
+  have been stored raw. Reading a proven local as the scalar it holds is exact
+  whatever its sibling arm is, so `$c ? $v : strlen($s)` projects `$v` although
+  the call is not itself a proof. Any other expression publishes nothing: its
+  operand is concrete already, or boxed for a reason this pass cannot see.
 - **Every authoritative visit** to the site agrees. A conflicting visit disables
   the site for good, and loop-storage probes publish nothing.
 

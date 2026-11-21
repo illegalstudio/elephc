@@ -565,7 +565,14 @@ pub(super) fn assignment_result_expr<'e>(
 /// codegen representation (`TaggedScalar`) would hide the int behind the nullable carrier.
 fn null_coalesce_value_type_for_merge(ctx: &LoweringContext<'_, '_>, value: &Expr) -> PhpType {
     match &value.kind {
-        ExprKind::Variable(name) => normalize_value_php_type(ctx.local_type(name)),
+        // A boxed local read as a container element produces its checked scalar (see
+        // `local_values::lower_local_value`), so the merge is planned from that scalar too.
+        ExprKind::Variable(name) => ctx
+            .local_load_php_type(name)
+            .and_then(|physical| {
+                element_values::projected_local_element_type(ctx, name, value.span, &physical)
+            })
+            .unwrap_or_else(|| normalize_value_php_type(ctx.local_type(name))),
         _ => null_only_call_merge_type(ctx, value)
             .unwrap_or_else(|| materialized_expr_type_for_merge(ctx, value)),
     }

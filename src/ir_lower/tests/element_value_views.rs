@@ -243,3 +243,34 @@ function keyed(bool $flag): array {
         });
     }
 }
+
+/// `??`, `match` and a ternary beside a call all read the loop binding as the checked int, so
+/// an unseeded literal assigned to a fresh local is built as `array<int>`.
+#[test]
+fn element_views_project_every_merge_arm_kind_on_all_targets() {
+    let source = r#"<?php
+function merged(bool $flag): array {
+    $source = ['a' => 5, 'b' => 6];
+    foreach ($source as $value) {
+        $coalesced = [$value ?? 0];
+        $matched = [match ($flag) { true => $value, default => 0 }];
+        $beside = [$value, $flag ? $value : strlen('ab')];
+    }
+    return [$coalesced, $matched, $beside];
+}
+"#;
+    for target_name in TARGETS {
+        with_function(source, target_name, "merged", |function| {
+            for push in function.instructions.iter().filter(|i| i.op == Op::ArrayPush) {
+                let operand = &function.value(push.operands[1]).unwrap().php_type;
+                assert!(matches!(operand, PhpType::Int | PhpType::Array(_)),
+                    "{target_name}: a merged literal item must be the checked int, got {operand:?}");
+            }
+            for literal in function.instructions.iter().filter(|i| i.op == Op::ArrayNew) {
+                assert!(!matches!(&literal.result_php_type,
+                    PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed),
+                    "{target_name}: no literal may be built with boxed elements");
+            }
+        });
+    }
+}
