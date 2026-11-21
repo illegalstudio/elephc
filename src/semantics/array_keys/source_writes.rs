@@ -371,6 +371,7 @@ fn source_literal_truthiness(expr: &Expr) -> Option<bool> {
         ExprKind::ArrayLiteral(values) => source_indexed_array_nonempty(values),
         ExprKind::ArrayLiteralAssoc(entries) => Some(!entries.is_empty()),
         ExprKind::ArrayLiteralMixed(entries) => source_mixed_array_nonempty(entries),
+        ExprKind::Assignment { value, .. } => source_literal_truthiness(value),
         _ => crate::types::deferred_defaults::literal_truthiness(expr),
     }
 }
@@ -2058,13 +2059,17 @@ fn infer_expr(
             static_property_fact(receiver, property, properties, current_class)
         }
         ExprKind::Ternary {
+            condition,
             then_expr,
             else_expr,
-            ..
-        } => merge_value_facts(
-            infer_expr(then_expr, locals, properties, profile, current_class),
-            infer_expr(else_expr, locals, properties, profile, current_class),
-        ),
+        } => match source_literal_truthiness(condition) {
+            Some(true) => infer_expr(then_expr, locals, properties, profile, current_class),
+            Some(false) => infer_expr(else_expr, locals, properties, profile, current_class),
+            None => merge_value_facts(
+                infer_expr(then_expr, locals, properties, profile, current_class),
+                infer_expr(else_expr, locals, properties, profile, current_class),
+            ),
+        },
         ExprKind::NullCoalesce { value, default } => merge_value_facts(
             infer_expr(value, locals, properties, profile, current_class),
             infer_expr(default, locals, properties, profile, current_class),
