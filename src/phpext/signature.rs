@@ -110,9 +110,12 @@ pub(super) fn supported(ty: &PhpType) -> bool {
 }
 
 /// Enumerates core value helpers whose persistent state is entirely inside the native image.
+///
+/// `gettype()` and `get_class()` only read static type names and emitted class metadata; the
+/// runtime class checks at typed returns and parameters name a rejected value with them.
 pub(crate) fn runtime_supported(target: crate::ir::RuntimeFnId) -> bool {
     use crate::ir::RuntimeFnId as R;
-    matches!(target, R::Count | R::ArrayIsList | R::ArrayKeyExists | R::ArrayKeyFirst
+    matches!(target, R::Gettype | R::GetClass | R::Count | R::ArrayIsList | R::ArrayKeyExists | R::ArrayKeyFirst
         | R::ArrayKeyLast | R::ArrayKeys | R::ArrayValues | R::ArrayReverse | R::ArraySlice
         | R::ArrayMerge | R::ArrayPop | R::ArrayPush | R::ArrayShift | R::ArrayUnshift
         | R::ArraySum | R::ArrayProduct | R::ArraySearch | R::ArrayChunk | R::ArrayColumn
