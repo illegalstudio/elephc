@@ -30,6 +30,7 @@ pub(super) fn inject_for_test(
         overrides,
         preload,
         strict,
+        &crate::opcache_prelude::AutoloadedFunctions::default(),
         &mut inventory,
     )
 }

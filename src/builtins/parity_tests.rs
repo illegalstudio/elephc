@@ -154,6 +154,7 @@ fn opcache_api_program() -> crate::parser::ast::Program {
         &[],
         None,
         false,
+        &crate::opcache_prelude::AutoloadedFunctions::default(),
         &mut inventory,
     );
     // Keep the injected declarations only: the probe's own call statements are not prelude
