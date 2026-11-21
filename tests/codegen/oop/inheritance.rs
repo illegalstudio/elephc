@@ -401,6 +401,70 @@ F::note();
     );
 }
 
+/// Verifies each late-bound redeclaration of a private static method checks the call's
+/// arguments against its own signature, only when it is selected: a missing parameter throws
+/// `ArgumentCountError`, a renamed one rejects the named argument, and the scope's method keeps
+/// binding. The dispatch result keeps the selected method's type inside an array literal.
+#[test]
+fn test_static_late_binding_private_scope_method_checks_each_selected_binding() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static function m(int $x): string { return "A::m $x"; }
+    private static function t(): string { return "7"; }
+    public static function run(): string {
+        try { return static::m(1); } catch (\ArgumentCountError $e) { return get_class($e) . ": " . strstr($e->getMessage(), ",", true); }
+    }
+    public static function named(): string {
+        try { return static::m(x: 2); } catch (\Error $e) { return get_class($e) . ": " . explode(",", $e->getMessage())[0]; }
+    }
+    public static function types(): void { var_dump([static::t()]); }
+}
+class C extends A {
+    public static function m(int $x, int $extra): string { return "C::m $x $extra"; }
+    public static function t(): int { return 7; }
+}
+class R extends A { public static function m(int $y): string { return "R::m $y"; } }
+echo A::run(), "\n", C::run(), "\n", R::run(), "\n";
+echo A::named(), "\n", C::named(), "\n", R::named(), "\n";
+A::types();
+C::types();
+"#,
+    );
+    assert_eq!(
+        out,
+        "A::m 1\nArgumentCountError: Too few arguments to function C::m()\nR::m 1\n\
+         A::m 2\nArgumentCountError: Too few arguments to function C::m()\n\
+         Error: Unknown named parameter $x\n\
+         array(1) {\n  [0]=>\n  string(1) \"7\"\n}\narray(1) {\n  [0]=>\n  int(7)\n}\n"
+    );
+}
+
+/// Verifies `$r =& static::m()` over a reference-returning private method binds the scope
+/// method's property for the scope class, and a fresh cell for a by-value redeclaration.
+#[test]
+fn test_static_late_binding_private_scope_method_reference_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+error_reporting(E_ALL & ~E_NOTICE);
+class Box { public int $v = 1; }
+class A {
+    public static Box $box;
+    private static function &m(): int { $b = self::$box; return $b->v; }
+    public static function run(): string {
+        $r =& static::m();
+        $r++;
+        return static::class . ": r=$r v=" . self::$box->v;
+    }
+}
+class C extends A { public static function m(): int { return 40; } }
+A::$box = new Box();
+echo A::run(), "\n", C::run(), "\n", A::run(), "\n";
+"#,
+    );
+    assert_eq!(out, "A: r=2 v=2\nC: r=41 v=2\nA: r=3 v=3\n");
+}
+
 /// Verifies inherited properties (`$a`) and methods are accessible from child, and
 /// `parent::greet()` calls the parent's version, returning "42 hi!".
 #[test]

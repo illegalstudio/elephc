@@ -130,6 +130,49 @@ fn late_bound_lookup(
     found
 }
 
+/// Returns the result type of `static::m()` when it dispatches over redeclarations of a private
+/// static method, or `None` when the call binds the scope's method alone.
+///
+/// The dispatch stores every arm into one merge temporary of this type, and callers that pick
+/// storage before lowering the call (array literals, merges) must see the same type: a
+/// redeclaration returning `int` beside a private method returning `string` joins to `mixed`.
+pub(in crate::ir_lower) fn private_late_static_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) -> Option<PhpType> {
+    if !matches!(receiver, StaticReceiver::Static) {
+        return None;
+    }
+    let scope = ctx.current_class.as_deref()?;
+    let arms = private_late_static_arms(ctx, scope, method);
+    if arms.is_empty() {
+        return None;
+    }
+    Some(joined_result_type(ctx, receiver, method, &arms))
+}
+
+/// Joins the scope method's result type with every called redeclaration's: the shared type when
+/// they agree (`void` when all are `void`), `mixed` otherwise.
+fn joined_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+    arms: &[(PrivateLateStaticArm, Vec<u64>)],
+) -> PhpType {
+    let fallback_type = lexical_static_method_call_expr_type_for_ir(ctx, receiver, method)
+        .unwrap_or(PhpType::Mixed);
+    let same = arms.iter().all(|(arm, _)| match arm {
+        PrivateLateStaticArm::Call(class_name) => {
+            let target = static_receiver_for_class_name(class_name);
+            lexical_static_method_call_expr_type_for_ir(ctx, &target, method)
+                .is_none_or(|ty| ty == fallback_type)
+        }
+        PrivateLateStaticArm::PrivateError(_) => true,
+    });
+    if same { fallback_type } else { PhpType::Mixed }
+}
+
 /// Emits the called-class dispatch: one compare per affected class, one arm per resolution,
 /// and the scope's own method for every other called class.
 fn lower_private_late_static_dispatch(
@@ -142,25 +185,31 @@ fn lower_private_late_static_dispatch(
     arms: Vec<(PrivateLateStaticArm, Vec<u64>)>,
 ) -> LoweredValue {
     let span = expr.span;
-    let fallback_type = static_method_call_expr_type_for_ir(ctx, receiver, method)
-        .unwrap_or_else(|| fallback_expr_type(expr));
-    let mut arm_types = vec![fallback_type.clone()];
-    for (arm, _) in &arms {
-        if let PrivateLateStaticArm::Call(class_name) = arm {
-            let target = static_receiver_for_class_name(class_name);
-            arm_types.push(
-                static_method_call_expr_type_for_ir(ctx, &target, method)
-                    .unwrap_or_else(|| fallback_type.clone()),
-            );
+    let result_type = joined_result_type(ctx, receiver, method, &arms);
+    // `$r =& static::m()`: each arm adopts its own reference cell into the assignment's staging
+    // (a by-value arm gets a fresh cell), so no arm can leave the binding to another's lease.
+    let reference_assignment = ctx
+        .reference_call_context
+        .as_ref()
+        .is_some_and(|context| context.depth == ctx.expression_depth);
+    if reference_assignment {
+        let fallback = static_method_implementation_signature(ctx, receiver, method);
+        let targets = arms.iter().filter_map(|(arm, _)| match arm {
+            PrivateLateStaticArm::Call(class_name) => static_method_implementation_signature(
+                ctx, &static_receiver_for_class_name(class_name), method,
+            ),
+            PrivateLateStaticArm::PrivateError(_) => None,
+        });
+        if fallback.into_iter().chain(targets).any(|signature| signature.by_ref_return
+            && !signature.return_type.reference_payload_compatible(&result_type))
+        {
+            crate::ir_lower::diagnostics::refuse(span,
+                "Unsupported reference assignment: a late-bound redeclaration returns a \
+                 different reference payload than the private method");
         }
     }
-    let all_void = arm_types.iter().all(|ty| *ty == PhpType::Void);
-    let result_type = if all_void || arm_types.iter().all(|ty| *ty == fallback_type) {
-        fallback_type
-    } else {
-        PhpType::Mixed
-    };
-    let temp_name = (!all_void).then(|| ctx.declare_owned_hidden_temp(result_type.clone()));
+    let temp_name = (!reference_assignment && result_type != PhpType::Void)
+        .then(|| ctx.declare_owned_hidden_temp(result_type.clone()));
     let split_initialized = ctx.initialized_slots_snapshot();
     let merge = ctx.builder.create_named_block("private_static.merge", Vec::new());
     let called_class_id = ctx.emit_value(
@@ -205,11 +254,17 @@ fn lower_private_late_static_dispatch(
     }
     let mut reachable_initialized = Vec::new();
     // -- every other called class runs the scope's own private method --
+    let fallback_type = lexical_static_method_call_expr_type_for_ir(ctx, receiver, method)
+        .unwrap_or(PhpType::Mixed);
+    if reference_assignment {
+        ctx.reference_call_context.as_mut().unwrap().adopted = false;
+    }
     let value = lower_static_method_call_bound(
         ctx, receiver, method, args, expr, None, StaticCallBinding::Resolved,
     );
     finish_private_late_static_arm(
-        ctx, temp_name.as_deref(), &result_type, value, merge, &mut reachable_initialized, span,
+        ctx, temp_name.as_deref(), &result_type, value, merge, &mut reachable_initialized,
+        reference_assignment, &fallback_type, span,
     );
     for (block, arm) in arm_blocks {
         ctx.builder.position_at_end(block);
@@ -217,12 +272,29 @@ fn lower_private_late_static_dispatch(
         match arm {
             PrivateLateStaticArm::Call(class_name) => {
                 let target = static_receiver_for_class_name(&class_name);
+                // The checker bound the arguments against the private method only. A
+                // redeclaration with other parameters throws its own binding error, and only
+                // when a class that selects it is the called class.
+                let signature = static_method_implementation_signature(ctx, &target, method)
+                    .cloned();
+                if let Some(signature) = signature.as_ref() {
+                    if super::selected_method_arguments::reject_invalid(
+                        ctx, &class_name, method, signature, args, span,
+                    ) {
+                        continue;
+                    }
+                }
+                let arm_type = lexical_static_method_call_expr_type_for_ir(ctx, &target, method)
+                    .unwrap_or_else(|| result_type.clone());
+                if reference_assignment {
+                    ctx.reference_call_context.as_mut().unwrap().adopted = false;
+                }
                 let value = lower_static_method_call_bound(
                     ctx, &target, method, args, expr, None, StaticCallBinding::Forwarded,
                 );
                 finish_private_late_static_arm(
                     ctx, temp_name.as_deref(), &result_type, value, merge,
-                    &mut reachable_initialized, span,
+                    &mut reachable_initialized, reference_assignment, &arm_type, span,
                 );
             }
             PrivateLateStaticArm::PrivateError(class_name) => {
@@ -242,13 +314,19 @@ fn lower_private_late_static_dispatch(
         initialized.retain(|slot| arm_initialized.contains(slot));
     }
     ctx.restore_initialized_slots(initialized);
+    if reference_assignment {
+        // Every arm that reaches the merge adopted a cell into the assignment's staging.
+        ctx.reference_call_context.as_mut().unwrap().adopted = true;
+    }
     match temp_name {
         Some(temp_name) => take_owned_temp(ctx, &temp_name, span),
-        None => lower_expr(ctx, &Expr::new(ExprKind::Null, span)),
+        None => lower_null(ctx, expr),
     }
 }
 
-/// Stores one arm's call result into the merge temporary and joins the merge block.
+/// Stores one arm's call result into the merge temporary (or, under `$r =& static::m()`, gives a
+/// by-value result its own reference cell) and joins the merge block.
+#[allow(clippy::too_many_arguments)]
 fn finish_private_late_static_arm(
     ctx: &mut LoweringContext<'_, '_>,
     temp_name: Option<&str>,
@@ -256,11 +334,16 @@ fn finish_private_late_static_arm(
     value: LoweredValue,
     merge: BlockId,
     reachable_initialized: &mut Vec<HashSet<LocalSlotId>>,
+    reference_assignment: bool,
+    arm_type: &PhpType,
     span: Span,
 ) {
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
+    super::enum_interface_calls::complete_reference_branch(
+        ctx, value, reference_assignment, arm_type, span,
+    );
     if let Some(temp_name) = temp_name {
         let value = if ctx.builder.value_php_type(value.value) == PhpType::Void {
             lower_expr(ctx, &Expr::new(ExprKind::Null, span))
