@@ -9,6 +9,8 @@
 //! - Modifier and member parsing must preserve PHP visibility and abstract/static/final/readonly rules.
 //! - Every property and constant a declarator list emits carries the span of its own declarator
 //!   (name plus optional initializer), not the span of the whole declaration.
+//! - A member that fails to parse is skipped to its own end, so its error does not cascade into
+//!   the rest of the class body.
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
@@ -130,6 +132,9 @@ pub(in crate::parser::stmt) fn parse_trait_decl(
 /// promoted constructor properties, and member attributes.
 /// `owner_kind` is used only for error messages (e.g., "class", "trait").
 /// `enclosing_is_abstract` controls whether abstract property declarations are permitted.
+///
+/// A member that fails to parse is skipped to its end (see [`parse_members_recovering`]), so
+/// the error is reported once instead of cascading into the rest of the file.
 pub(in crate::parser::stmt) fn parse_class_like_body(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -145,13 +150,43 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
     ),
     CompileError,
 > {
-    let mut trait_uses = Vec::new();
-    let mut properties = Vec::new();
-    let mut methods = Vec::new();
-    let mut constants = Vec::new();
-    let mut cases = Vec::new();
+    let mut members = Default::default();
+    parse_members_recovering(tokens, pos, &mut members, |tokens, pos, members, member_start| {
+        parse_class_like_members(
+            tokens,
+            pos,
+            owner_kind,
+            enclosing_is_abstract,
+            members,
+            member_start,
+        )
+    })?;
+    Ok(members)
+}
+
+/// The members of a class-like body, in the order `parse_class_like_body` returns them.
+type ClassLikeMembers = (
+    Vec<TraitUse>,
+    Vec<ClassProperty>,
+    Vec<ClassMethod>,
+    Vec<ClassConst>,
+    Vec<EnumCaseDecl>,
+);
+
+/// Parses class-like members into `members` up to the closing `}`, stopping at the first
+/// error. `member_start` is set to the first token of each member before it is parsed.
+fn parse_class_like_members(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    owner_kind: &str,
+    enclosing_is_abstract: bool,
+    members: &mut ClassLikeMembers,
+    member_start: &mut usize,
+) -> Result<(), CompileError> {
+    let (trait_uses, properties, methods, constants, cases) = members;
 
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        *member_start = *pos;
         // Capture any `#[...]` attribute groups attached to the next member —
         // they're attached to the resulting property or method below.
         let member_attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
@@ -253,7 +288,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 member_span,
                 &modifiers,
                 &member_attributes,
-                &mut constants,
+                constants,
                 owner_kind,
             )?;
             continue;
@@ -276,7 +311,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 modifiers.is_final,
             )?;
             method.attributes = member_attributes;
-            append_promoted_properties(&mut properties, promoted_properties)?;
+            append_promoted_properties(properties, promoted_properties)?;
             methods.push(method);
             continue;
         }
@@ -440,7 +475,7 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
         ));
     }
 
-    Ok((trait_uses, properties, methods, constants, cases))
+    Ok(())
 }
 
 /// Appends promoted constructor properties to the class properties list.
@@ -747,15 +782,29 @@ fn parse_class_like_method(
 /// Parses the body of an `interface` declaration.
 /// Interface bodies may only contain constants, hooked properties, and method signatures (no bodies).
 /// All properties are implicitly abstract and public; modifiers are validated but not stored as-is.
+///
+/// Like a class body, a member that fails to parse is skipped to its end.
 fn parse_interface_body(
     tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>, Vec<ClassConst>), CompileError> {
-    let mut properties = Vec::new();
-    let mut methods = Vec::new();
-    let mut constants = Vec::new();
+    let mut members = Default::default();
+    parse_members_recovering(tokens, pos, &mut members, parse_interface_members)?;
+    Ok(members)
+}
+
+/// Parses interface members into `members` up to the closing `}`, stopping at the first
+/// error. `member_start` is set to the first token of each member before it is parsed.
+fn parse_interface_members(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    members: &mut (Vec<ClassProperty>, Vec<ClassMethod>, Vec<ClassConst>),
+    member_start: &mut usize,
+) -> Result<(), CompileError> {
+    let (properties, methods, constants) = members;
 
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        *member_start = *pos;
         // Attributes may decorate interface methods (e.g. `#[Deprecated]`).
         let member_attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
         if *pos >= tokens.len() || matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
@@ -776,7 +825,7 @@ fn parse_interface_body(
                 member_span,
                 &modifiers,
                 &member_attributes,
-                &mut constants,
+                constants,
                 "interface",
             )?;
             continue;
@@ -887,7 +936,92 @@ fn parse_interface_body(
         methods.push(method);
     }
 
-    Ok((properties, methods, constants))
+    Ok(())
+}
+
+/// Runs `parse_members` over a class-like body until it reaches the closing `}`, collecting
+/// every member's error.
+///
+/// When a member fails, parsing resumes after that member (see [`skip_class_member`]) rather
+/// than at the statement level. Statement recovery would resume inside the failed declaration,
+/// so `public function __construct(public string $s = null) {}` would also report its `{}` and
+/// the class's `}` as unexpected tokens, where php reports the one error.
+fn parse_members_recovering<T>(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    members: &mut T,
+    mut parse_members: impl FnMut(
+        &[SpannedToken],
+        &mut usize,
+        &mut T,
+        &mut usize,
+    ) -> Result<(), CompileError>,
+) -> Result<(), CompileError> {
+    let mut errors = Vec::new();
+    loop {
+        let mut member_start = *pos;
+        match parse_members(tokens, pos, members, &mut member_start) {
+            Ok(()) => break,
+            Err(error) => {
+                errors.extend(error.flatten());
+                *pos = skip_class_member(tokens, member_start);
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CompileError::from_many(errors))
+    }
+}
+
+/// Returns the index just past the class-like member that starts at `start`: past its `;`, or
+/// past the `}` that closes its body (a method body, property hooks, a trait-use adaptation
+/// block), whichever comes first outside parentheses and brackets. Stops on the body's own
+/// closing `}` or at the end of input without consuming it, so the caller's `}` check still
+/// sees it.
+///
+/// Open delimiters are kept on a stack. A `}` closes the nearest `{` and drops any `(` or `[`
+/// left open after it, so an unbalanced `echo (;` inside a method body still ends the skip at
+/// that body's `}` instead of swallowing the next member. A `)` or `]` only closes its own
+/// kind, and a `{` opened inside parentheses (a `match` in a parameter default) does not end
+/// the member when it closes.
+fn skip_class_member(tokens: &[SpannedToken], start: usize) -> usize {
+    let mut open: Vec<&Token> = Vec::new();
+    let mut index = start;
+    while let Some((token, _)) = tokens.get(index) {
+        match token {
+            Token::Eof => return index,
+            // No `{` of this member is open: this is the enclosing body's `}`, even when a `(`
+            // or `[` was left unclosed before it.
+            Token::RBrace if !open.contains(&&Token::LBrace) => return index,
+            Token::LParen | Token::LBracket | Token::LBrace => open.push(token),
+            Token::RParen | Token::RBracket => {
+                let opener = if matches!(token, Token::RParen) {
+                    Token::LParen
+                } else {
+                    Token::LBracket
+                };
+                if open.last() == Some(&&opener) {
+                    open.pop();
+                }
+            }
+            Token::RBrace => {
+                while let Some(opener) = open.pop() {
+                    if matches!(opener, Token::LBrace) {
+                        break;
+                    }
+                }
+                if open.is_empty() {
+                    return index + 1;
+                }
+            }
+            Token::Semicolon if open.is_empty() => return index + 1,
+            _ => {}
+        }
+        index += 1;
+    }
+    index
 }
 
 /// Parses everything after `const` in a class, interface, trait or enum body.
