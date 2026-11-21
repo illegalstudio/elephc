@@ -715,6 +715,7 @@ impl AstVisitor for ExpressionFactUpdater<'_> {
             ExprKind::ArrayLiteral(values) => self.evaluated_indexed_array_fact(values),
             ExprKind::ArrayLiteralAssoc(entries) => self.evaluated_assoc_array_fact(entries),
             ExprKind::ArrayLiteralMixed(entries) => self.evaluated_mixed_array_fact(entries),
+            ExprKind::Spread(inner) => self.expression_value(inner),
             _ => infer_expr(
                 expr,
                 self.locals,
