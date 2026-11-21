@@ -70,8 +70,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => super::value_error::emit_throw_static_message_aarch64(
             emitter, "_spl_type_error_class_id", TYPE_LABEL, TYPE_MESSAGE.len()),
-        Arch::X86_64 => super::value_error::emit_throw_static_message_x86_64(
-            emitter, "_spl_type_error_class_id", TYPE_LABEL, TYPE_MESSAGE.len()),
+        Arch::X86_64 => {
+            emitter.instruction("sub rsp, 8");                                  // adapt the jump-only entry to the throwing helper's return-slot alignment
+            super::value_error::emit_throw_static_message_x86_64(
+                emitter, "_spl_type_error_class_id", TYPE_LABEL, TYPE_MESSAGE.len());
+        }
     }
 }
 
@@ -97,6 +100,10 @@ mod tests {
                 && line.contains(TYPE_FAIL)), "{name}");
             assert!(!classifier.contains("__rt_diag_warning"), "{name}");
             assert!(classifier.contains("__rt_strict_numeric_operand_invalid:"), "{name}");
+            if name == "linux-x86_64" {
+                let failure = asm.split(&format!(".globl {TYPE_FAIL}\n")).nth(1).unwrap();
+                assert!(failure.lines().take(5).any(|line| line.trim() == "sub rsp, 8"), "{failure}");
+            }
         }
     }
 }

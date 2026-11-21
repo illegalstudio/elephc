@@ -154,6 +154,11 @@ const CURL_RELEASE_CHAIN: &[&str] = &[
     "__rt_curl_share_free",
 ];
 
+/// Global labels reached only by jumps, with their stack delta from an ordinary call entry.
+const JUMP_ONLY_ENTRY_OFFSETS: &[(&str, i64)] = &[
+    (super::arrays::strict_numeric_operand::TYPE_FAIL, -8),
+];
+
 /// One emitted helper: its name and its (line number, text) instruction stream.
 struct Function {
     name: String,
@@ -242,9 +247,10 @@ fn resolve_local(body: &[(usize, String)], from: usize, target: &str) -> Option<
 /// Walks ONE control-flow path set, starting at `start`, tracking `rsp`'s offset from that
 /// entry point. Returns the construct that defeated it, if any.
 ///
-/// At entry `rsp % 16 == 8` (the caller's `call` pushed a return address onto an aligned
-/// stack), so a `call` is correct exactly when the offset is `8 mod 16`. A path ends at
-/// `ret`, at a branch that leaves the helper (a tail call), or at an unmodellable construct.
+/// At an ordinary entry `rsp % 16 == 8` because the caller's `call` pushed a return address
+/// onto an aligned stack. `entry_offset` adapts labels reached only by a jump, and a nested
+/// `call` is correct exactly when the resulting offset is `8 mod 16`. A path ends at `ret`,
+/// at a branch that leaves the helper (a tail call), or at an unmodellable construct.
 /// Reaching one instruction with two different offsets means the walk lost track, and the
 /// helper is reported as unanalyzable rather than silently half-checked.
 /// A register adjustment immediately preceded by `shl <reg>, 4` preserves the offset's
@@ -253,10 +259,11 @@ fn walk(
     body: &[(usize, String)],
     labels: &HashMap<&str, usize>,
     start: usize,
+    entry_offset: i64,
     seen: &mut HashMap<usize, i64>,
     misaligned: &mut Vec<(usize, String, i64)>,
 ) -> Option<String> {
-    let mut work = vec![(start, 0i64)];
+    let mut work = vec![(start, entry_offset)];
     while let Some((index, offset)) = work.pop() {
         let Some((line, text)) = body.get(index) else {
             continue;
@@ -433,7 +440,10 @@ fn analyze(function: &Function) -> Analysis {
     loop {
         let Some(start) = entry else { break };
         let mut seen: HashMap<usize, i64> = HashMap::new();
-        if let Some(reason) = walk(&function.body, &labels, start, &mut seen, &mut misaligned) {
+        let name = function.body.get(start).and_then(|(_, text)| label_of(text)).unwrap_or(function.name.as_str());
+        let entry_offset = JUMP_ONLY_ENTRY_OFFSETS.iter().find_map(|(candidate, offset)|
+            (*candidate == name).then_some(*offset)).unwrap_or(0);
+        if let Some(reason) = walk(&function.body, &labels, start, entry_offset, &mut seen, &mut misaligned) {
             return Analysis { unanalyzable: Some(reason), misaligned: Vec::new() };
         }
         visited.extend(seen);
