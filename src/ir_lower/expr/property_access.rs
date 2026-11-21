@@ -1988,6 +1988,18 @@ pub(super) fn lower_property_probe_from_value(
     property: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    lower_property_probe_from_value_in_mode(ctx, object, property, PropertyFetchMode::Probe, expr)
+}
+
+/// The probe above with the fetch mode an ordinary (non-XML) receiver answers in: `??` passes
+/// `Coalesce` (`__isset`, then `__get`), while an XML view always answers natively.
+pub(super) fn lower_property_probe_from_value_in_mode(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    mode: PropertyFetchMode,
+    expr: &Expr,
+) -> LoweredValue {
     let object = refine_member_receiver(ctx, object, expr);
     let object = box_opaque_property_receiver(ctx, object, expr.span);
     if let Some(method) = native_property_method_for_value(ctx, object.value, property,
@@ -2001,8 +2013,8 @@ pub(super) fn lower_property_probe_from_value(
     }
     if !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
         && matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-    { return native_xml_reads::probe(ctx, object, property, expr); }
-    lower_property_probe_without_native(ctx, object, property, PropertyFetchMode::Probe, expr)
+    { return native_xml_reads::probe(ctx, object, property, mode, expr); }
+    lower_property_probe_without_native(ctx, object, property, mode, expr)
 }
 
 /// Probes ordinary property storage without re-entering a native XML presence branch.

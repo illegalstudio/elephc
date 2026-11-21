@@ -60,7 +60,8 @@ pub(super) fn isset(
 
 /// Reads a native XML child for coalesce, returning PHP null when it does not exist.
 pub(super) fn probe(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    mode: PropertyFetchMode, expr: &Expr,
 ) -> LoweredValue {
     let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
     dispatch(
@@ -68,7 +69,7 @@ pub(super) fn probe(
         |ctx, receiver| lower_method_call_with_receiver_direct(
             ctx, receiver, "__elephc_property_probe", &[name.clone()], Op::MethodCall, expr,
         ),
-        |ctx, receiver| lower_property_probe_without_native(ctx, receiver, property, PropertyFetchMode::Probe, expr),
+        |ctx, receiver| lower_property_probe_without_native(ctx, receiver, property, mode, expr),
     )
 }
 

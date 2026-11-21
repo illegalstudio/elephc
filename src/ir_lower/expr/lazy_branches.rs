@@ -215,6 +215,19 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         {
             return lower_property_probe_from_value(ctx, object, property, value);
         }
+        // A boxed receiver may be a native XML view, whose children answer natively whatever
+        // hooks a subclass declares; every other object takes the `??` fetch below.
+        if !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
+            && {
+                let ty = ctx.builder.value_php_type(object.value);
+                matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+                    || super::property_access::is_opaque_property_object(ctx, &ty)
+            }
+        {
+            return super::property_access::lower_property_probe_from_value_in_mode(
+                ctx, object, property, PropertyFetchMode::Coalesce, value,
+            );
+        }
         if property_can_be_uninitialized(ctx, object.value, property)
             || union_hook_probe_class(ctx, object.value, property).is_some() {
             return lower_initialized_property_value(ctx, object, property, value);
@@ -256,6 +269,10 @@ pub(super) fn lower_initialized_property_null_coalesce_probe(
         return None;
     };
     if !property_probe_receiver_uses_native_object_storage(ctx, object) {
+        return None;
+    }
+    // A native XML view answers its own children; the native probe below owns it.
+    if receiver_class_has_native_xml_children(ctx, object) {
         return None;
     }
     if !matches!(
@@ -480,6 +497,16 @@ fn property_probe_receiver_uses_native_object_storage(
     instance_callable_object_class_and_nullability(ctx, object).is_some()
 }
 
+/// Whether the receiver's statically known class is a native XML class (SimpleXML or a subclass).
+fn receiver_class_has_native_xml_children(ctx: &LoweringContext<'_, '_>, object: &Expr) -> bool {
+    instance_callable_object_class(ctx, object).is_some_and(|class_name| {
+        crate::types::builtin_classes::has_native_dimensions(
+            class_name.trim_start_matches('\\'),
+            ctx.classes,
+        )
+    })
+}
+
 /// Evaluates the receiver of a statically missing concrete-class property and
 /// materializes null, matching PHP's warning-free `$object->missing ?? $default` probe.
 fn lower_known_missing_property_probe(
@@ -491,6 +518,10 @@ fn lower_known_missing_property_probe(
     };
     let class_name = instance_callable_object_class(ctx, object)?;
     let class_name = class_name.trim_start_matches('\\');
+    // XML children are not declared properties: any name can select one.
+    if crate::types::builtin_classes::has_native_dimensions(class_name, ctx.classes) {
+        return None;
+    }
     // The object at run time may be any class inheriting the static one (`$this` in a parent's
     // method, a parameter typed with a base class), and php answers from that class: the probe is
     // a constant null only when no class the receiver can be supplies the name.

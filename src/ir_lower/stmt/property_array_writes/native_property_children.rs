@@ -30,6 +30,8 @@ pub(super) fn fetch(
     let known = crate::ir_lower::expr::singular_object_class(&ty).and_then(|(class, _)|
         (!class.is_empty() && !ctx.interfaces.contains_key(class)).then(|| class.to_string()));
     let mut classes = ctx.classes.iter().filter_map(|(class, info)| {
+        // An interface has no instances: `get_class()` never names it.
+        if ctx.interfaces.contains_key(class) { return None; }
         if known.as_ref().is_some_and(|base|
             class != base && !crate::types::class_inherits_from(ctx.classes, class, base)) { return None; }
         storage(ctx, class, info, property).map(|storage| (class.clone(), storage))

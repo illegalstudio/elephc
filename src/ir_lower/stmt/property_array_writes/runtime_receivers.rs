@@ -187,6 +187,8 @@ fn dispatch(
         return false;
     }
     let mut classes: Vec<_> = ctx.classes.iter().filter_map(|(name, info)| {
+        // An interface has no instances: `get_class()` never names it.
+        if ctx.interfaces.contains_key(name) { return None; }
         if concrete_class.as_ref().is_some_and(|base|
             name != base && !crate::types::class_inherits_from(ctx.classes, name, base)) {
             return None;

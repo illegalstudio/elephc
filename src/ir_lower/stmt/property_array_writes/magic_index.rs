@@ -25,6 +25,8 @@ pub(super) fn lower(
     let base = crate::ir_lower::expr::singular_object_class(&ty).map(|(class, _)| class)
         .filter(|class| !class.is_empty() && !ctx.interfaces.contains_key(*class));
     let mut classes = ctx.classes.iter().filter_map(|(class, info)| {
+        // An interface has no instances: `get_class()` never names it.
+        if ctx.interfaces.contains_key(class) { return None; }
         if base.is_some_and(|base| !crate::ir_lower::expr::class_extends_class(ctx, class, base)) { return None; }
         kind(ctx, class, info, property).map(|kind| (class.clone(), kind))
     }).collect::<Vec<_>>();

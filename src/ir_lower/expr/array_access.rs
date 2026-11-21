@@ -705,11 +705,14 @@ fn lower_array_access_from_values_with_receiver_pins(
     // `ArrayAccess` (`Illuminate\Contracts\Container\Container`) is read the same way: the class
     // behind it is what implements the interface, so the read dispatches on the boxed object at
     // run time, exactly as it does for a `mixed` receiver.
+    // A native XML class answers `$x[..]` through its own dimension adapter, not `ArrayAccess`;
+    // boxing it sent the read down the generic runtime call and leaked the box when it threw.
     let receiver_is_unproven_array_access = matches!(
         ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Object(ref class_name)
             if !object_name_satisfies_interface_for_ir(ctx, class_name, "ArrayAccess")
-    );
+    ) && native_dimension_method_for_type(ctx, &ctx.builder.value_php_type(array_value.value),
+        elephc_builtin_contract::ObjectDimension::Get).is_none();
     let array_value = if receiver_is_unproven_array_access
         || matches!(
             ctx.builder.value_php_type(array_value.value).codegen_repr(),

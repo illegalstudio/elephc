@@ -1525,7 +1525,25 @@ pub(super) fn static_place_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> O
         // A property named at run time has no declared type to read; it is whatever the object
         // holds. Only a receiver this module can re-read qualifies.
         ExprKind::DynamicPropertyAccess { object, .. } => {
-            static_place_type(ctx, object).map(|_| PhpType::Mixed)
+            let receiver = static_place_type(ctx, object)?;
+            // A SimpleXML selection is a view into the document: it is bound through the native
+            // reference protocol, never read and written back as a place. The receiver may be a
+            // native XML class or, in a program that links SimpleXML, any erased value.
+            if ctx.classes.contains_key("SimpleXMLElement") {
+                let may_be_xml = match receiver.codegen_repr() {
+                    PhpType::Mixed | PhpType::Union(_) => true,
+                    PhpType::Object(class) => {
+                        class.is_empty()
+                            || ctx.interfaces.contains_key(&class)
+                            || crate::types::builtin_classes::has_native_dimensions(&class, ctx.classes)
+                    }
+                    _ => false,
+                };
+                if may_be_xml {
+                    return None;
+                }
+            }
+            Some(PhpType::Mixed)
         }
         ExprKind::ArrayAccess { array, .. } => {
             match static_place_type(ctx, array)?.codegen_repr() {

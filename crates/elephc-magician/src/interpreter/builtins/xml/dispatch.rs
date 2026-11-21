@@ -95,8 +95,12 @@ pub(in crate::interpreter) fn eval_xml_builtin_name(name: &str) -> bool {
 /// Whether the host registered the function `name` names: the `libxml_*` functions belong to
 /// the DOM prelude's `Libxml` part (linked on their own), the rest to the xml bridge.
 fn eval_xml_name_linked(context: &ElephcEvalContext, name: &str) -> bool {
-    if name.to_ascii_lowercase().starts_with("libxml_") {
+    let key = name.to_ascii_lowercase();
+    if key.starts_with("libxml_") {
         context.native_function("libxml_use_internal_errors").is_some()
+    } else if key.starts_with("simplexml_") {
+        // A SimpleXML-only program links its own loaders without `xml_parser_create()`.
+        context.native_function(&key).is_some() || eval_xml_bridge_linked(context)
     } else {
         eval_xml_bridge_linked(context)
     }

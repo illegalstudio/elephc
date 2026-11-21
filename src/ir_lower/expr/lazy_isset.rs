@@ -402,7 +402,11 @@ pub(super) fn lower_lazy_empty_without_native(
             lower_member_receiver(ctx, object, &args[0]);
             return Some(emit_bool_literal(ctx, true, Some(args[0].span)));
         }
-        if matches!(
+        // An opaque receiver (`mixed`, a union, a bare `object`) has no class to name a slot in:
+        // `property_isset_action` answers "initialized" for it, and that ladder would run the
+        // ordinary read -- `__get` for a class without `__isset`. The runtime-name form below is
+        // mode-aware (`__isset` alone, then the value), and quiet for an uninitialized slot.
+        if !property_probe_needs_runtime_name_form(ctx, object) && matches!(
             property_isset_action(ctx, object, property, &args[0]),
             Some(IssetPropertyAction::Initialized)
         ) {

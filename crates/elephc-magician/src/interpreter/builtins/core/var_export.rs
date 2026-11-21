@@ -169,6 +169,11 @@ fn eval_var_export_append_object(
 ) -> Result<(), EvalStatus> {
     let identity = eval_debug_object_identity(value, values);
     let class_name = eval_debug_object_class_name(value, identity, context, values)?;
+    // A native SimpleXML view exports its projected children and attributes, as php's
+    // `get_properties` handler does; its slots carry nothing.
+    if runtime_ops::simplexml_properties::is_native(values, value, "")? {
+        return eval_var_export_append_native_object(value, &class_name, indent, context, values, output);
+    }
     let properties =
         eval_object_properties_ignoring_debug_info(value, identity, &class_name, context, values)?;
     if context.has_enum(&class_name) {
@@ -205,6 +210,44 @@ fn eval_var_export_append_object(
     eval_var_export_append_padding(indent, output);
     output.extend_from_slice(close);
     Ok(())
+}
+
+/// Appends a native SimpleXML view from its debug projection (string keys quoted, integer keys bare).
+fn eval_var_export_append_native_object(
+    value: RuntimeCellHandle,
+    class_name: &str,
+    indent: usize,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    super::native_debug::with_guard(value, context, values, |context, values| {
+        super::native_debug::with_projection(value, context, values, |hash, context, values| {
+            output.push(b'\\');
+            output.extend_from_slice(class_name.as_bytes());
+            output.extend_from_slice(b"::__set_state(array(\n");
+            let len = values.array_len(hash)?;
+            for position in 0..len {
+                super::native_debug::with_entry(hash, position, context, values, |key, element, context, values| {
+                    eval_var_export_append_padding(indent + 3, output);
+                    if values.type_tag(key)? == EVAL_TAG_INT {
+                        output.extend_from_slice(&values.string_bytes(key)?);
+                    } else {
+                        output.push(b'\'');
+                        eval_var_export_append_escaped(&values.string_bytes(key)?, output);
+                        output.push(b'\'');
+                    }
+                    output.extend_from_slice(b" => ");
+                    eval_var_export_append_entry_value(element, indent, context, values, output)?;
+                    output.extend_from_slice(b",\n");
+                    Ok(())
+                })?;
+            }
+            eval_var_export_append_padding(indent, output);
+            output.extend_from_slice(b"))");
+            Ok(())
+        })
+    })
 }
 
 /// Appends one array element or object property value, breaking the line before a nested block.
