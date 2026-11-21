@@ -218,3 +218,28 @@ function maybe(int $n): array {
         });
     }
 }
+
+/// A branch result used as a literal value is concrete on every arm, so a keyed literal
+/// stores raw integers instead of the boxed merge temp it used to hold.
+#[test]
+fn element_views_keep_branch_results_typed_in_literals_on_all_targets() {
+    let source = r#"<?php
+function keyed(bool $flag): array {
+    $source = ['a' => 5, 'b' => 6];
+    $out = [];
+    foreach ($source as $value) { $out = ['v' => $flag ? $value : 0, 'w' => $value ?: 1]; }
+    return $out;
+}
+"#;
+    for target_name in TARGETS {
+        with_function(source, target_name, "keyed", |function| {
+            let sets: Vec<_> = function.instructions.iter().filter(|i| i.op == Op::HashSet).collect();
+            assert!(!sets.is_empty(), "{target_name}: fixture must build the keyed literal");
+            for set in sets {
+                assert_eq!(function.value(set.operands[2]).unwrap().php_type, PhpType::Int,
+                    "{target_name}: every literal value must be the checked int");
+            }
+            assert!(!widens_a_container(function), "{target_name}: the literal must not widen");
+        });
+    }
+}

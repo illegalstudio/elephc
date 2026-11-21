@@ -387,3 +387,25 @@ unset($outer);
         "[[\"in2\",null],[1,\"in2\",null],{\"seed\":\"x\",\"t\":\"in2\"}]|\
          [[null,null],[1,null,null],{\"seed\":\"x\",\"t\":null}]");
 }
+
+/// A branch result used as a literal item or as an appended value is the proven scalar on
+/// every arm, in indexed and keyed literals, nested merges and spread literals alike.
+#[test]
+fn test_element_views_branch_results_keep_literal_storage() {
+    let source = r#"<?php
+function single(bool $c) { foreach (['a' => 5] as $v) { return [$c ? $v : 0]; } return [0]; }
+function keyed(bool $c) { $src = ['a' => 5, 'b' => 6]; $out = []; foreach ($src as $k => $v) { $out = ['v' => $c ? $v : 0, 'w' => $v ?: 1]; } return $out; }
+function nested(bool $c, bool $d) { $src = ['a' => 5]; $out = [1]; foreach ($src as $v) { $out[] = $c ? ($d ? $v : 2) : 3; $out = [...$out, $c ? $v : 0]; } return $out; }
+function strings(bool $c) { $src = ['a' => str_repeat('p', 3)]; foreach ($src as $k => $v) { return ['value' => $c ? $v : 'none', 'key' => $c ? $k : 'nokey']; } return ['value' => 'x', 'key' => 'y']; }
+$single = single(true); $keyed = keyed(true); $nested = nested(true, true); $strings = strings(true);
+echo implode(',', $single), '|', in_array(5, $single, true) ? 'y' : 'n', '|', array_sum($single), '|', implode(',', single(false)), "\n";
+echo implode(',', $keyed), '|', in_array(6, $keyed, true) ? 'y' : 'n', '|', array_sum($keyed), '|', json_encode(keyed(false)), "\n";
+echo implode(',', $nested), '|', in_array(5, $nested, true) ? 'y' : 'n', '|', implode(',', nested(true, false)), '|', implode(',', nested(false, true)), "\n";
+echo implode(',', $strings), '|', in_array('ppp', $strings, true) ? 'y' : 'n', '|', json_encode(strings(false));
+unset($single, $keyed, $nested, $strings);
+"#;
+    assert_clean_output(source, "5|y|5|0\n\
+        6,6|y|12|{\"v\":0,\"w\":6}\n\
+        1,5,5|y|1,2,5|1,3,0\n\
+        ppp,a|y|{\"value\":\"none\",\"key\":\"nokey\"}");
+}

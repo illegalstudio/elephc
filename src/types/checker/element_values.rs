@@ -16,6 +16,8 @@
 //!   An ordinary assigned local is not proof: its checked type can drop a stored `null`.
 //! - A global or a by-reference captured local is a boxed cell other code can rewrite, so it
 //!   contributes `mixed` to the container's checked element type instead of a view.
+//! - A proven branch merge publishes its view on the locals its arms read as well, so the
+//!   merge itself is concrete and a literal's predicted storage matches its lowered items.
 //! - Conflicting authoritative visits disable the site, and storage probes publish nothing.
 
 use super::Checker;
@@ -41,7 +43,16 @@ impl Checker {
             return;
         }
         let view = self.projectable_element_view(value, ty, env);
-        let key = (self.current_loop_storage_scope.clone(), value.span);
+        self.publish_merge_arm_views(value, view.as_ref());
+        self.publish_element_value_view(value.span, view);
+    }
+
+    /// Stores one site's view, disabling the site when an earlier visit proved another one.
+    fn publish_element_value_view(&mut self, span: crate::span::Span, view: Option<ElementValueView>) {
+        if !span.identifies_a_node() {
+            return;
+        }
+        let key = (self.current_loop_storage_scope.clone(), span);
         self.element_value_views
             .entry(key)
             .and_modify(|previous| {
@@ -50,6 +61,35 @@ impl Checker {
                 }
             })
             .or_insert(view);
+    }
+
+    /// Publishes a branch merge's view on each local its arms read.
+    ///
+    /// A merge of a boxed arm and a concrete one materializes in a boxed temp, whose storage a
+    /// literal is predicted from before any item is lowered. Projecting the arms themselves
+    /// makes the merge concrete instead: every arm then produces the proven scalar, so the
+    /// predicted storage, the merge temp and the stored element agree for every kind of site.
+    /// An unproven merge publishes `None` on the same arms, which disables them like any other
+    /// conflicting visit.
+    fn publish_merge_arm_views(&mut self, value: &Expr, view: Option<&ElementValueView>) {
+        let arms: [&Expr; 2] = match &value.kind {
+            ExprKind::ErrorSuppress(inner) => return self.publish_merge_arm_views(inner, view),
+            ExprKind::Ternary { then_expr, else_expr, .. } => [then_expr, else_expr],
+            ExprKind::ShortTernary { value, default }
+            | ExprKind::NullCoalesce { value, default } => [value, default],
+            _ => return,
+        };
+        for arm in arms {
+            if let ExprKind::Variable(name) = &arm.kind {
+                let arm_view = view.map(|view| ElementValueView {
+                    ty: view.ty.clone(),
+                    local: Some(name.clone()),
+                });
+                self.publish_element_value_view(arm.span, arm_view);
+            } else {
+                self.publish_merge_arm_views(arm, view);
+            }
+        }
     }
 
     /// Returns the view lowering may project a boxed operand to, if this value has one.

@@ -373,8 +373,12 @@ while the boxed cell can still hold the `null`, and casting that box would store
   binding also ends with its loop, after which the name holds whatever it held
   before a source that turned out to be empty.
 - **A branch merge** (`?:`, `??`) is as proven as its arms, and a literal arm is
-  its own type. Any other expression publishes nothing: its operand is concrete
-  already, or boxed for a reason this pass cannot see.
+  its own type. A proven merge also publishes its view on each local its arms
+  read, so the arms produce the scalar themselves and the merge is concrete: a
+  literal's storage is predicted from its items before any of them is lowered,
+  and a boxed merge temp would have been stored raw in a keyed literal. Any
+  other expression publishes nothing: its operand is concrete already, or boxed
+  for a reason this pass cannot see.
 - **Every authoritative visit** to the site agrees. A conflicting visit disables
   the site for good, and loop-storage probes publish nothing.
 
