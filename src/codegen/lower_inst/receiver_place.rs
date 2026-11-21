@@ -150,6 +150,33 @@ impl ReceiverPlace {
         }
     }
 
+    /// Gives a consuming COW split an extra owner when the receiver is reached through a ref cell.
+    ///
+    /// `array_pop`, `array_shift` and `array_splice` split a ref-cell receiver and publish it with
+    /// `Retire`, so the split and the store-back each need an owner to release. Every other
+    /// receiver kind needs nothing here. A slot whose reference binding may have been skipped is
+    /// still raw at runtime: its store-back overwrites without retiring, so that path keeps the
+    /// slot's own owner and the extra one is only taken once the slot holds a ref cell.
+    pub(super) fn prepare_ref_cell_consuming_split(
+        &self,
+        ctx: &mut FunctionContext<'_>,
+        value: ValueId,
+    ) -> Result<()> {
+        let Self::RefCell(slot) = self else {
+            return Ok(());
+        };
+        let raw_path = if ctx.local_ref_cell_representation_is_dynamic(*slot) {
+            Some(branch_if_raw_at_runtime(ctx, *slot)?)
+        } else {
+            None
+        };
+        self.prepare_consuming_storeback(ctx, value)?;
+        if let Some(label) = raw_path {
+            ctx.emitter.label(&label);
+        }
+        Ok(())
+    }
+
     /// Re-prepares a receiver for a second consuming helper after a publish.
     ///
     /// A raw Mixed-widened local's publish moved the load's owner into the slot's new box, so a
@@ -330,6 +357,37 @@ impl ReceiverPlace {
         let value_ty = ctx.value_php_type(value)?;
         self.store_back(ctx, value, &value_ty)
     }
+}
+
+/// Branches past the code that follows when a dynamic ref-cell slot is still raw at runtime.
+///
+/// Returns the label to place after the ref-cell-only code. The slot's representation flag is
+/// non-zero once a reference binding promoted it, as `store_value_through_ref_cell_slot` reads it.
+fn branch_if_raw_at_runtime(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<String> {
+    let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
+        CodegenIrError::invalid_module(format!(
+            "dynamic ref-cell slot {} has no representation flag",
+            slot.as_raw()
+        ))
+    })?;
+    let raw = ctx.next_label("consuming_split_raw_slot");
+    let state_reg = abi::secondary_scratch_reg(ctx.emitter);
+    // -- skip the split's extra owner while the slot is still raw at runtime --
+    abi::load_at_offset(ctx.emitter, state_reg, state_offset);
+    match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            ctx.emitter.instruction(                                            // a raw slot keeps its own owner
+                &format!("cbz {}, {}", state_reg, raw)
+            );
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            ctx.emitter.instruction(                                            // test the slot's runtime representation flag
+                &format!("test {}, {}", state_reg, state_reg)
+            );
+            ctx.emitter.instruction(&format!("je {}", raw));                    // a raw slot keeps its own owner
+        }
+    }
+    Ok(raw)
 }
 
 /// Republishes a global-backed receiver only when a helper handed back a different cell.
