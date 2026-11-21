@@ -1657,8 +1657,15 @@ pub(super) fn coerce_operands_to_params_guarded(
                 continue;
             }
             let lowered = lowered_value_from_id(ctx, operands[index]);
-            operands[index] =
-                root_evaluated_call_argument(ctx, lowered, Span::dummy()).value;
+            // A deferred check's box is never the call's operand (the check passes a scalar):
+            // its slot can own it outright, with no retain/release pair on the accepting path.
+            operands[index] = if deferred_positional[index] {
+                super::call_operand_owners::move_evaluated_call_argument_into_root(
+                    ctx, lowered, Span::dummy(),
+                ).value
+            } else {
+                root_evaluated_call_argument(ctx, lowered, Span::dummy()).value
+            };
         }
         // The operands after the regular parameters (a variadic's collected array, built from
         // extra named arguments after every source was evaluated) are owned too.
@@ -1670,6 +1677,11 @@ pub(super) fn coerce_operands_to_params_guarded(
             }
         }
     }
+    // The last operand whose check or conversion can throw. A string converted for it (or after
+    // it) has nothing left to survive before the call, which roots it like any owned operand.
+    let last_throwing_operand = (0..limit)
+        .rev()
+        .find(|index| needs_guard[*index].is_some() || needs_coercion[*index]);
     for index in 0..limit {
         if sig.ref_params.get(index).copied().unwrap_or(false) {
             if let Some((local, span)) = reference_check(index) {
@@ -1698,10 +1710,21 @@ pub(super) fn coerce_operands_to_params_guarded(
                 // conversion that can warn publishes its span as the current line, and a
                 // span-less one would publish line 0 over the caller's site (a
                 // compiler-generated span is not published at all). The string it makes is
-                // published too, before a later check can throw.
+                // published too when a later check (or a pending property check) can still
+                // throw. Otherwise it stays the owned operand the call roots: publishing it
+                // here made the call persist a second copy of it.
                 let source = lowered_value_from_id(ctx, operands[index]);
                 let string = coerce_to_string_at_span(ctx, source, Some(guard_span));
-                operands[index] = root_evaluated_call_argument(ctx, string, Span::dummy()).value;
+                let later_check_can_throw = last_throwing_operand != Some(index)
+                    || ctx.call_argument_evaluation_scopes.last().is_some_and(|scope| {
+                        scope.expression_depth == ctx.expression_depth
+                            && !scope.pending_property_type_guards.is_empty()
+                    });
+                operands[index] = if later_check_can_throw {
+                    root_evaluated_call_argument(ctx, string, Span::dummy()).value
+                } else {
+                    string.value
+                };
                 continue;
             }
         }

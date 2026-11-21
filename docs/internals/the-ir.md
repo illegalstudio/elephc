@@ -1292,7 +1292,12 @@ pieces must stay in agreement:
    checks of the supplied named arguments before the defaults. Both raise the
    pending by-reference property checks of earlier parameters first
    (`emit_property_type_guards_before`), and an accepted `Stringable` is
-   converted before the next parameter is checked.
+   converted before the next parameter is checked. The call's owned operands
+   are published before the checks; a checked box is moved into its unwind
+   slot without a retain (`move_evaluated_call_argument_into_root`) and retires
+   after the call. A string converted after the last check that can throw stays
+   the call's own owned operand, so an accepted check persists it once, like
+   the unchecked conversion; an earlier one is published for the later checks.
 6. **Codegen** (`codegen::lower_inst::scalar_param_guard`). The hot path is a
    tag load and one compare-and-branch; the refusal (peeling a nested cell,
    the `Stringable` test, the class name lookup, building the message and

@@ -158,3 +158,48 @@ echo fromMixed("a");
     let span = conversion.span.expect("the conversion carries a span");
     assert_eq!(span.line, 4, "the conversion reports the call's line");
 }
+
+/// An accepted `string` check on an owned box costs what `main`'s unchecked conversion costs:
+/// one persisted copy of the converted string (the call's own operand root) and no retained box.
+///
+/// The box is moved into its unwind slot instead of being retained there, and the converted
+/// string, when no later check can throw, stays the owned operand the call roots. Publishing it
+/// before the call made the call persist a second copy, which cost a third more allocations and
+/// about 45% on a `len($words[$i & 3])` loop.
+#[test]
+fn accepted_string_guard_persists_the_converted_string_once() {
+    let module = super::lower_source(
+        r#"<?php
+function take(string $s): int { return strlen($s); }
+function walk(mixed $words): int { return take($words[1]); }
+function walkTwo(mixed $words): int { return take2($words[1], $words[2]); }
+function take2(string $a, string $b): int { return strlen($a . $b); }
+echo walk(["a", "b"]), walkTwo(["a", "b", "c"]);
+"#,
+    );
+    let function = module.functions.iter().find(|function| function.name == "walk").unwrap();
+    assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::ScalarParamGuard).count(), 1);
+    let value_type = |function: &crate::ir::Function, value| function.value(value).map(|value| value.ir_type);
+    let string_acquires = function.instructions.iter()
+        .filter(|inst| inst.op == Op::Acquire
+            && inst.result.is_some_and(|value| value_type(function, value) == Some(crate::ir::IrType::Str)))
+        .count();
+    assert_eq!(string_acquires, 1, "the converted string is persisted once, by the call");
+    // The guard reads a borrow of the element box itself, which its slot owns without an
+    // `Acquire`.
+    let guarded = function.instructions.iter().find(|inst| inst.op == Op::ScalarParamGuard)
+        .map(|guard| guard.operands[0]).unwrap();
+    let borrow = function.instructions.iter().find(|inst| inst.result == Some(guarded)).unwrap();
+    assert_eq!(borrow.op, Op::Borrow);
+    let element = borrow.operands[0];
+    assert!(function.instructions.iter().any(|inst| inst.result == Some(element) && inst.op != Op::Acquire),
+        "the guarded box is the element read, not a retained copy");
+    assert!(!function.instructions.iter().any(|inst| inst.op == Op::Acquire && inst.operands == [element]),
+        "the guarded box is moved into its slot, not retained");
+    // A string converted before a later check that can throw is still published for it.
+    let two = module.functions.iter().find(|function| function.name == "walkTwo").unwrap();
+    assert!(two.instructions.iter().any(|inst| inst.op == Op::Acquire
+        && inst.immediate == Some(crate::ir::Immediate::Bool(true))
+        && inst.result.is_some_and(|value| value_type(two, value) == Some(crate::ir::IrType::Str))),
+        "the first converted string is published before the second check");
+}

@@ -1647,3 +1647,29 @@ echo $n, " ", $r, " ", $o->m(box("ok"), make(1)), "\n";
     assert_eq!(output.stdout, "1200 ok2 ok2\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// An accepted `string` check allocates exactly what the explicit `(string)` cast it replaces
+/// does: one conversion and the call's one persisted operand per call. Publishing the converted
+/// string before the call made the call persist a second copy (3 allocations per call instead
+/// of 2), which cost about 45% on a `len($words[$i & 3])` loop.
+#[test]
+fn test_accepted_string_guard_allocates_like_an_explicit_cast() {
+    let program = |argument: &str| format!(r#"<?php
+function take(string $s): int {{ return strlen($s); }}
+function run(mixed $words): int {{
+    $total = 0;
+    for ($i = 0; $i < 1000; $i++) {{ $total += take({argument}); }}
+    return $total;
+}}
+echo run(json_decode('["alpha", "be"]', true)), "\n";
+"#);
+    let guarded = compile_and_run_with_gc_stats(&program("$words[$i & 1]"));
+    let cast = compile_and_run_with_gc_stats(&program("(string) $words[$i & 1]"));
+    assert!(guarded.success && cast.success, "{}{}", guarded.stderr, cast.stderr);
+    assert_eq!(guarded.stdout, "3500\n");
+    assert_eq!(cast.stdout, "3500\n");
+    let (guarded_allocs, guarded_frees) = parse_gc_stats(&guarded.stderr);
+    let (cast_allocs, cast_frees) = parse_gc_stats(&cast.stderr);
+    assert_eq!(guarded_allocs - guarded_frees, cast_allocs - cast_frees, "{}", guarded.stderr);
+    assert_eq!(guarded_allocs, cast_allocs, "guarded: {}\ncast: {}", guarded.stderr, cast.stderr);
+}
