@@ -229,6 +229,37 @@ echo count(wrap(1)), count(wrap('x')), count(wrap([1, 2])), "|",
     assert_eq!(out, "112|#7sevengiven|0234\n");
 }
 
+/// Issue #2320, symfony/filesystem `Filesystem::remove()`: `iterable` is `array|Traversable`, so
+/// a failed `instanceof Traversable` and a failed `!is_array` both leave the array half.
+#[test]
+fn test_elseif_chain_narrows_iterable_through_its_array_and_traversable_halves() {
+    let out = compile_and_run(
+        r#"<?php
+final class Fs {
+    public function remove(string|iterable $files): string {
+        if ($files instanceof \Traversable) { $files = iterator_to_array($files, false); }
+        elseif (!\is_array($files)) { $files = [$files]; }
+        return self::doRemove($files);
+    }
+    public function removeOther(string|iterable $files): string {
+        if (\is_string($files)) { $files = [$files]; }
+        elseif (!\is_array($files)) { $files = iterator_to_array($files, false); }
+        return self::doRemove($files);
+    }
+    private static function doRemove(array $files): string { return implode(',', $files); }
+}
+function gen(): iterable { yield 'e'; yield 'f'; }
+function passes(iterable $files): string { return (new Fs())->remove($files); }
+$fs = new Fs();
+echo $fs->remove('a'), "|", $fs->remove(['b', 'c']), "|", $fs->remove(new ArrayIterator(['d'])), "|",
+    $fs->remove(gen()), "|", passes(['g']), "|", passes(new ArrayIterator(['h'])), "\n";
+echo $fs->removeOther('a'), "|", $fs->removeOther(['b', 'c']), "|",
+    $fs->removeOther(new ArrayIterator(['d'])), "|", $fs->removeOther(gen()), "\n";
+"#,
+    );
+    assert_eq!(out, "a|b,c|d|e,f|g|h\na|b,c|d|e,f\n");
+}
+
 /// A nullable local initialized on its null arm stays non-null through the rest of the chain:
 /// the later clauses and the fall-through were all entered with the guard's complement.
 #[test]

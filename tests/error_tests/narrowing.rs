@@ -456,6 +456,20 @@ fn test_elseif_chain_join_rejects_an_exit_that_keeps_a_wider_member() {
     );
 }
 
+/// Only the exact `Traversable` test leaves the array half of an `iterable` union member: a
+/// failed `instanceof` of a narrower class still admits every other `Traversable` object.
+#[test]
+fn test_elseif_chain_join_keeps_the_traversable_half_of_iterable() {
+    for body in [
+        "if ($v instanceof \\ArrayIterator) { $v = iterator_to_array($v, false); } elseif (\\is_string($v)) { $v = [$v]; }",
+        "if (\\is_string($v)) { $v = [$v]; } elseif ($v instanceof \\ArrayIterator) { $v = iterator_to_array($v, false); }",
+    ] {
+        let source = format!("<?php function f(string|iterable $v): array {{ {body} return $v; }}");
+        let error = check_source(&source).expect_err(body);
+        assert!(error.contains("return type expects array, got "), "{body}: {error}");
+    }
+}
+
 /// A lazily initialized nullable local stays nullable through an `elseif` chain when any exit
 /// that reaches the code after it can still carry null.
 #[test]

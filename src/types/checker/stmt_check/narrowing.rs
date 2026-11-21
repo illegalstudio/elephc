@@ -168,6 +168,15 @@ impl Checker {
         };
         let (matched, complement) = if template_guard {
             (template_guard_narrowing(&current), current.clone())
+        } else if current == PhpType::Iterable && self.local_slot_is_boxed_union(receiver, env) {
+            // A lone `iterable` read out of a boxed union slot is still that union's member:
+            // an earlier guard dropped the others. It splits into its halves like one, which
+            // a local typed plain `iterable` cannot, because its raw slot is not read per member.
+            let member = PhpType::Union(vec![current.clone()]);
+            (
+                self.normalize_union_type(vec![self.narrow_to(&member, &target)]),
+                self.normalize_union_type(vec![self.narrow_complement(&member, &target)]),
+            )
         } else {
             (self.narrow_to(&current, &target), self.narrow_complement(&current, &target))
         };
@@ -179,6 +188,13 @@ impl Checker {
             (matched, complement)
         };
         Ok(Some(GuardNarrowing { var: key, then_ty, else_ty }))
+    }
+
+    /// Whether a guard receiver is a local whose slot is a boxed union, whatever it reads as.
+    fn local_slot_is_boxed_union(&self, receiver: &Expr, env: &TypeEnv) -> bool {
+        matches!(receiver.kind, ExprKind::Variable(_))
+            && self.guarded_local_storage_type(receiver, env).is_some_and(|storage|
+                matches!(storage, PhpType::Union(_)) && storage.codegen_repr() == PhpType::Mixed)
     }
 
     /// Whether `class` names a generic class or interface TEMPLATE, which after monomorphization
@@ -416,8 +432,8 @@ impl Checker {
     fn narrow_to(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
         match current {
             PhpType::Union(members) => {
-                let kept: Vec<PhpType> =
-                    members.iter().filter(|m| guard_matches(self, m, target)).cloned().collect();
+                let kept: Vec<PhpType> = members.iter()
+                    .filter_map(|m| guard_true_part(self, m, target)).collect();
                 if kept.is_empty() {
                     target.fallback_type()
                 } else {
@@ -435,8 +451,8 @@ impl Checker {
     fn narrow_complement(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
         match current {
             PhpType::Union(members) => {
-                let kept: Vec<PhpType> =
-                    members.iter().filter(|m| !guard_matches(self, m, target)).cloned().collect();
+                let kept: Vec<PhpType> = members.iter()
+                    .filter_map(|m| guard_false_part(self, m, target)).collect();
                 if kept.is_empty() {
                     current.clone()
                 } else {
@@ -632,6 +648,35 @@ fn template_guard_narrowing(current: &PhpType) -> PhpType {
             }
         }
         _ => PhpType::Mixed,
+    }
+}
+
+/// The part of one union member that a TRUE guard keeps, `None` when it keeps nothing.
+///
+/// `iterable` is `array|Traversable`, so a guard can keep one half of that member: `is_array`
+/// keeps the array half and an `instanceof` keeps the tested class, since an object the guard
+/// accepted came from the `Traversable` half. Every other member is kept whole or dropped.
+fn guard_true_part(checker: &Checker, member: &PhpType, target: &GuardTarget) -> Option<PhpType> {
+    match (member, target) {
+        (PhpType::Iterable, GuardTarget::AnyArray) => Some(PhpType::php_array()),
+        (PhpType::Iterable, GuardTarget::Exact(class @ PhpType::Object(_))) => Some(class.clone()),
+        _ => guard_matches(checker, member, target).then(|| member.clone()),
+    }
+}
+
+/// The part of one union member that a FALSE guard keeps, `None` when it keeps nothing.
+///
+/// The `iterable` halves mirror [`guard_true_part`]: a failed `is_array` leaves the
+/// `Traversable` half, and a failed `instanceof Traversable` leaves the array half. A failed
+/// `instanceof` of any narrower class says nothing about the other `Traversable` objects, so
+/// the member stays whole.
+fn guard_false_part(checker: &Checker, member: &PhpType, target: &GuardTarget) -> Option<PhpType> {
+    let traversable = PhpType::Object("Traversable".to_string());
+    match (member, target) {
+        (PhpType::Iterable, GuardTarget::AnyArray) => Some(traversable),
+        (PhpType::Iterable, GuardTarget::Exact(class @ PhpType::Object(_)))
+            if checker.type_accepts(class, &traversable) => Some(PhpType::php_array()),
+        _ => (!guard_matches(checker, member, target)).then(|| member.clone()),
     }
 }
 

@@ -339,6 +339,8 @@ function wrap(int|string|array $value): array {
 }
 ```
 
+Inside a union, `iterable` counts as `array|Traversable` for these guards: `is_array` keeps the array half and leaves `Traversable`, and a failed `instanceof Traversable` leaves the array half. So `if ($files instanceof Traversable) { $files = iterator_to_array($files, false); } elseif (!is_array($files)) { $files = [$files]; }` leaves a `string|iterable $files` an array. A failed `instanceof` of a narrower class such as `ArrayIterator` leaves the whole `iterable`, because another `Traversable` object can still be there.
+
 The same join carries a lazily initialized nullable local through the rest of its chain: after `if ($layout === null) { $layout = new Layout(); } elseif ($resize) { $layout->resize(); }`, `$layout` is a `Layout`, because the `elseif` and the fall-through both start from the null guard's complement.
 
 The variable keeps its wider type when an exit can still hold a wider member: an arm that skips the store or stores a wider value, a fall-through that no guard narrowed (a guard on another variable, a condition that is not a type guard, a null guard on a later clause), or a condition that reassigns the variable. By-reference parameters, reference-aliased or by-reference-captured locals, globals and statics keep their declared union, because code outside the function's flow may write them. Passing the variable to a by-reference parameter also ends the narrowing.

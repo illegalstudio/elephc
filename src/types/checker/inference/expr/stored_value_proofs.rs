@@ -86,7 +86,11 @@ impl Checker {
                     !type_admits_null(&def.return_type) || matches!(def.spec.semantics.lowering,
                         crate::builtins::semantics::BuiltinLowering::Runtime(
                             crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Fopen
-                                | crate::ir::RuntimeFnId::ArrayValues))))
+                                | crate::ir::RuntimeFnId::ArrayValues
+                                // Both return an array or do not return: a zero-length
+                                // separator and a non-traversable source raise instead.
+                                | crate::ir::RuntimeFnId::Explode
+                                | crate::ir::RuntimeFnId::IteratorToArray))))
             }
             _ => false,
         }

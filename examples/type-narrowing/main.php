@@ -94,6 +94,31 @@ class Cart
     }
 }
 
+// An `elseif` chain without `else` joins what each branch stored with what is left once
+// every guard was false. Here that remainder is already an array, so `$value` is an
+// array after the chain while its slot still holds int|string|array.
+function quantities(int|string|array $value): array
+{
+    if (is_int($value)) {
+        $value = [$value];
+    } elseif (is_string($value)) {
+        $value = explode(",", $value);
+    }
+    return $value;
+}
+
+// `iterable` is array|Traversable: a failed `instanceof Traversable` and a failed
+// `!is_array` both leave the array half.
+function labels(string|iterable $labels): string
+{
+    if ($labels instanceof Traversable) {
+        $labels = iterator_to_array($labels, false);
+    } elseif (!is_array($labels)) {
+        $labels = [$labels];
+    }
+    return implode("+", $labels);
+}
+
 // A guard narrows what the branch READS. An assignment inside it is still measured
 // against the variable's own type, so the standard fallback idiom compiles: `$found`
 // reads as `false` in the branch, yet `string[]|false` holds an empty array perfectly
@@ -128,6 +153,8 @@ echo "default discount ", $discount->format(), "\n";
 echo "cached discount ", $discount === $cart->discountOrDefault() ? "same" : "different", "\n";
 echo "raised discount ", $cart->discountAtLeast(500)->format(), "\n";
 echo "kept discount ", (new Cart(new Money(900)))->discountAtLeast(500)->format(), "\n";
+echo "quantities ", count(quantities(3)), count(quantities("1,2")), count(quantities([1, 2, 3])), "\n";
+echo "labels ", labels("a"), " ", labels(["b", "c"]), " ", labels(new ArrayIterator(["d"])), "\n";
 
 foreach (metaFiles($dir) as $path) {
     echo "meta ", basename($path), "\n";
