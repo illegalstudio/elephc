@@ -66,7 +66,11 @@ pub(super) fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction
         );
         return ctx.store_result_value(result);
     }
-    coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    if inst.result_ownership == Ownership::Borrowed {
+        coerce_borrowed_ref_cell_local(ctx, &source_ty, &result_ty)?;
+    } else {
+        coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
+    }
     ctx.store_result_value(result)
 }
 
@@ -173,9 +177,7 @@ pub(super) fn coerce_borrowed_ref_cell_local(
     result_ty: &PhpType,
 ) -> Result<()> {
     if source_ty.codegen_repr() == PhpType::Mixed
-        && matches!(result_ty.codegen_repr(), PhpType::Str | PhpType::Array(_)
-            | PhpType::AssocArray { .. } | PhpType::Object(_) | PhpType::Callable
-            | PhpType::Iterable)
+        && result_ty.supports_borrowed_mixed_payload_view()
     {
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));

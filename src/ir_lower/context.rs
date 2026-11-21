@@ -2597,10 +2597,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let ir_type = value_ir_type(&php_type);
         // Global symbols and reference cells lend their current heap value. Append
         // normalization chooses the final box without changing reference payload contracts.
+        let conditional_ref_cell_view = op == Op::LoadLocal
+            && self.ref_cell_owner_locals.contains_key(name)
+            && self.builder.local_php_type(slot).codegen_repr() == PhpType::Mixed
+            && php_type.supports_borrowed_mixed_payload_view();
         let ownership = if op == Op::LoadRefCellValue {
             Ownership::Owned
-        } else if matches!(op, Op::LoadRefCell | Op::LoadGlobal)
-            && Ownership::php_type_needs_lifetime_tracking(&php_type)
+        } else if (matches!(op, Op::LoadRefCell | Op::LoadGlobal)
+            && Ownership::php_type_needs_lifetime_tracking(&php_type))
+            || conditional_ref_cell_view
         {
             Ownership::Borrowed
         } else {
