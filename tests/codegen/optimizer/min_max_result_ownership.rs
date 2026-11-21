@@ -19,7 +19,6 @@
 //! - Expected output comes from PHP 8.5; `ELEPHC_PHP_CHECK=1` re-runs the oracle.
 
 use super::min_max_selection::{function_assembly, php_oracle, run};
-use super::*;
 
 /// Results that outlive the call while their operand variable is modified afterwards.
 const ESCAPING_RESULTS: &str = r#"<?php

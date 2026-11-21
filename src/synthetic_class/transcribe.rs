@@ -1173,6 +1173,7 @@ fn expr(value: &Expr, depth: usize) -> String {
             by_ref_return,
             captures,
             capture_refs,
+            ..
         } => {
             assert!(variadic.is_none(), "a variadic closure is not modelled");
             assert!(!variadic_by_ref, "a by-ref variadic is not modelled");

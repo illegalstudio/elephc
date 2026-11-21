@@ -485,6 +485,7 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
 /// Returns true when an expression contains a direct regex builtin call.
 fn expr_has_regex_call(expr: &Expr) -> bool {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => runtime.exprs().any(expr_has_regex_call),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => {
@@ -841,6 +842,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         return true;
     }
     match &expr.kind {
+        ExprKind::Runtime(_) => true,
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => {

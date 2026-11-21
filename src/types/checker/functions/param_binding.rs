@@ -631,7 +631,9 @@ impl Checker {
                     match entry {
                         ArrayEntry::Spread(value)
                         | ArrayEntry::Keyed(_, value)
-                        | ArrayEntry::Value(value) => {
+                        | ArrayEntry::Value(value)
+                        | ArrayEntry::Reference(value)
+                        | ArrayEntry::KeyReference(_, value) => {
                             self.record_static_callable_literal_element(value);
                         }
                     }

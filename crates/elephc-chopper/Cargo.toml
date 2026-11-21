@@ -1,0 +1,17 @@
+[package]
+name = "elephc-chopper"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Shared PHP scanning and parsing for elephc"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+elephc-builtin-contract = { path = "../elephc-builtin-contract" }
+stacker = "0.1"
+
+[dev-dependencies]
+serde_json = "1"

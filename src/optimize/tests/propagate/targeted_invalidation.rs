@@ -243,6 +243,7 @@ fn test_closure_by_ref_capture_kills_existing_fact() {
     let closure = Expr::new(
         ExprKind::Closure {
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_by_ref: false,
             variadic_type: None,

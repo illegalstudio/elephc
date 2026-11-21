@@ -56,6 +56,21 @@ fn execute_program_flat_constant_inventory_has_no_unused_category() {
     }
 }
 
+/// Eval-defined namespaced constants keep their declared spelling in inventories.
+#[test]
+fn execute_program_namespaced_constant_inventory_keeps_declared_spelling() {
+    let program = parse_fragment(br#"
+define('App\FLAG', 42);
+$flat = get_defined_constants();
+$categorized = get_defined_constants(true);
+echo $flat['App\FLAG'], ':', $categorized['user']['App\FLAG'];
+"#).expect("parse namespaced constant inventory");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute namespaced constant");
+    assert_eq!(values.output, "42:42");
+}
+
 /// Thin eval agrees with the native bridge on null masks and restoring an empty stack.
 #[test]
 fn execute_program_preserves_null_handler_mask_and_clears_empty_restore() {

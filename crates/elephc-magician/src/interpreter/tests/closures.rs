@@ -48,6 +48,23 @@ echo call_user_func_array($fn, ["right" => 6, "left" => 5]);"#,
     assert_eq!(values.output, "5:11");
 }
 
+/// Calls a closure and a string callable directly from their expressions.
+#[test]
+fn execute_program_calls_immediate_eval_callable_expressions() {
+    let program = parse_fragment(
+        br#"function eval_callable_length($value) { return strlen($value); }
+echo (function($value) { return $value + 1; })(41); echo ":";
+echo ('eval_callable_length')('elephc');"#,
+    )
+    .expect("parse immediate callable expressions");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute immediate callable expressions");
+
+    assert_eq!(values.output, "42:6");
+}
+
 /// Verifies by-value eval closure captures snapshot the defining value for each invocation.
 #[test]
 fn execute_program_closure_by_value_capture_uses_snapshot() {

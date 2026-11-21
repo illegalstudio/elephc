@@ -134,7 +134,9 @@ impl DefaultExporter<'_> {
                     crate::parser::ast::ArrayEntry::Keyed(key, value) =>
                         Some(format!("{} => {}", self.export(key)?, self.export(value)?)),
                     crate::parser::ast::ArrayEntry::Value(value) => self.export(value),
-                    crate::parser::ast::ArrayEntry::Spread(_) => None,
+                    crate::parser::ast::ArrayEntry::Spread(_)
+                    | crate::parser::ast::ArrayEntry::Reference(_)
+                    | crate::parser::ast::ArrayEntry::KeyReference(_, _) => None,
                 }).collect::<Option<Vec<_>>>()?;
                 Some(format!("[{}]", items.join(", ")))
             }

@@ -535,6 +535,13 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         &opcache_manifest,
         &opcache_preload_symbols,
     );
+    // The tokenizer memory guard reads `memory_limit` through Core INI. When the user configured
+    // a limit but the program itself never mentions `ini_get`, force that surface so the guard
+    // sees the configured value instead of the compiled heap size.
+    let force_ini_get = ini_overrides
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("memory_limit"))
+        && crate::tokenizer_prelude::program_uses_surface(&ast);
     let (ast, opcache_bake_sites) = opcache_prelude::inject_if_used(
         ast,
         php_version,
@@ -544,6 +551,7 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         &ini_overrides,
         opcache_preload_statistics.as_ref(),
         strict_opcache,
+        force_ini_get,
         &mut prelude_inventory,
     );
     timings.record_since("opcache-prelude", phase_started);
@@ -571,9 +579,11 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     crate::progress::phase("hash-prelude");
     let phase_started = Instant::now();
     let ast = crate::hash_prelude::inject_if_used(ast, autoloaded("hash"), &mut prelude_inventory);
-    let ast = crate::tokenizer_prelude::inject_if_used(
+    let ast = crate::tokenizer_prelude::inject_if_used_with_web(
         ast,
         with_crates.contains("tokenizer") || autoloaded("tokenizer"),
+        heap_size,
+        web,
         &mut prelude_inventory,
     );
     let uri_supported = php_version >= crate::php_version::PhpVersion::Php85;

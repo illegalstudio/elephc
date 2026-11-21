@@ -215,6 +215,7 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                 | Op::EvalClassExists
                 | Op::EvalConstantExists
                 | Op::EvalConstantFetch
+                | Op::EvalConstantFetchOrGlobal
                 | Op::EvalStaticMethodCall => {
                     features.eval_bridge = true;
                 }

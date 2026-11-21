@@ -12,12 +12,19 @@
 //! - Double-quoted literal interpolation lives in `strings` and rewrites one literal into
 //!   a concatenation token stream the existing grammar already understands.
 
-mod inline_html;
-mod scan;
+mod decode;
+mod shared;
 mod strings;
 #[cfg(test)]
 mod tests;
 mod token;
 
-pub(crate) use scan::{tokenize, tokenize_at_line};
+use crate::errors::EvalParseError;
+
+pub(crate) use shared::tokenize_script;
 pub(crate) use token::{Token, TokenKind};
+
+/// Tokenizes a complete runtime fragment with Chopper.
+pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, EvalParseError> {
+    shared::tokenize_fragment(source)
+}

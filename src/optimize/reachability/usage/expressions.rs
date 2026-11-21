@@ -22,6 +22,10 @@ impl Scanner<'_> {
     /// Scans one expression and records all declaration edges it contains.
     pub(super) fn scan_expr(&mut self, expr: &Expr) {
         match &expr.kind {
+            ExprKind::Runtime(runtime) => {
+                self.unresolved_callable_hazard();
+                for value in runtime.exprs() { self.scan_expr(value); }
+            },
             ExprKind::FunctionCall { name, args } => self.scan_function_call(name.as_str(), args),
             ExprKind::FirstClassCallable(target) => self.scan_callable_target(target),
             ExprKind::ExprCall { callee, args } => {

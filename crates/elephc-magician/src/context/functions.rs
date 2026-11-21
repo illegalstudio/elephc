@@ -130,6 +130,8 @@ impl ElephcEvalContext {
         {
             return false;
         }
+        self.constant_names
+            .insert(key.clone(), name.trim_start_matches('\\').to_string());
         self.constants.insert(key, value);
         true
     }
@@ -149,7 +151,15 @@ impl ElephcEvalContext {
         let mut entries = self
             .constants
             .iter()
-            .map(|(name, value)| (name.clone(), *value))
+            .map(|(name, value)| {
+                (
+                    self.constant_names
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| name.clone()),
+                    *value,
+                )
+            })
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.0.cmp(&right.0));
         entries
@@ -159,7 +169,15 @@ impl ElephcEvalContext {
     pub(crate) fn constant_inventory_entry(&self, index: usize) -> Option<(&str, RuntimeCellHandle)> {
         let mut entries = self.constants.iter().collect::<Vec<_>>();
         entries.sort_by(|left, right| left.0.cmp(right.0));
-        entries.get(index).map(|(name, cell)| (name.as_str(), **cell))
+        entries.get(index).map(|(name, cell)| {
+            (
+                self.constant_names
+                    .get(*name)
+                    .map(String::as_str)
+                    .unwrap_or(name.as_str()),
+                **cell,
+            )
+        })
     }
 
     /// Borrows one eval-only function name, excluding native registrations and closures.

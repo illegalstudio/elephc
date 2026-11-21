@@ -812,6 +812,8 @@ fn path_dependency_dirs(crate_dir: &Path) -> Vec<PathBuf> {
             collect_path_dependencies(entry, crate_dir, &mut dirs);
         }
     }
+    // A wrapper target may point to a sibling crate's library source.
+    dirs.extend(crate::bridge_sources::external_source_crates(&parsed, crate_dir));
     dirs
 }
 
@@ -1555,6 +1557,37 @@ mod tests {
         assert_eq!(found, vec!["a", "b", "c", "d"]);
 
         let _ = std::fs::remove_dir_all(&crate_dir);
+    }
+
+    /// A wrapper crate that compiles another crate's `[lib].path` source is watched too.
+    ///
+    /// Changes to a source reached through `[lib].path` invalidate the wrapper archive
+    /// the same way as changes to a declared path dependency.
+    #[test]
+    fn path_dependency_dirs_follows_an_external_lib_path() {
+        let root = scratch("external_lib_path");
+        std::fs::create_dir_all(root.join("shared/src")).expect("shared src dir");
+        std::fs::write(
+            root.join("shared/Cargo.toml"),
+            "[package]\nname = \"shared\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("write shared manifest");
+        std::fs::write(root.join("shared/src/lib.rs"), "").expect("write shared lib");
+        std::fs::create_dir_all(root.join("wrapper")).expect("wrapper dir");
+        std::fs::write(
+            root.join("wrapper/Cargo.toml"),
+            "[package]\nname = \"wrapper\"\nversion = \"0.1.0\"\n\n\
+             [lib]\npath = \"../shared/src/lib.rs\"\n",
+        )
+        .expect("write wrapper manifest");
+
+        let found: Vec<String> = path_dependency_dirs(&root.join("wrapper"))
+            .iter()
+            .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+            .collect();
+        assert_eq!(found, vec!["shared"]);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Every bridge crate must appear in the lists CI, the Docker scripts and the

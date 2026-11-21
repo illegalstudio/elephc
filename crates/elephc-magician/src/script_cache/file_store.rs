@@ -105,7 +105,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Format 31 records each eval function, method, and generic template's defining
 /// `strict_types` mode, which changes the serialized callable layout.
 /// Format 32 rejects a `declare(strict_types=...)` that follows another eval statement.
-pub(crate) const FORMAT_VERSION: u32 = 32;
+/// Format 33 reparses cached scripts and parse failures with the shared Chopper frontend.
+pub(crate) const FORMAT_VERSION: u32 = 33;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

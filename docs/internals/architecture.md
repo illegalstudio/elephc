@@ -12,14 +12,14 @@ Source (.php or .lfc)
     │
     ▼
 ┌─────────┐
-│  Lexer   │  src/lexer/
+│  Lexer   │  crates/elephc-chopper/src/syntax/lexer/
 │          │  scan.rs, literals.rs, cursor.rs, token.rs
 │          │  Source text -> Vec<SpannedToken> (Token + TokenMetadata)
 └────┬─────┘
      │
      ▼
 ┌─────────┐
-│  Parser  │  src/parser/
+│  Parser  │  crates/elephc-chopper/src/syntax/parser/
 │          │  expr/, stmt/, control.rs, ast/
 │          │  Tokens → Program (Vec<Stmt>)
 └────┬─────┘
@@ -303,6 +303,59 @@ at the cost of reworking the debug-info path: the linker's debug map records the
 object path **as handed to it** (`keep_obj_for_debug` in `pipeline/backend.rs`
 deliberately keeps the object at that path for debuggers to follow), and
 `dsymutil` names its bundle after the binary it is given.
+
+The compiler re-exports its lexer, parser, AST, source profiles, spans, and names
+from `elephc_chopper::syntax`. The `elephc_chopper::scanner` module runs the
+same byte scanner for the compiler, the PHP tokenizer APIs, and Magician. The
+scanner keeps the token boundary rules for each source profile. The compiler
+projects recognized lexemes to syntax tokens, attaches source spans, and decodes
+literals with its existing diagnostics. The PHP tokenizer keeps trivia and the
+original byte ranges. The compiler's double-quote and heredoc decoders consume
+their literal bodies and return the offset where the shared scanner resumes.
+
+For dynamic eval fragments, the Chopper scanner starts in PHP code mode and
+preserves offsets in the original string. It starts in HTML mode for included
+files and scans across opening and closing tags in one pass. Magician decodes
+runtime literal values, lowers the Chopper AST to EvalIR, and derives
+caller-scope metadata from the token stream. The tagless parser entry point retains implicit array keys and
+reference elements, the strict-types directive, and declaration source ranges.
+Magician resolves namespace aliases during lowering and attaches anonymous class
+declarations to their construction expressions. The AST retains unary plus and
+the operands of computed member access and writes so Magician controls numeric
+coercion, call argument binding, nullsafe evaluation, and write semantics.
+Declaration lowering retains attributes and property hook metadata for reflection.
+The runtime parser entry point also accepts assembled script tokens and concrete
+generic declarations with their original namespace and strict-types mode.
+For generic declarations, Chopper records the header and the token positions
+bound to each type parameter. Magician uses those positions to build the
+specialization template alongside the EvalIR prototype. The file adapter
+validates UTF-8 in code and retains the original bytes of inline HTML.
+
+The tokenizer bridge and Magician share the Rust API in
+`elephc_chopper::syntax::php_tokenizer`. It uses the scanner for every call. With
+`TOKEN_PARSE`, it scans the normalized validation view through the same scanner
+and enters a scoped mode on the shared parser. The mode discards each parsed
+statement and collects PHP diagnostics and semi-reserved-word feedback.
+
+The full parser-enabled engine can be measured with
+`scripts/measure-tokenizer-engine-size.sh size` or `fast`. Both profiles use
+`panic = "immediate-abort"` through `-Z build-std=std,panic_abort`, which removes
+the std panic/backtrace formatter from the executable. `size` uses opt-level z
+and `fast` uses opt-level 3.
+
+The macOS ARM64 results below are a historical baseline from the `66a5ad66d8`
+revision of [PR #2180](https://github.com/illegalstudio/elephc/pull/2180), before
+the move to Chopper. Its fast profile used separate optimization levels for
+the scanner and parser. Sizes are in bytes.
+
+| Profile | #2180 snapshot | Mago 1.51 |
+| --- | ---: | ---: |
+| `size` | 501,184 | 367,504 with matching immediate-abort profile, 634,352 with `size-z` |
+| `fast` | 533,856 | 498,736 with matching immediate-abort profile, 798,784 with `release-lto` |
+| Plain Cargo release, 16 codegen units, unwind, no LTO or stripping | 1,741,168 | |
+| Fat LTO, one codegen unit, stripped, abort | 1,014,000 | |
+| Fat LTO, one codegen unit, stripped, unwind | 1,113,344 | |
+| Fat LTO, one codegen unit, stripped, immediate-abort | 763,808 | |
 
 ## Target Model
 
@@ -591,6 +644,7 @@ src/
 crates/
 ├── elephc-builtin-contract/   Dependency-neutral builtin catalog and signatures
 ├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions and immutable `BcMath\Number` objects
+├── elephc-chopper/            PHP scanner, parser, AST, and tokenizer validation
 ├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
 ├── elephc-curl/               Static libcurl easy, multi, share, callback, and multipart bridge
 ├── elephc-fileinfo/           Binary-safe fileinfo bridge over the managed libmagic package
@@ -612,8 +666,7 @@ crates/
 ├── elephc-reference/          Dependency-neutral native property-reference metadata and validation
 ├── elephc-tidy/               ext/tidy bridge over the catalog's static libtidy 5.8.0
 ├── elephc-tls/                TLS bridge for the `https://` stream wrapper
-├── elephc-tokenizer-engine/   Shared byte-preserving PHP tokenizer and parse validation
-├── elephc-tokenizer/          Standalone tokenizer C bridge over the shared engine
+├── elephc-tokenizer/          Standalone C bridge for the PHP tokenizer APIs
 ├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
 ├── elephc-uri/                PHP 8.5 `ext/uri` bridge for RFC 3986 and WHATWG URL values
 ├── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation
@@ -677,7 +730,7 @@ Namespace syntax is preserved through parsing and include resolution, then norma
 - rewrites supported string-literal callbacks such as `call_user_func("name", ...)` to the resolved target name; `function_exists($name)` keeps PHP's introspection semantics instead — a literal name is not namespace-resolved, and a dynamic name is matched at run time against the declared-function set baked into the binary
 - flattens namespace-only AST statements so downstream passes operate on a simpler canonical AST
 
-`src/names.rs` is the shared utility layer for this work. It defines the internal `Name` representation plus common helpers for:
+`crates/elephc-chopper/src/syntax/names.rs` is the shared utility layer for this work. It defines the internal `Name` representation plus common helpers for:
 
 - canonical declaration names
 - namespace qualification rules
