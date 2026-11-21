@@ -771,6 +771,19 @@ fn test_error_preg_grep_wrong_types() {
     );
 }
 
+/// `preg_quote()` takes a string and an optional delimiter: no argument or more than two is
+/// rejected, as php's `ArgumentCountError` does at runtime.
+#[test]
+fn test_error_preg_quote_wrong_args() {
+    for source in ["<?php preg_quote();", r#"<?php preg_quote("a", "/", 1);"#] {
+        expect_error(source, "Function 'preg_quote' expects 1 to 2 arguments");
+    }
+    expect_error(
+        r#"<?php preg_quote([]);"#,
+        "Function 'preg_quote' parameter $str expects string",
+    );
+}
+
 // -- Hex literal errors --
 
 /// Verifies that concatenating an undefined constant with a string path inside `require` produces a
