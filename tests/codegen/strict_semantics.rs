@@ -9,6 +9,19 @@
 
 use crate::support::*;
 
+/// Keeps simple and complex interpolation on PHP's canonical integer-offset grammar.
+#[test]
+fn test_strict_array_keys_interpolation_uses_integer_offsets() {
+    let source = r#"<?php
+$items = [1 => 'integer', '1' => 'string'];
+echo "$items[1]", ':', "{$items[1]}", ':', $items['1'];
+"#;
+    assert_eq!(
+        StrictFixture::new(source).run(&["--strict-array-keys"]),
+        "integer:integer:string"
+    );
+}
+
 /// Checked helper entries throw for boxed and scalar integer overflow with balanced native owners.
 #[test]
 fn test_strict_boxed_overflow_staged_native_arithmetic_and_powers() {

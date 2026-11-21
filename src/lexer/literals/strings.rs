@@ -192,7 +192,7 @@ fn interpolate(
                 } else {
                     has_interpolation = true;
                     let mut part = vec![spanned(Token::Variable(name), span)];
-                    append_simple_access(input, &mut part, span, profile)?;
+                    append_simple_access(input, &mut part, span)?;
                     push_interp_part(&mut tokens, &mut current, part, span);
                 }
             }
@@ -226,11 +226,10 @@ fn append_simple_access(
     input: &mut impl EscapeInput,
     part: &mut Vec<SpannedToken>,
     span: Span,
-    profile: elephc_semantics::SemanticProfile,
 ) -> Result<(), CompileError> {
     if input.peek_escape() == Some('[') {
         input.advance_escape(); // consume '['
-        append_simple_offset_key(input, part, span, profile);
+        append_simple_offset_key(input, part, span);
         if input.peek_escape() == Some(']') {
             input.advance_escape();
         } else {
@@ -267,7 +266,6 @@ fn append_simple_offset_key(
     input: &mut impl EscapeInput,
     part: &mut Vec<SpannedToken>,
     span: Span,
-    profile: elephc_semantics::SemanticProfile,
 ) {
     part.push(spanned(Token::LBracket, span));
     match input.peek_escape() {
@@ -298,11 +296,12 @@ fn append_simple_offset_key(
                     break;
                 }
             }
-            // PHP classifies canonical numeric text before ArrayAccess dispatch too.
-            // Exact-key mode keeps the original text instead of applying that conversion.
-            let token = match elephc_semantics::array_keys::classify_string_key(profile, digits.as_bytes()) {
-                elephc_semantics::array_keys::StringKey::Integer(value) => Token::IntLiteral(value),
-                elephc_semantics::array_keys::StringKey::String(_) => Token::StringLiteral(digits),
+            // PHP's simple interpolation grammar canonicalizes integer-looking offsets
+            // before ordinary array-key policy applies. Exact-key mode therefore keeps
+            // noncanonical spellings but must still treat `1` as integer key 1.
+            let token = match elephc_semantics::array_keys::php_integer_key(digits.as_bytes()) {
+                Some(value) => Token::IntLiteral(value),
+                None => Token::StringLiteral(digits),
             };
             part.push(spanned(token, span));
         }

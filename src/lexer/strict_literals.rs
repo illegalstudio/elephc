@@ -63,9 +63,7 @@ fn strict_integer_literal_compiler_interpolation_keeps_the_source_profile() {
     for exact in [false, true] {
         let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact);
         let tokens = tokenize_with_semantics("<?php echo \"$items[1]\";", SourceMode::Php, 7, profile).unwrap();
-        assert!(tokens.iter().any(|(token, _)| if exact {
-            matches!(token, Token::StringLiteral(value) if value == "1")
-        } else { matches!(token, Token::IntLiteral(1)) }));
+        assert!(tokens.iter().any(|(token, _)| matches!(token, Token::IntLiteral(1))));
     }
 
 }

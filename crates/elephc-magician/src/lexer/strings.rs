@@ -182,9 +182,9 @@ impl Lexer<'_> {
                     self.bump_char();
                 }
                 if digits == "-" { return Err(EvalParseError::InvalidNumber); }
-                let kind = match elephc_semantics::array_keys::classify_string_key(self.semantic_profile(), digits.as_bytes()) {
-                    elephc_semantics::array_keys::StringKey::Integer(value) => TokenKind::Int(value),
-                    elephc_semantics::array_keys::StringKey::String(_) => TokenKind::String(digits),
+                let kind = match elephc_semantics::array_keys::php_integer_key(digits.as_bytes()) {
+                    Some(value) => TokenKind::Int(value),
+                    None => TokenKind::String(digits),
                 };
                 part.push(Token::new(kind, line));
             }

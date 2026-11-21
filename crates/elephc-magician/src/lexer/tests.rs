@@ -16,9 +16,10 @@
 //! - Malformed simple offsets are PHP parse errors (measured against PHP 8.5.6) and are
 //!   pinned as refusals so a future rewrite cannot start silently accepting them.
 
-use super::scan::tokenize;
+use super::scan::{tokenize, tokenize_with_semantics};
 use super::TokenKind;
 use crate::errors::EvalParseError;
+use elephc_semantics::{SemanticProfile, StrictFeature};
 
 /// Preserves hexadecimal/octal bytes and keeps private-use source characters distinct from byte markers.
 #[test]
@@ -39,6 +40,21 @@ fn kinds(source: &str) -> Vec<TokenKind> {
         .into_iter()
         .map(super::Token::into_kind)
         .collect()
+}
+
+/// Keeps PHP simple-interpolation integer grammar independent of exact array-key mode.
+#[test]
+fn canonical_simple_offset_is_integer_in_every_array_key_profile() {
+    for exact in [false, true] {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact);
+        let tokens = tokenize_with_semantics(r#""$a[1]";"#, profile)
+            .expect("fragment should tokenize")
+            .into_iter()
+            .map(super::Token::into_kind)
+            .collect::<Vec<_>>();
+        assert!(tokens.contains(&TokenKind::Int(1)), "exact={exact}: {tokens:?}");
+        assert!(!tokens.contains(&TokenKind::String("1".to_owned())), "exact={exact}: {tokens:?}");
+    }
 }
 
 /// Returns the parse error a fragment produces, failing the test if it tokenizes.
