@@ -233,6 +233,18 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
     .expect("compiler-owned helper writes retain internal semantics");
 }
 
+/// Long left-associated boolean chains keep source validation linear.
+#[test]
+fn strict_array_key_source_validation_handles_long_boolean_chains() {
+    let condition = (0..24)
+        .map(|_| "PHP_OS_FAMILY === 'Windows'")
+        .collect::<Vec<_>>()
+        .join(" && ");
+    let source = format!("<?php $values = [1]; if ({condition}) {{ $values[0] = 2; }}");
+    crate::semantics::validate_source(&parse(&source, SourceMode::Php), profile())
+        .expect("boolean-chain validation remains bounded");
+}
+
 /// Typed selectors are checked on array places without normalizing away their original kinds.
 #[test]
 fn strict_array_key_checker_validates_original_array_places() {

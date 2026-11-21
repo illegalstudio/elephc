@@ -413,161 +413,111 @@ fn source_array_literal_nonempty(expr: &Expr) -> Option<bool> {
     }
 }
 
-/// Returns facts on the path where one condition admits its controlled body.
-fn validate_true_condition_flow(
-    expr: &Expr,
-    locals: &LocalFacts,
-    properties: &PropertyFacts,
-    profile: SemanticProfile,
-    current_class: Option<&str>,
-) -> Result<LocalFacts, CompileError> {
-    match &expr.kind {
-        ExprKind::BinaryOp { left, op, right }
-            if matches!(op, crate::parser::ast::BinOp::And) =>
-        {
-            let left_true = validate_true_condition_flow(
-                left,
-                locals,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let left_false = validate_false_condition_flow(
-                left,
-                locals,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let right_true = validate_true_condition_flow(
-                right,
-                &left_true,
-                properties,
-                profile,
-                current_class,
-            )?;
-            Ok(match source_literal_truthiness(left) {
-                Some(true) | None => right_true,
-                Some(false) => left_false,
-            })
-        }
-        ExprKind::BinaryOp { left, op, right }
-            if matches!(op, crate::parser::ast::BinOp::Or) =>
-        {
-            let left_true = validate_true_condition_flow(
-                left,
-                locals,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let left_false = validate_false_condition_flow(
-                left,
-                locals,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let right_true = validate_true_condition_flow(
-                right,
-                &left_false,
-                properties,
-                profile,
-                current_class,
-            )?;
-            Ok(match source_literal_truthiness(left) {
-                Some(true) => left_true,
-                Some(false) => right_true,
-                None => merge_exits(&[left_true, right_true]),
-            })
-        }
-        ExprKind::Not(inner) => validate_false_condition_flow(
-            inner,
-            locals,
-            properties,
-            profile,
-            current_class,
-        ),
-        _ => validate_expression_flow(expr, locals, properties, profile, current_class),
-    }
+/// Facts produced by the two possible exits from one condition evaluation.
+struct ConditionFlow {
+    when_true: LocalFacts,
+    when_false: LocalFacts,
 }
 
-/// Returns facts on the path where one condition falls through to its alternative.
-fn validate_false_condition_flow(
+/// Audits one condition once and returns both of its possible source-order exits.
+fn validate_condition_flow(
     expr: &Expr,
     locals: &LocalFacts,
     properties: &PropertyFacts,
     profile: SemanticProfile,
     current_class: Option<&str>,
-) -> Result<LocalFacts, CompileError> {
+) -> Result<ConditionFlow, CompileError> {
     match &expr.kind {
-        ExprKind::BinaryOp { left, op, right }
-            if matches!(op, crate::parser::ast::BinOp::Or) =>
-        {
-            let left_false = validate_false_condition_flow(
-                left,
-                locals,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let left_true = validate_true_condition_flow(
-                left,
-                locals,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let right_false = validate_false_condition_flow(
-                right,
-                &left_false,
-                properties,
-                profile,
-                current_class,
-            )?;
-            Ok(match source_literal_truthiness(left) {
-                Some(true) => left_true,
-                Some(false) | None => right_false,
-            })
-        }
         ExprKind::BinaryOp { left, op, right }
             if matches!(op, crate::parser::ast::BinOp::And) =>
         {
-            let left_false = validate_false_condition_flow(
+            let left_flow = validate_condition_flow(
                 left,
                 locals,
                 properties,
                 profile,
                 current_class,
             )?;
-            let left_true = validate_true_condition_flow(
-                left,
-                locals,
-                properties,
-                profile,
-                current_class,
-            )?;
-            let right_false = validate_false_condition_flow(
+            let right_flow = validate_condition_flow(
                 right,
-                &left_true,
+                &left_flow.when_true,
                 properties,
                 profile,
                 current_class,
             )?;
-            Ok(match source_literal_truthiness(left) {
-                Some(false) => left_false,
-                Some(true) => right_false,
-                None => merge_exits(&[left_false, right_false]),
+            let truthiness = source_literal_truthiness(left);
+            let when_true = match truthiness {
+                Some(false) => left_flow.when_false.clone(),
+                Some(true) | None => right_flow.when_true,
+            };
+            let when_false = match truthiness {
+                Some(false) => left_flow.when_false,
+                Some(true) => right_flow.when_false,
+                None => merge_exits(&[left_flow.when_false, right_flow.when_false]),
+            };
+            Ok(ConditionFlow {
+                when_true,
+                when_false,
             })
         }
-        ExprKind::Not(inner) => validate_true_condition_flow(
-            inner,
-            locals,
-            properties,
-            profile,
-            current_class,
-        ),
-        _ => validate_expression_flow(expr, locals, properties, profile, current_class),
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, crate::parser::ast::BinOp::Or) =>
+        {
+            let left_flow = validate_condition_flow(
+                left,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let right_flow = validate_condition_flow(
+                right,
+                &left_flow.when_false,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let truthiness = source_literal_truthiness(left);
+            let when_true = match truthiness {
+                Some(true) => left_flow.when_true.clone(),
+                Some(false) => right_flow.when_true,
+                None => merge_exits(&[left_flow.when_true.clone(), right_flow.when_true]),
+            };
+            let when_false = match truthiness {
+                Some(true) => left_flow.when_true,
+                Some(false) | None => right_flow.when_false,
+            };
+            Ok(ConditionFlow {
+                when_true,
+                when_false,
+            })
+        }
+        ExprKind::Not(inner) => {
+            let inner = validate_condition_flow(
+                inner,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            Ok(ConditionFlow {
+                when_true: inner.when_false,
+                when_false: inner.when_true,
+            })
+        }
+        _ => {
+            let exit = validate_expression_flow(
+                expr,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            Ok(ConditionFlow {
+                when_true: exit.clone(),
+                when_false: exit,
+            })
+        }
     }
 }
 
@@ -1624,20 +1574,15 @@ fn validate_stmt(
             elseif_clauses,
             else_body,
         } => {
-            let then_entry = validate_true_condition_flow(
+            let condition_flow = validate_condition_flow(
                 condition,
                 locals,
                 properties,
                 profile,
                 current_class,
             )?;
-            let mut fallthrough = validate_false_condition_flow(
-                condition,
-                locals,
-                properties,
-                profile,
-                current_class,
-            )?;
+            let then_entry = condition_flow.when_true;
+            let mut fallthrough = condition_flow.when_false;
             let mut exits = Vec::with_capacity(elseif_clauses.len() + 2);
             exits.push(validate_branch(
                 then_body,
@@ -1647,13 +1592,14 @@ fn validate_stmt(
                 current_class,
             )?);
             for (condition, body) in elseif_clauses {
-                let body_entry = validate_true_condition_flow(
+                let condition_flow = validate_condition_flow(
                     condition,
                     &fallthrough,
                     properties,
                     profile,
                     current_class,
                 )?;
+                let body_entry = condition_flow.when_true;
                 exits.push(validate_branch(
                     body,
                     &body_entry,
@@ -1661,13 +1607,7 @@ fn validate_stmt(
                     profile,
                     current_class,
                 )?);
-                fallthrough = validate_false_condition_flow(
-                    condition,
-                    &fallthrough,
-                    properties,
-                    profile,
-                    current_class,
-                )?;
+                fallthrough = condition_flow.when_false;
             }
             if let Some(body) = else_body {
                 exits.push(validate_branch(
@@ -1683,36 +1623,26 @@ fn validate_stmt(
             *locals = merge_exits(&exits);
         }
         StmtKind::While { condition, body } => {
-            let first_body_entry = validate_true_condition_flow(
+            let first_flow = validate_condition_flow(
                 condition,
                 locals,
                 properties,
                 profile,
                 current_class,
             )?;
-            let first_exit = validate_false_condition_flow(
-                condition,
-                locals,
-                properties,
-                profile,
-                current_class,
-            )?;
+            let first_body_entry = first_flow.when_true;
+            let first_exit = first_flow.when_false;
             let first_body =
                 validate_branch(body, &first_body_entry, properties, profile, current_class)?;
-            let repeated_body_entry = validate_true_condition_flow(
+            let repeated_flow = validate_condition_flow(
                 condition,
                 &first_body,
                 properties,
                 profile,
                 current_class,
             )?;
-            let repeated_exit = validate_false_condition_flow(
-                condition,
-                &first_body,
-                properties,
-                profile,
-                current_class,
-            )?;
+            let repeated_body_entry = repeated_flow.when_true;
+            let repeated_exit = repeated_flow.when_false;
             validate_branch(
                 body,
                 &repeated_body_entry,
@@ -1739,20 +1669,15 @@ fn validate_stmt(
         }
         StmtKind::DoWhile { body, condition } => {
             validate_block(body, locals, properties, profile, current_class)?;
-            let first_exit = validate_false_condition_flow(
+            let first_flow = validate_condition_flow(
                 condition,
                 locals,
                 properties,
                 profile,
                 current_class,
             )?;
-            let mut repeated_body = validate_true_condition_flow(
-                condition,
-                locals,
-                properties,
-                profile,
-                current_class,
-            )?;
+            let first_exit = first_flow.when_false;
+            let mut repeated_body = first_flow.when_true;
             validate_block(
                 body,
                 &mut repeated_body,
@@ -1760,13 +1685,14 @@ fn validate_stmt(
                 profile,
                 current_class,
             )?;
-            let repeated_exit = validate_false_condition_flow(
+            let repeated_exit = validate_condition_flow(
                 condition,
                 &repeated_body,
                 properties,
                 profile,
                 current_class,
-            )?;
+            )?
+            .when_false;
             *locals = merge_exits(&[first_exit, repeated_exit]);
         }
         StmtKind::For {
@@ -1778,26 +1704,21 @@ fn validate_stmt(
             if let Some(init) = init {
                 validate_stmt(init, locals, properties, profile, current_class)?;
             }
-            let first_body_entry = match condition {
-                Some(condition) => validate_true_condition_flow(
+            let first_flow = match condition {
+                Some(condition) => validate_condition_flow(
                     condition,
                     locals,
                     properties,
                     profile,
                     current_class,
                 )?,
-                None => locals.clone(),
+                None => ConditionFlow {
+                    when_true: locals.clone(),
+                    when_false: locals.clone(),
+                },
             };
-            let first_exit = match condition {
-                Some(condition) => validate_false_condition_flow(
-                    condition,
-                    locals,
-                    properties,
-                    profile,
-                    current_class,
-                )?,
-                None => locals.clone(),
-            };
+            let first_body_entry = first_flow.when_true;
+            let first_exit = first_flow.when_false;
             let mut first_body =
                 validate_branch(body, &first_body_entry, properties, profile, current_class)?;
             if let Some(update) = update {
@@ -1809,26 +1730,21 @@ fn validate_stmt(
                     current_class,
                 )?;
             }
-            let repeated_body_entry = match condition {
-                Some(condition) => validate_true_condition_flow(
+            let repeated_flow = match condition {
+                Some(condition) => validate_condition_flow(
                     condition,
                     &first_body,
                     properties,
                     profile,
                     current_class,
                 )?,
-                None => first_body.clone(),
+                None => ConditionFlow {
+                    when_true: first_body.clone(),
+                    when_false: first_body,
+                },
             };
-            let repeated_exit = match condition {
-                Some(condition) => validate_false_condition_flow(
-                    condition,
-                    &first_body,
-                    properties,
-                    profile,
-                    current_class,
-                )?,
-                None => first_body,
-            };
+            let repeated_body_entry = repeated_flow.when_true;
+            let repeated_exit = repeated_flow.when_false;
             validate_branch(
                 body,
                 &repeated_body_entry,
