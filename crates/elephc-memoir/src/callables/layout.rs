@@ -152,6 +152,8 @@ pub const SIGNATURE_REF_FLAGS_OFFSET: usize = offset_of!(DescriptorSignature<u64
 pub const CAPTURE_TABLE_OFFSET: usize = offset_of!(DescriptorEnvironment<u64>, captures);
 /// Byte offset of the native capture count word.
 pub const CAPTURE_COUNT_OFFSET: usize = offset_of!(DescriptorEnvironment<u64>, capture_count);
+// Collector scans use the first word directly and preserve their instruction comments.
+const _: () = assert!(CAPTURE_COUNT_OFFSET == 0);
 /// Byte offset of the native tag word.
 pub const BINDING_TAG_OFFSET: usize = offset_of!(DescriptorBinding<u64>, tag);
 /// Byte offset of the native by ref word.

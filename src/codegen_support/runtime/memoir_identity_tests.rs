@@ -7,6 +7,7 @@
 //! Key details:
 //! - Includes the APM data slots and typed-property reference emitter from main 8fd1043dbe.
 //! - Captured before extraction at 58ee974dc47d68a8984b096c860a7fc6465434e9.
+//! - The optional mbstring emitter excludes the standalone UTF-8 validator after main f84cc7fae7.
 //! - Fingerprints include output bytes, fixed data and sorted internal-label bookkeeping.
 //! - Every supported target covers executable, PIC, library, extension and dead-strip modes.
 
