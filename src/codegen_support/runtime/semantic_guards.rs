@@ -14,6 +14,8 @@ const OWNED_FRAME: usize = 96;
 const OWNED_RECORD: usize = 80;
 
 const BOOLEAN_MESSAGE: &str = "--strict-bools requires a boolean callback result";
+const BOOLEAN_FAIL: &str = "__rt_strict_boolean_fail";
+const BOOLEAN_OWNED_FAIL: &str = "__rt_strict_boolean_owned_fail";
 
 /// Emits data only for enabled guards, preserving the default runtime data image.
 pub(crate) fn data(profile: SemanticProfile) -> String {
@@ -27,13 +29,13 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let tag = abi::secondary_scratch_reg(emitter);
     emitter.label_global("__rt_strict_boolean");
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_strict_boolean_fail");
+    abi::emit_branch_if_int_result_zero(emitter, BOOLEAN_FAIL);
     abi::emit_load_from_address(emitter, tag, result, 0);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("cmp {tag}, #3")),        // require the PHP boolean runtime tag
         Arch::X86_64 => emitter.instruction(&format!("cmp {tag}, 3")),          // require the PHP boolean runtime tag
     }
-    abi::emit_branch_if_not_equal_wide(emitter, "__rt_strict_boolean_fail");
+    abi::emit_branch_if_not_equal_wide(emitter, BOOLEAN_FAIL);
     abi::emit_jump(emitter, "__rt_mixed_cast_bool");
 
     emitter.label_global("__rt_strict_boolean_owned");
@@ -42,13 +44,13 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     let owner = abi::tertiary_scratch_reg(emitter);
     abi::emit_frame_slot_address(emitter, owner, 8);
     abi::emit_link_call_operand_owner_in_frame(emitter, owner, OWNED_RECORD);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_strict_boolean_owned_fail");
+    abi::emit_branch_if_int_result_zero(emitter, BOOLEAN_OWNED_FAIL);
     abi::emit_load_from_address(emitter, tag, result, 0);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("cmp {tag}, #3")),        // inspect the consumed callback result kind
         Arch::X86_64 => emitter.instruction(&format!("cmp {tag}, 3")),          // inspect the consumed callback result kind
     }
-    abi::emit_branch_if_not_equal_wide(emitter, "__rt_strict_boolean_owned_fail");
+    abi::emit_branch_if_not_equal_wide(emitter, BOOLEAN_OWNED_FAIL);
     abi::emit_call_label(emitter, "__rt_mixed_cast_bool");
     abi::store_at_offset(emitter, result, 16);
     abi::emit_unlink_call_operand_owner_in_frame(emitter, OWNED_RECORD);
@@ -57,11 +59,14 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, result, 16);
     abi::emit_frame_restore(emitter, OWNED_FRAME);
     abi::emit_return(emitter);
-    emitter.label("__rt_strict_boolean_owned_fail");
+    emitter.label(BOOLEAN_OWNED_FAIL);
     // Leave the input published so cleanup can chain a throwing destructor to the TypeError.
     // A separate global entry is a separate dead-stripping section, so fallthrough cannot retain it.
-    abi::emit_jump(emitter, "__rt_strict_boolean_fail");
-    emitter.label_global("__rt_strict_boolean_fail");
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("sub rsp, 8");                                      // adapt the owned frame to the shared call-entry-aligned failure body
+    }
+    abi::emit_jump(emitter, BOOLEAN_FAIL);
+    emitter.label_global(BOOLEAN_FAIL);
     match emitter.target.arch {
         Arch::AArch64 => super::arrays::value_error::emit_throw_static_message_aarch64(
             emitter, "_spl_type_error_class_id", "_strict_boolean_message", BOOLEAN_MESSAGE.len()),
@@ -93,6 +98,12 @@ mod tests {
             assert!(asm.contains(".globl __rt_strict_boolean_fail"), "{name}");
             let branch = if target.arch == Arch::AArch64 { "b __rt_strict_boolean_fail" } else { "jmp __rt_strict_boolean_fail" };
             assert!(asm.contains(branch), "{name}: global failure entries require explicit section edges");
+            if target.arch == Arch::X86_64 {
+                let owned = asm.split(&format!("{BOOLEAN_OWNED_FAIL}:\n")).nth(1).unwrap();
+                assert_eq!(owned.lines().next().map(str::trim), Some("sub rsp, 8"), "{owned}");
+                let shared = asm.split(&format!(".globl {BOOLEAN_FAIL}\n")).nth(1).unwrap();
+                assert!(shared.lines().take(5).any(|line| line.trim() == "push rbp"), "{shared}");
+            }
         }
     }
 }
