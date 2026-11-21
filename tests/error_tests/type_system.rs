@@ -1034,6 +1034,58 @@ class C {
     );
 }
 
+/// A backed-case value must still be a constant expression of the backing type: a string
+/// constant cannot back an int enum, and a function call is rejected as PHP does.
+#[test]
+fn test_error_enum_case_value_must_fold_to_the_backing_type() {
+    expect_error(
+        r#"<?php
+final class Codes { public const NAME = 'n'; }
+enum Level: int { case Low = Codes::NAME; }
+"#,
+        "Enum int backing values must be integer literals",
+    );
+    expect_error(
+        r#"<?php
+enum Level: string { case Low = PHP_EOL . strtoupper('x'); }
+"#,
+        "Constant expression contains invalid operations",
+    );
+}
+
+/// A backed-case value is checked for PHP's forbidden constant-expression forms before folding
+/// prunes a branch: a class or user constant does not decide a branch at compile time, so a
+/// variable or call in the branch it skips is still rejected, with PHP's messages.
+#[test]
+fn test_error_enum_case_value_rejects_forbidden_constant_expression_forms() {
+    let invalid = "Constant expression contains invalid operations";
+    for source in [
+        "<?php\nclass C { const YES = true; }\nenum E: int { case A = C::YES ? 1 : $x; }\n",
+        "<?php\nconst Z = true;\nenum E: int { case A = Z ? 1 : strlen('a'); }\n",
+        "<?php\nenum E: string { case A = 'a' . $x; }\n",
+        "<?php\nenum E: int { case A = [1, 2][$i]; }\n",
+        "<?php\nenum E: int { case A = (1 ? 1 : 2) + $x; }\n",
+    ] {
+        expect_error(source, invalid);
+    }
+    expect_error(
+        "<?php\nenum E: int { case A = PHP_INT_SIZE ? new stdClass : 1; }\n",
+        "New expressions are not supported in this context",
+    );
+    expect_error(
+        "<?php\nenum E: int { case A = static::X; }\n",
+        "\"static::\" is not allowed in compile-time constants",
+    );
+    expect_error(
+        "<?php\nenum E: int { case A = (object) []; }\n",
+        "Object casts are not supported in this context",
+    );
+    expect_error(
+        "<?php\nenum E: int { case A = function () { return 1; }; }\n",
+        "Closures in constant expressions must be static",
+    );
+}
+
 /// Verifies that assigning an incompatible value to a static property is rejected.
 /// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]
