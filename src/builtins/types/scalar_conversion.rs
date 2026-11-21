@@ -7,6 +7,7 @@
 //! Key details:
 //! - Prepared callable bodies reuse the same target-aware cast graph as explicit syntax.
 //! - PHP names never select an emitter and object hooks retain callback effects.
+//! - `strval` materializes identity casts so its declared fresh-result contract stays true.
 
 use crate::builtins::semantics::*;
 use crate::parser::ast::CastType;
@@ -46,5 +47,17 @@ fn lower_bool(ctx: &mut dyn BuiltinLoweringContext, call: &NormalizedBuiltinCall
 /// Routes string conversion through the explicit cast's ownership and object-hook handling.
 fn lower_string(ctx: &mut dyn BuiltinLoweringContext, call: &NormalizedBuiltinCall<'_>)
     -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
-    ctx.emit_scalar_cast(&CastType::String, call.operand(0)?, call.source_mode, call.span)
+    let source = call.operand(0)?;
+    let converted = ctx.emit_scalar_cast(&CastType::String, source, call.source_mode, call.span)?;
+    if converted.value != source {
+        return Ok(converted);
+    }
+    Ok(ctx.emit_value(
+        crate::ir::Op::StrPersist,
+        vec![source],
+        None,
+        call.result_type.clone(),
+        crate::ir::Op::StrPersist.default_effects(),
+        Some(call.span),
+    ))
 }
