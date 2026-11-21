@@ -327,13 +327,14 @@ fn validate_expression_writes(
     current_class: Option<&str>,
 ) -> Result<(), CompileError> {
     let mut visitor = ExpressionWriteValidator {
-        locals,
+        locals: locals.clone(),
         properties,
         profile,
         current_class,
         source: SourcePolicy::default(),
         statement_depth: 0,
         error: None,
+        assignment_values: HashMap::new(),
     };
     ast_visit::walk_statements(std::slice::from_ref(stmt), &mut visitor);
     visitor.error.map_or(Ok(()), Err)
@@ -347,28 +348,44 @@ fn validate_expression_value_writes(
     profile: SemanticProfile,
     current_class: Option<&str>,
 ) -> Result<(), CompileError> {
+    validate_expression_flow(expr, locals, properties, profile, current_class).map(|_| ())
+}
+
+/// Audits one expression and returns facts after its source-order evaluation.
+fn validate_expression_flow(
+    expr: &Expr,
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> Result<LocalFacts, CompileError> {
     let mut visitor = ExpressionWriteValidator {
-        locals,
+        locals: locals.clone(),
         properties,
         profile,
         current_class,
         source: SourcePolicy::default(),
         statement_depth: 1,
         error: None,
+        assignment_values: HashMap::new(),
     };
     ast_visit::walk_expression(expr, &mut visitor);
-    visitor.error.map_or(Ok(()), Err)
+    match visitor.error {
+        Some(error) => Err(error),
+        None => Ok(visitor.locals),
+    }
 }
 
 /// Keeps nested statement bodies on their own flow-sensitive validation pass.
 struct ExpressionWriteValidator<'a> {
-    locals: &'a LocalFacts,
+    locals: LocalFacts,
     properties: &'a PropertyFacts,
     profile: SemanticProfile,
     current_class: Option<&'a str>,
     source: SourcePolicy,
     statement_depth: usize,
     error: Option<CompileError>,
+    assignment_values: HashMap<usize, ValueFact>,
 }
 
 impl AstVisitor for ExpressionWriteValidator<'_> {
@@ -398,10 +415,23 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
         {
             return;
         }
+        if is_lazy_flow_expression(expr) {
+            match validate_lazy_expression_writes(
+                expr,
+                &self.locals,
+                self.properties,
+                self.profile,
+                self.current_class,
+            ) {
+                Ok(locals) => self.locals = locals,
+                Err(error) => self.error = Some(error),
+            }
+            return;
+        }
         if matches!(&expr.kind, ExprKind::Closure { .. }) {
             self.error = validate_closure_value(
                 expr,
-                Some(self.locals),
+                Some(&self.locals),
                 self.properties,
                 self.profile,
                 self.current_class,
@@ -419,7 +449,7 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
             return;
         };
         let mut locals = self.locals.clone();
-        apply_expression_facts(
+        let value = apply_expression_facts(
             value,
             &mut locals,
             self.properties,
@@ -441,11 +471,158 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
             self.current_class,
         )
         .err();
+        self.assignment_values.insert(expression_id(expr), value);
     }
 
-    /// Restores the enclosing expression producer policy.
-    fn expression_end(&mut self, _expr: &Expr) {
+    /// Lets lazy nodes use their branch-aware validation instead of the generic source walk.
+    fn descend_expression(&mut self, expr: &Expr) -> bool {
+        self.error.is_none() && !is_lazy_flow_expression(expr)
+    }
+
+    /// Publishes assignment facts for later operands, then restores source policy.
+    fn expression_end(&mut self, expr: &Expr) {
+        if self.error.is_none() && self.statement_depth == 1 {
+            if let ExprKind::Assignment {
+                target,
+                value,
+                prelude,
+                ..
+            } = &expr.kind
+            {
+                apply_prelude_facts(
+                    prelude,
+                    &mut self.locals,
+                    self.properties,
+                    self.profile,
+                    self.current_class,
+                );
+                let value = self
+                    .assignment_values
+                    .remove(&expression_id(expr))
+                    .unwrap_or_else(|| {
+                        infer_expr(
+                            value,
+                            &self.locals,
+                            self.properties,
+                            self.profile,
+                            self.current_class,
+                        )
+                    });
+                record_assignment_fact(
+                    target,
+                    value,
+                    &mut self.locals,
+                    self.properties,
+                    self.profile,
+                    self.current_class,
+                );
+            }
+        }
         self.source.leave_expression();
+    }
+}
+
+/// Audits every lazy branch while merging only effects that can reach the following operand.
+fn validate_lazy_expression_writes(
+    expr: &Expr,
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> Result<LocalFacts, CompileError> {
+    match &expr.kind {
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(
+                op,
+                crate::parser::ast::BinOp::And | crate::parser::ast::BinOp::Or
+            ) =>
+        {
+            let left_exit =
+                validate_expression_flow(left, locals, properties, profile, current_class)?;
+            let right_exit =
+                validate_expression_flow(right, &left_exit, properties, profile, current_class)?;
+            let truthiness = crate::types::deferred_defaults::literal_truthiness(left);
+            let right_runs = match op {
+                crate::parser::ast::BinOp::And => truthiness,
+                crate::parser::ast::BinOp::Or => truthiness.map(|value| !value),
+                _ => unreachable!("lazy binary operator was matched above"),
+            };
+            Ok(match right_runs {
+                Some(true) => right_exit,
+                Some(false) => left_exit,
+                None => merge_exits(&[left_exit, right_exit]),
+            })
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            let condition_exit =
+                validate_expression_flow(condition, locals, properties, profile, current_class)?;
+            let then_exit = validate_expression_flow(
+                then_expr,
+                &condition_exit,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let else_exit = validate_expression_flow(
+                else_expr,
+                &condition_exit,
+                properties,
+                profile,
+                current_class,
+            )?;
+            Ok(
+                match crate::types::deferred_defaults::literal_truthiness(condition) {
+                    Some(true) => then_exit,
+                    Some(false) => else_exit,
+                    None => merge_exits(&[then_exit, else_exit]),
+                },
+            )
+        }
+        ExprKind::ShortTernary { value, default } => {
+            let value_exit =
+                validate_expression_flow(value, locals, properties, profile, current_class)?;
+            let default_exit = validate_expression_flow(
+                default,
+                &value_exit,
+                properties,
+                profile,
+                current_class,
+            )?;
+            Ok(
+                match crate::types::deferred_defaults::literal_truthiness(value) {
+                    Some(true) => value_exit,
+                    Some(false) => default_exit,
+                    None => merge_exits(&[value_exit, default_exit]),
+                },
+            )
+        }
+        ExprKind::NullCoalesce { value, default } => {
+            let value_exit =
+                validate_expression_flow(value, locals, properties, profile, current_class)?;
+            let default_exit = validate_expression_flow(
+                default,
+                &value_exit,
+                properties,
+                profile,
+                current_class,
+            )?;
+            Ok(match &value.kind {
+                ExprKind::Null => default_exit,
+                ExprKind::BoolLiteral(_)
+                | ExprKind::IntLiteral(_)
+                | ExprKind::FloatLiteral(_)
+                | ExprKind::StringLiteral(_)
+                | ExprKind::ArrayLiteral(_)
+                | ExprKind::ArrayLiteralAssoc(_)
+                | ExprKind::ArrayLiteralMixed(_) => value_exit,
+                _ => merge_exits(&[value_exit, default_exit]),
+            })
+        }
+        _ => unreachable!("only lazy expressions reach branch-aware write validation"),
     }
 }
 

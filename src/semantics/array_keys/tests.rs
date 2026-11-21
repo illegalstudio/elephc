@@ -146,6 +146,8 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php function mixed_dynamic_parent(int $key): void { $values = [null, false]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][false] = 2; } }",
         "<?php function array_or_null_dynamic_parent(int $key): void { $values = [[1], null]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][false] = 2; } }",
         "<?php function deep_dynamic_parent(int $key): void { $values = [[[null]], [[false]]]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][0][0][false] = 2; } }",
+        "<?php function ordered_write(): int { $values = [1]; if (PHP_OS_FAMILY === 'Windows') { return ($values = [[1]]) ? ($values[0][false] = 2) : 0; } return 0; }",
+        "<?php $values = [1]; if (PHP_OS_FAMILY === 'Windows') { $writer = ($values = [[1]]) ? function () use ($values): void { $values[0][false] = 2; } : null; }",
     ] {
         let error = match crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
@@ -198,6 +200,7 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php $inner = 'ab'; $values = [$inner, ($inner = [])]; $values[0][true] = 'x';",
         "<?php $inner = 'ab'; $values = ['first' => $inner, 'second' => ($inner = [])]; $values['first'][true] = 'x';",
         "<?php $inner = 'ab'; $values = [0 => $inner, ($inner = [])]; $values[0][true] = 'x';",
+        "<?php $values = [1]; $ignored = false ? ($values = [[1]]) : 0; $values[0][false] = 2;",
     ] {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));
