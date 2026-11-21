@@ -270,3 +270,43 @@ fn test_iterable_cleanup_uses_uniform_decref_dispatch() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// The SPL iterator functions read a source out of a boxed union slot once a guard narrowed it
+/// to `iterable` or to a `Traversable` object: the lowering unboxes the payload on every target.
+#[test]
+fn test_spl_iterator_functions_read_a_boxed_narrowed_source() {
+    let out = compile_and_run(
+        r#"<?php
+function viaTraversable(string|iterable $files): int {
+    if ($files instanceof \Traversable) { return count(iterator_to_array($files, false)); }
+    return 0;
+}
+function viaComplement(string|iterable $files): string {
+    if (\is_string($files)) { return 'string'; }
+    return implode(',', iterator_to_array($files, false));
+}
+function viaNullable(?iterable $files): string {
+    if ($files === null) { return 'null'; }
+    $out = '';
+    foreach (iterator_to_array($files) as $key => $value) { $out .= $key . '=' . $value . ';'; }
+    return $out;
+}
+function counted(string|iterable $files): int {
+    if (\is_string($files)) { return -1; }
+    return iterator_count($files);
+}
+function tick(): bool { echo 't'; return true; }
+function applied(string|iterable $files): int {
+    if ($files instanceof \Traversable) { return iterator_apply($files, 'tick'); }
+    return -3;
+}
+function gen(): iterable { yield 'a' => 1; yield 'b' => 2; yield 'c' => 3; }
+echo viaTraversable(new ArrayIterator([1, 2])), viaTraversable('x'), viaTraversable([1]), viaTraversable(gen()), "|",
+    viaComplement(new ArrayIterator(['p', 'q'])), "|", viaComplement('x'), "|", viaComplement(['r']), "|",
+    viaComplement(gen()), "|", viaNullable(null), "|", viaNullable(['k' => 'v']), "|", viaNullable(gen()), "\n";
+echo counted('s'), "|", counted([1, 2]), "|", counted(new ArrayIterator([1])), "|", counted(gen()), "|",
+    applied('s'), "|", applied(new ArrayIterator([1, 2])), "\n";
+"#,
+    );
+    assert_eq!(out, "2003|p,q|string|r|1,2,3|null|k=v;|a=1;b=2;c=3;\n-1|2|1|3|-3|tt2\n");
+}
