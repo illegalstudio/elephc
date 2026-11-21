@@ -1850,7 +1850,7 @@ fn merge_write_parent_facts(left: ValueFact, right: ValueFact) -> ValueFact {
     let left = write_parent_fact(left, true);
     let right = write_parent_fact(right, true);
     let (ValueFact::Array(left), ValueFact::Array(right)) = (&left, &right) else {
-        return merge_value_facts(left, right);
+        return ValueFact::Known(PhpType::php_array());
     };
     merge_array_facts_with(left, right, merge_write_parent_facts)
         .map(ValueFact::Array)

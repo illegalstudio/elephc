@@ -149,6 +149,7 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php function mixed_dynamic_parent(int $key): void { $values = [null, false]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][false] = 2; } }",
         "<?php function array_or_null_dynamic_parent(int $key): void { $values = [[1], null]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][false] = 2; } }",
         "<?php function deep_dynamic_parent(int $key): void { $values = [[[null]], [[false]]]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][0][0][false] = 2; } }",
+        "<?php function mixed_typed_parents(int $key, array<int> $left, array<string> $right): void { $values = [$left, $right]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][false] = 2; } }",
         "<?php function ordered_write(): int { $values = [1]; if (PHP_OS_FAMILY === 'Windows') { return ($values = [[1]]) ? ($values[0][false] = 2) : 0; } return 0; }",
         "<?php $values = [1]; if (PHP_OS_FAMILY === 'Windows') { $writer = ($values = [[1]]) ? function () use ($values): void { $values[0][false] = 2; } : null; }",
     ] {
