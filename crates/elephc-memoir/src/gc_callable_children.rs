@@ -10,8 +10,8 @@
 //! - Capture proofs save logical indexes and revalidate typed ownership on each pass.
 
 use crate::callables::layout::{
-    BINDING_REF_OFFSET, BINDING_SHIFT, CAPTURE_COUNT_OFFSET, CAPTURE_TABLE_OFFSET,
-    BINDING_TAG_OFFSET, ENVIRONMENT_OFFSET, HEADER_BYTES,
+    BINDING_REF_OFFSET, BINDING_SHIFT, BINDING_TAG_OFFSET, CAPTURE_TABLE_OFFSET,
+    ENVIRONMENT_OFFSET, HEADER_BYTES,
 };
 use crate::callables::storage::CAPTURE_SHIFT;
 
@@ -35,11 +35,7 @@ pub fn emit_gc_callable_children(e: &mut impl Emitter) {
     op(e, &format!("ldr x9, [x0, #{ENVIRONMENT_OFFSET}]"), &format!("mov r10, QWORD PTR [rax + {ENVIRONMENT_OFFSET}]"), "read the immutable environment metadata, not captured PHP values");
     op(e, "cbz x9, __rt_gc_callable_done", "test r10, r10", "descriptors without an environment have no capture slots");
     if e.arch() == Arch::X86_64 { op(e, "", "jz __rt_gc_callable_done", "finish without dereferencing missing environment metadata"); }
-    let (count, environment) = match e.arch() {
-        Arch::AArch64 => ("x0", "x9"),
-        Arch::X86_64 => ("rax", "r10"),
-    };
-    e.emit_load_from_address(count, environment, CAPTURE_COUNT_OFFSET);
+    op(e, "ldr x0, [x9]", "mov rax, QWORD PTR [r10]", "count every capture slot, including scalar and string slots");
     save(e, 24);
     op(e, &format!("ldr x9, [x9, #{CAPTURE_TABLE_OFFSET}]"), &format!("mov r10, QWORD PTR [r10 + {CAPTURE_TABLE_OFFSET}]"), "read the immutable typed binding table");
     op(e, "str x9, [sp, #32]", "mov QWORD PTR [rsp + 32], r10", "preserve the binding table across recursive child marking");

@@ -10,7 +10,7 @@
 //! - Reference captures prove ownership of their managed cell, not its changing payload.
 
 use crate::callables::layout::{
-    BINDING_REF_OFFSET, BINDING_SHIFT, CAPTURE_COUNT_OFFSET, CAPTURE_TABLE_OFFSET,
+    BINDING_REF_OFFSET, BINDING_SHIFT, BINDING_TAG_OFFSET, CAPTURE_TABLE_OFFSET,
     ENVIRONMENT_OFFSET, HEADER_BYTES,
 };
 use crate::callables::storage::CAPTURE_SHIFT;
@@ -34,11 +34,7 @@ pub fn emit(e: &mut impl Emitter) {
     op(e, &format!("ldr x10, [x0, #{ENVIRONMENT_OFFSET}]"), &format!("mov r9, QWORD PTR [rax + {ENVIRONMENT_OFFSET}]"), "read the current immutable callable environment");
     op(e, "cmp x10, #0", "test r9, r9", "a descriptor without an environment cannot prove capture ownership");
     branch(e, "eq", "z", "invalid");
-    let (count, environment) = match e.arch() {
-        Arch::AArch64 => ("x9", "x10"),
-        Arch::X86_64 => ("r8", "r9"),
-    };
-    e.emit_load_from_address(count, environment, CAPTURE_COUNT_OFFSET);
+    op(e, "ldr x9, [x10]", "mov r8, QWORD PTR [r9]", "bound logical captures by the environment's actual binding count");
     op(e, "cmp x1, x9", "cmp rdi, r8", "reject removed or nonexistent capture indexes");
     branch(e, "hs", "ae", "invalid");
     op(e, &format!("ldr x10, [x10, #{CAPTURE_TABLE_OFFSET}]"), &format!("mov r9, QWORD PTR [r9 + {CAPTURE_TABLE_OFFSET}]"), "require typed bindings before treating a capture as an owner");
@@ -50,7 +46,7 @@ pub fn emit(e: &mut impl Emitter) {
         op(e, "", "add r9, r8", "locate the binding without retaining its address across calls");
     }
     op(e, &format!("ldr x11, [x10, #{BINDING_REF_OFFSET}]"), &format!("mov r10, QWORD PTR [r9 + {BINDING_REF_OFFSET}]"), "reference bindings own a managed cell independently of its contents");
-    op(e, &format!("ldr x10, [x10, #{CAPTURE_TABLE_OFFSET}]"), &format!("mov r9, QWORD PTR [r9 + {CAPTURE_TABLE_OFFSET}]"), "recover the current by-value ownership representation");
+    op(e, &format!("ldr x10, [x10, #{BINDING_TAG_OFFSET}]"), &format!("mov r9, QWORD PTR [r9 + {BINDING_TAG_OFFSET}]"), "recover the current by-value ownership representation");
     op(e, &format!("add x0, x0, x1, lsl #{CAPTURE_SHIFT}"), "mov r8, rdi", "locate this runtime capture inside the validated allocation");
     if e.arch() == Arch::X86_64 {
         op(e, "", &format!("shl r8, {CAPTURE_SHIFT}"), "scale the capture index by its two-word slot width");
