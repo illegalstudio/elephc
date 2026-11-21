@@ -28,6 +28,8 @@
 //!   SPAN set has an explicit `is_empty()` fast path (`has_local_binding_decisions`) that keeps
 //!   the scan off the hot path entirely; the NAME set has none — `local_has_mixed_storage` is a
 //!   plain hash lookup, which on an empty set is already the cheapest thing it could do.
+//! - Scalar-guard argument spans are installed around every post-typecheck phase: a call that can
+//!   reject a `mixed` argument at run time stays `may_throw` even when the callee is pure.
 //! - Buffer read proofs are installed only for propagation. They remove intrinsic warning-handler
 //!   effects, never effects from evaluating a receiver or index or from a bounds failure.
 
@@ -43,6 +45,77 @@ thread_local! {
     static ACTIVE_MIXED_STORAGE_LOCALS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// Indexed reads the checker proved cannot dispatch PHP warning handlers.
     static ACTIVE_BUFFER_READ_SITES: RefCell<HashSet<Span>> = RefCell::new(HashSet::new());
+    /// Arguments whose parameter binding runs a runtime scalar-parameter `TypeError` check.
+    static ACTIVE_SCALAR_GUARD_ARG_SITES: RefCell<HashSet<Span>> = RefCell::new(HashSet::new());
+}
+
+/// Restores the previously installed scalar-guard argument spans when dropped.
+pub struct ScalarGuardArgSitesScope {
+    previous: Option<HashSet<Span>>,
+}
+
+impl Drop for ScalarGuardArgSitesScope {
+    /// Reinstalls the spans that were active before this scope began.
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.take() {
+            ACTIVE_SCALAR_GUARD_ARG_SITES.with(|slot| slot.replace(previous));
+        }
+    }
+}
+
+/// Installs the checker's runtime-guarded argument spans (`CheckResult::scalar_guard_arg_sites`)
+/// until the returned scope drops. Drivers hold it across every post-typecheck phase, including
+/// the effect summaries the optimizer builds when it is constructed.
+pub fn install_scalar_guard_arg_sites(sites: HashSet<Span>) -> ScalarGuardArgSitesScope {
+    ScalarGuardArgSitesScope {
+        previous: Some(ACTIVE_SCALAR_GUARD_ARG_SITES.with(|slot| slot.replace(sites))),
+    }
+}
+
+/// Runs `f` with `sites` installed, or with whatever set is already installed when `None`.
+pub(crate) fn with_scalar_guard_arg_sites<R>(sites: Option<&HashSet<Span>>, f: impl FnOnce() -> R) -> R {
+    let _scope = sites.map(|sites| install_scalar_guard_arg_sites(sites.clone()));
+    f()
+}
+
+/// Returns whether a call with these arguments binds a `mixed`/union value to a declared
+/// scalar parameter, so it can throw `TypeError` before the callee's body runs.
+///
+/// The checker records the bound argument's own span; a named argument is matched through
+/// its value, and a spread through the unpacked expression and, for a static array literal,
+/// through each element it expands to (`f(...['s' => $v])` binds `$v` itself).
+pub(crate) fn call_has_scalar_guard_arg(args: &[crate::parser::ast::Expr]) -> bool {
+    ACTIVE_SCALAR_GUARD_ARG_SITES.with(|slot| call_args_hit_scalar_guard_sites(args, &slot.borrow()))
+}
+
+/// Matches call arguments against an explicit set of runtime-guarded argument spans, as
+/// `call_has_scalar_guard_arg` does against the installed one. The checker passes the spans it
+/// has recorded so far: the installed set only exists after type checking.
+pub(crate) fn call_args_hit_scalar_guard_sites(
+    args: &[crate::parser::ast::Expr],
+    sites: &HashSet<Span>,
+) -> bool {
+    use crate::parser::ast::ExprKind;
+    !sites.is_empty()
+        && args.iter().any(|arg| {
+            sites.contains(&arg.span)
+                || match &arg.kind {
+                    ExprKind::NamedArg { value, .. } => sites.contains(&value.span),
+                    ExprKind::Spread(value) => {
+                        sites.contains(&value.span)
+                            || match &value.kind {
+                                ExprKind::ArrayLiteral(items) => {
+                                    items.iter().any(|item| sites.contains(&item.span))
+                                }
+                                ExprKind::ArrayLiteralAssoc(pairs) => {
+                                    pairs.iter().any(|(_, item)| sites.contains(&item.span))
+                                }
+                                _ => false,
+                            }
+                    }
+                    _ => false,
+                }
+        })
 }
 
 /// Installs checker-proven buffer reads for one constant-propagation run.

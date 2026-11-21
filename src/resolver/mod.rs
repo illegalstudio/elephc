@@ -120,6 +120,7 @@ pub fn resolve_collecting_includes_with_defines(
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
         Span::reset_source_ids();
+        crate::parser::stmt::params::forget_included_param_lines();
         resolve_collecting_includes_with_defines_inner(program, base_dir, defines)
     })
 }

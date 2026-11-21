@@ -838,13 +838,24 @@ function exerciseOwnedSpread(string $text): void {
         let push = owner_op(Op::PushCallOperandOwner);
         let pop = owner_op(Op::PopCallOperandOwner);
         let release = owner_op(Op::ReleaseLocalSlot);
+        // A source holding a converted `Stringable` is released early, before its owner record
+        // is popped, so a throwing destructor still finds the converted string owned; every
+        // release still comes after the later arguments are evaluated.
+        let last_release = function
+            .instructions
+            .iter()
+            .rposition(|inst| {
+                inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(Immediate::LocalSlot(slot))
+            })
+            .unwrap();
         assert!(
             source_call < acquire
                 && acquire < store
                 && store < push
                 && push < later_call
+                && later_call < release
                 && later_call < pop
-                && pop < release,
+                && pop < last_release,
             "{target}: the spread source stays unwind-visible through later argument evaluation",
         );
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();

@@ -333,6 +333,7 @@ fn post_typecheck_optimizer_survives_the_nesting_limit_on_a_small_embedder_stack
             &check.functions,
             &check.classes,
             &check.interfaces,
+            &check.scalar_guard_arg_sites,
         );
         let ast = optimizer.propagate(
             ast,
