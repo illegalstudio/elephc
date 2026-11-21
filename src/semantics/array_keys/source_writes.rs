@@ -449,6 +449,13 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
             return;
         };
         let mut locals = self.locals.clone();
+        apply_expression_facts(
+            target,
+            &mut locals,
+            self.properties,
+            self.profile,
+            self.current_class,
+        );
         let value = apply_expression_facts(
             value,
             &mut locals,
@@ -1182,6 +1189,7 @@ fn validate_stmt(
             index,
             value,
         } => {
+            apply_expression_facts(index, locals, properties, profile, current_class);
             let value =
                 apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = locals.get(array);
@@ -1203,6 +1211,7 @@ fn validate_stmt(
             locals.set(array, array_push_fact(receiver, value));
         }
         StmtKind::NestedArrayAssign { target, value } => {
+            apply_expression_facts(target, locals, properties, profile, current_class);
             let value =
                 apply_expression_facts(value, locals, properties, profile, current_class);
             validate_array_access_chain(
@@ -1230,6 +1239,8 @@ fn validate_stmt(
             index,
             value,
         } => {
+            apply_expression_facts(object, locals, properties, profile, current_class);
+            apply_expression_facts(index, locals, properties, profile, current_class);
             apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = property_fact(
                 infer_expr(object, locals, properties, profile, current_class),
@@ -1251,6 +1262,7 @@ fn validate_stmt(
             index,
             value,
         } => {
+            apply_expression_facts(index, locals, properties, profile, current_class);
             apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = static_property_fact(receiver, property, properties, current_class);
             validate_index(
