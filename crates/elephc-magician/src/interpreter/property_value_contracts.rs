@@ -202,6 +202,7 @@ pub(in crate::interpreter) fn eval_preflight_property_reference_source(
 
 /// Recognizes declarations whose array element contract can validate the current value directly.
 fn declared_has_structural_array(declared: &EvalParameterType) -> bool {
+    /// Finds parameterized or schema-backed array contracts inside nullable and composite declarations.
     fn contains(ty: &elephc_generics::Type) -> bool {
         use elephc_generics::Type;
         match ty {
