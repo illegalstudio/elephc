@@ -1001,7 +1001,8 @@ branches can be written directly on the property (`public Level $first =
 Holder::CASES[0];`, `public Level $level = Level::Low ? Level::High : Level::Low;`),
 an offset or key may itself depend on an enum (`self::CASES[Level::Low ? 1 : 0]`),
 and a scalar property may be selected by an enum condition (`public int $n =
-Level::Low ? 1 : 2;`); all of them initialize and reflect like PHP.
+Level::Low ? 1 : 2;`) or by an enum comparison (`public int $n = Level::Low === Level::High ? 1 : 2;`);
+all of them initialize and reflect like PHP.
 
 A default naming a case that does not exist is a compile error (`Undefined enum case: Level::Missing`), and a scoped constant that resolves to a scalar is still rejected for an enum-typed slot.
 

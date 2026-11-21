@@ -26,6 +26,7 @@ use crate::types::{is_php_integer_array_key, ClassInfo, InterfaceInfo};
 
 mod arrays;
 pub(in crate::codegen) use arrays::resolve_array_const_default;
+mod comparisons;
 
 #[cfg(test)]
 mod tests;
@@ -380,6 +381,9 @@ fn resolve_binary_expression_default(
                 _ => unreachable!("logical default operator was prefiltered"),
             };
             Some(with_enum_reads(const_default_bool(value), reads))
+        }
+        BinOp::Eq | BinOp::NotEq | BinOp::StrictEq | BinOp::StrictNotEq => {
+            comparisons::resolve_equality_default(left, op, right, context, depth + 1)
         }
         BinOp::NullCoalesce => {
             let left = resolve_const_default_at(left, context, depth + 1)?;

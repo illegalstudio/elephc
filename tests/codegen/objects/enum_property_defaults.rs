@@ -308,3 +308,83 @@ var_dump((new ReflectionClassConstant('K', 'PICK'))->getValue() === E::B);
 "#);
     assert_eq!(out, "bool(true)\nbool(true)\nint(1)\nstring(3) \"two\"\nbool(false)\nbool(true)\n");
 }
+
+/// Identity and equality between enum cases fold in property defaults, so reflection sees the
+/// selected scalar instead of null (issue #2261).
+#[test]
+fn test_enum_property_defaults_comparison_selects_reflected_scalar() {
+    let out = compile_and_run(r#"<?php
+enum E { case A; case B; }
+class K {
+    public int $same = E::A === E::A ? 1 : 2;
+    public int $other = E::A === E::B ? 1 : 2;
+    public int $notSame = E::A !== E::B ? 1 : 2;
+    public int $loose = E::A == E::A ? 1 : 2;
+    public int $looseNot = E::A != E::A ? 1 : 2;
+    public bool $flag = E::B === E::B;
+    public static int $pick = E::A === E::B ? 3 : 4;
+}
+var_dump((new ReflectionProperty('K', 'same'))->getDefaultValue());
+var_dump((new ReflectionProperty('K', 'other'))->getDefaultValue());
+var_dump((new ReflectionProperty('K', 'notSame'))->getDefaultValue());
+var_dump((new ReflectionProperty('K', 'loose'))->getDefaultValue());
+var_dump((new ReflectionProperty('K', 'looseNot'))->getDefaultValue());
+var_dump((new ReflectionProperty('K', 'flag'))->getDefaultValue());
+var_dump((new ReflectionProperty('K', 'pick'))->getDefaultValue());
+$k = new K();
+var_dump($k->same, $k->other, $k->notSame, $k->loose, $k->looseNot, $k->flag, K::$pick);
+"#);
+    let flags = "int(1)\nint(2)\nint(1)\nint(1)\nint(2)\nbool(true)\nint(4)\n";
+    assert_eq!(out, format!("{flags}{flags}"));
+}
+
+/// Strict comparisons between scalars, strings and an enum case fold too, and a loose
+/// comparison that needs PHP's numeric-string rules is still evaluated correctly at run time.
+#[test]
+fn test_enum_property_defaults_comparison_scalar_operands() {
+    let out = compile_and_run(r#"<?php
+enum E { case A; case B; }
+class K {
+    public bool $str = 'abc' === 'abc';
+    public bool $strDiff = 'abc' === 'abd';
+    public bool $type = 1 === 1.0;
+    public bool $nulls = null === null;
+    public bool $enumInt = E::A === 1;
+    public bool $numeric = '1e1' == '10';
+    public bool $both = E::A !== E::B && E::B === E::B;
+}
+$names = ['str', 'strDiff', 'type', 'nulls', 'enumInt', 'numeric', 'both'];
+$k = new K();
+foreach ($names as $name) {
+    echo $name, '=', var_export($k->$name, true), "\n";
+}
+var_dump((new ReflectionProperty('K', 'str'))->getDefaultValue());
+var_dump((new ReflectionProperty('K', 'strDiff'))->getDefaultValue());
+var_dump((new ReflectionProperty('K', 'type'))->getDefaultValue());
+var_dump((new ReflectionProperty('K', 'nulls'))->getDefaultValue());
+var_dump((new ReflectionProperty('K', 'enumInt'))->getDefaultValue());
+var_dump((new ReflectionProperty('K', 'numeric'))->getDefaultValue());
+var_dump((new ReflectionProperty('K', 'both'))->getDefaultValue());
+"#);
+    assert_eq!(
+        out,
+        "str=true\nstrDiff=false\ntype=false\nnulls=true\nenumInt=false\nnumeric=true\nboth=true\n\
+         bool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(true)\n"
+    );
+}
+
+/// ReflectionClassConstant folds an enum comparison the same way property defaults do.
+#[test]
+fn test_enum_property_defaults_comparison_reflection_constants() {
+    let out = compile_and_run(r#"<?php
+enum E { case A; case B; }
+class K {
+    const SAME = E::A === E::A;
+    const PICK = E::A === E::B ? 'x' : 'y';
+}
+$constants = (new ReflectionClass('K'))->getConstants();
+var_dump($constants['SAME'], $constants['PICK']);
+var_dump((new ReflectionClassConstant('K', 'PICK'))->getValue());
+"#);
+    assert_eq!(out, "bool(true)\nstring(1) \"y\"\nstring(1) \"y\"\n");
+}
