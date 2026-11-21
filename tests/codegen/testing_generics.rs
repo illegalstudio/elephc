@@ -17,7 +17,7 @@ fn run_generic_suite(source: &str, files: &[(&str, &str)]) -> (String, String, i
     for (name, contents) in files {
         fs::write(dir.join(name), contents).unwrap();
     }
-    let result = elephc_cli_command(&dir)
+    let result = elephc_root_command(&dir)
         .args(["test", "CellTest.lfc"])
         .output();
     fs::remove_dir_all(&dir).expect("remove native generic suite artifacts");

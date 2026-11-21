@@ -78,6 +78,7 @@ fn compile(dir: &Path, ini: &[&str]) -> PathBuf {
 /// Compiles a fixture with additional mode flags, preserving the ordinary INI setup.
 fn compile_with_flags(dir: &Path, ini: &[&str], flags: &[&str]) -> PathBuf {
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
@@ -759,6 +760,7 @@ fn file_cache_operations_link_the_bridge_only_under_a_file_cache() {
         )
         .unwrap();
         let mut cmd = Command::new(elephc_bin());
+        cmd.arg("build");
         cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
         cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
         cmd.current_dir(&dir);
@@ -810,6 +812,7 @@ fn a_web_worker_survives_its_file_cache_directory_being_removed() {
     )
     .unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(&dir);

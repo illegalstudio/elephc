@@ -76,7 +76,7 @@ Use `--with-bcmath` to force-link the bridge and retain the Number declarations
 when the surface is reached only through indirection or opaque eval source:
 
 ```bash
-elephc --with-bcmath app.php
+elephc build --with-bcmath app.php
 ```
 
 `extension_loaded('bcmath')` reports `true` when the AOT binary links the

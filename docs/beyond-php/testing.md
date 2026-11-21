@@ -217,7 +217,7 @@ exit($runner->finish());
 ```
 
 ```text
-$ elephc tests/main.php && ./tests/main
+$ elephc build tests/main.php && ./tests/main
 ok   App\Tests\CounterTest::testStartsAtZero (1 assertion)
 ok   App\Tests\CounterTest::testIncrements (1 assertion)
 

@@ -4,7 +4,7 @@ The four exports demonstrate integers, binary strings, heterogeneous nested
 arrays and a PHP exception. Build with a matching PHP 8.5 development SDK:
 
 ```sh
-elephc --emit phpext --heap-size=1048576 main.php
+elephc build --emit phpext --heap-size=1048576 main.php
 php -n -d extension=./main.so driver.php
 ```
 

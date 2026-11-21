@@ -25,7 +25,7 @@ final class IdentityTest extends TestCase {
 }
 "#,
     ).unwrap();
-    let output = elephc_cli_command(&dir)
+    let output = elephc_root_command(&dir)
         .args(["test", "IdentityTest.lfc"])
         .output()
         .expect("run native generic function test");
@@ -57,7 +57,7 @@ final class GenericFunctionTest extends TestCase {
 }
 "#,
     ).unwrap();
-    let output = elephc_cli_command(&dir)
+    let output = elephc_root_command(&dir)
         .args(["test", "GenericFunctionTest.lfc", "--no-isolation"])
         .output()
         .expect("run namespaced native generic functions");
@@ -120,7 +120,7 @@ final class DocblockTest extends TestCase {
     }
 }
 "#).unwrap();
-    let output = elephc_cli_command(&dir)
+    let output = elephc_root_command(&dir)
         .args(["test", "DocblockTest.php", "--strict-php"])
         .output().unwrap();
     fs::remove_dir_all(&dir).unwrap();
@@ -171,7 +171,7 @@ final class CompoundTest extends TestCase {
     }
 }
 "#).unwrap();
-    let output = elephc_cli_command(&dir).args(["test", "CompoundTest.lfc"]).output().unwrap();
+    let output = elephc_root_command(&dir).args(["test", "CompoundTest.lfc"]).output().unwrap();
     fs::remove_dir_all(&dir).unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout),
@@ -225,7 +225,7 @@ final class MethodHelperTest extends TestCase {
     ] {
         fs::write(dir.join(name), source).unwrap();
     }
-    let output = elephc_cli_command(&dir).args(["test", "MethodHelperTest.lfc"]).output().unwrap();
+    let output = elephc_root_command(&dir).args(["test", "MethodHelperTest.lfc"]).output().unwrap();
     fs::remove_dir_all(&dir).unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

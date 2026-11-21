@@ -119,7 +119,7 @@ fn test_exception_routing_example_prunes_catch_only_declarations() {
         .expect("failed to run elephc CLI with --emit-ir");
     assert!(
         emitted.status.success(),
-        "elephc --emit-ir failed: stderr={}",
+        "elephc build --emit-ir failed: stderr={}",
         String::from_utf8_lossy(&emitted.stderr)
     );
     let ir = String::from_utf8_lossy(&emitted.stdout);
@@ -862,7 +862,7 @@ fn test_cli_pdo_query_only_omits_begin_transaction_method() {
         .expect("failed to compile PDO fixture through the CLI");
     assert!(
         output.status.success(),
-        "elephc --emit-asm failed: {}",
+        "elephc build --emit-asm failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 

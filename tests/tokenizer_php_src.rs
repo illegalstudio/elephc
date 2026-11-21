@@ -87,6 +87,7 @@ token_get_all($code, TOKEN_PARSE);
     fs::write(&source_path, source.as_bytes()).map_err(|error| format!("write: {error}"))?;
 
     let compiled = Command::new(elephc)
+        .arg("build")
         .arg(&source_path)
         .output()
         .map_err(|error| format!("spawn elephc: {error}"))?;

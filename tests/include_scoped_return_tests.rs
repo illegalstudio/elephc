@@ -50,7 +50,7 @@ fn run_program(prefix: &str, files: &[(&str, &str)]) -> String {
     for (name, source) in files {
         fs::write(dir.join(name), source).unwrap();
     }
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)
@@ -233,7 +233,7 @@ fn compile_with(
     for (name, source) in files {
         fs::write(dir.join(name), source).unwrap();
     }
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)

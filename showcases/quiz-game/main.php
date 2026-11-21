@@ -1,6 +1,6 @@
 <?php
 // Quiz Game — trivia with scoring, timer, and high scores
-// Usage: elephc showcases/quiz-game/main.php && ./showcases/quiz-game/main
+// Usage: elephc build showcases/quiz-game/main.php && ./showcases/quiz-game/main
 
 require_once 'questions.php';
 require_once 'game.php';
