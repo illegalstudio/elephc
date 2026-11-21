@@ -287,10 +287,19 @@ impl Checker {
                     true,
                 ),
             };
-            let rejection = rejection.or_else(|| (self.strict_locals
-                && name_facts.assigns.iter().any(|site| site.depth > 0)
-                && name_facts.assigns.iter().any(|site| site.ty == PhpType::Mixed
-                    || site.ty != name_facts.assigns[0].ty))
+            // Unknown producers need a live runtime origin whenever the body also has a
+            // conditional store. Exact alternatives need one only when their governing guard
+            // is opaque: a transparent guard accepts every exact store against its own view and
+            // restores the outer binding afterwards, so marking that shape would make the mark
+            // override the very guard that proved the region safe.
+            let has_conditional_store = name_facts.assigns.iter().any(|site| site.depth > 0);
+            let has_unknown_producer = name_facts.assigns.iter().any(|site| site.ty == PhpType::Mixed);
+            let has_opaque_alternative = name_facts.assigns.iter().any(|site| {
+                site.depth > 0 && site.ty != name_facts.assigns[0].ty
+                    && site.guard_region.is_none_or(|region| !transparent_regions[region])
+            });
+            let rejection = rejection.or_else(|| (self.strict_locals && has_conditional_store
+                && (has_unknown_producer || has_opaque_alternative))
                 .then(|| (PhpType::Mixed, &name_facts.assigns[0])));
             let Some((existing, site)) = rejection else { continue; };
             marks.push((

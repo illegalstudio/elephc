@@ -162,7 +162,14 @@ impl Checker {
             self.local_store_contracts.remove(&key);
         }
         let declared = self.typed_local_names.get(name);
-        let original = declared.or_else(|| self.inferred_local_contracts.get(name))
+        // A store governed by a flow guard is checked against that guard's current view. Once
+        // the first store replaces the view, later stores in the same region are checked against
+        // the value the region itself published. The inferred binding contract remains untouched
+        // so closing the region can restore the pre-guard binding.
+        let guarded = self.narrowed_local_origins.get(name).and_then(|origin| {
+            origin.view.as_ref().or_else(|| origin.stored_in_region.then(|| env.get(name)).flatten())
+        });
+        let original = declared.or(guarded).or_else(|| self.inferred_local_contracts.get(name))
             .or_else(|| self.narrowed_local_origins.get(name).map(|origin| &origin.origin))
             .or_else(|| self.guarded_union_types.get(name).map(|origin| &origin.ty))
             .or_else(|| env.get(name).filter(|_| self.definitely_bound_locals.contains(name)
