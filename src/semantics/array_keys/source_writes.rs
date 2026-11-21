@@ -1078,6 +1078,39 @@ fn infer_expr(
     profile: SemanticProfile,
     current_class: Option<&str>,
 ) -> ValueFact {
+    match &expr.kind {
+        ExprKind::ArrayLiteral(values) => {
+            return inferred_indexed_array_fact(
+                values,
+                locals,
+                properties,
+                profile,
+                current_class,
+            );
+        }
+        ExprKind::ArrayLiteralAssoc(entries) => {
+            return inferred_assoc_array_fact(
+                entries,
+                locals,
+                properties,
+                profile,
+                current_class,
+            );
+        }
+        ExprKind::ArrayLiteralMixed(entries) => {
+            return inferred_mixed_array_fact(
+                entries,
+                locals,
+                properties,
+                profile,
+                current_class,
+            );
+        }
+        ExprKind::Spread(inner) => {
+            return infer_expr(inner, locals, properties, profile, current_class);
+        }
+        _ => {}
+    }
     if let Some(fact) = source_expr_fact(expr, profile) {
         return fact;
     }
@@ -1302,9 +1335,6 @@ fn source_expr_fact(expr: &Expr, profile: SemanticProfile) -> Option<ValueFact> 
         ExprKind::BoolLiteral(true) | ExprKind::Not(_) => ValueFact::Known(PhpType::Bool),
         ExprKind::StringLiteral(value) => ValueFact::String(value.clone()),
         ExprKind::Null => ValueFact::Known(PhpType::Void),
-        ExprKind::ArrayLiteral(values) => source_indexed_array_fact(values, profile),
-        ExprKind::ArrayLiteralAssoc(entries) => source_assoc_array_fact(entries, profile),
-        ExprKind::ArrayLiteralMixed(entries) => source_mixed_array_fact(entries, profile),
         ExprKind::Spread(inner) => source_expr_fact(inner, profile)?,
         ExprKind::UnaryPlus(inner) => match source_expr_fact(inner, profile)? {
             value @ (ValueFact::Integer(_) | ValueFact::Known(PhpType::Float)) => value,
@@ -1327,19 +1357,33 @@ fn source_expr_fact(expr: &Expr, profile: SemanticProfile) -> Option<ValueFact> 
     })
 }
 
-/// Builds a complete indexed literal shape, expanding only literal array spreads.
-fn source_indexed_array_fact(values: &[Expr], profile: SemanticProfile) -> ValueFact {
+/// Builds a complete indexed literal shape from values inferred in the current flow state.
+fn inferred_indexed_array_fact(
+    values: &[Expr],
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> ValueFact {
     let mut array = ArrayFact::empty();
     for value in values {
         if let ExprKind::Spread(source) = &value.kind {
-            let Some(ValueFact::Array(source)) = source_expr_fact(source, profile) else {
+            let ValueFact::Array(source) =
+                infer_expr(source, locals, properties, profile, current_class)
+            else {
                 return ValueFact::Known(PhpType::php_array());
             };
             if array.spread(&source).is_none() {
                 return ValueFact::Known(PhpType::php_array());
             }
         } else if array
-            .append(source_expr_fact(value, profile).unwrap_or(ValueFact::Unknown))
+            .append(infer_expr(
+                value,
+                locals,
+                properties,
+                profile,
+                current_class,
+            ))
             .is_none()
         {
             return ValueFact::Known(PhpType::php_array());
@@ -1348,8 +1392,14 @@ fn source_indexed_array_fact(values: &[Expr], profile: SemanticProfile) -> Value
     ValueFact::Array(array)
 }
 
-/// Builds a complete explicitly keyed literal shape under the selected exact-key policy.
-fn source_assoc_array_fact(entries: &[(Expr, Expr)], profile: SemanticProfile) -> ValueFact {
+/// Builds an explicitly keyed literal shape from values inferred in the current flow state.
+fn inferred_assoc_array_fact(
+    entries: &[(Expr, Expr)],
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> ValueFact {
     let mut array = ArrayFact::empty();
     for (key, value) in entries {
         let Some(key) = source_array_key(key, profile) else {
@@ -1357,14 +1407,20 @@ fn source_assoc_array_fact(entries: &[(Expr, Expr)], profile: SemanticProfile) -
         };
         array.insert(
             key,
-            source_expr_fact(value, profile).unwrap_or(ValueFact::Unknown),
+            infer_expr(value, locals, properties, profile, current_class),
         );
     }
     ValueFact::Array(array)
 }
 
-/// Builds an ordered mixed literal shape when every spread and key is static.
-fn source_mixed_array_fact(entries: &[ArrayEntry], profile: SemanticProfile) -> ValueFact {
+/// Builds an ordered mixed literal shape from values inferred in the current flow state.
+fn inferred_mixed_array_fact(
+    entries: &[ArrayEntry],
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> ValueFact {
     let mut array = ArrayFact::empty();
     for entry in entries {
         let success = match entry {
@@ -1373,13 +1429,21 @@ fn source_mixed_array_fact(entries: &[ArrayEntry], profile: SemanticProfile) -> 
                     ExprKind::Spread(source) => source.as_ref(),
                     _ => source,
                 };
-                let Some(ValueFact::Array(source)) = source_expr_fact(source, profile) else {
+                let ValueFact::Array(source) =
+                    infer_expr(source, locals, properties, profile, current_class)
+                else {
                     return ValueFact::Known(PhpType::php_array());
                 };
                 array.spread(&source)
             }
             ArrayEntry::Value(value) | ArrayEntry::Reference(value) => {
-                array.append(source_expr_fact(value, profile).unwrap_or(ValueFact::Unknown))
+                array.append(infer_expr(
+                    value,
+                    locals,
+                    properties,
+                    profile,
+                    current_class,
+                ))
             }
             ArrayEntry::Keyed(key, value) | ArrayEntry::KeyReference(key, value) => {
                 let Some(key) = source_array_key(key, profile) else {
@@ -1387,7 +1451,7 @@ fn source_mixed_array_fact(entries: &[ArrayEntry], profile: SemanticProfile) -> 
                 };
                 array.insert(
                     key,
-                    source_expr_fact(value, profile).unwrap_or(ValueFact::Unknown),
+                    infer_expr(value, locals, properties, profile, current_class),
                 );
                 Some(())
             }

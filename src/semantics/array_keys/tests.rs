@@ -136,6 +136,9 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php $values = [9223372036854775807 => [1]]; $values[] = []; if (PHP_OS_FAMILY === 'Windows') { $values[9223372036854775807][false] = 2; }",
         "<?php $values = [1]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = ($values = [[1]]); }",
         "<?php $values = [1]; do { $values = [[1]]; } while ($values[0][false] = false);",
+        "<?php $inner = [1]; $values = [$inner]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $inner = [1]; $values = ['a' => $inner]; if (PHP_OS_FAMILY === 'Windows') { $values['a'][false] = 2; }",
+        "<?php $inner = [[1]]; $values = [...$inner]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
     ] {
         let error = crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
