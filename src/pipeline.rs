@@ -1608,6 +1608,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
                         &deferral_class_files,
                         &class_parent_edges,
                         &php_load_fatal,
+                        &mut canonical_declaring_paths,
                     )
                 });
             remembered_refusals = rest;
@@ -1618,7 +1619,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
                 php_load_fatal.insert(path.clone());
                 probe_only_deferred.insert(path.clone());
                 if let Some(parent) =
-                    first_parent_declared_by(&path, &deferral_class_files, &class_parent_edges)
+                    first_parent_declared_by(&path, &deferral_class_files, &class_parent_edges, &mut canonical_declaring_paths)
                 {
                     add_missing_parent_unit(&mut ast, &mut preload_include_units, &path, &parent);
                 }
@@ -1912,6 +1913,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
                             &deferral_class_files,
                             &class_parent_edges,
                             &php_load_fatal,
+                            &mut canonical_declaring_paths,
                         ))
                 {
                     php_load_fatal.insert(canonical.clone());
@@ -1948,12 +1950,13 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
                         &deferral_class_files,
                         &class_parent_edges,
                         &php_load_fatal,
+                        &mut canonical_declaring_paths,
                     )
                 {
                     php_load_fatal.insert(path.clone());
                     probe_only_deferred.insert(path.clone());
                     if let Some(parent) =
-                        first_parent_declared_by(&path, &deferral_class_files, &class_parent_edges)
+                        first_parent_declared_by(&path, &deferral_class_files, &class_parent_edges, &mut canonical_declaring_paths)
                     {
                         add_missing_parent_unit(&mut ast, &mut preload_include_units, &path, &parent);
                     }
@@ -3071,15 +3074,7 @@ fn declares_only_probed_classes<V: AsRef<str>>(
     let declared: Vec<&String> = class_files
         .iter()
         .filter(|(_, declaring)| {
-            canonical_paths
-                .entry(declaring.as_ref().to_string())
-                .or_insert_with(|| {
-                    #[cfg(test)]
-                    DECLARING_PATH_CANONICALIZATIONS.with(|count| count.set(count.get() + 1));
-                    Path::new(declaring.as_ref()).canonicalize().ok()
-                })
-                .as_deref()
-                .is_some_and(|declaring| declaring == file)
+            canonical_declaring_path(declaring.as_ref(), canonical_paths).is_some_and(|declaring| declaring == file)
         })
         .map(|(class, _)| class)
         .collect();
@@ -3087,6 +3082,23 @@ fn declares_only_probed_classes<V: AsRef<str>>(
         && declared
             .iter()
             .all(|class| probe_only_names.contains(&crate::names::php_symbol_key(class)))
+}
+
+/// The canonical path of a class's declaring file, resolved once per build through `cache`: a file
+/// does not move while the program compiles, and `realpath` per class per refused file was the top
+/// cost of the Symfony Demo's front end (57% of its samples).
+fn canonical_declaring_path<'a>(
+    file: &str,
+    cache: &'a mut crate::fast_hash::FastMap<String, Option<PathBuf>>,
+) -> Option<&'a Path> {
+    cache
+        .entry(file.to_string())
+        .or_insert_with(|| {
+            #[cfg(test)]
+            DECLARING_PATH_CANONICALIZATIONS.with(|count| count.set(count.get() + 1));
+            Path::new(file).canonicalize().ok()
+        })
+        .as_deref()
 }
 
 /// Gives a class file refused for a missing parent the unit that fails like php's load of it.
@@ -3122,10 +3134,11 @@ fn first_parent_declared_by(
     path: &Path,
     class_files: &HashMap<String, String>,
     parent_edges: &[(String, Vec<String>)],
+    canonical_paths: &mut crate::fast_hash::FastMap<String, Option<PathBuf>>,
 ) -> Option<String> {
     let mut classes: Vec<&String> = class_files
         .iter()
-        .filter(|(_, file)| Path::new(file).canonicalize().is_ok_and(|file| file == path))
+        .filter(|(_, file)| canonical_declaring_path(file, canonical_paths).is_some_and(|file| file == path))
         .map(|(name, _)| name)
         .collect();
     classes.sort();
@@ -3145,11 +3158,16 @@ fn extends_a_php_load_fatal_class(
     class_files: &HashMap<String, String>,
     parent_edges: &[(String, Vec<String>)],
     php_load_fatal: &HashSet<PathBuf>,
+    canonical_paths: &mut crate::fast_hash::FastMap<String, Option<PathBuf>>,
 ) -> bool {
     if php_load_fatal.is_empty() {
         return false;
     }
-    let canonical = |file: &str| Path::new(file).canonicalize().unwrap_or_else(|_| PathBuf::from(file));
+    let canonical_paths = std::cell::RefCell::new(canonical_paths);
+    let canonical = |file: &str| {
+        canonical_declaring_path(file, &mut canonical_paths.borrow_mut())
+            .map_or_else(|| PathBuf::from(file), Path::to_path_buf)
+    };
     let file_of = |class: &str| {
         class_files
             .iter()
@@ -3221,6 +3239,39 @@ mod declaring_path_tests {
         let canonicalized = DECLARING_PATH_CANONICALIZATIONS.with(|count| count.get());
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(canonicalized, 2, "{canonicalized} canonicalizations for two declaring files");
+    }
+
+    /// Asking which refused files extend a class php cannot load canonicalized every class file
+    /// per question: files times refusals `realpath` calls, 57% of the Symfony Demo's front end.
+    /// The declaring files are canonicalized once per build, however many files are asked about.
+    #[test]
+    fn load_fatal_ancestry_canonicalizes_each_declaring_file_once() {
+        let dir = std::env::temp_dir().join(format!("elephc_load_fatal_paths_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fatal = dir.join("Fatal.php");
+        std::fs::write(&fatal, "<?php\n").unwrap();
+        let mut class_files: HashMap<String, String> = HashMap::default();
+        let mut parent_edges: Vec<(String, Vec<String>)> = Vec::new();
+        class_files.insert("Base".to_string(), fatal.display().to_string());
+        let mut children = Vec::new();
+        for index in 0..6 {
+            let child = dir.join(format!("Child{index}.php"));
+            std::fs::write(&child, "<?php\n").unwrap();
+            class_files.insert(format!("Child{index}"), child.display().to_string());
+            parent_edges.push((format!("Child{index}"), vec!["Base".to_string()]));
+            children.push(child.canonicalize().unwrap());
+        }
+        let php_load_fatal: HashSet<PathBuf> = [fatal.canonicalize().unwrap()].into_iter().collect();
+        let mut cache = crate::fast_hash::FastMap::default();
+        DECLARING_PATH_CANONICALIZATIONS.with(|count| count.set(0));
+        for _ in 0..3 {
+            for child in &children {
+                assert!(extends_a_php_load_fatal_class(child, &class_files, &parent_edges, &php_load_fatal, &mut cache));
+            }
+        }
+        let canonicalized = DECLARING_PATH_CANONICALIZATIONS.with(|count| count.get());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(canonicalized, 7, "{canonicalized} canonicalizations for seven declaring files");
     }
 }
 
