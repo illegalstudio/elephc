@@ -130,6 +130,10 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php $values = [...[[1]]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $values = []; $values[0] = []; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $values = [[]]; $values[0][0] = []; if (PHP_OS_FAMILY === 'Windows') { $values[0][0][false] = 2; }",
+        "<?php $values = [-1 => [1], [2]]; if (PHP_OS_FAMILY === 'Windows') { $values[-1][false] = 2; }",
+        "<?php $values = [-1 => [1]]; $values[] = []; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [-1 => [1], ...[[2]]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [9223372036854775807 => [1]]; $values[] = []; if (PHP_OS_FAMILY === 'Windows') { $values[9223372036854775807][false] = 2; }",
     ] {
         let error = crate::semantics::validate_source(
             &parse(source, SourceMode::Php),

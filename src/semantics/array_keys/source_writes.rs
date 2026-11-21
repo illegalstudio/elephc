@@ -63,12 +63,12 @@ impl ArrayFact {
         }
     }
 
-    /// Appends one implicit value when version-independent integer-key history is known.
+    /// Appends one implicit value while preserving PHP 8.5 next-key history.
     fn append(&mut self, value: ValueFact) -> Option<()> {
         let key = match self.maximum_integer {
-            None => 0,
-            Some(maximum) if maximum >= 0 => maximum.checked_add(1)?,
-            Some(_) => return None,
+            None | Some(..0) => 0,
+            Some(i64::MAX) => return Some(()),
+            Some(maximum) => maximum + 1,
         };
         self.insert(ArrayKeyFact::Integer(key), value);
         Some(())
