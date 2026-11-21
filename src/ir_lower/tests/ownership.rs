@@ -566,10 +566,24 @@ fn nested_mixed_write_roots_preserve_storage_ownership_on_all_targets() {
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let function = module.functions.iter().find(|function| function.name == "change_nested_root").unwrap();
-        let clone = function.instructions.iter().find(|inst| inst.op == Op::MixedClone)
-            .expect("a by-reference root needs a detached value before nested mutation");
-        assert!(function.instructions.iter().any(|inst| inst.op == Op::StoreRefCell), "{target}");
-        assert_eq!(clone.result_php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
+        let detached = function.instructions.iter().find(|inst| {
+            inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::MixedCellResolveForWrite,
+            ))
+        })
+        .expect("a by-reference root needs a detached writable value before nested mutation");
+        let published = function.instructions.iter().find(|inst| inst.op == Op::LoadRefCell)
+            .expect("a by-reference root must load its published cell");
+        assert_eq!(
+            function.value(published.result.unwrap()).unwrap().ownership,
+            Ownership::Borrowed,
+            "{target}",
+        );
+        assert!(
+            !function.instructions.iter().any(|inst| inst.op == Op::StoreRefCell),
+            "{target}: the stable published cell must be mutated in place",
+        );
+        assert_eq!(detached.result_php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}");
         let mut property_fetches = 0;
         for function in &module.functions {
             for inst in &function.instructions {
