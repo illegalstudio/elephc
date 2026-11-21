@@ -377,20 +377,31 @@ fn validate_true_condition_flow(
         ExprKind::BinaryOp { left, op, right }
             if matches!(op, crate::parser::ast::BinOp::And) =>
         {
-            let left = validate_true_condition_flow(
+            let left_true = validate_true_condition_flow(
                 left,
                 locals,
                 properties,
                 profile,
                 current_class,
             )?;
-            validate_true_condition_flow(
-                right,
-                &left,
+            let left_false = validate_false_condition_flow(
+                left,
+                locals,
                 properties,
                 profile,
                 current_class,
-            )
+            )?;
+            let right_true = validate_true_condition_flow(
+                right,
+                &left_true,
+                properties,
+                profile,
+                current_class,
+            )?;
+            Ok(match crate::types::deferred_defaults::literal_truthiness(left) {
+                Some(true) | None => right_true,
+                Some(false) => left_false,
+            })
         }
         ExprKind::BinaryOp { left, op, right }
             if matches!(op, crate::parser::ast::BinOp::Or) =>
@@ -416,7 +427,11 @@ fn validate_true_condition_flow(
                 profile,
                 current_class,
             )?;
-            Ok(merge_exits(&[left_true, right_true]))
+            Ok(match crate::types::deferred_defaults::literal_truthiness(left) {
+                Some(true) => left_true,
+                Some(false) => right_true,
+                None => merge_exits(&[left_true, right_true]),
+            })
         }
         ExprKind::Not(inner) => validate_false_condition_flow(
             inner,
@@ -441,20 +456,31 @@ fn validate_false_condition_flow(
         ExprKind::BinaryOp { left, op, right }
             if matches!(op, crate::parser::ast::BinOp::Or) =>
         {
-            let left = validate_false_condition_flow(
+            let left_false = validate_false_condition_flow(
                 left,
                 locals,
                 properties,
                 profile,
                 current_class,
             )?;
-            validate_false_condition_flow(
-                right,
-                &left,
+            let left_true = validate_true_condition_flow(
+                left,
+                locals,
                 properties,
                 profile,
                 current_class,
-            )
+            )?;
+            let right_false = validate_false_condition_flow(
+                right,
+                &left_false,
+                properties,
+                profile,
+                current_class,
+            )?;
+            Ok(match crate::types::deferred_defaults::literal_truthiness(left) {
+                Some(true) => left_true,
+                Some(false) | None => right_false,
+            })
         }
         ExprKind::BinaryOp { left, op, right }
             if matches!(op, crate::parser::ast::BinOp::And) =>
@@ -480,7 +506,11 @@ fn validate_false_condition_flow(
                 profile,
                 current_class,
             )?;
-            Ok(merge_exits(&[left_false, right_false]))
+            Ok(match crate::types::deferred_defaults::literal_truthiness(left) {
+                Some(false) => left_false,
+                Some(true) => right_false,
+                None => merge_exits(&[left_false, right_false]),
+            })
         }
         ExprKind::Not(inner) => validate_true_condition_flow(
             inner,
