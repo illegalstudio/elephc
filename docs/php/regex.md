@@ -96,6 +96,7 @@ for a complete project.
 | `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): mixed` | Replace all regex matches with the callback return value; callback receives `array<string>` matches. The static return is `mixed`, so a `string` function may return the call. An invalid pattern, including an unknown modifier or a missing delimiter, returns `null` |
 | `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array\|false` | PHP returns the pieces, or `false` for an invalid pattern or the removed `/e` modifier. The checker types this result as `array\|false`. Supports no-empty, delimiter-capture, offset-capture, and positive limits |
 | `preg_grep()` | `preg_grep($pattern, $array, $flags = 0): array\|false` | Return the entries whose string value matches, keeping their keys; `PREG_GREP_INVERT` keeps the others. An invalid pattern returns `false` |
+| `preg_filter()` | `preg_filter($pattern, $replacement, $subject): ?string` | Like `preg_replace()` (same string-only arguments), but returns `null` when the pattern matches nothing or is invalid |
 | `preg_quote()` | `preg_quote($str, $delimiter = null): string` | Escape the regex metacharacters (`. \ + * ? [ ^ ] $ ( ) { } = ! < > \| : - #`) and the first byte of `$delimiter` with a backslash; NUL becomes `\000` |
 | `preg_last_error()` | `preg_last_error(): int` | The `PREG_*_ERROR` code of the last `preg_*` call |
 | `preg_last_error_msg()` | `preg_last_error_msg(): string` | PHP's message for that code |
@@ -229,6 +230,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
+| [`preg_filter()`](./builtins/regex/preg_filter.md) | `(string $pattern, string $replacement, string $subject): ?string` | `?string` | ✓ | ✓ |
 | [`preg_grep()`](./builtins/regex/preg_grep.md) | `(string $pattern, array $array, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |
 | [`preg_last_error()`](./builtins/regex/preg_last_error.md) | `(): int` | `int` | ✓ | ✓ |
 | [`preg_last_error_msg()`](./builtins/regex/preg_last_error_msg.md) | `(): string` | `string` | ✓ | ✓ |

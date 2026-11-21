@@ -195,7 +195,7 @@
       "total": 3181
     },
     "functions": {
-      "have": 1115,
+      "have": 1116,
       "total": 2169
     }
   },
@@ -1115,8 +1115,8 @@
       "docs": "docs/php/regex.md#functions",
       "extension": "pcre",
       "functions": {
-        "eval": 9,
-        "have": 9,
+        "eval": 10,
+        "have": 10,
         "total": 11
       },
       "name": "pcre",

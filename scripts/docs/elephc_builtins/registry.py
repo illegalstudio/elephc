@@ -307,6 +307,7 @@ REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
     "json_validate": ("JSON", "JSON"),
     "mb_ereg_match": ("Regex", "Regex"),
     "method_exists": ("Class", "Class"),
+    "preg_filter": ("Regex", "Regex"),
     "preg_grep": ("Regex", "Regex"),
     "preg_last_error": ("Regex", "Regex"),
     "preg_last_error_msg": ("Regex", "Regex"),

@@ -771,6 +771,14 @@ fn test_error_preg_grep_wrong_types() {
     );
 }
 
+/// `preg_filter()` takes a pattern, a replacement and a subject.
+#[test]
+fn test_error_preg_filter_wrong_args() {
+    for source in ["<?php preg_filter();", r#"<?php preg_filter("/a/", "b");"#] {
+        expect_error(source, "Function 'preg_filter' expects 3 arguments");
+    }
+}
+
 /// `preg_quote()` takes a string and an optional delimiter: no argument or more than two is
 /// rejected, as php's `ArgumentCountError` does at runtime.
 #[test]

@@ -231,6 +231,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     PregGrep,
     /// Dispatches `preg_quote(...)`.
     PregQuote,
+    /// Dispatches `preg_filter(...)`.
+    PregFilter,
     /// Dispatches `preg_last_error(...)`.
     PregLastError,
     /// Dispatches `preg_last_error_msg(...)`.
@@ -496,6 +498,7 @@ impl EvalDirectHook {
             }
             Self::PregGrep => eval_builtin_preg_grep(args, context, scope, values),
             Self::PregQuote => eval_builtin_preg_quote(args, context, scope, values),
+            Self::PregFilter => eval_builtin_preg_filter(args, context, scope, values),
             Self::PregLastError => eval_builtin_preg_last_error(args, values),
             Self::PregLastErrorMsg => eval_builtin_preg_last_error_msg(args, values),
             Self::PregSplit => eval_builtin_preg_split(args, context, scope, values),

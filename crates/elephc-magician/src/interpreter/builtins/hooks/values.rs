@@ -234,6 +234,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     PregGrep,
     /// Dispatches `preg_quote(...)`.
     PregQuote,
+    /// Dispatches `preg_filter(...)`.
+    PregFilter,
     /// Dispatches `preg_last_error(...)`.
     PregLastError,
     /// Dispatches `preg_last_error_msg(...)`.
@@ -603,6 +605,7 @@ impl EvalValuesHook {
             }
             Self::PregGrep => eval_preg_grep_values_result(evaluated_args, context, values),
             Self::PregQuote => eval_preg_quote_values_result(evaluated_args, values),
+            Self::PregFilter => eval_preg_filter_values_result(evaluated_args, values),
             Self::PregLastError => {
                 if !evaluated_args.is_empty() {
                     return Err(EvalStatus::RuntimeFatal);

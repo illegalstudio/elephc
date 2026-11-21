@@ -122265,6 +122265,129 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "replacement",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "subject",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 3,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Regex",
+    "canonical_name": "preg_filter",
+    "description": "Performs `preg_replace()` but returns `null` when `$pattern` matches nothing in `$subject` or is invalid.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "regex",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/regex/preg_filter.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "pattern",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "replacement",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "subject",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 3,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/pcre_prelude.rs",
+      "codegen_function": "preg_filter",
+      "notes": [
+        "Implemented by the compiler-injected PCRE prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "pcre",
+    "name": "preg_filter",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "pattern",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "replacement",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "subject",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "?string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "preg_filter",
+    "sub_area": "Regex"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "pattern",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
           "name": "array",
           "optional": false,
           "type": "array"

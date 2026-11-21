@@ -1,6 +1,7 @@
 //! Purpose:
 //! Injects `preg_grep()` as a declared PHP function built on `preg_split()` and `preg_match()`,
-//! and `preg_quote()` as a byte loop over PHP's regex metacharacters.
+//! `preg_quote()` as a byte loop over PHP's regex metacharacters, and `preg_filter()` over
+//! `preg_match()` and `preg_replace()`.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()`, next to the version prelude and before name resolution,
@@ -39,7 +40,7 @@ use crate::synthetic_class::{
 };
 
 /// The surface this prelude can inject, each guarded on its own.
-const SURFACE: &[&str] = &["preg_grep", "preg_quote"];
+const SURFACE: &[&str] = &["preg_grep", "preg_quote", "preg_filter"];
 
 /// The bytes `preg_quote()` escapes besides NUL and the delimiter (php-src `ext/pcre`, PHP 7.3+
 /// adds `#`).
@@ -205,7 +206,36 @@ fn preg_quote_decl() -> Stmt {
         .build()
 }
 
-/// Whether `program` calls `preg_grep()`: the usage half of the test `inject_if_used` applies.
+/// `preg_filter(string $pattern, string $replacement, string $subject): ?string`.
+///
+/// `preg_replace()` that answers `null` when nothing matched (or the pattern is invalid), over the
+/// same string-only subset elephc's `preg_replace()` accepts.
+fn preg_filter_decl() -> Stmt {
+    function("preg_filter")
+        .param("pattern", TypeExpr::Str)
+        .param("replacement", TypeExpr::Str)
+        .param("subject", TypeExpr::Str)
+        .returns(TypeExpr::Nullable(Box::new(TypeExpr::Str)))
+        .body(vec![
+            s_if(
+                e_binop(
+                    e_call("preg_match", vec![e_var("pattern"), e_var("subject")]),
+                    BinOp::StrictNotEq,
+                    e_int(1),
+                ),
+                vec![s_return(e_null())],
+                vec![],
+                None,
+            ),
+            s_return(e_call(
+                "preg_replace",
+                vec![e_var("pattern"), e_var("replacement"), e_var("subject")],
+            )),
+        ])
+        .build()
+}
+
+/// Whether `program` calls a function this prelude declares: the usage half of the test `inject_if_used` applies.
 ///
 /// Also run by `crate::autoload::prelude_probe` over the autoload closure, whose files are only
 /// loaded after this prelude has been decided.
@@ -249,7 +279,7 @@ pub fn inject_if_used(
 
 /// Builds the injected PCRE declarations.
 pub(crate) fn pcre_declarations() -> Program {
-    internal_declarations(|| vec![preg_grep_decl(), preg_quote_decl()])
+    internal_declarations(|| vec![preg_grep_decl(), preg_quote_decl(), preg_filter_decl()])
 }
 
 /// The function name a prelude declaration declares.

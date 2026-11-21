@@ -55,6 +55,7 @@ mod codegen {
     mod system;
     mod json;
     mod preg_errors_grep;
+    mod preg_filter;
     mod preg_quote;
     mod uri_php_src;
     mod uri;
