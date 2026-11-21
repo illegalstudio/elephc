@@ -53,7 +53,12 @@ pub(super) fn lower_reflection_class_new_instance_args(
     let class_name = call.root_value(ctx, class_name, expr.span);
     let class_name = lower_expr(ctx, &class_name);
     let unpack = call.unpack(0, expr.span);
-    let result = lower_new_dynamic_generic(ctx, class_name, &[unpack], expr);
+    let result = object_construction::lower_new_dynamic_generic_for_reflection(
+        ctx,
+        class_name,
+        &[unpack],
+        expr,
+    );
     finish_reflection_array_call(ctx, call, result, expr.span)
 }
 

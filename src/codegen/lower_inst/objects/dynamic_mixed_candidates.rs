@@ -157,7 +157,7 @@ pub(super) fn dynamic_new_uncastable_collector(
 /// reaches the fallback for reasons this function has not measured, and stays there.
 pub(super) fn dynamic_new_mixed_refusals(
     ctx: &FunctionContext<'_>,
-    arg_count: usize,
+    arg_count: Option<usize>,
     line: u32,
     matched: &[String],
     reflection_construction: bool,
@@ -181,6 +181,9 @@ pub(super) fn dynamic_new_mixed_refusals(
             refusals.push(refusal);
             continue;
         }
+        let Some(arg_count) = arg_count else {
+            continue;
+        };
         // A descendant of a class with a private constructor carries no `__construct` entry of
         // its own, but PHP still runs the ancestor's. Resolve the owner here too, so an arity or
         // collector refusal names and measures the signature that will actually run.
