@@ -217,21 +217,22 @@ mod tests {
         use crate::parser::ast::{ExprKind, Stmt};
         let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
         let source = "<?php echo 9223372036854775807 + 1; echo -9223372036854775808 - 1; echo 9223372036854775807 * 2; echo 2 ** 63; echo -(-9223372036854775808);";
-        let tokens = crate::lexer::tokenize_with_semantics(source, SourceMode::Php, 0, profile).unwrap();
-        let parsed = crate::parser::parse(&tokens).unwrap();
         let _profile = scoped_semantic_profile(profile);
         for mode in [SourceMode::Php, SourceMode::Lfc, SourceMode::Internal] {
-            let mut program = parsed.clone();
-            for stmt in &mut program { stmt.source_mode = mode; }
+            let input = if mode == SourceMode::Php { source } else { source.strip_prefix("<?php ").unwrap() };
+            let tokens = crate::lexer::tokenize_with_semantics(input, mode, 0, profile).unwrap();
+            let program = crate::parser::parse_with_mode(&tokens, mode).unwrap();
             let folded = crate::optimize::fold_constants(program);
             for stmt in folded {
                 let StmtKind::Echo(expr) = stmt.kind else { panic!("expected an echo"); };
                 assert_eq!(matches!(expr.kind, ExprKind::FloatLiteral(_)), mode == SourceMode::Internal, "{mode:?} {expr:?}");
             }
         }
-        let mut internal = parsed[0].clone();
-        internal.source_mode = SourceMode::Internal;
-        let mut wrapper = Stmt::new(StmtKind::Synthetic(vec![internal, parsed[0].clone()]), parsed[0].span);
+        let internal = crate::parser::parse_with_mode(&crate::lexer::tokenize_with_semantics(
+            source.strip_prefix("<?php ").unwrap(), SourceMode::Internal, 0, profile).unwrap(), SourceMode::Internal).unwrap();
+        let user = crate::parser::parse_with_mode(&crate::lexer::tokenize_with_semantics(
+            source, SourceMode::Php, 0, profile).unwrap(), SourceMode::Php).unwrap();
+        let mut wrapper = Stmt::new(StmtKind::Synthetic(vec![internal[0].clone(), user[0].clone()]), user[0].span);
         wrapper.source_mode = SourceMode::Internal;
         let folded = crate::optimize::fold_constants(vec![wrapper]);
         let StmtKind::Synthetic(children) = &folded[0].kind else { panic!("expected a wrapper"); };

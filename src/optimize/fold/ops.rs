@@ -105,8 +105,12 @@ fn try_fold_numeric_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprK
     };
     let literal = |value: &Expr| int_literal(value).map(NumericValue::Int)
         .or_else(|| numeric_literal(value).map(NumericValue::Float));
-    elephc_semantics::constant_numeric::fold(super::super::semantic_context::active_profile(),
-        operation, literal(left)?, literal(right)?).map(|value| match value {
+    let profile = crate::semantics::numeric::operation_policy(
+        super::super::semantic_context::active_profile(),
+        super::super::semantic_context::active_source_mode(),
+    ).requirements();
+    elephc_semantics::constant_numeric::fold(profile, operation, literal(left)?, literal(right)?)
+        .map(|value| match value {
             NumericValue::Int(value) => ExprKind::IntLiteral(value),
             NumericValue::Float(value) => ExprKind::FloatLiteral(value),
         })
