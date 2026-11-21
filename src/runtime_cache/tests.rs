@@ -441,6 +441,30 @@ fn strict_profile_runtime_cache_identity_covers_all_features() {
         );
     }
 
+    /// Verifies a post-publish lease retry preserves the caller's semantic profile.
+    #[test]
+    fn post_publish_lease_retry_preserves_semantic_profile() {
+        let source = include_str!("../runtime_cache.rs");
+        let retry_start = source
+            .rfind("let Some(prepared) = lease_runtime_object")
+            .expect("post-publish lease retry remains explicit");
+        let retry_tail = &source[retry_start..];
+        let retry_end = retry_tail
+            .find("prune_runtime_cache_objects")
+            .expect("lease retry precedes cache pruning");
+        let retry = &retry_tail[..retry_end];
+
+        assert!(
+            retry.contains("prepare_runtime_object_with_semantics(")
+                && retry.contains("semantic_profile"),
+            "a lost strict runtime lease must rebuild with the same semantic profile"
+        );
+        assert!(
+            !retry.contains("prepare_runtime_object_with_mode("),
+            "the permissive compatibility wrapper must not handle a strict retry"
+        );
+    }
+
     /// Verifies cache housekeeping bounds superseded runtime objects while
     /// preserving the active entry, its integrity sidecar, and unrelated files.
     #[test]

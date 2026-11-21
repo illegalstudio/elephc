@@ -232,12 +232,13 @@ fn prepare_runtime_object_with_semantics(
         }
     };
     let Some(prepared) = lease_runtime_object(&cache_path, &integrity_path, status)? else {
-        return prepare_runtime_object_with_mode(
+        return prepare_runtime_object_with_semantics(
             heap_size,
             target,
             features,
             pic,
             library_boundary,
+            semantic_profile,
         );
     };
     prune_runtime_cache_objects(&cache_dir, &cache_path);
