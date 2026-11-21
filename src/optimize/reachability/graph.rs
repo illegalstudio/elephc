@@ -296,6 +296,9 @@ struct GraphState {
     scanned_methods: HashSet<(String, String, bool)>,
     behaviorally_scanned_methods: HashSet<(String, String, bool)>,
     opaque_variables: HashSet<String>,
+    /// Variables whose `$f(...)` calls a scope resolved to known callables; a `global`/`$GLOBALS`
+    /// rebinding of the same name in any behaviorally reached scope re-raises the function hazard.
+    resolved_callable_calls: HashSet<String>,
     all_variables_opaque: bool,
     behavioral_variable_methods: HashMap<String, HashSet<(String, bool)>>,
     internal_callable_methods: HashSet<(String, String, bool)>,
@@ -454,6 +457,7 @@ impl GraphState {
             scanned_methods: HashSet::default(),
             behaviorally_scanned_methods: HashSet::default(),
             opaque_variables: HashSet::default(),
+            resolved_callable_calls: HashSet::default(),
             all_variables_opaque: false,
             behavioral_variable_methods: HashMap::default(),
             internal_callable_methods,
@@ -494,6 +498,12 @@ impl GraphState {
 
     /// Applies dynamic hazard widening accumulated from executable and reachable bodies.
     fn apply_global_hazards(&mut self) {
+        if (self.all_variables_opaque
+            || self.resolved_callable_calls.iter().any(|name| self.opaque_variables.contains(name)))
+            && !self.resolved_callable_calls.is_empty()
+        {
+            self.reach.hazards.dynamic_function = true;
+        }
         let hazards = &self.reach.hazards;
         let raised = [
             hazards.enumerates_functions,
@@ -1300,6 +1310,8 @@ impl GraphState {
             self.opaque_variables
                 .extend(usage.global_aliases.iter().cloned());
             self.all_variables_opaque |= usage.dynamic_global_alias;
+            self.resolved_callable_calls
+                .extend(usage.resolved_callable_calls.iter().cloned());
             for (variable, methods) in &usage.variable_methods {
                 self.behavioral_variable_methods
                     .entry(variable.clone())

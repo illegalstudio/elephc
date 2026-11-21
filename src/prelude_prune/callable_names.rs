@@ -19,6 +19,12 @@ pub(crate) struct CallableNames {
     opaque: HashSet<String>,
     invoked: HashSet<String>,
     opaque_expression: bool,
+    /// Names written by anything other than a plain copy of another variable.
+    hard_opaque: HashSet<String>,
+    /// Names assigned a copy, or a choice between simple callables and copies.
+    composite: HashSet<String>,
+    /// `(variable, source)` edges from `$variable = $source` copies.
+    aliases: Vec<(String, String)>,
 }
 
 impl CallableNames {
@@ -49,6 +55,15 @@ impl CallableNames {
     pub(crate) fn assignment(&mut self, name: &str, value: &Expr) {
         if simple_callable(value) {
             self.assigned.insert(name.to_owned());
+        } else if let Some(sources) = composite_callable_sources(value) {
+            // A copy, or a choice between simple callables and copies, stays opaque for the
+            // environment gate (`has_unknown_target`), which does not follow copies, but is
+            // remembered for `has_unknown_target_through_copies`.
+            self.opaque.insert(name.to_owned());
+            self.composite.insert(name.to_owned());
+            for source in sources {
+                self.aliases.push((name.to_owned(), source));
+            }
         } else {
             self.write(name);
         }
@@ -57,6 +72,7 @@ impl CallableNames {
     /// Invalidates a name whose value can be supplied or changed outside a simple assignment.
     pub(crate) fn write(&mut self, name: &str) {
         self.opaque.insert(name.to_owned());
+        self.hard_opaque.insert(name.to_owned());
     }
 
     /// Invalidates the local owner of a write through array or string dimensions.
@@ -98,12 +114,66 @@ impl CallableNames {
         }
     }
 
+    /// Like [`Self::has_unknown_target`], but a variable that only ever receives simple
+    /// callables or copies of variables that do (`$g = $f; $g()`) is known too. Copy cycles
+    /// are known: they can only ever hold what some simple binding gave them.
+    pub(crate) fn has_unknown_target_through_copies(&self) -> bool {
+        if self.opaque_expression {
+            return true;
+        }
+        let mut known: HashSet<&str> = self
+            .assigned
+            .iter()
+            .chain(self.composite.iter())
+            .filter(|name| !self.hard_opaque.contains(*name))
+            .map(String::as_str)
+            .collect();
+        loop {
+            let before = known.len();
+            for (name, source) in &self.aliases {
+                if !known.contains(source.as_str()) {
+                    known.remove(name.as_str());
+                }
+            }
+            if known.len() == before {
+                break;
+            }
+        }
+        self.invoked.iter().any(|name| !known.contains(name.as_str()))
+    }
+
     /// Returns true when any call target has not been proven to have only simple bindings.
     pub(crate) fn has_unknown_target(&self) -> bool {
         self.opaque_expression || self.invoked.iter().any(|name| {
             !self.assigned.contains(name) || self.opaque.contains(name)
         })
     }
+}
+
+/// For a copy of a variable, or a ternary / `match` / `??` choosing among simple callables and
+/// variable copies, returns the variables copied from; `None` for any other value.
+fn composite_callable_sources(value: &Expr) -> Option<Vec<String>> {
+    fn collect(value: &Expr, sources: &mut Vec<String>) -> bool {
+        match &value.kind {
+            ExprKind::Variable(source) => {
+                sources.push(source.clone());
+                true
+            }
+            ExprKind::Ternary { then_expr, else_expr, .. } => {
+                collect(then_expr, sources) && collect(else_expr, sources)
+            }
+            ExprKind::Match { arms, default, .. } => {
+                arms.iter().all(|(_, arm)| collect(arm, sources))
+                    && default.as_ref().is_none_or(|default| collect(default, sources))
+            }
+            ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
+                collect(value, sources) && collect(default, sources)
+            }
+            _ => simple_callable(value),
+        }
+    }
+    let mut sources = Vec::new();
+    collect(value, &mut sources).then_some(sources)
 }
 
 /// Identifies values whose callable identity cannot be synthesized by string computation.

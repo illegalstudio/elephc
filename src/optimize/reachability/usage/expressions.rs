@@ -43,7 +43,12 @@ impl Scanner<'_> {
                         && matches!(&values[1].kind, ExprKind::StringLiteral(_)));
                 if exact {
                     self.callable_or_hazard(Some(callee));
-                } else {
+                } else if matches!(callee.kind, ExprKind::Variable(_))
+                    || !self.resolve_called_expression(callee, args)
+                {
+                    // `($callback)()` stays conservative on purpose
+                    // (`prune_expr_call_keeps_methods_on_live_classes`); only the plain
+                    // `$callback()` spelling is settled through the scope's bindings.
                     self.unresolved_callable_hazard();
                 }
                 self.scan_class_introspection_callable(callee, args);
@@ -51,9 +56,15 @@ impl Scanner<'_> {
                 self.scan_exprs(args);
             }
             ExprKind::ClosureCall { var, args } => {
-                self.unresolved_callable_hazard();
-                let callable = Expr::new(ExprKind::Variable(var.clone()), expr.span);
-                self.scan_class_introspection_callable(&callable, args);
+                // A variable bound only to closures and first-class callables reaches what those
+                // bindings recorded where they were written; `finish()` settles which calls
+                // qualify once every binding of the scope has been seen. A literal eval
+                // fragment stays a hazard: the interpreter resolves its calls at runtime.
+                let callee = Expr::new(ExprKind::Variable(var.clone()), expr.span);
+                if !self.resolve_called_expression(&callee, args) {
+                    self.unresolved_callable_hazard();
+                }
+                self.scan_class_introspection_callable(&callee, args);
                 self.scan_exprs(args);
             }
             // A generic construction keeps its class alive through the TYPE it names, which
@@ -323,6 +334,10 @@ impl Scanner<'_> {
         if matches!(key.as_str(), "debug_backtrace" | "debug_print_backtrace") {
             let class = self.record_class("SensitiveParameterValue");
             self.usage.instantiated_classes.insert(class);
+        }
+        // A by-name local write can rebind any callable variable of the scope.
+        if matches!(key.as_str(), "extract" | "parse_str" | "mb_parse_str" | "import_request_variables") {
+            self.dynamic_variable_writes = true;
         }
         if key == "class_alias" {
             if let Some((original, _)) = crate::autoload::resolved_class_alias_args(args) {
@@ -1091,16 +1106,22 @@ impl Scanner<'_> {
 
     /// Unions statically evident receiver classes without reviving an opaque variable fact.
     pub(super) fn remember_assignment(&mut self, name: &str, value: &Expr) {
+        // `$GLOBALS['name'] = ...` parses as an assignment to the pseudo-local `GLOBALS[name]`:
+        // it rebinds the global `name`, which a callable variable of another scope may be.
+        if let Some(global) = name.strip_prefix("GLOBALS[").and_then(|rest| rest.strip_suffix(']')) {
+            self.usage.global_aliases.insert(global.to_string());
+        }
         self.definitely_non_object_variables.remove(name);
         let classes = self.expr_classes(value);
         if classes.is_empty() {
-            self.forget_variable(name);
+            self.forget_variable_classes(name);
         } else if !self.invalidated_variables.contains(name) {
             self.variable_classes
                 .entry(name.to_string())
                 .or_default()
                 .extend(classes);
         }
+        self.remember_callable_binding(name, value);
         let callables = self.callable_function_names(value);
         if !callables.is_empty() {
             self.variable_callables
@@ -1136,8 +1157,79 @@ impl Scanner<'_> {
         }
     }
 
+    /// Settles `(callee)(args)` when the callee expression is made only of closures,
+    /// first-class callables and variables: those targets were recorded where they were
+    /// written, and the variables are judged by [`Scanner::finish`] with every other `$f(...)`.
+    /// Returns false when the callee must stay a hazard.
+    fn resolve_called_expression(&mut self, callee: &Expr, args: &[Expr]) -> bool {
+        if self.in_eval_fragment {
+            return false;
+        }
+        let mut sources = Vec::new();
+        if !Self::callable_binding_kind(callee, &mut sources) {
+            return false;
+        }
+        self.called_variables.extend(sources);
+        // An argument can be written through a by-reference parameter of the target.
+        for argument in args {
+            if let ExprKind::Variable(name) = &unwrap_named_arg(argument).kind {
+                self.callable_opaque.insert(name.clone());
+            }
+        }
+        true
+    }
+
+    /// Classifies one assignment for the `$f(...)` resolution of [`Scanner::finish`].
+    fn remember_callable_binding(&mut self, name: &str, value: &Expr) {
+        let mut sources = Vec::new();
+        if Self::callable_binding_kind(value, &mut sources) {
+            self.callable_candidates.insert(name.to_string());
+            for source in sources {
+                self.callable_aliases.push((name.to_string(), source));
+            }
+        } else {
+            self.callable_opaque.insert(name.to_string());
+        }
+    }
+
+    /// Reports whether `value` is a callable the scan can name without interpreting a string: a
+    /// closure or first-class callable (whose target the scan recorded where it was written), or
+    /// a copy of another variable. Copy sources are collected for the alias fixpoint. A literal
+    /// name stays opaque: the interpreter-shaped resolution of a callable string is a hazard
+    /// by contract (`scan_literal_eval_keeps_the_fragments_own_hazards`).
+    fn callable_binding_kind(value: &Expr, sources: &mut Vec<String>) -> bool {
+        match &value.kind {
+            ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => true,
+            ExprKind::Variable(source) => {
+                sources.push(source.clone());
+                true
+            }
+            ExprKind::Ternary { then_expr, else_expr, .. } => {
+                Self::callable_binding_kind(then_expr, sources)
+                    && Self::callable_binding_kind(else_expr, sources)
+            }
+            ExprKind::Match { arms, default, .. } => {
+                arms.iter().all(|(_, arm)| Self::callable_binding_kind(arm, sources))
+                    && default
+                        .as_ref()
+                        .is_none_or(|default| Self::callable_binding_kind(default, sources))
+            }
+            ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
+                Self::callable_binding_kind(value, sources)
+                    && Self::callable_binding_kind(default, sources)
+            }
+            _ => false,
+        }
+    }
+
     /// Permanently makes one local receiver opaque for the remainder of this conservative scan.
     pub(super) fn forget_variable(&mut self, name: &str) {
+        self.callable_opaque.insert(name.to_string());
+        self.forget_variable_classes(name);
+    }
+
+    /// Drops the receiver-class and callable-name facts of one variable.
+    fn forget_variable_classes(&mut self, name: &str) {
         self.variable_classes.remove(name);
         self.variable_callables.remove(name);
         self.definitely_non_object_variables.remove(name);

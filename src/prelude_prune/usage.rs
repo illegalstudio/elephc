@@ -78,6 +78,12 @@ pub(crate) struct Usage {
     /// call). Its failure mode is LOUD — an undefined function at the call site — so the pruner
     /// answers it by widening the roots to the names the program does mention.
     pub(crate) dynamic_function_call: bool,
+    /// A dynamic call other than a plain `$f(...)` through a variable: a callback slot the walk
+    /// cannot read, an unreadable method name, or any call inside an eval fragment. A variable
+    /// call alone is answered by [`Usage::reaches_unseen_callable`], because whether its target
+    /// is a known closure, first-class callable or literal name is decided by the whole-program
+    /// binding facts in `callable_names`, which are complete only after the walk.
+    pub(crate) dynamic_call_beyond_variables: bool,
     /// The program contains a `yield` or `yield from`, which makes its enclosing function a
     /// generator and materializes a `Generator` object no source line names.
     pub(crate) uses_yield: bool,
@@ -147,6 +153,18 @@ impl Usage {
     /// Returns true when a PHP function is referenced case-insensitively.
     pub(crate) fn references(&self, name: &str) -> bool {
         self.functions.contains(&php_symbol_key(name))
+    }
+
+    /// Returns true when a dynamic call may reach a callable this walk cannot name.
+    ///
+    /// A call through a variable bound only to closures, first-class callables or literal
+    /// names reaches exactly the declarations those bindings spell, which ordinary references
+    /// already keep (`$f = strlen(...); $f('abc')` reaches `strlen` and nothing else). Every
+    /// other dynamic call, and a variable call with an opaque or parameter-supplied binding,
+    /// stays a hazard.
+    pub(crate) fn reaches_unseen_callable(&self) -> bool {
+        self.dynamic_call_beyond_variables
+            || (self.dynamic_function_call && self.callable_names.has_unknown_target_through_copies())
     }
 }
 
@@ -1205,6 +1223,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 // arguments exist but say nothing — `usort($a, $cmp)`, `call_user_func($x)` — is.
                 if !read && !args.is_empty() {
                     usage.dynamic_function_call = true;
+                    usage.dynamic_call_beyond_variables = true;
                 }
             } else if name == "eval" {
                 // A TRANSPARENT fragment (see `transparent_literal_eval`) is source like any
@@ -1260,6 +1279,11 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         ExprKind::ExprCall { callee, args } => {
             usage.callable_names.expression_call(callee);
             usage.dynamic_function_call = true;
+            if !(matches!(callee.kind, ExprKind::Variable(_)) || super::callable_names::simple_callable(callee))
+                || usage.scanning_eval_fragment
+            {
+                usage.dynamic_call_beyond_variables = true;
+            }
             scan_expr(callee, usage);
             for arg in args {
                 scan_expr(arg, usage);
@@ -1268,6 +1292,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         ExprKind::ClosureCall { var, args } => {
             usage.callable_names.variable_call(var);
             usage.dynamic_function_call = true;
+            usage.dynamic_call_beyond_variables |= usage.scanning_eval_fragment;
             for arg in args {
                 scan_expr(arg, usage);
             }
@@ -1425,6 +1450,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                     });
                     if !read && !args.is_empty() {
                         usage.dynamic_function_call = true;
+                        usage.dynamic_call_beyond_variables = true;
                     }
                 }
             }
@@ -1511,6 +1537,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             // at neither.
             if !record_literal_callable(usage, method) {
                 usage.dynamic_function_call = true;
+                usage.dynamic_call_beyond_variables = true;
                 usage.callable_names.unknown_call();
             }
             scan_expr(object, usage);
@@ -1840,6 +1867,36 @@ mod tests {
         let usage = collect(&parse("<?php $f = $argv[1]; $f(); eval('echo 1;');"));
         assert!(!usage.introspects);
         assert!(usage.dynamic_function_call);
+    }
+
+    /// A variable call bound only to known callables reaches nothing the walk cannot name; an
+    /// opaque binding, a parameter, or a callback slot it cannot read still does.
+    #[test]
+    fn variable_calls_through_known_bindings_do_not_reach_unseen_callables() {
+        for source in [
+            "<?php $f = strlen(...); echo $f('abc');",
+            "<?php $f = function ($x) { return $x; }; echo $f('abc');",
+            "<?php $f = strlen(...); $g = $f; echo $g('abc');",
+            "<?php echo (strlen(...))('abc');",
+            "<?php $f = $argc > 0 ? strlen(...) : trim(...); echo $f('abc');",
+            "<?php $f = match ($argc) { 1 => strlen(...), default => trim(...) }; echo $f('abc');",
+        ] {
+            let usage = collect(&parse(source));
+            assert!(usage.dynamic_function_call, "{source}");
+            assert!(!usage.reaches_unseen_callable(), "{source}");
+        }
+        for source in [
+            "<?php $f = $argv[1]; echo $f('abc');",
+            "<?php function run($cb) { return $cb('abc'); }",
+            "<?php $f = $argv[1]; $g = $f; echo $g('abc');",
+            "<?php $f = $argc > 0 ? strlen(...) : $argv[1]; echo $f('abc');",
+            "<?php function run($cb) { $g = $cb; return $g('abc'); }",
+            "<?php $f = strlen(...); $f = $argv[1]; echo $f('abc');",
+            "<?php usort($a, $cmp);",
+            "<?php eval('$f = strlen(...); $f(1);');",
+        ] {
+            assert!(collect(&parse(source)).reaches_unseen_callable(), "{source}");
+        }
     }
 
     /// A computed call inside the fragment is introspection even when inline code already made

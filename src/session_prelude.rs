@@ -98,5 +98,5 @@ pub(crate) fn program_registers_save_handler(program: &[crate::parser::ast::Stmt
 /// other source, so the session functions it names are kept by ordinary reachability. Treating
 /// every `eval` as unseen forced the whole session group into `<?php eval('return 1;');`.
 fn unseen_source_may_call(usage: &crate::prelude_prune::usage::Usage) -> bool {
-    usage.opaque_eval || usage.dynamic_function_call || usage.includes_runtime_php
+    usage.opaque_eval || usage.reaches_unseen_callable() || usage.includes_runtime_php
 }

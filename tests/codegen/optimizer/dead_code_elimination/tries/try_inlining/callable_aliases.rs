@@ -310,3 +310,56 @@ try {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies that a closure call whose binding is a known first-class callable keeps only that
+/// callable's shared wrapper, not the session surface or the builtin wrapper catalog.
+/// Confirms "3" with a bounded number of `_eir_shared_callable_*` wrappers and bounded assembly.
+#[test]
+fn test_closure_call_through_known_alias_keeps_only_its_target_wrappers() {
+    let dir = make_cli_test_dir("elephc_closure_call_known_alias_wrapper_budget");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+$f = strlen(...);
+echo $f("abc");
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let wrappers = user_asm
+        .lines()
+        .filter(|line| {
+            line.starts_with("_eir_shared_callable_builtin_")
+                || line.starts_with("_eir_shared_callable_instance_method_")
+                || line.starts_with("_eir_shared_callable_extern_")
+        })
+        .filter(|line| line.ends_with(':'))
+        .count();
+    assert!(
+        wrappers <= 4,
+        "a call through a known first-class callable alias must keep only its own wrappers, found {wrappers}"
+    );
+    assert!(
+        !user_asm.contains("ElephcSessionState"),
+        "a resolvable closure call must not keep the session prelude"
+    );
+    assert!(
+        user_asm.lines().count() < 60_000,
+        "a resolvable closure call kept {} assembly lines",
+        user_asm.lines().count()
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "3");
+
+    let _ = fs::remove_dir_all(&dir);
+}

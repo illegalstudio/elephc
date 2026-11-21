@@ -38,6 +38,11 @@ pub struct Usage {
     pub(crate) required_libraries: HashSet<String>,
     pub(crate) class_alias_targets: HashSet<String>,
     pub(crate) global_aliases: HashSet<String>,
+    /// Variables called as `$f(...)` whose every binding in the scanned scope is a known
+    /// callable (closure, first-class callable, or an alias of one). Such a call
+    /// raises no function hazard locally, but a `global $f` or `$GLOBALS['f']` write in another
+    /// scope can rebind the variable, so the graph raises the hazard when one exists.
+    pub(crate) resolved_callable_calls: HashSet<String>,
     pub(crate) dynamic_global_alias: bool,
     pub(crate) variable_methods: HashMap<String, HashSet<(String, bool)>>,
     /// Classes a literal `eval` fragment names, or declares over an existing declaration. The
@@ -75,6 +80,7 @@ impl Usage {
         self.required_libraries.extend(other.required_libraries);
         self.class_alias_targets.extend(other.class_alias_targets);
         self.global_aliases.extend(other.global_aliases);
+        self.resolved_callable_calls.extend(other.resolved_callable_calls);
         self.dynamic_global_alias |= other.dynamic_global_alias;
         self.fragment_classes.extend(other.fragment_classes);
         for (variable, methods) in other.variable_methods {
@@ -153,7 +159,7 @@ pub(super) fn scan_function(stmt: &Stmt, call_signatures: &CallSignatureIndex) -
         scanner.scan_params(params, variadic_type.as_ref(), return_type.as_ref());
         scanner.scan_nested(body, false);
     }
-    scanner.usage
+    scanner.finish()
 }
 
 /// Scans one method's annotations, defaults, attributes, and body in its declaring class.
@@ -170,7 +176,7 @@ pub(super) fn scan_method(
         ..Scanner::default()
     };
     scanner.scan_method(method);
-    scanner.usage
+    scanner.finish()
 }
 
 /// Scans declaration-level class dependencies without traversing method bodies.
@@ -260,6 +266,18 @@ struct Scanner<'a> {
     usage: Usage,
     variable_classes: HashMap<String, HashSet<String>>,
     variable_callables: HashMap<String, HashSet<String>>,
+    /// Variables bound to at least one known callable (closure, first-class callable, alias
+    /// of a variable).
+    callable_candidates: HashSet<String>,
+    /// Variables with a binding that is not a known callable: parameters, by-reference writes,
+    /// list/foreach/catch targets, computed values.
+    callable_opaque: HashSet<String>,
+    /// `(variable, source)` edges from `$variable = $source` assignments.
+    callable_aliases: Vec<(String, String)>,
+    /// Variables called through `$f(...)`.
+    called_variables: HashSet<String>,
+    /// `extract()`-style writes that can rebind any local by name.
+    dynamic_variable_writes: bool,
     definitely_non_object_variables: HashSet<String>,
     invalidated_variables: HashSet<String>,
     current_class: Option<String>,
@@ -467,6 +485,34 @@ impl Scanner<'_> {
     fn scan_program(mut self, program: &[Stmt], declarations: bool) -> Usage {
         for stmt in program {
             self.scan_statement(stmt, declarations);
+        }
+        self.finish()
+    }
+
+    /// Settles the `$f(...)` calls of the scanned scope: a call whose variable is bound only to
+    /// known callables reaches exactly what those bindings already recorded; any other raises
+    /// the unresolved-callable hazard.
+    fn finish(mut self) -> Usage {
+        let mut resolved = self.callable_candidates.clone();
+        resolved.retain(|name| !self.callable_opaque.contains(name));
+        loop {
+            let before = resolved.len();
+            for (variable, source) in &self.callable_aliases {
+                if !resolved.contains(source) {
+                    resolved.remove(variable);
+                }
+            }
+            if resolved.len() == before {
+                break;
+            }
+        }
+        let called = std::mem::take(&mut self.called_variables);
+        for variable in called {
+            if resolved.contains(&variable) && !self.dynamic_variable_writes {
+                self.usage.resolved_callable_calls.insert(variable);
+            } else {
+                self.unresolved_callable_hazard();
+            }
         }
         self.usage
     }
@@ -826,6 +872,7 @@ impl Scanner<'_> {
     /// Scans parameter defaults and records declared receiver domains for the body scan.
     fn scan_params(&mut self, params: &[(String, Option<TypeExpr>, Option<Expr>, bool)], variadic: Option<&TypeExpr>, ret: Option<&TypeExpr>) {
         for (name, ty, default, _) in params {
+            self.callable_opaque.insert(name.clone());
             if let Some(ty) = ty {
                 self.scan_type(ty);
                 let classes = self.type_classes(ty);

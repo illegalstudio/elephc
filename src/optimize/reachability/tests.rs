@@ -1897,3 +1897,41 @@ fn scan_string_class_probes_keep_dynamic_lookup_hazards() {
     assert!(usage.classes.contains(&php_symbol_key("Child")));
     assert!(usage.classes.contains(&php_symbol_key("Base")));
 }
+
+/// Verifies a `$f(...)` call through a variable bound only to known callables keeps those
+/// targets and prunes an unrelated declared function.
+#[test]
+fn prune_closure_call_through_known_bindings_keeps_only_its_targets() {
+    for source in [
+        "<?php function kept($x) { return $x; } function unrelated() { return 1; } $f = kept(...); echo $f(1);",
+        "<?php function kept($x) { return $x; } function unrelated() { return 1; } $f = kept(...); $g = $f; echo $g(1);",
+        "<?php function kept($x) { return $x; } function other($x) { return $x; } function unrelated() { return 1; } $f = $argc > 1 ? kept(...) : other(...); echo $f(1);",
+        "<?php function unrelated() { return 1; } $f = function ($x) { return $x; }; echo $f(1);",
+    ] {
+        let (program, _) = prune(source);
+        assert!(!has_function(&program, "unrelated"), "{source}");
+    }
+    let (program, _) = prune(
+        "<?php function kept($x) { return $x; } function unrelated() { return 1; } $f = kept(...); echo $f(1);",
+    );
+    assert!(has_function(&program, "kept"));
+}
+
+/// Verifies a `$f(...)` call whose variable has an opaque binding, is a parameter, is passed to
+/// another call, or can be rebound from another scope keeps every declared function.
+#[test]
+fn prune_closure_call_through_opaque_bindings_keeps_every_function() {
+    for source in [
+        "<?php function unrelated() { return 1; } $f = $argv[1]; echo $f(1);",
+        "<?php function unrelated() { return 1; } function run($cb) { return $cb(1); } echo run('strlen');",
+        "<?php function unrelated() { return 1; } $f = strlen(...); $f = $argv[1]; echo $f('x');",
+        "<?php function unrelated() { return 1; } $f = strlen(...); $g = $argv[1]; $f = $g; echo $f('x');",
+        "<?php function unrelated() { return 1; } $f = strlen(...); extract($_GET); echo $f('x');",
+        "<?php function unrelated() { return 1; } function rebind() { global $f; $f = $_GET['f']; } $f = strlen(...); rebind(); echo $f('x');",
+        "<?php function unrelated() { return 1; } function rebind() { $GLOBALS['f'] = $_GET['f']; } $f = strlen(...); rebind(); echo $f('x');",
+        "<?php function unrelated() { return 1; } $f = strlen(...); $swap = function (&$slot) { $slot = $_GET['f']; }; $swap($f); echo $f('x');",
+    ] {
+        let (program, _) = prune(source);
+        assert!(has_function(&program, "unrelated"), "{source}");
+    }
+}
