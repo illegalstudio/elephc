@@ -926,7 +926,8 @@ mod tests {
             assert!(dispatch.contains(mode), "{target}: {dispatch}");
             let warn = if target == "linux-x86_64" { "test QWORD PTR [rbp - 32], 1" }
                 else { "tbz x9, #0, __rt_mixed_array_get_null" };
-            assert_eq!(assembly.matches(warn).count(), 5, "{target}: write mode must stay quiet");
+            let warning_checks = assembly.lines().filter(|line| line.trim() == warn).count();
+            assert_eq!(warning_checks, 5, "{target}: write mode must stay quiet");
         }
     }
 
