@@ -416,3 +416,72 @@ fn test_union_store_narrowing_needs_a_non_null_proof() {
         assert!(error.contains("return type expects string, got int|string"), "{body}: {error}");
     }
 }
+
+/// An `elseif` chain without `else` narrows only when every exit that reaches the code after
+/// it, the fall-through included, holds the narrower type (issue #2320).
+#[test]
+fn test_elseif_chain_join_rejects_an_exit_that_keeps_a_wider_member() {
+    for (params, body) in [
+        // The fall-through still holds `string`: no guard excluded it.
+        ("int|string|array $v", "if (\\is_int($v)) { $v = [$v]; } elseif (\\is_float($v)) { $v = [$v]; }"),
+        // A clause that skips its store on one path leaves `string` there.
+        ("int|string|array $v, bool $flag",
+            "if (\\is_int($v)) { $v = [$v]; } elseif (\\is_string($v)) { if ($flag) { $v = [$v]; } }"),
+        // A clause that stores another wide member.
+        ("int|string|array $v", "if (\\is_int($v)) { $v = [$v]; } elseif (\\is_string($v)) { $v = 5; }"),
+        // Guards on another variable say nothing about this one's fall-through.
+        ("int|string|array $v, int|string $w",
+            "if (\\is_int($w)) { $v = [1]; } elseif (\\is_string($w)) { $v = [2]; }"),
+        // A condition that is not a type guard leaves the complement of the first guard only.
+        ("int|string|array $v, bool $flag",
+            "if (\\is_int($v)) { $v = [$v]; } elseif ($flag) { $v = [1]; }"),
+        // A condition that rebinds the local replaces the value the earlier guard tested.
+        ("int|string|array $v, int|string $w",
+            "if (\\is_int($v)) { $v = [$v]; } elseif (\\is_string($v = $w)) { echo 1; }"),
+        // A write through a reference after the store.
+        ("int|string|array $v",
+            "if (\\is_int($v)) { $v = [$v]; } elseif (\\is_string($v)) { $v = [$v]; $r = &$v; $r = 5; }"),
+        // A wider store after the chain.
+        ("int|string|array $v",
+            "if (\\is_int($v)) { $v = [$v]; } elseif (\\is_string($v)) { $v = [$v]; } $v = 'x';"),
+    ] {
+        let source = format!("<?php function f({params}): array {{ {body} return $v; }}");
+        let error = check_source(&source).expect_err(body);
+        assert!(error.contains("return type expects array, got "), "{body}: {error}");
+    }
+    // A by-reference parameter keeps its declared union: the caller can write it.
+    expect_error(
+        "<?php function f(int|string|array &$v): array { if (\\is_int($v)) { $v = [$v]; } elseif (\\is_string($v)) { $v = [$v]; } return $v; }",
+        "return type expects array, got ",
+    );
+}
+
+/// A lazily initialized nullable local stays nullable through an `elseif` chain when any exit
+/// that reaches the code after it can still carry null.
+#[test]
+fn test_nullable_lazy_local_elseif_join_rejects_nullable_exits() {
+    for branch in [
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { $service = null; }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { $service = $replacement; }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { if ($other) { $service = null; } }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { $service->poke(); } elseif ($other) { $service = null; }",
+        "if ($service === null) { $service = new Service(); } elseif (($service = $replacement) === null) { echo 1; }",
+        "if ($service === null) { $service = new Service(); } elseif (($service = $replacement) !== null && $flag) { echo 1; }",
+        "if ($service === null) { if ($other) { $service = new Service(); } } elseif ($flag) { echo 1; }",
+        "if ($service === null) { } elseif ($flag) { $service->poke(); }",
+        // The null guard sits on a later clause: the first clause's exit keeps null.
+        "if ($flag) { echo 1; } elseif ($service === null) { $service = new Service(); }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { $r = &$service; $r = null; }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { wipe($service); }",
+        "if ($service === null) { $service = new Service(); } elseif (wipe($service) === null) { echo 1; }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { unset($service); }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { $f = function () use (&$service) { $service = null; }; $f(); }",
+        "if ($service === null) { $service = new Service(); } elseif ($flag) { $service->poke(); } $service = null;",
+    ] {
+        let source = format!("<?php class Service {{ public function poke(): void {{}} }}
+function wipe(?Service &$x): void {{ $x = null; }}
+function get(?Service $service, ?Service $replacement, bool $flag, bool $other): Service {{ {branch} return $service; }}");
+        let error = check_source(&source).expect_err(branch);
+        assert!(error.contains("return type expects Service, got Service|null"), "{branch}: {error}");
+    }
+}

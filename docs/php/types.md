@@ -327,7 +327,21 @@ function zone(DateTimeZone|string $tz): DateTimeZone {
 }
 ```
 
-A single guarded `if` without `else` joins the branch's exit with the guard's complement, so `if (!$now instanceof DateTimeImmutable) { $now = new DateTimeImmutable(); }` leaves `$now` a `DateTimeImmutable`. The branch may store through a nested `if`/`elseif`/`else`: when every arm that falls through stores a `string`, `if ($message === null) { if ($path === null) { $message = '…'; } else { $message = sprintf('…', $path); } }` leaves `$message` a `string`. A chain without a final `else`, or an arm that skips the store, keeps the wider type. By-reference parameters, reference-aliased or by-reference-captured locals, globals and statics keep their declared union, because code outside the function's flow may write them. Passing the variable to a by-reference parameter also ends the narrowing.
+A single guarded `if` without `else` joins the branch's exit with the guard's complement, so `if (!$now instanceof DateTimeImmutable) { $now = new DateTimeImmutable(); }` leaves `$now` a `DateTimeImmutable`. The branch may store through a nested `if`/`elseif`/`else`: when every arm that falls through stores a `string`, `if ($message === null) { if ($path === null) { $message = '…'; } else { $message = sprintf('…', $path); } }` leaves `$message` a `string`.
+
+An `if`/`elseif` chain without a final `else` joins the same way. Each branch that falls out of the chain contributes what it left in the variable, and the implicit fall-through contributes the variable's type with every guard of the chain excluded, since reaching it means every guard was false:
+
+```php
+function wrap(int|string|array $value): array {
+    if (is_int($value)) { $value = [$value]; }
+    elseif (is_string($value)) { $value = [$value]; }
+    return $value;               // neither int nor string is left: an array on every path
+}
+```
+
+The same join carries a lazily initialized nullable local through the rest of its chain: after `if ($layout === null) { $layout = new Layout(); } elseif ($resize) { $layout->resize(); }`, `$layout` is a `Layout`, because the `elseif` and the fall-through both start from the null guard's complement.
+
+The variable keeps its wider type when an exit can still hold a wider member: an arm that skips the store or stores a wider value, a fall-through that no guard narrowed (a guard on another variable, a condition that is not a type guard, a null guard on a later clause), or a condition that reassigns the variable. By-reference parameters, reference-aliased or by-reference-captured locals, globals and statics keep their declared union, because code outside the function's flow may write them. Passing the variable to a by-reference parameter also ends the narrowing.
 
 Narrowing applies to function and method parameters. A parameter whose call sites pass incompatible types (e.g. `int` at one site and a class instance at another) is inferred as a union, and the guard narrows it inside each branch. This is **not** yet supported for closure parameters: a closure invoked with incompatible argument types is rejected at compile time rather than inferred as a union.
 

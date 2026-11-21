@@ -80,6 +80,18 @@ class Cart
         }
         return $discount; // both exits hold Money, including the cached path
     }
+
+    public function discountAtLeast(int $cents): Money
+    {
+        $discount = $this->discount;
+        if ($discount === null) {
+            $discount = new Money($cents);
+            $this->discount = $discount;
+        } elseif ($discount->cents < $cents) {
+            $discount->cents = $cents; // the elseif reads the guard's complement: Money
+        }
+        return $discount; // every exit of the chain holds Money
+    }
 }
 
 // A guard narrows what the branch READS. An assignment inside it is still measured
@@ -114,6 +126,8 @@ $cart = new Cart(null);
 $discount = $cart->discountOrDefault();
 echo "default discount ", $discount->format(), "\n";
 echo "cached discount ", $discount === $cart->discountOrDefault() ? "same" : "different", "\n";
+echo "raised discount ", $cart->discountAtLeast(500)->format(), "\n";
+echo "kept discount ", (new Cart(new Money(900)))->discountAtLeast(500)->format(), "\n";
 
 foreach (metaFiles($dir) as $path) {
     echo "meta ", basename($path), "\n";

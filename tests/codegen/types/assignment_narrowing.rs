@@ -10,6 +10,8 @@
 //!   union slot is read back as the object on the path that stored it and on the one that did not.
 //! - A by-reference parameter is never narrowed by a store: something outside the function's
 //!   flow may write it, so the fixture shows the caller's later write through the reference.
+//! - Issue #2320 fixtures cover an `if`/`elseif` chain without `else`: the fall-through holds the
+//!   complement of every guard, so each of them runs every clause and the fall-through.
 //! - Outputs match php 8.5 (`ELEPHC_PHP_CHECK=1`).
 
 use super::*;
@@ -194,4 +196,143 @@ echo label(), label(null, 1), label(null, 2), label('x'), "|", deep(), deep(null
 "#,
     );
     assert_eq!(out, "otheronetwox|noneaab|Asia/TokyoUTCEurope/Paris\n");
+}
+
+/// Issue #2320: an `elseif` chain without `else` joins every clause exit with the complement of
+/// its guards, which is what the implicit fall-through holds.
+#[test]
+fn test_elseif_chain_without_else_joins_through_the_guard_complement() {
+    let out = compile_and_run(
+        r#"<?php
+final class Tag { public function __construct(public string $name) {} }
+function wrap(int|string|array $v): array {
+    if (\is_int($v)) { $v = [$v]; }
+    elseif (\is_string($v)) { $v = [$v]; }
+    return $v;                                  // neither int nor string: already an array
+}
+function tag(Tag|int|string $v): Tag {
+    if (\is_int($v)) { $v = new Tag('#' . $v); }
+    elseif (\is_string($v)) { $v = new Tag($v); }
+    return $v;
+}
+function listed(int|string|array $v, bool $empty): array {
+    if ($empty) { $v = []; }
+    elseif (\is_int($v)) { $v = [$v, $v]; }
+    elseif (\is_string($v)) { return [$v, $v, $v]; }
+    return $v;                                  // a diverging clause contributes no exit
+}
+echo count(wrap(1)), count(wrap('x')), count(wrap([1, 2])), "|",
+    tag(7)->name, tag('seven')->name, tag(new Tag('given'))->name, "|",
+    count(listed(1, true)), count(listed(1, false)), count(listed('x', false)), count(listed([1, 2, 3, 4], false)), "\n";
+"#,
+    );
+    assert_eq!(out, "112|#7sevengiven|0234\n");
+}
+
+/// A nullable local initialized on its null arm stays non-null through the rest of the chain:
+/// the later clauses and the fall-through were all entered with the guard's complement.
+#[test]
+fn test_lazy_nullable_local_joins_through_an_elseif_chain() {
+    let out = compile_and_run(
+        r#"<?php
+class Service {
+    public int $hits = 0;
+    public function __construct(public string $name = "base") {}
+    public function poke(): void { $this->hits++; }
+    public function label(): string { return $this->name . ":" . $this->hits; }
+}
+final class Sub extends Service {}
+final class Owner {
+    private ?Service $service = null;
+    public function get(bool $poke): Service {
+        $service = $this->service;
+        if ($service === null) {
+            $service = new Service("lazy");
+            $this->service = $service;
+        } elseif ($poke) {
+            $service->poke();
+        }
+        return $service;
+    }
+}
+function three(?Service $s, bool $a, bool $b): Service {
+    if (is_null($s)) { $s = new Sub("sub"); }
+    elseif ($a) { $s->poke(); }
+    elseif ($b) { $s = new Service("replaced"); }
+    return $s;
+}
+function reguard(?Service $s): Service {
+    if (!isset($s)) { $s = new Service("made"); }
+    elseif ($s instanceof Sub) { $s->poke(); }
+    return $s;
+}
+function early(?Service $s, bool $flag): Service {
+    if (null === $s) { $s = new Service("made"); }
+    elseif ($flag) { $s = null; return new Service("early"); }
+    return $s;
+}
+function counter(?int $n, bool $bump): int {
+    if ($n === null) { $n = 10; }
+    elseif ($bump) { $n = $n + 1; }
+    return $n;
+}
+function label(?string $s, bool $mark): string {
+    if ($s === null) { $s = "none"; }
+    elseif ($mark) { $s = $s . "!"; }
+    return $s;
+}
+$owner = new Owner();
+$first = $owner->get(true);
+echo $first->label(), "|", $owner->get(true)->label(), "|", $owner->get(false)->label(), "|";
+echo $first === $owner->get(false) ? "same" : "different", "\n";
+$e = new Service("given");
+echo three(null, true, true)->label(), "|", three($e, true, false)->label(), "|",
+    three($e, false, true)->label(), "|", three($e, false, false)->label(), "\n";
+echo reguard(null)->label(), "|", reguard(new Sub("s"))->label(), "|", reguard($e)->label(), "\n";
+echo early(null, true)->label(), "|", early($e, true)->label(), "|", early($e, false)->label(), "\n";
+echo counter(null, true), "|", counter(4, true), "|", counter(4, false), "|",
+    label(null, true), "|", label("a", true), "|", label("a", false), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "lazy:0|lazy:1|lazy:1|same\nsub:0|given:1|replaced:0|given:1\nmade:0|s:1|given:1\n\
+         made:0|early:0|given:1\n10|5|4|none|a!|a\n",
+    );
+}
+
+/// A join narrows the read, never the slot: a contract wider than the union the construct
+/// started with (a kept complement, or an enclosing guard) still takes a later store.
+///
+/// A guard rather than a regression: both functions compile on main and must keep doing so.
+#[test]
+fn test_union_join_keeps_a_wider_storage_contract() {
+    let out = compile_and_run(
+        r#"<?php
+class A {} class B {}
+function flat(A|B|string $x, bool $c): string {
+    if (\is_string($x)) { return 'string'; }
+    if ($x instanceof A) { $x = new B(); }
+    if ($c) { $x = 's'; }
+    return \is_string($x) ? $x : 'object';
+}
+function nested(A|B|string $x, bool $c): string {
+    if (!\is_string($x)) {
+        if ($x instanceof A) { $x = new B(); }
+        if ($c) { $x = 's'; }
+    }
+    return \is_string($x) ? $x : 'object';
+}
+function chain(A|B|int|string $x, bool $c): string {
+    if (\is_string($x)) { return 'string'; }
+    if ($x instanceof A) { $x = new B(); } elseif (\is_int($x)) { $x = new B(); }
+    if ($c) { $x = 's'; }
+    return \is_string($x) ? $x : 'object';
+}
+echo flat(new A(), true), flat(new A(), false), flat('q', false), "|",
+    nested(new A(), true), nested(new B(), false), nested('q', true), "|",
+    chain(new A(), true), chain(3, false), chain('q', false), "\n";
+"#,
+    );
+    assert_eq!(out, "sobjectstring|sobjectq|sobjectstring\n");
 }
