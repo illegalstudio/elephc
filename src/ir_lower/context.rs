@@ -619,6 +619,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) expression_depth: usize,
     /// Printed callable description (`Class::method`) for argument `TypeError` messages.
     pub(crate) call_description: Option<String>,
+    /// Address of the registry signature whose arguments are being lowered right now, set only
+    /// around a builtin call. Boundary conversions that exist for source-declared parameters
+    /// (a gradual `float` cast, an `array<mixed>` payload conversion) are skipped for a builtin
+    /// argument that carries a shape the builtin-specific passes match.
+    pub(crate) builtin_arg_sig: Option<usize>,
     /// Call span of the `ReflectionMethod::invoke*()` currently dispatching its target.
     ///
     /// Reflection calls run under weak typing in php-src, so an explicitly reflected
@@ -1199,6 +1204,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             int_seed_bindings: HashMap::default(),
             pointer_reference_bindings: Vec::new(),
             call_description: None,
+            builtin_arg_sig: None,
             reflected_invoke_call_span: None,
             source_path,
             closure_display_names: HashMap::default(),
@@ -4113,7 +4119,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // An earlier conditional PHP assignment may have populated this slot even when
         // the merge cannot prove definite initialization. A merely declared one-shot temporary
         // has no previous owner; keep its first store free of artificial destructor effects.
-        if !uses_global
+        let released_previous_occupant = !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| {
                 self.initialized_slots.contains(&slot)
@@ -4121,15 +4127,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                         && self.assigned_php_local_slots.contains(&slot))
                     || !self.loop_stack.is_empty()
                     || (previous_kind == LocalKind::PhpLocal && self.eval_barrier_active)
-            })
-        {
+            });
+        if released_previous_occupant {
             self.release_stored_local_value_before_overwrite_from(name, slot, &widened_storage_type, source, span);
         }
         // A loop-carried slot can exist globally without being definitely initialized
         // on this CFG path. An earlier eval barrier can likewise reload a future PHP local
         // before lowering reaches its first syntactic store. Release either runtime occupant
         // before overwriting it.
+        // (The branch above already released it whenever this one would apply: it covers every
+        // loop and eval-barrier case, so a second release here only doubled the cleanup.)
         if !uses_global
+            && !released_previous_occupant
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
             && (!self.loop_stack.is_empty()

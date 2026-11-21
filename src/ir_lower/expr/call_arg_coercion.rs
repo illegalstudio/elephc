@@ -1011,6 +1011,26 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     if *declared_param_ty == PhpType::False && matches!(source_ty, PhpType::Mixed) {
         return value;
     }
+    // A builtin's `float` parameter reads a checked int|float arithmetic result natively and
+    // nothing in that result can raise a TypeError, so the boundary cast would only hide the
+    // operand shape the builtin-specific passes match (the boxed `sqrt($i + c)` range reducer).
+    let builtin_argument = ctx.builtin_arg_sig == Some(sig as *const FunctionSig as usize)
+        && !sig.declared_params.get(index).copied().unwrap_or(false);
+    if builtin_argument
+        && param_ty == PhpType::Float
+        && super::integer_destinations::checked_integer_tree(ctx, value.value)
+    {
+        return value;
+    }
+    // A builtin reads a typed scalar array natively: widening it to `array<mixed>` here would
+    // allocate a boxed copy per call and keep the array operand from being hoisted out of loops.
+    if builtin_argument
+        && matches!(&param_ty, PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed)
+        && matches!(&source_ty, PhpType::Array(element)
+            if matches!(element.codegen_repr(), PhpType::Int | PhpType::Float))
+    {
+        return value;
+    }
     let value = crate::ir_lower::expr::coerce_container_to_mixed_payload(
         ctx,
         value,

@@ -558,7 +558,11 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
     } else if is_extern {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
+        let previous_builtin_sig = ctx.builtin_arg_sig.replace(
+            sig.as_ref().map_or(0, |signature| signature as *const FunctionSig as usize),
+        );
         let mut operands = lower_builtin_call_args(ctx, canonical, sig.as_ref(), args);
+        ctx.builtin_arg_sig = previous_builtin_sig;
         narrow_single_array_min_max_operand(ctx, canonical, &mut operands, expr.span);
         operands
     };

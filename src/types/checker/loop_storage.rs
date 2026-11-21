@@ -414,12 +414,42 @@ fn checked_scalar_arithmetic_type(
     match op {
         BinOp::Add | BinOp::Sub | BinOp::Mul => {
             let mut result = PhpType::Int;
+            let mut boxed_operand = false;
             for operand in [left, right] {
-                match infer_value(operand, env)? {
+                // `$total += ($value = $value + 3)` adds the value just stored into `$value`,
+                // which has the local's own storage type, not the `mixed` of the arithmetic.
+                let operand_type = match &operand.kind {
+                    ExprKind::Assignment { target, .. } => match &target.kind {
+                        ExprKind::Variable(name) => match env.get(name) {
+                            Some(ty @ (PhpType::Int | PhpType::Float)) => Some(ty.clone()),
+                            _ => infer_value(operand, env),
+                        },
+                        _ => infer_value(operand, env),
+                    },
+                    _ => infer_value(operand, env),
+                };
+                match operand_type? {
                     PhpType::Int => {}
                     PhpType::Float => result = PhpType::Float,
+                    // A nested checked `+`/`-`/`*` (`$sum + $i * $i`) is `mixed` only because it may
+                    // overflow to float, which the update's own overflow path already covers.
+                    PhpType::Mixed if matches!(&operand.kind, ExprKind::BinaryOp {
+                        op: BinOp::Add | BinOp::Sub | BinOp::Mul, .. }) =>
+                    {
+                        match checked_scalar_arithmetic_type(operand, env, infer_value)? {
+                            PhpType::Float => result = PhpType::Float,
+                            _ => {}
+                        }
+                    }
+                    PhpType::Mixed => boxed_operand = true,
                     _ => return None,
                 }
+            }
+            // `float + mixed` is a float whatever number the boxed side holds, so a float
+            // accumulator fed by a boxed value (`$sum += max($i, $bound)`) keeps its raw slot;
+            // an int one cannot tell int from float and stays unproven.
+            if boxed_operand && result != PhpType::Float {
+                return None;
             }
             Some(result)
         }

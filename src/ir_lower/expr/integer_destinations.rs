@@ -79,7 +79,7 @@ pub(crate) fn coerce_integer_arithmetic(
 }
 
 /// Requires every noninteger node to be checked arithmetic rather than a dynamic PHP value.
-fn checked_integer_tree(ctx: &LoweringContext<'_, '_>, root: ValueId) -> bool {
+pub(super) fn checked_integer_tree(ctx: &LoweringContext<'_, '_>, root: ValueId) -> bool {
     if ctx.builder.value_type(root) == IrType::I64 {
         return false;
     }

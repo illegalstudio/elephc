@@ -484,7 +484,10 @@ fn value_is_numeric_only(ctx: &LoweringContext<'_, '_>, value: ValueId, depth: u
         Op::RuntimeCall => matches!(
             producer.immediate,
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-                crate::ir::RuntimeFnId::ArraySum | crate::ir::RuntimeFnId::ArrayProduct
+                crate::ir::RuntimeFnId::ArraySum
+                    | crate::ir::RuntimeFnId::ArrayProduct
+                    | crate::ir::RuntimeFnId::ArrayMapSumAdd
+                    | crate::ir::RuntimeFnId::ArrayMapSumAddSafe
             )))
         ),
         _ => false,

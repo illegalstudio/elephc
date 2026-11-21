@@ -218,7 +218,12 @@ impl Checker {
                         "Bitwise operators require integer or string operands",
                     ));
                 }
-                if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
+                // php returns a string only when BOTH operands are strings; any other pair is
+                // converted to int. An operand that can never be a string (`int`, `float`, `bool`,
+                // `null`, an arithmetic union such as the `int|float` of a checked `+`) therefore
+                // settles the result as `int` even when the other side is boxed, which keeps
+                // `$mask = ($argc + 8) & 1023` and `$n ^= array_sum($a)` raw-int accumulators.
+                if may_be_string_operand(&lt) && may_be_string_operand(&rt) {
                     Ok(PhpType::Mixed)
                 } else {
                     Ok(PhpType::Int)
@@ -1948,6 +1953,16 @@ fn is_bitwise_operand_type(checker: &Checker, ty: &PhpType) -> bool {
         || matches!(ty, PhpType::Union(members) if members
             .iter()
             .any(|member| matches!(member, PhpType::Str) || is_integer_operand_type(checker, member)))
+}
+
+/// Whether a bitwise operand can hold a string at runtime: `string`, `mixed`, or a union with
+/// either member.
+fn may_be_string_operand(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Str | PhpType::Mixed => true,
+        PhpType::Union(members) => members.iter().any(may_be_string_operand),
+        _ => false,
+    }
 }
 
 /// Returns `true` if `ty` is a valid operand type for bitwise binary operators.
