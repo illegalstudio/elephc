@@ -216,6 +216,7 @@ impl Checker {
             // Rebuilt once per round, although no round adds a method: a stale owner list would
             // silently narrow a mixed receiver's candidates.
             *self.method_owners.borrow_mut() = None;
+            self.named_methods.borrow_mut().0 = usize::MAX;
             self.subtype_dispatch_cache.borrow_mut().1.clear();
             self.descendant_classes_cache.borrow_mut().1.clear();
             self.interface_implementers_cache.borrow_mut().1.clear();

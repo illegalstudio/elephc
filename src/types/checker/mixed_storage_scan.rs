@@ -1428,13 +1428,7 @@ fn disqualify_args(facts: &mut Facts, args: &[Expr]) {
 /// every other position is disqualified plainly. A method no class declares keeps the generic
 /// by-reference handling, and named or spread arguments fall back to the whole-call rule.
 fn disqualify_named_method_arguments(checker: &Checker, method: &str, facts: &mut Facts, args: &[Expr]) {
-    let sigs: Vec<&crate::types::FunctionSig> = checker
-        .classes
-        .values()
-        .flat_map(|class| class.methods.iter().chain(class.static_methods.iter()))
-        .filter(|(name, _)| name.eq_ignore_ascii_case(method))
-        .map(|(_, sig)| sig)
-        .collect();
+    let sigs = checker.named_method_sigs(method);
     if sigs.is_empty() {
         disqualify_call_arguments(facts, args);
         return;
@@ -1458,6 +1452,53 @@ fn disqualify_named_method_arguments(checker: &Checker, method: &str, facts: &mu
         } else {
             disqualify_root(facts, arg);
         }
+    }
+}
+
+impl Checker {
+    /// Every class method (instance or static, case-insensitive) named `method`.
+    ///
+    /// The mixed-storage scan asks this for every method call it walks, in every body, on every
+    /// round; filtering the whole class table each time made it the top cost of the Symfony Demo
+    /// check (call sites times methods). The (class, method) pairs are indexed per class table,
+    /// and the signatures are read fresh, because the method pass rewrites them.
+    fn named_method_sigs(&self, method: &str) -> Vec<&crate::types::FunctionSig> {
+        let mut index = self.named_methods.borrow_mut();
+        if index.0 != self.classes.len() {
+            #[cfg(test)]
+            crate::types::checker::NAMED_METHOD_TABLE_SCANS.with(|count| count.set(count.get() + 1));
+            let mut by_name: crate::fast_hash::FastMap<String, Vec<(String, String, bool)>> =
+                crate::fast_hash::FastMap::default();
+            for (class_name, class) in &self.classes {
+                for key in class.methods.keys() {
+                    by_name
+                        .entry(key.to_ascii_lowercase())
+                        .or_default()
+                        .push((class_name.clone(), key.clone(), false));
+                }
+                for key in class.static_methods.keys() {
+                    by_name
+                        .entry(key.to_ascii_lowercase())
+                        .or_default()
+                        .push((class_name.clone(), key.clone(), true));
+                }
+            }
+            *index = (self.classes.len(), by_name);
+        }
+        let Some(entries) = index.1.get(&method.to_ascii_lowercase()) else {
+            return Vec::new();
+        };
+        entries
+            .iter()
+            .filter_map(|(class_name, key, is_static)| {
+                let class = self.classes.get(class_name)?;
+                if *is_static {
+                    class.static_methods.get(key)
+                } else {
+                    class.methods.get(key)
+                }
+            })
+            .collect()
     }
 }
 

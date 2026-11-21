@@ -72,6 +72,10 @@ thread_local! {
     /// Whole-table scans `record_scope_dynamic_mixed_receiver_mutation` made.
     pub(crate) static MIXED_RECEIVER_MUTATION_SCANS: std::cell::Cell<u64> =
         const { std::cell::Cell::new(0) };
+    /// Whole-table scans the mixed-storage scan made to find the methods of a name, so a test can
+    /// pin them to the class table instead of the method call sites.
+    pub(crate) static NAMED_METHOD_TABLE_SCANS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
 }
 
 mod ref_param_widening;
@@ -356,6 +360,10 @@ pub(crate) struct Checker {
     /// Instance method name -> the classes declaring it, in `classes` iteration order, with the
     /// `classes.len()` it was built at. See `method_owners_of`.
     pub(crate) method_owners: std::cell::RefCell<Option<MethodOwnerIndex>>,
+    /// Lowercased method name -> `(class, method key, is static)` of every instance or static
+    /// method of that name, with the `classes.len()` it was built at. The signatures are read
+    /// fresh from `classes`. See `named_method_sigs`.
+    pub(crate) named_methods: std::cell::RefCell<(usize, crate::fast_hash::FastMap<String, Vec<(String, String, bool)>>)>,
     /// Instance-method owners compatible with a receiver type, keyed `(receiver, method)`, with the
     /// `classes.len()` they were computed at. Which classes extend or implement a receiver is fixed
     /// once the class table is built; asking again for every call site walked each owner's parent

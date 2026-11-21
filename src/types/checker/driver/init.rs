@@ -103,6 +103,7 @@ impl Checker {
             classes: crate::fast_hash::FastMap::default(),
             operator_classes: std::cell::Cell::new(None),
             method_owners: std::cell::RefCell::new(None),
+            named_methods: std::cell::RefCell::new((usize::MAX, Default::default())),
             subtype_dispatch_cache: std::cell::RefCell::new((0, Default::default())),
             descendant_classes_cache: std::cell::RefCell::new((0, Default::default())),
             interface_implementers_cache: std::cell::RefCell::new((0, Default::default())),

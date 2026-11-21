@@ -1379,3 +1379,39 @@ fn constant_nested_literals_register_no_unwind_owner() {
     let throwing = "<?php\nfunction pick(int $n): string { if ($n > 3) { throw new Exception('x'); } return 'p'; }\nfunction data(int $n) {\n    return ['Names' => ['AED' => ['AED', 'dirham']], 'Pick' => pick($n)];\n}\necho count(data($argc)), \"\\n\";\n";
     assert!(owner_pushes_in(throwing, "data") > 0, "a throwing entry lost its unwind owner");
 }
+
+/// `count` classes declaring `m` and `count` calls of it through a `mixed` receiver in one body.
+fn many_named_method_calls(count: usize) -> String {
+    let mut source = String::from("<?php\n");
+    for index in 0..count {
+        source.push_str(&format!("class C{index} {{ public function m($v) {{ return $v; }} }}\n"));
+    }
+    source.push_str("function run(mixed $o): void {\n    $x = null;\n");
+    for _ in 0..count {
+        source.push_str("    $o->m($x);\n");
+    }
+    source.push_str("}\nrun(new C0());\necho \"done\\n\";\n");
+    source
+}
+
+/// Whole-table scans for the methods of a name made while checking `source`.
+fn named_method_table_scans(source: &str) -> u64 {
+    crate::types::checker::NAMED_METHOD_TABLE_SCANS.with(|count| count.set(0));
+    let _module = lower_source(source);
+    crate::types::checker::NAMED_METHOD_TABLE_SCANS.with(|count| count.get())
+}
+
+/// The mixed-storage scan filtered the WHOLE class table for the methods named by every method
+/// call it walked: call sites times methods, the top cost (70% of samples) of the Symfony Demo
+/// check. The methods of a name are fixed per class table, so the scans must not grow with the
+/// calls.
+#[test]
+fn mixed_storage_scan_indexes_named_methods_once_per_class_table() {
+    let small = named_method_table_scans(&many_named_method_calls(40));
+    let large = named_method_table_scans(&many_named_method_calls(160));
+    assert!(small > 0, "the fixture no longer reaches the named method lookup");
+    assert!(
+        large <= small * 2,
+        "named method table scans grew with the calls: {small} for 40 calls, {large} for 160"
+    );
+}
