@@ -71,7 +71,9 @@ mod core_methods;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub(crate) use expr::body_contains_eval_call;
+pub(crate) use expr::{
+    body_contains_eval_call, body_writes_local, expr_writes_local, stmt_writes_local,
+};
 #[allow(unused_imports)] // used by the binary's pipeline only
 pub(crate) use program::module_runs_interpreted_code;
 

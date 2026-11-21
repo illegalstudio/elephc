@@ -1651,7 +1651,12 @@ fn validate_stmt(
                 profile,
                 current_class,
             )?;
-            *locals = merge_loop_exits(body, &[first_exit, repeated_exit]);
+            *locals = merge_loop_exits(
+                body,
+                Some(condition),
+                None,
+                &[first_exit, repeated_exit],
+            );
         }
         StmtKind::Foreach {
             key_var,
@@ -1666,7 +1671,7 @@ fn validate_stmt(
             }
             iteration.set(value_var, ValueFact::Unknown);
             validate_block(body, &mut iteration, properties, profile, current_class)?;
-            *locals = merge_loop_exits(body, &[entry, iteration]);
+            *locals = merge_loop_exits(body, None, None, &[entry, iteration]);
         }
         StmtKind::DoWhile { body, condition } => {
             validate_block(body, locals, properties, profile, current_class)?;
@@ -1694,7 +1699,12 @@ fn validate_stmt(
                 current_class,
             )?
             .when_false;
-            *locals = merge_loop_exits(body, &[first_exit, repeated_exit]);
+            *locals = merge_loop_exits(
+                body,
+                Some(condition),
+                None,
+                &[first_exit, repeated_exit],
+            );
         }
         StmtKind::For {
             init,
@@ -1753,7 +1763,12 @@ fn validate_stmt(
                 profile,
                 current_class,
             )?;
-            *locals = merge_loop_exits(body, &[first_exit, repeated_exit]);
+            *locals = merge_loop_exits(
+                body,
+                condition.as_ref(),
+                update.as_deref(),
+                &[first_exit, repeated_exit],
+            );
         }
         StmtKind::Switch { cases, default, .. } => {
             let entry = locals.clone();
@@ -1848,11 +1863,22 @@ fn validate_branch(
 }
 
 /// Merges loop fallthroughs unless a break can bypass the modeled backedge state.
-fn merge_loop_exits(body: &[Stmt], exits: &[LocalFacts]) -> LocalFacts {
+fn merge_loop_exits(
+    body: &[Stmt],
+    condition: Option<&Expr>,
+    update: Option<&Stmt>,
+    exits: &[LocalFacts],
+) -> LocalFacts {
     if crate::termination::block_may_break_current_loop(body) {
         let mut merged = merge_exits(exits);
-        for fact in merged.values.values_mut() {
-            *fact = ValueFact::Unknown;
+        for (name, fact) in &mut merged.values {
+            let bypassed_write = crate::ir_lower::body_writes_local(body, name)
+                || condition
+                    .is_some_and(|condition| crate::ir_lower::expr_writes_local(condition, name))
+                || update.is_some_and(|update| crate::ir_lower::stmt_writes_local(update, name));
+            if bypassed_write {
+                *fact = ValueFact::Unknown;
+            }
         }
         return merged;
     }

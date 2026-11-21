@@ -463,12 +463,12 @@ pub(super) fn lower_closure_with_context(
 /// than a silent "not written". That polarity is the whole point: a missed write leaves the cell
 /// narrowly typed and silently reinterprets whatever is stored through it — the exact defect
 /// this gate exists to prevent — while a spurious true only widens a cell that did not need it.
-pub(super) fn body_writes_local(body: &[Stmt], name: &str) -> bool {
+pub(crate) fn body_writes_local(body: &[Stmt], name: &str) -> bool {
     body.iter().any(|stmt| stmt_writes_local(stmt, name))
 }
 
 /// Returns true when a statement can store into the local named `name`.
-fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
+pub(crate) fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
     match &stmt.kind {
         // Direct stores to the bare name.
         StmtKind::Assign { name: target, value } | StmtKind::TypedAssign { name: target, value, .. } => {
@@ -575,7 +575,7 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
 }
 
 /// Returns true when an expression can store into the local named `name`.
-fn expr_writes_local(expr: &Expr, name: &str) -> bool {
+pub(crate) fn expr_writes_local(expr: &Expr, name: &str) -> bool {
     match &expr.kind {
         ExprKind::Runtime(_) => true,
         ExprKind::Assignment { target, value, result_target, prelude, .. } => {
