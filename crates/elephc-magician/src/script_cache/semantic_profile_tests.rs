@@ -203,6 +203,56 @@ fn strict_cache_live_stale_profile_keeps_fresh_sibling_visible() {
     );
 }
 
+/// Missing files retire timestamp-free profiles instead of treating two zeroes as fresh.
+#[test]
+fn strict_cache_deleted_file_discards_unrecorded_profile_sibling() {
+    let _guard = store::lock_for_test();
+    let fixture = Fixture::new();
+    config::set_config(config::ScriptCacheConfig {
+        enabled: true,
+        validate_timestamps: true,
+        revalidate_freq: 0,
+        file_update_protection: 0,
+        ..config::ScriptCacheConfig::disabled()
+    });
+    file_cache::set_file_cache_config(file_cache::FileCacheConfig::default());
+    config::stamp_request_time(1_000_000);
+    std::fs::write(&fixture.source, b"<?php return 1;").unwrap();
+    set_mtime(&fixture.source, 990_000);
+    store::load_script_with_semantics(
+        &fixture.source,
+        SemanticProfile::PERMISSIVE,
+    )
+    .unwrap();
+
+    config::set_config(config::ScriptCacheConfig {
+        enabled: true,
+        validate_timestamps: false,
+        revalidate_freq: 0,
+        file_update_protection: 0,
+        ..config::ScriptCacheConfig::disabled()
+    });
+    store::load_script_with_semantics(&fixture.source, checked_literals()).unwrap();
+    std::fs::remove_file(&fixture.source).unwrap();
+    config::set_config(config::ScriptCacheConfig {
+        enabled: true,
+        validate_timestamps: true,
+        revalidate_freq: 0,
+        file_update_protection: 0,
+        ..config::ScriptCacheConfig::disabled()
+    });
+
+    assert!(store::invalidate(&fixture.source, false));
+    assert!(
+        !store::is_cached_with_semantics(&fixture.source, checked_literals()),
+        "a timestamp-free profile must not survive deletion",
+    );
+    assert!(
+        !store::is_cached_with_semantics(&fixture.source, SemanticProfile::PERMISSIVE),
+        "the timestamped sibling is stale after deletion",
+    );
+}
+
 /// Rejects disk entries from another profile, including ABI mismatches before replay.
 #[test]
 fn strict_cache_disk_headers_require_matching_semantics() {

@@ -767,13 +767,17 @@ pub fn invalidate(path: &Path, force: bool) -> bool {
 ///
 /// NO `is_unrecorded` SHORT-CIRCUIT HERE, unlike the include and query paths: php-src's
 /// `accel_invalidate` calls `do_validate_timestamps` directly, so an entry admitted without
-/// a timestamp compares `0` against the real mtime and is stale.
+/// a timestamp fails immediately. That remains stale when a missing file also maps to the
+/// local timestamp sentinel `0`.
 fn discard_stale_profiles(key: &Path) -> bool {
     let timestamp = file_timestamp(key);
     let mut cache = lock_script_cache();
     let mut discarded = false;
     for (entry_key, entry) in &mut cache.entries {
-        if entry_key.path == key && !entry.discarded && entry.timestamp != timestamp {
+        if entry_key.path == key
+            && !entry.discarded
+            && (entry.timestamp == 0 || entry.timestamp != timestamp)
+        {
             entry.discarded = true;
             discarded = true;
         }
