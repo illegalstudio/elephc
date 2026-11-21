@@ -43,6 +43,22 @@ fn strict_mixed_origins_ternary_literals_retain_element_contracts() {
     }
 }
 
+/// A missing ternary-arm contract defers to the selected value instead of borrowing its sibling's schema.
+#[test]
+fn strict_mixed_origins_ternary_partial_contracts_infer_the_selected_array() {
+    let source = "$typed=[1,2];$flag=false;$items=$flag?$typed:['a']; \
+        try{$items[]=2;}catch(TypeError $error){echo 'T';}$items[]='b'; \
+        $other=$flag?1:['a'];try{$other[]=2;}catch(TypeError $error){echo 'S';} \
+        $other[]='b';return count($items)+count($other);";
+    for dispatch in [false, true] {
+        for features in [vec![StrictFeature::Locals, StrictFeature::ArrayTypes],
+            vec![StrictFeature::Locals, StrictFeature::ArrayTypes, StrictFeature::Mixed]] {
+            let (output, returned) = run_source(source, None, &features, dispatch);
+            assert_eq!(output, "TS"); assert_eq!(returned, FakeValue::Int(4));
+        }
+    }
+}
+
 /// Untyped array returns infer contents while an explicit mixed return remains open.
 #[test]
 fn strict_mixed_origins_direct_unknown_array_return_infers_contents() {

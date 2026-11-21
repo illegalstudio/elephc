@@ -116,8 +116,7 @@ fn producer_contract(expr: &EvalExpr, context: &ElephcEvalContext,
                     for variant in second.variants() { if !variants.contains(variant) { variants.push(variant.clone()); } }
                     EvalParameterType::new(variants, nullable)
                 }
-                (Some(first), None) | (None, Some(first)) => first,
-                (None, None) => return None,
+                _ => return None,
             })
         }
         EvalExpr::Call { name, .. } => calls::producer(name, None, context, role),
