@@ -122,16 +122,12 @@ fn branch_if_eval_global_alias_detached(
     abi::emit_pop_reg(ctx.emitter, local_cell);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {result}, {local_cell}"));
-            ctx.emitter
-                .instruction(&format!("b.ne {detached}"));
+            ctx.emitter.instruction(&format!("cmp {result}, {local_cell}"));    // compare the activation cell with the current global reference owner
+            ctx.emitter.instruction(&format!("b.ne {detached}"));               // skip alias marking after the activation detached its reference cell
         }
         Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("cmp {result}, {local_cell}"));
-            ctx.emitter
-                .instruction(&format!("jne {detached}"));
+            ctx.emitter.instruction(&format!("cmp {result}, {local_cell}"));    // compare the activation cell with the current global reference owner
+            ctx.emitter.instruction(&format!("jne {detached}"));                // skip alias marking after the activation detached its reference cell
         }
     }
     Ok(())
@@ -380,14 +376,12 @@ fn emit_branch_if_scope_entry_global_alias(ctx: &mut FunctionContext<'_>, label:
     abi::emit_load_temporary_stack_slot(ctx.emitter, flags, 8);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("tst {flags}, #{EVAL_SCOPE_FLAG_GLOBAL_ALIAS}"));
-            ctx.emitter.instruction(&format!("b.ne {label}"));
+            ctx.emitter.instruction(&format!("tst {flags}, #{EVAL_SCOPE_FLAG_GLOBAL_ALIAS}")); // test whether the interpreter still resolves this entry through globals
+            ctx.emitter.instruction(&format!("b.ne {label}"));                  // retain the native activation alias while its global marker remains set
         }
         Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("test {flags}, {EVAL_SCOPE_FLAG_GLOBAL_ALIAS}"));
-            ctx.emitter.instruction(&format!("jne {label}"));
+            ctx.emitter.instruction(&format!("test {flags}, {EVAL_SCOPE_FLAG_GLOBAL_ALIAS}")); // test whether the interpreter still resolves this entry through globals
+            ctx.emitter.instruction(&format!("jne {label}"));                   // retain the native activation alias while its global marker remains set
         }
     }
 }
