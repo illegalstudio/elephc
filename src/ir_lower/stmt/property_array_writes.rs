@@ -191,7 +191,7 @@ pub(super) fn lower_property_array_assign(
                 object: Box::new(object.clone()), property: property.into(),
             }, span)), index: Box::new(index.clone()),
         }, span);
-        if super::nested_property_updates::attached_property_root(ctx, &target) {
+        if super::nested_property_updates::static_attached_property_root(ctx, &target) {
             super::nested_array_writes::lower_nested_array_assign(ctx, &target, value, span);
             return;
         }

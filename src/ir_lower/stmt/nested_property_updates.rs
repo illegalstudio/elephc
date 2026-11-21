@@ -24,6 +24,12 @@ pub(super) fn attached_property_root(ctx: &LoweringContext<'_, '_>, target: &Exp
         crate::ir_lower::expr::nested_property_has_boxed_root(ctx, object, property))
 }
 
+/// Limits direct attached-cell updates to a receiver whose class is known before runtime dispatch.
+pub(super) fn static_attached_property_root(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
+    named_property_root(target).is_some_and(|(object, property)|
+        crate::ir_lower::expr::nested_property_has_static_boxed_root(ctx, object, property))
+}
+
 /// Settles a compound RHS before the first element read, including expression-result captures.
 pub(super) fn capture_compound_rhs(
     ctx: &mut LoweringContext<'_, '_>, value: &mut Expr,

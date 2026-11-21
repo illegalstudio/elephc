@@ -213,6 +213,14 @@ pub(crate) fn nested_property_has_boxed_root(
         || property_is_splittable_container_slot(ctx, class, property, true)
 }
 
+/// Requires a statically known class before bypassing runtime magic-property dispatch.
+pub(crate) fn nested_property_has_static_boxed_root(
+    ctx: &LoweringContext<'_, '_>, object: &Expr, property: &str,
+) -> bool {
+    let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, object);
+    singular_object_class(&ty).is_some() && nested_property_has_boxed_root(ctx, object, property)
+}
+
 /// Selects borrowed slot access only for the stable storage shape required by its consumer.
 fn lower_property_write_source(
     ctx: &mut LoweringContext<'_, '_>,
