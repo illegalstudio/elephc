@@ -83,6 +83,7 @@ impl Invalidation {
 /// extraction and call handling cannot drift between two implementations.
 pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
     match &expr.kind {
+        ExprKind::Runtime(_) => Invalidation::All,
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

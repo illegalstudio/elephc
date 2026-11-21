@@ -28,6 +28,9 @@ pub fn local_inputs_newer_than(workspace: &Path, crate_name: &str, built_at: Sys
         if any_file_newer_than(&directory, built_at) { return true; }
         let Some(manifest) = read_manifest(&directory.join("Cargo.toml")) else { continue; };
         add_dependencies(&manifest, &directory, workspace, workspace_manifest.as_ref(), &mut pending);
+        if let Some(table) = manifest.as_table() {
+            pending.extend(external_source_crates(table, &directory));
+        }
         if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
             for target in targets.values() {
                 add_dependencies(target, &directory, workspace, workspace_manifest.as_ref(), &mut pending);
@@ -35,6 +38,49 @@ pub fn local_inputs_newer_than(workspace: &Path, crate_name: &str, built_at: Sys
         }
     }
     false
+}
+
+/// Returns the crate directories behind `[lib]` / `[[bin]]` sources that live outside `crate_dir`.
+///
+/// A wrapper crate can compile another crate's sources through a target path. Its archive
+/// must track those sources as well as declared dependencies. The owning crate directory is the nearest
+/// ancestor of the declared source path that carries a `Cargo.toml`.
+pub fn external_source_crates(manifest: &toml::Table, crate_dir: &Path) -> Vec<PathBuf> {
+    let mut targets: Vec<&str> = Vec::new();
+    if let Some(path) = manifest
+        .get("lib")
+        .and_then(|lib| lib.get("path"))
+        .and_then(toml::Value::as_str)
+    {
+        targets.push(path);
+    }
+    if let Some(bins) = manifest.get("bin").and_then(toml::Value::as_array) {
+        targets.extend(
+            bins.iter()
+                .filter_map(|bin| bin.get("path").and_then(toml::Value::as_str)),
+        );
+    }
+    let Ok(canonical_crate) = std::fs::canonicalize(crate_dir) else {
+        return Vec::new();
+    };
+    let mut dirs = Vec::new();
+    for target in targets {
+        let resolved = crate_dir.join(target);
+        let Some(mut current) = resolved.parent() else { continue; };
+        loop {
+            if current.join("Cargo.toml").is_file() {
+                if let Ok(canonical) = std::fs::canonicalize(current) {
+                    if !canonical.starts_with(&canonical_crate) {
+                        dirs.push(current.to_path_buf());
+                    }
+                }
+                break;
+            }
+            let Some(parent) = current.parent() else { break; };
+            current = parent;
+        }
+    }
+    dirs
 }
 
 /// Collects normal and build path dependencies, resolving workspace-inherited declarations.

@@ -1,0 +1,304 @@
+//! Purpose:
+//! Defines AST records for PHP class-like declarations and members.
+//! Covers classes, interfaces, traits, enums, properties, methods, visibility, and trait adaptations.
+//!
+//! Called from:
+//! - `crate::syntax::parser::stmt::oop` and class-aware resolver, name-resolver, type, and codegen passes.
+//!
+//! Key details:
+//! - Member metadata carries spans and modifiers needed for PHP-compatible diagnostics and lowering.
+
+use crate::syntax::names::Name;
+use crate::syntax::span::Span;
+
+use super::{Expr, Stmt, TypeExpr};
+
+// --- Attributes (PHP 8.0 #[Name(args)]) ---
+
+/// One attribute inside a `#[...]` group: a qualified name followed by
+/// optional arguments. Multiple attributes can sit in the same group:
+/// `#[A, B(1)]`, and groups stack: `#[A] #[B]`.
+#[derive(Debug, Clone)]
+pub struct Attribute {
+    pub name: Name,
+    pub args: Vec<Expr>,
+    #[allow(dead_code)] // Used for error reporting in future passes
+    pub span: Span,
+}
+
+impl PartialEq for Attribute {
+    /// Compares two attributes by name and arguments, ignoring span.
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.args == other.args
+    }
+}
+
+/// One `#[...]` group; PHP allows several comma-separated attributes per
+/// group as well as several stacked groups before the same declaration.
+/// Both shapes flatten naturally into `Vec<AttributeGroup>` per declaration.
+#[derive(Debug, Clone)]
+pub struct AttributeGroup {
+    pub attributes: Vec<Attribute>,
+    #[allow(dead_code)] // Used for error reporting in future passes
+    pub span: Span,
+}
+
+impl PartialEq for AttributeGroup {
+    /// Compares two attribute groups by their attributes, ignoring span.
+    fn eq(&self, other: &Self) -> bool {
+        self.attributes == other.attributes
+    }
+}
+
+#[derive(Debug, Clone)]
+/// Enum case declaration.
+pub struct EnumCaseDecl {
+    pub name: String,
+    pub value: Option<Expr>,
+    pub span: Span,
+    pub attributes: Vec<AttributeGroup>,
+}
+
+impl PartialEq for EnumCaseDecl {
+    /// Compares two enum cases by name, value, and attributes; span is not compared.
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.value == other.value && self.attributes == other.attributes
+    }
+}
+
+// --- OOP ---
+
+#[derive(Debug, Clone, PartialEq)]
+/// Visibility modifier.
+pub enum Visibility {
+    Public,
+    Protected,
+    Private,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+/// Property hooks.
+pub struct PropertyHooks {
+    pub get: bool,
+    pub set: bool,
+    pub get_by_ref: bool,
+    /// Whether the original hook bodies explicitly access this property's backing value.
+    pub uses_backing_slot: bool,
+}
+
+impl PropertyHooks {
+    /// Returns a `PropertyHooks` with all hooks disabled (no get/set/get_by_ref).
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Returns true if any hook (get, set, or get_by_ref) is present.
+    pub fn any(&self) -> bool {
+        self.get || self.set || self.get_by_ref
+    }
+
+    /// Returns true if a getter is required (either value or by-ref getter present).
+    pub fn requires_get(&self) -> bool {
+        self.get || self.get_by_ref
+    }
+
+    /// Returns whether hooks expose a property with no backing value.
+    pub fn is_virtual(&self) -> bool {
+        self.any() && !self.uses_backing_slot
+    }
+
+    /// Recognizes only generated accessors actually declared for this property.
+    pub fn matches_accessor(&self, property: &str, method: &str) -> bool {
+        (self.requires_get()
+            && method.eq_ignore_ascii_case(&crate::syntax::names::property_hook_get_method(property)))
+            || (self.set
+                && method.eq_ignore_ascii_case(&crate::syntax::names::property_hook_set_method(property)))
+    }
+}
+
+#[derive(Debug, Clone)]
+/// Trait use.
+pub struct TraitUse {
+    pub trait_names: Vec<Name>,
+    /// Type arguments written on each used trait (`use Holder<int>;`), aligned index by index
+    /// with `trait_names`; an entry is empty when that trait was written bare.
+    ///
+    /// Only ever non-empty before `crate::syntax::generics::classes` runs: it instantiates each written
+    /// mention as an ordinary trait and renames the use to it, so trait flattening never sees
+    /// a type argument.
+    pub type_args: Vec<Vec<TypeExpr>>,
+    pub adaptations: Vec<TraitAdaptation>,
+    // Used for trait-flattening diagnostics.
+    pub span: Span,
+}
+
+impl PartialEq for TraitUse {
+    /// Compares two trait uses by trait names, type arguments and adaptations; span is not
+    /// compared.
+    fn eq(&self, other: &Self) -> bool {
+        self.trait_names == other.trait_names
+            && self.type_args == other.type_args
+            && self.adaptations == other.adaptations
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Trait adaptation.
+pub enum TraitAdaptation {
+    Alias {
+        trait_name: Option<Name>,
+        method: String,
+        alias: Option<String>,
+        visibility: Option<Visibility>,
+    },
+    InsteadOf {
+        trait_name: Option<Name>,
+        method: String,
+        instead_of: Vec<Name>,
+    },
+}
+
+#[derive(Debug, Clone)]
+/// Class property.
+pub struct ClassProperty {
+    pub name: String,
+    pub visibility: Visibility,
+    /// PHP 8.4 asymmetric visibility: the write (`set`) visibility when it differs from the
+    /// read visibility above. `None` means writes use the same visibility as reads.
+    pub set_visibility: Option<Visibility>,
+    pub type_expr: Option<TypeExpr>,
+    pub hooks: PropertyHooks,
+    pub readonly: bool,
+    pub is_final: bool,
+    pub is_static: bool,
+    pub is_abstract: bool,
+    pub by_ref: bool,
+    pub is_promoted: bool,
+    pub default: Option<Expr>,
+    #[allow(dead_code)] // Used for error reporting in future phases
+    pub span: Span,
+    pub attributes: Vec<AttributeGroup>,
+}
+
+impl PartialEq for ClassProperty {
+    /// Compares class properties by name, visibility, type, hooks, modifiers,
+    /// by-ref flag, default value, and attributes; span is not compared.
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.visibility == other.visibility
+            && self.set_visibility == other.set_visibility
+            && self.type_expr == other.type_expr
+            && self.hooks == other.hooks
+            && self.readonly == other.readonly
+            && self.is_final == other.is_final
+            && self.is_static == other.is_static
+            && self.is_abstract == other.is_abstract
+            && self.by_ref == other.by_ref
+            && self.is_promoted == other.is_promoted
+            && self.default == other.default
+            && self.attributes == other.attributes
+    }
+}
+
+/// `const [TYPE] NAME = expr;` declaration inside a class/interface/trait body.
+/// PHP supports per-constant visibility (PHP 7.1+), the `final` modifier
+/// (PHP 8.1+), and declared types (PHP 8.3+). Per-constant attributes are
+/// retained for reflection.
+#[derive(Debug, Clone)]
+pub struct ClassConst {
+    pub name: String,
+    pub visibility: Visibility,
+    pub is_final: bool,
+    pub type_expr: Option<TypeExpr>,
+    pub value: Expr,
+    #[allow(dead_code)] // Used for error reporting in future passes
+    pub span: Span,
+    #[allow(dead_code)] // Reserved for #[\Deprecated] on class constants
+    pub attributes: Vec<AttributeGroup>,
+}
+
+impl PartialEq for ClassConst {
+    /// Compares class constants by name, visibility, final/type metadata, value, and
+    /// attributes; span is not compared.
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.visibility == other.visibility
+            && self.is_final == other.is_final
+            && self.type_expr == other.type_expr
+            && self.value == other.value
+            && self.attributes == other.attributes
+    }
+}
+
+#[derive(Debug, Clone)]
+/// Class method.
+pub struct ClassMethod {
+    pub name: String,
+    /// Type parameters this method declares of its OWN (`function map<U>(…)`), empty for an
+    /// ordinary method.
+    ///
+    /// Distinct from the class's: a method of `Box<T>` may introduce a `U` that only its call
+    /// sites determine, so `T` is bound when the CLASS is instantiated and `U` when the METHOD
+    /// is called. An instantiated generic method is dispatched statically and never takes a
+    /// vtable slot — two instantiations of one class must keep identical method sets, or their
+    /// slot numbering diverges and a variance widening lands on the wrong method.
+    pub type_params: Vec<crate::syntax::parser::ast::TypeParam>,
+    pub visibility: Visibility,
+    pub is_static: bool,
+    pub is_abstract: bool,
+    pub is_final: bool,
+    pub has_body: bool,
+    pub params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
+    /// Attribute groups declared on each source-order parameter.
+    /// This vector is parallel to `params`, plus one trailing entry when `variadic` is present.
+    pub param_attributes: Vec<Vec<AttributeGroup>>,
+    pub variadic: Option<String>,
+    /// Whether the variadic parameter was declared by reference (`&...$args`).
+    pub variadic_by_ref: bool,
+    /// Declared element type hint on the variadic parameter (`int ...$xs`), if any. Each argument
+    /// collected into the variadic is checked against this type.
+    pub variadic_type: Option<TypeExpr>,
+    #[allow(dead_code)] // Will be used for return type checking in future phases
+    pub return_type: Option<TypeExpr>,
+    /// `true` when declared with `function &m()` — calls return a reference (alias)
+    /// to the returned lvalue rather than a copy.
+    pub by_ref_return: bool,
+    pub body: Vec<Stmt>,
+    #[allow(dead_code)] // Used for error reporting in future phases
+    pub span: Span,
+    pub attributes: Vec<AttributeGroup>,
+}
+
+impl ClassMethod {
+    /// Rewrites relative class types in every annotation while retaining late-bound return `static`.
+    ///
+    /// Parameter annotations resolve `self`/`static`/`parent` lexically. Return annotations keep
+    /// `static` symbolic so checker and EIR call sites can bind it to the receiver type.
+    pub fn substitute_relative_class_types(&mut self, self_class: &str, parent: Option<&str>) {
+        for (_, type_ann, _, _) in self.params.iter_mut() {
+            if let Some(ty) = type_ann.as_mut() {
+                *ty = ty.substitute_relative_class_types(self_class, parent);
+            }
+        }
+        if let Some(variadic_ty) = self.variadic_type.as_mut() {
+            *variadic_ty = variadic_ty.substitute_relative_class_types(self_class, parent);
+        }
+        if let Some(ret) = self.return_type.as_mut() {
+            *ret = ret.substitute_method_return_relative_types(self_class, parent);
+        }
+    }
+}
+
+impl PartialEq for ClassMethod {
+    /// Compares class methods by name, visibility, static/abstract/final flags,
+    /// has_body, and attributes; span, params, return_type, and body are not compared.
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.visibility == other.visibility
+            && self.is_static == other.is_static
+            && self.is_abstract == other.is_abstract
+            && self.is_final == other.is_final
+            && self.has_body == other.has_body
+            && self.attributes == other.attributes
+    }
+}

@@ -575,3 +575,13 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 filter = 'binary(/^codegen_tests_/) and test(~simplexml_php_src)'
 slow-timeout = { period = "60s", terminate-after = 5 }
 
+
+# The inline php-src tokenizer corpus compiles all 54 cases with the debug compiler and
+# measured 299s locally, beyond the ordinary 180s single-case budget.
+[[profile.default.overrides]]
+filter = 'binary(=tokenizer_php_src)'
+slow-timeout = { period = "60s", terminate-after = 8 }
+
+[[profile.ci.overrides]]
+filter = 'binary(=tokenizer_php_src)'
+slow-timeout = { period = "60s", terminate-after = 8 }

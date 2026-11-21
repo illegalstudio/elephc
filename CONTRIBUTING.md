@@ -487,10 +487,10 @@ elephc parses expressions with a Pratt parser, so a new binary operator flows
 through the whole pipeline — lexer, parser, type checker, optimizer, EIR
 lowering, and target-aware codegen. Implement it end-to-end:
 
-1. Add the token to `src/lexer/token.rs`.
-2. Add scanning logic to `src/lexer/scan.rs`.
-3. Add the `BinOp` variant to `src/parser/ast.rs`.
-4. Add one line to `infix_bp()` in `src/parser/expr/pratt.rs` (the Pratt parser
+1. Add the token to `crates/elephc-chopper/src/syntax/lexer/token.rs`.
+2. Add scanning logic to `crates/elephc-chopper/src/syntax/lexer/scan.rs`.
+3. Add the `BinOp` variant to `crates/elephc-chopper/src/syntax/parser/ast/`.
+4. Add one line to `infix_bp()` in `crates/elephc-chopper/src/syntax/parser/expr/pratt.rs` (the Pratt parser
    binding-power table) so precedence and associativity match PHP.
 5. Add type checking/inference in the relevant `src/types/checker/` file, usually
    under `inference/ops.rs` or expression inference.
@@ -510,8 +510,8 @@ type checker, the optimizer, and EIR lowering. Missing a pass usually produces
 silent miscompilation rather than a compile error, so also audit every
 AST-walking pass (see "Adding or changing an AST node" in `CLAUDE.md`):
 
-1. Add the `StmtKind` variant to `src/parser/ast.rs`.
-2. Add parser logic in `src/parser/stmt.rs`.
+1. Add the `StmtKind` variant to `crates/elephc-chopper/src/syntax/parser/ast/`.
+2. Add parser logic in `crates/elephc-chopper/src/syntax/parser/stmt/mod.rs`.
 3. Add resolver/name-resolver handling if the statement can contain names,
    declarations, includes, function variants, or expressions.
 4. Add type checking in the relevant `src/types/checker/` module.

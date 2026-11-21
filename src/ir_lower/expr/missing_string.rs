@@ -398,6 +398,11 @@ fn collect_expr(
     found: &mut HashSet<String>,
 ) {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => {
+            for value in runtime.exprs() {
+                collect_expr(value, carried, ctx, found);
+            }
+        },
         ExprKind::Assignment {
             target,
             value,

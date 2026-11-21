@@ -266,6 +266,9 @@ impl Checker {
                             self.infer_type(value, env)?
                         }
                         ArrayEntry::Value(value) => self.infer_type(value, env)?,
+                        ArrayEntry::Reference(value) | ArrayEntry::KeyReference(_, value) => {
+                            return Err(CompileError::new(value.span, "Reference elements in array literals are not supported in native compilation"));
+                        }
                     };
                     val_ty = Some(match val_ty {
                         Some(acc) if acc == next => acc,

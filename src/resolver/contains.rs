@@ -134,6 +134,7 @@ fn methods_have_includes(methods: &[ClassMethod]) -> bool {
 /// and all other expression variants.
 fn expr_has_includes(expr: &Expr) -> bool {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => runtime.exprs().any(expr_has_includes),
         // A value-position include is itself an include.
         ExprKind::IncludeValue { .. } => true,
         ExprKind::BinaryOp { left, right, .. } => {

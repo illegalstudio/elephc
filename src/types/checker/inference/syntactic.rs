@@ -495,7 +495,10 @@ fn infer_unbound_expr_type_syntactic(expr: &Expr, profile: SemanticProfile) -> P
                         };
                         assoc_spread_entry_types_syntactic(inner, profile).1
                     }
-                    ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => {
+                    ArrayEntry::Keyed(_, value)
+                    | ArrayEntry::Value(value)
+                    | ArrayEntry::Reference(value)
+                    | ArrayEntry::KeyReference(_, value) => {
                         infer_expr_type_syntactic(value, profile)
                     }
                 };

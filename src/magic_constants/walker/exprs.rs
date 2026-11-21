@@ -26,6 +26,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
     let source_profile = expr.source_profile;
     let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
+        kind @ ExprKind::Runtime(_) => kind,
         ExprKind::MagicConstant(mc) => pass.transform_magic(span, mc),
 
         ExprKind::StringLiteral(value) => pass.transform_string(value),
@@ -146,6 +147,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -171,6 +173,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             pass.leave_closure();
             ExprKind::Closure {
                 params: new_params,
+                param_attributes,
                 variadic,
                 variadic_by_ref,
                 variadic_type: new_variadic_type,

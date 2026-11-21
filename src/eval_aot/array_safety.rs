@@ -48,7 +48,7 @@ where
             expr_is_eir_static_assoc_array_source_safe(pairs, support, facts, scope_reads)
         }
         ExprKind::ArrayLiteralMixed(entries) => entries.iter().all(|entry| match entry {
-            ArrayEntry::Spread(_) => false,
+            ArrayEntry::Spread(_) | ArrayEntry::Reference(_) | ArrayEntry::KeyReference(_, _) => false,
             ArrayEntry::Keyed(key, value) => {
                 expr_is_eir_static_array_key_safe(key, support, facts, scope_reads)
                     && expr_is_eir_constant_array_value_safe(value)
@@ -78,7 +78,7 @@ pub(super) fn expr_is_eir_constant_array_value_safe(expr: &Expr) -> bool {
             expr_is_eir_constant_array_key(key) && expr_is_eir_constant_array_value_safe(value)
         }),
         ExprKind::ArrayLiteralMixed(entries) => entries.iter().all(|entry| match entry {
-            ArrayEntry::Spread(_) => false,
+            ArrayEntry::Spread(_) | ArrayEntry::Reference(_) | ArrayEntry::KeyReference(_, _) => false,
             ArrayEntry::Keyed(key, value) => {
                 expr_is_eir_constant_array_key(key)
                     && expr_is_eir_constant_array_value_safe(value)

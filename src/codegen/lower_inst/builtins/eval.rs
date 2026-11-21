@@ -384,6 +384,6 @@ pub(super) use native_local_contracts::{lower_eval_scope_bind_local_type, lower_
 pub(super) use native_copy_origins::{lower_eval_scope_copy_binding_type, lower_eval_scope_binding_type};
 pub(super) use symbol_queries::{
     has_eval_context, lower_eval_class_constant_fetch, lower_eval_class_exists,
-    lower_eval_constant_exists, lower_eval_constant_fetch, lower_eval_function_exists,
-    lower_eval_static_property_get, lower_eval_static_property_set,
+    lower_eval_constant_exists, lower_eval_constant_fetch, lower_eval_constant_fetch_or_global,
+    lower_eval_function_exists, lower_eval_static_property_get, lower_eval_static_property_set,
 };

@@ -317,6 +317,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
 /// Computes ordinary expression effects before the caller's independent parameter contract.
 fn expression_effect_without_binding(expr: &Expr) -> Effect {
     match &expr.kind {
+        ExprKind::Runtime(_) => Effect::PURE.with_side_effects().with_may_throw().with_writes_globals(),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

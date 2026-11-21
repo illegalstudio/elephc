@@ -31,34 +31,62 @@ pub(in crate::interpreter) fn eval_dispatch_php_error(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let handled = dispatch_user_error_handler(message, level, context, values)?;
+    eval_dispatch_php_error_at(message, level, None, None, context, values)
+}
+
+/// Dispatches one PHP diagnostic whose source location may differ from the call site.
+pub(in crate::interpreter) fn eval_dispatch_php_error_at(
+    message: &str,
+    level: i64,
+    file: Option<&str>,
+    line: Option<usize>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let handled = dispatch_user_error_handler(message, level, file, line, context, values)?;
     let reporting_mask = match values.runtime_error_reporting(None) {
         Ok(mask) => mask,
         Err(EvalStatus::UnsupportedConstruct) => context.error_reporting_mask(),
         Err(status) => return Err(status),
     };
     if !handled && reporting_mask & level != 0 {
-        values.warning_unhandled(&format_user_error(message, level, context))?;
+        values.warning_unhandled(&format_user_error(message, level, file, line, context))?;
     }
     Ok(handled)
 }
 
 /// Formats PHP's default user diagnostic with its category and source location.
-fn format_user_error(message: &str, level: i64, context: &ElephcEvalContext) -> String {
+fn format_user_error(
+    message: &str,
+    level: i64,
+    file: Option<&str>,
+    line: Option<usize>,
+    context: &ElephcEvalContext,
+) -> String {
     let category = match level {
         E_USER_ERROR => "Fatal error",
         E_WARNING | E_USER_WARNING => "Warning",
         E_DEPRECATED | E_USER_DEPRECATED => "Deprecated",
         _ => "Notice",
     };
-    let (file, _, line, _) = context.call_site();
+    let (call_file, _, call_line, _) = context.call_site();
+    let file = file.unwrap_or(&call_file);
+    let line = line.map_or(call_line, |line| line as i64);
     format!("{category}: {message} in {file} on line {line}\n")
 }
 
 /// Invokes a handler with independent argument owners and converts its exact false sentinel.
-fn dispatch_user_error_handler(message: &str, level: i64, context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
-    let (file, _, line, _) = context.call_site();
+fn dispatch_user_error_handler(
+    message: &str,
+    level: i64,
+    file: Option<&str>,
+    line: Option<usize>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let (call_file, _, call_line, _) = context.call_site();
+    let file = file.unwrap_or(&call_file);
+    let line = line.map_or(call_line, |line| line as i64);
     let arguments = (0..4).map(|_| RuntimeOwnerSlot::new(
         RuntimeCellHandle::from_raw(std::ptr::null_mut()).borrowed())).collect::<Vec<_>>();
     with_runtime_owners(&arguments, || {

@@ -84,7 +84,9 @@ pub(in crate::interpreter) use constant::*;
 pub(in crate::interpreter) use define::*;
 pub(in crate::interpreter) use defined::*;
 pub(in crate::interpreter) use runtime_introspection::*;
-pub(in crate::interpreter) use error_dispatch::{eval_dispatch_php_error, E_WARNING, E_DEPRECATED};
+pub(in crate::interpreter) use error_dispatch::{
+    eval_dispatch_php_error, eval_dispatch_php_error_at, E_DEPRECATED, E_WARNING,
+};
 pub(in crate::interpreter) use die::*;
 pub(in crate::interpreter) use exit::*;
 pub(in crate::interpreter) use func_get_arg::*;

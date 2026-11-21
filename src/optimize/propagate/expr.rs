@@ -78,6 +78,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     let source_profile = expr.source_profile;
     let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
+        kind @ ExprKind::Runtime(_) => kind,
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(
@@ -222,6 +223,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         },
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -244,6 +246,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
                 variadic.as_deref(), variadic_by_ref);
             ExprKind::Closure {
                 params: propagate_params(params),
+                param_attributes,
                 variadic,
                 variadic_by_ref,
                 variadic_type,

@@ -32,6 +32,9 @@ pub(super) fn reflection_constant_array_entries_fold(
     let mut max_int: Option<i64> = None;
     for entry in entries {
         match entry {
+            crate::parser::ast::ArrayEntry::Reference(_) | crate::parser::ast::ArrayEntry::KeyReference(_, _) => {
+                return Err(CodegenIrError::unsupported("References in ReflectionClass constant arrays"));
+            }
             crate::parser::ast::ArrayEntry::Value(expr) => {
                 let value = reflection_constant_value(
                     ctx,

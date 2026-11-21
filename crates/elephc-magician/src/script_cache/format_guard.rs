@@ -111,8 +111,10 @@ mod tests {
     /// BUMPED TO 31: eval callables and generic templates record their defining
     /// `strict_types` mode, which changes the serialized payload.
     /// BUMPED TO 32: strict_types declarations must precede every other eval statement.
-    /// BUMPED TO 33: strict semantic profiles and source terms coexist with main's callable and jump layouts.
-    const RECORDED_FINGERPRINT: u64 = 3526544258761415661;
+    /// BUMPED TO 33: Chopper scans and parses included scripts and eval fragments.
+    /// BUMPED TO 34: semantic profiles are retained through the shared Chopper payload.
+    /// BUMPED TO 35: the profiled Chopper parser owns every cached script entry point.
+    const RECORDED_FINGERPRINT: u64 = 10_736_117_818_830_913_745;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

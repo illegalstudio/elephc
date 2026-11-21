@@ -19,6 +19,7 @@ use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::PhpType;
+use crate::builtins::semantics::BuiltinLoweringContext;
 
 /// Emits php-src's `E_DEPRECATED` for a `MT_RAND_PHP` constant-expression read.
 ///
@@ -469,11 +470,39 @@ pub(super) fn lower_const_ref(
     if let Some((value, php_type)) = ctx.constant_value(name.as_str()) {
         return lower_constant_value(ctx, value, php_type, expr);
     }
-    if ctx.has_eval_barrier() || ctx.eval_executed() {
+    let eval_possible = ctx.has_eval_barrier()
+        || ctx.eval_executed()
+        || crate::ir_lower::program_eval::contains_eval();
+    if eval_possible {
         // Barrier-free AOT evals can still define constants dynamically; the
-        // fetch needs the eval context, so make sure its slot exists.
+        // fetch needs the eval context, so make sure its slot exists. A program
+        // that calls `eval()` anywhere also reaches here for constants written in
+        // a declared initializer, which is lowered in its own function and never
+        // crosses the eval call itself.
         ctx.declare_eval_context_local();
         let data = ctx.intern_global_name(name.as_str());
+        if crate::ir_lower::program_eval::has_native_define(name.as_str()) {
+            // A compiled `define()` for this name exists somewhere, but finding it is not
+            // proof it ran: the eval registry may be the only store that holds the value.
+            // Read the native slot through the normal global load and let codegen consult
+            // the `define()` flag at run time before choosing between the two stores.
+            let native = ctx.emit_value(
+                Op::LoadGlobal,
+                Vec::new(),
+                Some(Immediate::GlobalName(data)),
+                super::fallback_expr_type(expr, ctx.semantic_profile()),
+                Op::LoadGlobal.default_effects(),
+                Some(expr.span),
+            );
+            return ctx.emit_value(
+                Op::EvalConstantFetchOrGlobal,
+                vec![native.value],
+                Some(Immediate::Data(data)),
+                PhpType::Mixed,
+                Op::EvalConstantFetchOrGlobal.default_effects(),
+                Some(expr.span),
+            );
+        }
         return ctx.emit_value(
             Op::EvalConstantFetch,
             Vec::new(),

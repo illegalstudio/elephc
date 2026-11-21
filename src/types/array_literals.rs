@@ -35,7 +35,9 @@ pub(crate) fn plan_literal_array_entries(
             let mut planned = Vec::with_capacity(entries.len());
             for entry in entries {
                 match entry {
-                    ArrayEntry::Spread(_) => return None,
+                    ArrayEntry::Spread(_)
+                    | ArrayEntry::Reference(_)
+                    | ArrayEntry::KeyReference(_, _) => return None,
                     ArrayEntry::Keyed(key, value) => planned.push((Some(key), value)),
                     ArrayEntry::Value(value) => planned.push((None, value)),
                 }

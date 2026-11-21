@@ -248,6 +248,37 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // move warning pointer into the runtime diagnostic buffer register
     emitter.instruction("b __rt_diag_warning");                                 // emit or suppress one eval runtime warning
 
+    // `__elephc_eval_warning_at(ptr, len, line)`: the tokenizer prelude reports the line inside
+    // the SCANNED source, so this publishes it for the diagnostic and restores the interpreter's
+    // line afterwards.
+    label_c_global(emitter, "__elephc_eval_warning_at");
+    emitter.instruction("sub sp, sp, #64");                                     // reserve the saved line/file/return-address slots
+    emitter.instruction("str x30, [sp, #32]");                                  // preserve the Rust caller's return address across the diagnostic
+    emitter.instruction("str x2, [sp, #8]");                                    // keep the requested warning line
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_php_diagnostic_line", 0);
+    emitter.instruction("str x9, [sp, #0]");                                    // remember the interpreter's line across the handler
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_php_diagnostic_file", 0);
+    emitter.instruction("str x9, [sp, #16]");                                   // remember the interpreter's file pointer
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_php_diagnostic_file_len", 0);
+    emitter.instruction("str x9, [sp, #24]");                                   // remember the interpreter's file length
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the requested warning line
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_php_diagnostic_line", 0);
+    emitter.instruction("mov x9, xzr");                                         // clear the file pointer: token_get_all names no file
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_php_diagnostic_file", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_php_diagnostic_file_len", 0);
+    emitter.instruction("mov x2, x1");                                          // move warning length into the runtime diagnostic length register
+    emitter.instruction("mov x1, x0");                                          // move warning pointer into the runtime diagnostic buffer register
+    emitter.instruction("bl __rt_diag_warning");                                // emit or suppress one eval runtime warning
+    emitter.instruction("ldr x10, [sp, #0]");                                   // recover the interpreter's line
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_php_diagnostic_line", 0);
+    emitter.instruction("ldr x9, [sp, #16]");                                   // recover the interpreter's file pointer
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_php_diagnostic_file", 0);
+    emitter.instruction("ldr x9, [sp, #24]");                                   // recover the interpreter's file length
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_php_diagnostic_file_len", 0);
+    emitter.instruction("ldr x30, [sp, #32]");                                  // recover the Rust caller's return address
+    emitter.instruction("add sp, sp, #64");                                     // drop the saved slots
+    emitter.instruction("ret");                                                 // return to the Rust interpreter
+
     label_c_global(emitter, "__elephc_eval_fatal");
     emitter.instruction("mov x2, x1");                                          // move fatal length into the stderr write-length register
     emitter.instruction("mov x1, x0");                                          // move fatal pointer into the stderr write-buffer register

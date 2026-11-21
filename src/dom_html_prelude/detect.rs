@@ -224,6 +224,7 @@ fn packed_field_refs_dom(field: &PackedField) -> bool {
 /// is exhaustive so a newly added `ExprKind` cannot silently bypass detection.
 fn expr_refs_dom(expr: &Expr) -> bool {
     match &expr.kind {
+        ExprKind::Runtime(runtime) => runtime.exprs().any(expr_refs_dom),
         // Leaves and identifier-only forms carry no DOM reference.
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)

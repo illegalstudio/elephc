@@ -339,3 +339,10 @@ fn test_while_condition_reads_by_reference_out_parameter() {
     );
     assert_eq!(out, "3:0");
 }
+
+/// PHP 8.2 allows `readonly` as a function name even though it lexes as a keyword.
+#[test]
+fn test_readonly_function_name() {
+    let out = compile_and_run("<?php function readonly() { return 7; } echo readonly();");
+    assert_eq!(out, "7");
+}

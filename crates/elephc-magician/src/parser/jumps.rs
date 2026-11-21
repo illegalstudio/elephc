@@ -3,8 +3,8 @@
 //! closure body, or the fragment's top-level code.
 //!
 //! Called from:
-//! - `crate::parser::state::Parser::parse_program()` for the fragment's own statements.
-//! - `Parser::parse_block_with_end_line()` for every function-like body.
+//! - The runtime frontend for the fragment's own statements.
+//! - AST-to-EvalIR lowering for each function-like body.
 //!
 //! Key details:
 //! - PHP rejects an invalid jump when it compiles the code, before any of it runs. Validating
@@ -29,7 +29,7 @@ struct Enclosing<'a> {
 }
 
 /// Validates every `goto` and label of one label scope.
-pub(super) fn validate_jump_scope(body: &[EvalStmt]) -> Result<(), EvalParseError> {
+pub(crate) fn validate_jump_scope(body: &[EvalStmt]) -> Result<(), EvalParseError> {
     let mut labels = HashSet::new();
     collect_labels(body, &mut labels)?;
     let mut enclosing = Vec::new();

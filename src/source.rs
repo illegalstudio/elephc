@@ -1,8 +1,5 @@
 //! Purpose:
-//! Defines the per-file source profile: the language mode selected from a physical input path
-//! plus the `declare(strict_types=1)` state that file opted into.
-//! Centralizes `.lfc` classification so every file loader agrees on tag and strict-mode semantics.
-//! Carries independent eval visibility and semantic guarantees into source-sensitive EIR data.
+//! Re-exports source profiles from the shared syntax crate and finalizes physical programs.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` for the entry source.
@@ -10,16 +7,8 @@
 //!
 //! Key details:
 //! - Only `.lfc` opts into tagless elephc source; every other path preserves tagged-PHP behavior.
-//! - Classification is ASCII case-insensitive and never changes output-path naming.
-//! - `strict_types` is a *per-file* PHP directive. It is stamped onto every `Stmt` created while
-//!   one physical file is parsed (`crate::parser::ast::Stmt::strict_types`) and therefore survives
-//!   include/autoload merging into the single flat program the type checker sees. Statement
-//!   rewriting passes must re-install the profile they read off the statement they are rebuilding,
-//!   which is why `with_parse_mode`/`scoped_parse_mode` take the whole `SourceProfile` instead of
-//!   the mode alone: a rebuild that dropped the flag would silently downgrade a strict file to
-//!   PHP's coercive parameter binding.
+//! - `strict_types` is a per-file directive stamped on every parsed statement.
 
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -46,174 +35,12 @@ pub(crate) fn canonical_span_source_path(span: crate::span::Span) -> Option<Stri
         .map(|path| canonical_source_path(std::path::Path::new(&path)))
 }
 
-/// Language profile selected for one physical source file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SourceMode {
-    /// Tagged PHP-compatible source that requires the normal `<?php` opening tag.
-    Php,
-    /// Tagless elephc source with every elephc extension available.
-    Lfc,
-    /// Compiler-generated source that is never subject to the user strict-PHP audit.
-    Internal,
-}
-
-/// Everything one physical source file contributes to the AST nodes parsed from it.
-///
-/// `mode` comes from the file's path and is known before parsing starts; `strict_types` comes
-/// from a `declare(strict_types=1)` directive and is only known once the parser has read the
-/// file's first statement. Both are stamped onto every `Stmt` the file produces, so the merged
-/// program still answers "which file was this written in" for the two questions that need it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SourceProfile {
-    /// Language profile selected from the physical path.
-    pub mode: SourceMode,
-    /// Whether the file declared `strict_types=1`.
-    pub strict_types: bool,
-}
-
-impl SourceProfile {
-    /// Builds the profile a physical file starts parsing with: its path-derived mode and PHP's
-    /// default coercive typing, which only a `declare(strict_types=1)` directive changes.
-    pub fn new(mode: SourceMode) -> Self {
-        Self {
-            mode,
-            strict_types: false,
-        }
-    }
-}
-
-/// Immutable policy attached to a literal eval source or a source-sensitive EIR value.
-/// PHP-only visibility is lexical; semantic guarantees belong to the compilation.
-/// The compact word keeps recursive EIR instructions within their stack-size budget.
-/// The constructor refuses unrepresentable future semantic bits; it never truncates them.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct EvalSourceProfile(u32);
-
-impl EvalSourceProfile {
-    const PHP_ONLY_BIT: u32 = 1 << 31;
-
-    /// Joins independently resolved visibility and guarantees without truncating any bits.
-    pub const fn new(php_only: bool, semantics: elephc_semantics::SemanticProfile) -> Self {
-        assert!(semantics.bits() < Self::PHP_ONLY_BIT as u64);
-        Self(semantics.bits() as u32 | if php_only { Self::PHP_ONLY_BIT } else { 0 })
-    }
-
-    /// Returns the lexical builtin visibility without changing semantic guarantees.
-    pub const fn php_only(self) -> bool { self.0 & Self::PHP_ONLY_BIT != 0 }
-
-    /// Recovers the validated neutral profile stored by the constructor.
-    pub fn semantics(self) -> elephc_semantics::SemanticProfile {
-        elephc_semantics::SemanticProfile::from_bits(u64::from(self.0 & !Self::PHP_ONLY_BIT))
-            .expect("source profiles contain only validated semantic bits")
-    }
-
-    /// Makes conservative declaration scans explicit about their permissive parser policy.
-    pub const fn permissive(php_only: bool) -> Self {
-        Self::new(php_only, elephc_semantics::SemanticProfile::PERMISSIVE)
-    }
-}
-
-thread_local! {
-    /// Source mode inherited by AST nodes created during one parser invocation.
-    static CURRENT_PARSE_MODE: Cell<SourceMode> = const { Cell::new(SourceMode::Internal) };
-
-    /// `strict_types` state inherited by AST nodes created during one parser invocation.
-    static CURRENT_STRICT_TYPES: Cell<bool> = const { Cell::new(false) };
-}
-
-impl SourceMode {
-    /// Classifies a physical path, treating only a case-insensitive `.lfc` suffix as tagless.
-    pub fn from_path(path: &Path) -> Self {
-        if path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("lfc"))
-        {
-            Self::Lfc
-        } else {
-            Self::Php
-        }
-    }
-
-    /// Returns whether this source mode requires a user-written `<?php` opening tag.
-    pub fn requires_open_tag(self) -> bool {
-        matches!(self, Self::Php)
-    }
-
-    /// Returns whether an invocation-level strict-PHP request applies to this source.
-    pub fn php_only_is_effective(self, requested: bool) -> bool {
-        requested && matches!(self, Self::Php)
-    }
-}
-
-/// Returns whether Composer discovery should inspect a path as PHP/LFC source.
-///
-/// Physical includes remain PHP-compatible regardless of suffix, but Composer's
-/// directory walkers intentionally discover only files named `.php` or `.lfc`.
-pub fn is_composer_source_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("php") || extension.eq_ignore_ascii_case("lfc")
-        })
-}
-
-/// Removes the recognized source suffix from one Composer-relative path component.
-pub fn composer_source_stem(component: &str) -> String {
-    Path::new(component)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or(component)
-        .to_string()
-}
-
-/// RAII guard restoring the parser's previous source profile on drop.
-pub(crate) struct ParseModeGuard {
-    previous: SourceProfile,
-}
-
-impl Drop for ParseModeGuard {
-    /// Restores the parser source profile active before the nested parse.
-    fn drop(&mut self) {
-        CURRENT_PARSE_MODE.with(|cell| cell.set(self.previous.mode));
-        CURRENT_STRICT_TYPES.with(|cell| cell.set(self.previous.strict_types));
-    }
-}
-
-/// Runs `f` while parser-created AST nodes inherit `profile`.
-pub(crate) fn with_parse_mode<T>(profile: SourceProfile, f: impl FnOnce() -> T) -> T {
-    let _guard = scoped_parse_mode(profile);
-    f()
-}
-
-/// Installs one parser/source reconstruction profile until the returned guard is dropped.
-pub(crate) fn scoped_parse_mode(profile: SourceProfile) -> ParseModeGuard {
-    let mode = CURRENT_PARSE_MODE.with(|cell| cell.replace(profile.mode));
-    let strict_types = CURRENT_STRICT_TYPES.with(|cell| cell.replace(profile.strict_types));
-    ParseModeGuard {
-        previous: SourceProfile { mode, strict_types },
-    }
-}
-
-/// Returns the source mode assigned to AST nodes created at the current parse site.
-pub(crate) fn current_parse_mode() -> SourceMode {
-    CURRENT_PARSE_MODE.with(Cell::get)
-}
-
-/// Returns the `strict_types` state assigned to AST nodes created at the current parse site.
-pub(crate) fn current_strict_types() -> bool {
-    CURRENT_STRICT_TYPES.with(Cell::get)
-}
-
-/// Records that the file currently being parsed declared `strict_types=<enabled>`.
-///
-/// PHP requires the directive to be a file's very first statement, so every statement created
-/// after this call belongs to the same file and inherits the flag. The enclosing
-/// `ParseModeGuard` resets it when the file's parse ends, which is what keeps the directive from
-/// leaking into an included file or back out to the includer.
-pub(crate) fn declare_strict_types(enabled: bool) {
-    CURRENT_STRICT_TYPES.with(|cell| cell.set(enabled));
-}
+#[allow(unused_imports)]
+pub use elephc_chopper::syntax::source::{
+    composer_source_stem, current_parse_mode, current_strict_types, declare_strict_types,
+    is_composer_source_path, scoped_parse_mode, with_parse_mode, EvalSourceProfile, SourceMode,
+    SourceProfile,
+};
 
 /// Applies path-dependent post-parse processing shared by every physical source loader.
 ///
@@ -289,8 +116,7 @@ mod tests {
         assert_eq!(composer_source_stem("App.lfc"), "App");
     }
 
-    /// Verifies a nested file parse starts coercive and cannot leak its `strict_types` state
-    /// back to the includer, which is what makes the directive per-file after include merging.
+    /// Verifies a nested file parse starts coercive and cannot leak its `strict_types` state.
     #[test]
     fn nested_parse_scopes_strict_types_to_one_file() {
         with_parse_mode(SourceProfile::new(SourceMode::Php), || {
@@ -298,7 +124,6 @@ mod tests {
             declare_strict_types(true);
             assert!(current_strict_types());
 
-            // An `include`d file parses inside the includer's scope and must start coercive.
             with_parse_mode(SourceProfile::new(SourceMode::Php), || {
                 assert!(!current_strict_types());
                 declare_strict_types(true);
@@ -313,15 +138,10 @@ mod tests {
         assert!(!current_strict_types());
     }
 
-    /// Verifies a statement-rewriting pass re-installing a statement's profile restores both the
-    /// language mode and the `strict_types` flag, so a rebuilt node keeps its file's binding
-    /// rules instead of silently reverting to coercive.
+    /// Verifies a statement-rewriting pass re-installing a profile restores both fields.
     #[test]
     fn reinstalling_a_profile_restores_both_fields() {
-        let strict = SourceProfile {
-            mode: SourceMode::Php,
-            strict_types: true,
-        };
+        let strict = SourceProfile { mode: SourceMode::Php, strict_types: true };
         with_parse_mode(strict, || {
             assert_eq!(current_parse_mode(), SourceMode::Php);
             assert!(current_strict_types());

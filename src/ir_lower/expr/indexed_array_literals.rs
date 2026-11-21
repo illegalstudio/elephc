@@ -449,6 +449,9 @@ pub(super) fn lower_mixed_array_literal(
                     Some(span),
                 );
             }
+            ArrayEntry::Reference(_) | ArrayEntry::KeyReference(_, _) => {
+                unreachable!("array references must be rejected by the native frontend");
+            }
             ArrayEntry::Value(value) => {
                 let span = value.span;
                 let value = lower_expr(ctx, value);
@@ -490,7 +493,8 @@ pub(super) fn assoc_array_literal_type_from_entries(
         .iter()
         .map(|entry| match entry {
             ArrayEntry::Spread(_) => None,
-            ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => {
+            ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value)
+            | ArrayEntry::Reference(value) | ArrayEntry::KeyReference(_, value) => {
                 Some(array_literal_element_type_for_ir(ctx, value))
             }
         })
@@ -499,7 +503,8 @@ pub(super) fn assoc_array_literal_type_from_entries(
         ctx,
         entries.iter().zip(&value_types).map(|(entry, value_ty)| match entry {
             ArrayEntry::Spread(source) => (spread_entry_source(source), true, None),
-            ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => (value, false, value_ty.clone()),
+            ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value)
+            | ArrayEntry::Reference(value) | ArrayEntry::KeyReference(_, value) => (value, false, value_ty.clone()),
         }),
         false,
     ) {
@@ -515,7 +520,8 @@ pub(super) fn assoc_array_literal_type_from_entries(
                 spread_storage_probe_element_type(&spread_source_storage_type_for_ir(ctx, inner))
             }
             (_, Some(ty)) => ty.codegen_repr(),
-            (ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value), None) => {
+            (ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value)
+            | ArrayEntry::Reference(value) | ArrayEntry::KeyReference(_, value), None) => {
                 array_literal_element_type_for_ir(ctx, value).codegen_repr()
             }
         };

@@ -104,6 +104,13 @@ fn lower_on_compiler_stack(
     let _closure_param_hints =
         crate::ir_lower::closure_hints::install(&check_result.closure_param_hints, &check_result.closure_result_types);
     let _closure_defaults = crate::ir_lower::initializer_reads::install(check_result);
+    // A program that runs dynamic `eval()` code can define constants after schema creation.
+    // Declared initializers must ask the eval runtime for those names instead of reading native
+    // global storage, which never receives them.
+    let _program_eval = crate::ir_lower::program_eval::install(
+        check_result.program_contains_eval || crate::ir_lower::body_contains_eval_call(program),
+        &check_result.native_defined_constants,
+    );
     let mut module = Module::new(target);
     module.semantic_profile = check_result.semantic_profile;
     module.source_path = source_path.map(crate::source::canonical_source_path);

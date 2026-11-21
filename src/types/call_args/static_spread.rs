@@ -106,7 +106,6 @@ pub(crate) fn validate_static_unpack_order(
     }
     Ok(())
 }
-
 /// Projects a planned positional call into values for builtin signature checking.
 /// Only fully static indexed unpacks are flattened; callers must validate source
 /// ordering first. General planning retains spread nodes for runtime arity guards.

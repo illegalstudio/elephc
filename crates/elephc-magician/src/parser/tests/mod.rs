@@ -28,3 +28,4 @@ mod jumps;
 mod support;
 mod trait_adaptations;
 mod small_stack;
+mod shared_ast;

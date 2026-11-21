@@ -1134,6 +1134,10 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         _ => {}
     }
     match &expr.kind {
+        ExprKind::Runtime(runtime) => {
+            usage.introspects = true;
+            for value in runtime.exprs() { scan_expr(value, usage); }
+        },
         ExprKind::IncludeValue { path, .. } => {
             // Like the include statement: a runtime include inside a fragment loads code this
             // walk cannot read.

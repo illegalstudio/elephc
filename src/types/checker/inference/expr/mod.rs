@@ -55,6 +55,7 @@ impl Checker {
             return result.map(|ty| crate::types::constant_binding::bound_result_type(ty, Some(binding)));
         }
         match &expr.kind {
+            ExprKind::Runtime(_) => Err(CompileError::new(expr.span, "Runtime fragment syntax must be lowered by Magician")),
             ExprKind::IncludeValue { .. }
             | ExprKind::BoolLiteral(_)
             | ExprKind::Null

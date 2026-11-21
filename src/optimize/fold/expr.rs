@@ -138,6 +138,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
     let source_profile = expr.source_profile;
     let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
+        kind @ ExprKind::Runtime(_) => kind,
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => {
@@ -397,6 +398,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         }
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -416,6 +418,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             );
             ExprKind::Closure {
                 params: fold_params(params),
+                param_attributes,
                 variadic,
                 variadic_by_ref,
                 variadic_type,

@@ -1965,7 +1965,7 @@ jobs:
         env:
           ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
         shell: elephc-ci-shell {0}
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-tokenizer-engine) and kind(lib)'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-chopper) and binary(=php_tokenizer)'
 
       - name: Audit consumer compilation
         if: always()
@@ -2012,6 +2012,12 @@ jobs:
           examples/tokenizer/main > "$RUNNER_TEMP/tokenizer-example.out"
           grep -F 'Function declaration at line 1, byte ' "$RUNNER_TEMP/tokenizer-example.out"
           grep -F 'First token: T_OPEN_TAG' "$RUNNER_TEMP/tokenizer-example.out"
+      - name: Run the inline php-src tokenizer corpus
+        env:
+          ELEPHC_TEST_COMPILER: ${{ github.workspace }}/target/debug/elephc
+        shell: elephc-ci-shell {0}
+        run: bash scripts/ci/run_prebuilt_tests.sh 'binary(=tokenizer_php_src)' --run-ignored only
+
       - name: Run focused native, eval and argument regressions
         shell: elephc-ci-shell {0}
         run: |

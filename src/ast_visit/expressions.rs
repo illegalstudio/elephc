@@ -21,6 +21,11 @@ pub(super) fn walk_expr(expr: &Expr, visitor: &mut impl AstVisitor) {
     visitor.expression(expr);
     let span = expr.span;
     match &expr.kind {
+        ExprKind::Runtime(runtime) => {
+            for operand in runtime.exprs() {
+                walk_expr(operand, visitor);
+            }
+        }
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
@@ -148,6 +153,7 @@ pub(super) fn walk_expr(expr: &Expr, visitor: &mut impl AstVisitor) {
             by_ref_return: _,
             captures: _,
             capture_refs: _,
+            ..
         } => {
             walk_params(params, span, visitor);
             if let Some(variadic_type) = variadic_type {

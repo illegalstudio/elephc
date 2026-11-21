@@ -44,5 +44,6 @@ fn strict_integer_literal_eval_parser_rejects_positive_and_precedence_overflow()
 #[test]
 fn strict_integer_literal_eval_interpolation_keeps_the_source_profile() {
     assert_eq!(checked("return \"{$items[9223372036854775809]}\";").unwrap_err(), EvalParseError::IntegerLiteralOverflow);
-    assert!(checked("return \"$items[9223372036854775808]\";").is_ok());
+    let simple = checked("return \"$items[9223372036854775808]\";");
+    assert!(simple.is_ok(), "{simple:?}");
 }

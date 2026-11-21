@@ -406,6 +406,7 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
     }
 
     match &expr.kind {
+        ExprKind::Runtime(_) => unreachable!("runtime fragment syntax must be lowered by Magician"),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

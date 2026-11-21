@@ -142,12 +142,6 @@ pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr], callee_desc
         .map_err(|err| unresolved_call_order_error(err, callee_desc))
 }
 
-/// Maps parser-only ordering without selecting semantic array-key rules.
-pub(crate) fn validate_unresolved_call_syntax(args: &[Expr], callee_desc: &str) -> Result<(), CompileError> {
-    call_args::validate_syntactic_call_argument_order(args)
-        .map_err(|err| unresolved_call_order_error(err, callee_desc))
-}
-
 /// Keeps parser and checker diagnostics identical for their shared syntax rules.
 fn unresolved_call_order_error(err: CallArgPlanError, callee_desc: &str) -> CompileError {
     match err {

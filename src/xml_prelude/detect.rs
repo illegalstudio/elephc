@@ -284,6 +284,7 @@ impl Detector {
         self.dom.observe_captures(expr);
         let mutations = self.dom.call_mutations(expr);
         let result = match &expr.kind {
+            ExprKind::Runtime(runtime) => runtime.exprs().any(|value| self.expr_refs_xml(value)),
             // Leaves and identifier-only forms carry no xml reference.
             ExprKind::StringLiteral(_)
             | ExprKind::IntLiteral(_)

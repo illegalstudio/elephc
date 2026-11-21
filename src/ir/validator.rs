@@ -817,6 +817,7 @@ fn validate_instruction_immediate(
         | LoadStaticPropertyRefCell
         | EvalFunctionCallArray | EvalFunctionExists | EvalClassExists | EvalConstantExists
         | EvalConstantFetch
+        | EvalConstantFetchOrGlobal
         | EvalStaticMethodCall
         | EnumBackingStringToInt
         | EnumBackingMixedToInt

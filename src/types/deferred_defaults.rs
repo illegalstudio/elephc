@@ -119,15 +119,8 @@ pub(crate) fn unconditional_error_message(default: &Expr) -> Option<&str> {
             unconditional_error_message(key).or_else(|| unconditional_error_message(value))),
         ExprKind::ArrayLiteralMixed(items) => items.iter()
             .find_map(|item| item.exprs().find_map(unconditional_error_message)),
-        ExprKind::BinaryOp { left, op, right } => unconditional_error_message(left).or_else(|| {
-            let evaluates_right = match op {
-                BinOp::And => literal_truthiness(left) == Some(true),
-                BinOp::Or => literal_truthiness(left) == Some(false),
-                BinOp::NullCoalesce => matches!(left.kind, ExprKind::Null),
-                _ => true,
-            };
-            evaluates_right.then(|| unconditional_error_message(right)).flatten()
-        }),
+        ExprKind::BinaryOp { left, op, right } => unconditional_error_message(left)
+            .or_else(|| right_side_evaluates(op, left).then(|| unconditional_error_message(right)).flatten()),
         ExprKind::ArrayAccess { array, index } => unconditional_error_message(array)
             .or_else(|| unconditional_error_message(index)),
         ExprKind::Ternary { condition, then_expr, else_expr } => {
@@ -147,6 +140,19 @@ pub(crate) fn unconditional_error_message(default: &Expr) -> Option<&str> {
         | ExprKind::Cast { expr: inner, .. } | ExprKind::Spread(inner) =>
             unconditional_error_message(inner),
         _ => None,
+    }
+}
+
+/// Returns whether a binary operator's right-hand side always runs after `left`.
+///
+/// `&&`, `||` and `??` short-circuit, so a name they guard is only a hard error when the left
+/// side already decides they run.
+pub(crate) fn right_side_evaluates(op: &BinOp, left: &Expr) -> bool {
+    match op {
+        BinOp::And => literal_truthiness(left) == Some(true),
+        BinOp::Or => literal_truthiness(left) == Some(false),
+        BinOp::NullCoalesce => matches!(left.kind, ExprKind::Null),
+        _ => true,
     }
 }
 
