@@ -226,7 +226,13 @@ fn can_be_caused_by_adoption(error: &CompileError) -> bool {
     for quoted in error.message.split('\'').skip(1).step_by(2) {
         let Some((class, method)) = quoted.split_once("::") else { continue; };
         let class_end = class.find('<').unwrap_or(class.len());
+        let instantiated = class_end < class.len();
         let class = simple(&class[..class_end]);
+        // `Box<int>::get` is a member of an INSTANTIATION: the template's own change is the
+        // subject, whichever of its methods the refusal names.
+        if instantiated && changed.names.contains(&class) {
+            return true;
+        }
         let method: String = method
             .chars()
             .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
@@ -667,6 +673,8 @@ mod tests {
         std::fs::write(&path, "<?php").unwrap();
         let path = canonical(&path);
         adopted().lock().unwrap().insert(path.clone());
+        // The annotations of `Box` changed its declaration, as adoption of a native template does.
+        changed().lock().unwrap().names.insert("box".to_string());
         let refusal = |message: &str| {
             let mut error = CompileError::new(crate::span::Span::dummy(), message);
             error.file = Some(path.display().to_string());
