@@ -635,6 +635,13 @@ Binds to lexical class, not runtime child.
 ## static::method()
 Late static binding — resolves against called class at runtime.
 
+When the method is a private static method of the class that contains the call, the
+called class's own `method` still decides, as in PHP: a subclass that does not redeclare
+it runs the private method, a public or protected redeclaration (or a class inheriting
+one) runs instead, and a private redeclaration throws
+`Error: Call to private method B::method() from scope A`. Only classes that redeclare
+the method get a runtime check; when none does, the call binds directly.
+
 ## Static methods
 Called with `::`, no `$this`.
 
