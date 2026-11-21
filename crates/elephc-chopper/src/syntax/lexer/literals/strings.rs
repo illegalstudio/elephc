@@ -246,7 +246,7 @@ fn append_simple_access(
 ) -> Result<(), CompileError> {
     if input.peek_escape() == Some('[') {
         input.advance_escape(); // consume '['
-        append_simple_offset_key(input, part, span);
+        append_simple_offset_key(input, part, span)?;
         if input.peek_escape() == Some(']') {
             input.advance_escape();
         } else {
@@ -283,7 +283,7 @@ fn append_simple_offset_key(
     input: &mut impl EscapeInput,
     part: &mut Vec<SpannedToken>,
     span: Span,
-) {
+) -> Result<(), CompileError> {
     part.push(spanned(Token::LBracket, span));
     match input.peek_escape() {
         Some('$') => {
@@ -313,6 +313,12 @@ fn append_simple_offset_key(
                     break;
                 }
             }
+            if digits == "-" {
+                return Err(CompileError::new(
+                    span,
+                    "Expected digits after '-' in string interpolation offset",
+                ));
+            }
             // PHP's simple interpolation grammar canonicalizes integer-looking offsets
             // before ordinary array-key policy applies. Exact-key mode therefore keeps
             // noncanonical spellings but must still treat `1` as integer key 1.
@@ -336,6 +342,7 @@ fn append_simple_offset_key(
         }
     }
     part.push(spanned(Token::RBracket, span));
+    Ok(())
 }
 
 /// Captures a braced interpolation expression verbatim and consumes its closing brace.
@@ -604,6 +611,15 @@ fn interpolation_ranges(content: &str) -> Vec<(usize, usize)> {
         ranges.push((start, index));
     }
     ranges
+}
+
+#[cfg(test)]
+mod tests {
+    /// A lone minus is not an integer offset and must not become the string key `"-"`.
+    #[test]
+    fn simple_interpolation_rejects_lone_minus_offset() {
+        assert!(crate::syntax::lexer::tokenize("<?php echo \"$items[-]\";").is_err());
+    }
 }
 
 /// Controls how a bare backslash at end of input is treated inside double-quoted strings.
