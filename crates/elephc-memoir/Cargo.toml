@@ -1,0 +1,10 @@
+[package]
+name = "elephc-memoir"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Compiler-side memory-management assembly generation for elephc"
+
+[lib]
+crate-type = ["rlib"]

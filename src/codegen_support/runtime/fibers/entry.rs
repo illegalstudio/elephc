@@ -8,15 +8,17 @@
 //! Key details:
 //! - The trampoline must keep Fiber object state, pending throws, try handlers, and transfer values balanced across switches.
 
+use elephc_memoir::coroutine_storage;
+
+use elephc_memoir::activation_records;
+
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::try_handlers::{TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE};
 
 use super::{
-    FIBER_CALLABLE_WRAPPER_OFFSET, FIBER_CALLER_OFFSET, FIBER_PENDING_THROW_OFFSET,
-    FIBER_STATE_OFFSET, FIBER_STATE_RUNNING, FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
-};
+    FIBER_CALLABLE_WRAPPER_OFFSET, FIBER_CALLER_OFFSET, FIBER_STATE_OFFSET, FIBER_STATE_RUNNING, FIBER_STATE_TERMINATED, };
 
 /// Emits the `__rt_fiber_entry` trampoline for the current target.
 ///
@@ -52,13 +54,9 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
     // emit_store_reg_to_symbol — that helper uses x9 internally for the symbol
     // address, so source register x9 would self-clobber.
     emitter.instruction(&format!("sub sp, sp, #{}", TRY_HANDLER_SLOT_SIZE));    // reserve TRY_HANDLER_SLOT_SIZE bytes on the fiber stack for the boundary handler
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0); // x10 = previous head of the handler chain (the fiber's saved value, typically NULL on a fresh fiber)
-    emitter.instruction("str x10, [sp, #0]");                                   // handler.next = previous chain head
-    emitter.instruction("str xzr, [sp, #8]");                                   // handler.activation_record = NULL → cleanup_frames unwinds the entire fiber call stack
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0); // x10 = current diagnostic-suppression depth
-    emitter.instruction("str x10, [sp, #16]");                                  // handler.saved_diag_depth = current depth (matches user-emitted try frames)
+    activation_records::emit_save_fiber_entry_prefix(emitter, "x10");
     emitter.instruction("mov x10, sp");                                         // x10 = address of the handler base
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // push the boundary handler onto the global handler chain
+    activation_records::emit_publish_try_handler(emitter, "x10");
     emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // x0 = jmp_buf address inside the handler (offset 24)
     emitter.save_exception_handler();                                           // setjmp returns 0 the first time; non-zero on a longjmp from __rt_throw_current
     emitter.instruction("cbnz x0, __rt_fiber_entry_escape");                    // a non-zero return means an exception unwound past every user handler
@@ -83,18 +81,14 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
 
     // -- store the return value into transfer_value (lo half) and mark Terminated --
     abi::emit_load_symbol_to_reg(emitter, "x19", "_fiber_current", 0); // reload x19 — registers were clobbered across the closure call
-    emitter.instruction(&format!("str x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // transfer_value.lo = closure return value
-    emitter.instruction(&format!(
-        "str xzr, [x19, #{}]",
-        FIBER_TRANSFER_VALUE_OFFSET + 8
-    ));                                                                         // transfer_value.hi = 0 (raw integer/string default tag)
+    coroutine_storage::emit_publish_transfer(emitter, "x19", "x0");
+    coroutine_storage::emit_clear_transfer_high(emitter, "x19");
     emitter.instruction(&format!("mov x20, #{}", FIBER_STATE_TERMINATED));      // FIBER_STATE_TERMINATED constant
     emitter.instruction(&format!("str x20, [x19, #{}]", FIBER_STATE_OFFSET));   // state = Terminated
 
     // -- pop the boundary handler before yielding control back to the caller --
     // Use x10 — emit_store_reg_to_symbol uses x9 internally for the symbol address.
-    emitter.instruction("ldr x10, [sp, #0]");                                   // x10 = handler.next (previous chain head)
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // restore the previous handler chain head
+    activation_records::emit_restore_fiber_entry_prefix(emitter, "x10", false);
 
     // -- switch back to whoever resumed us (caller can never be NULL inside a fiber) --
     emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_CALLER_OFFSET));   // x0 = caller fiber* (or NULL = main)
@@ -111,21 +105,14 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_coroutine_unwind_result");
     abi::emit_reg_move(emitter, "x10", "x0"); // x10 = the Throwable that was unwound past every user catch
     abi::emit_load_symbol_to_reg(emitter, "x19", "_fiber_current", 0); // x19 = current fiber* (preserved through longjmp via the global)
-    emitter.instruction(&format!("str x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // park the escaped Throwable so the caller's helper can re-raise it
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // wipe transfer_value.lo so callers do not see stale data
-    emitter.instruction(&format!(
-        "str xzr, [x19, #{}]",
-        FIBER_TRANSFER_VALUE_OFFSET + 8
-    ));                                                                         // wipe transfer_value.hi as well
+    coroutine_storage::emit_publish_pending_throw(emitter, "x19", "x10");
+    coroutine_storage::emit_clear_transfer(emitter, "x19");
     emitter.instruction(&format!("mov x20, #{}", FIBER_STATE_TERMINATED));      // FIBER_STATE_TERMINATED constant — the fiber is done after an escape
     emitter.instruction(&format!("str x20, [x19, #{}]", FIBER_STATE_OFFSET));   // state = Terminated
 
     // -- pop the boundary handler from the chain (longjmp restored SP to setjmp time) --
     // Use x10 — emit_store_reg_to_symbol uses x9 internally for the symbol address.
-    emitter.instruction("ldr x10, [sp, #0]");                                   // x10 = handler.next
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // restore the previous handler chain head
-    emitter.instruction("ldr x10, [sp, #16]");                                  // x10 = saved diagnostic suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore the diagnostic suppression depth captured at setjmp time
+    activation_records::emit_restore_fiber_entry_prefix(emitter, "x10", true);
 
     // -- switch back to the caller; their helper sees Terminated + non-null pending_throw and re-raises --
     emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_CALLER_OFFSET));   // x0 = caller fiber* (or NULL = main)
@@ -151,13 +138,9 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
     // -- install a sentinel exception handler for exceptions escaping the callback --
     emitter.instruction(&format!("sub rsp, {}", TRY_HANDLER_SLOT_SIZE));        // reserve TRY_HANDLER_SLOT_SIZE bytes for the boundary handler
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0); // r10 = previous head of the handler chain
-    emitter.instruction("mov QWORD PTR [rsp], r10");                            // handler.next = previous chain head
-    emitter.instruction("mov QWORD PTR [rsp + 8], 0");                          // handler.activation_record = NULL
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0); // r10 = current diagnostic-suppression depth
-    emitter.instruction("mov QWORD PTR [rsp + 16], r10");                       // handler.saved_diag_depth = current depth
+    activation_records::emit_save_fiber_entry_prefix(emitter, "r10");
     emitter.instruction("mov r10, rsp");                                        // r10 = address of the handler base
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // push the boundary handler onto the global handler chain
+    activation_records::emit_publish_try_handler(emitter, "r10");
     emitter.instruction(&format!("lea rdi, [rsp + {}]", TRY_HANDLER_JMP_BUF_OFFSET)); // rdi = jmp_buf address inside the handler
     emitter.save_exception_handler();                                           // setjmp returns 0 first, non-zero after longjmp
     emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
@@ -186,22 +169,15 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
     // -- store the return value into transfer_value and mark Terminated --
     abi::emit_load_symbol_to_reg(emitter, "r12", "_fiber_current", 0); // reload r12 because the callback may have clobbered caller-saved registers
-    emitter.instruction(&format!(
-        "mov QWORD PTR [r12 + {}], rax",
-        FIBER_TRANSFER_VALUE_OFFSET
-    ));                                                                         // transfer_value.lo = closure return value
-    emitter.instruction(&format!(
-        "mov QWORD PTR [r12 + {}], 0",
-        FIBER_TRANSFER_VALUE_OFFSET + 8
-    ));                                                                         // transfer_value.hi = 0
+    coroutine_storage::emit_publish_transfer(emitter, "r12", "rax");
+    coroutine_storage::emit_clear_transfer_high(emitter, "r12");
     emitter.instruction(&format!(
         "mov QWORD PTR [r12 + {}], {}",
         FIBER_STATE_OFFSET, FIBER_STATE_TERMINATED
     ));                                                                         // state = Terminated
 
     // -- pop the boundary handler before yielding control back to the caller --
-    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // r10 = handler.next (previous chain head)
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // restore the previous handler chain head
+    activation_records::emit_restore_fiber_entry_prefix(emitter, "r10", false);
     emitter.instruction(&format!(
         "mov rdi, QWORD PTR [r12 + {}]",
         FIBER_CALLER_OFFSET
@@ -216,26 +192,13 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_coroutine_unwind_result");
     abi::emit_reg_move(emitter, "r10", "rax"); // r10 = Throwable unwound past every user catch
     abi::emit_load_symbol_to_reg(emitter, "r12", "_fiber_current", 0); // r12 = current fiber* preserved through the global
-    emitter.instruction(&format!(
-        "mov QWORD PTR [r12 + {}], r10",
-        FIBER_PENDING_THROW_OFFSET
-    ));                                                                         // park the escaped Throwable for the caller
-    emitter.instruction(&format!(
-        "mov QWORD PTR [r12 + {}], 0",
-        FIBER_TRANSFER_VALUE_OFFSET
-    ));                                                                         // wipe transfer_value.lo
-    emitter.instruction(&format!(
-        "mov QWORD PTR [r12 + {}], 0",
-        FIBER_TRANSFER_VALUE_OFFSET + 8
-    ));                                                                         // wipe transfer_value.hi
+    coroutine_storage::emit_publish_pending_throw(emitter, "r12", "r10");
+    coroutine_storage::emit_clear_transfer(emitter, "r12");
     emitter.instruction(&format!(
         "mov QWORD PTR [r12 + {}], {}",
         FIBER_STATE_OFFSET, FIBER_STATE_TERMINATED
     ));                                                                         // state = Terminated after an escape
-    emitter.instruction("mov r10, QWORD PTR [rsp]");                            // r10 = handler.next
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // restore the previous handler chain head
-    emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                       // r10 = saved diagnostic suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore diagnostic suppression captured at setjmp time
+    activation_records::emit_restore_fiber_entry_prefix(emitter, "r10", true);
     emitter.instruction(&format!(
         "mov rdi, QWORD PTR [r12 + {}]",
         FIBER_CALLER_OFFSET

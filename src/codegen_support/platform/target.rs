@@ -24,12 +24,7 @@ pub enum Platform {
     Windows,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Target architecture.
-pub enum Arch {
-    AArch64,
-    X86_64,
-}
+pub use elephc_memoir::Arch;
 
 /// Deployment floor recorded for iOS builds.
 ///
@@ -595,21 +590,6 @@ impl Platform {
     }
 }
 
-impl Arch {
-    /// Detects the host architecture from the Rust compile-time target architecture.
-    ///
-    /// Returns `Arch::AArch64` on ARM64 hosts and `Arch::X86_64` on x86_64 hosts.
-    /// Panics if running on an unsupported architecture.
-    pub fn detect_host() -> Self {
-        if cfg!(target_arch = "aarch64") {
-            Arch::AArch64
-        } else if cfg!(target_arch = "x86_64") {
-            Arch::X86_64
-        } else {
-            panic!("unsupported host architecture for elephc")
-        }
-    }
-}
 
 impl Target {
     /// Constructs a `Target` from a `Platform` and `Arch`.

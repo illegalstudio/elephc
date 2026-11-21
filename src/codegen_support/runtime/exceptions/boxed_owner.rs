@@ -8,52 +8,10 @@
 //! - Both directions consume one input owner and return one output owner.
 //! - The new owner is acquired before releasing the old representation, so no destructor can run.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+pub use elephc_memoir::temporary_owners::emit_throwable_boxed_owners;
 
-/// Emits consuming conversions between validated Throwable boxes and native object owners.
-pub fn emit_throwable_boxed_owners(emitter: &mut Emitter) {
-    // -- detach a raw exception owner from an owned eval box --
-    emitter.label_global("__rt_throwable_take_boxed");
-    abi::emit_frame_prologue(emitter, 32);
-    let result = abi::int_result_reg(emitter);
-    abi::store_at_offset(emitter, result, 8);
-    abi::emit_call_label(emitter, "__rt_mixed_unbox");
-    match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("mov x0, x1"),                     // retain the raw object payload before consuming its box
-        Arch::X86_64 => emitter.instruction("mov rax, rdi"),                    // retain the raw object payload before consuming its box
-    }
-    abi::emit_call_label(emitter, "__rt_incref");
-    abi::store_at_offset(emitter, result, 16);
-    abi::load_at_offset(emitter, result, 8);
-    abi::emit_call_label(emitter, "__rt_decref_mixed");
-    abi::load_at_offset(emitter, result, 16);
-    abi::emit_frame_restore(emitter, 32);
-    abi::emit_return(emitter);
-
-    // -- box a transferred native exception without retaining a second raw owner --
-    emitter.label_global("__rt_throwable_box_owned");
-    abi::emit_frame_prologue(emitter, 32);
-    abi::store_at_offset(emitter, result, 8);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("mov x1, x0");                                  // move the owned raw exception into the object payload
-            emitter.instruction("mov x0, #6");                                  // box the validated object with the object tag
-            emitter.instruction("mov x2, #0");                                  // objects have no second payload word
-        }
-        Arch::X86_64 => {
-            emitter.instruction("mov rdi, rax");                                // move the owned raw exception into the object payload
-            emitter.instruction("mov eax, 6");                                  // box the validated object with the object tag
-            emitter.instruction("xor esi, esi");                                // objects have no second payload word
-        }
-    }
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-    abi::store_at_offset(emitter, result, 16);
-    abi::load_at_offset(emitter, result, 8);
-    abi::emit_call_label(emitter, "__rt_decref_any");
-    abi::load_at_offset(emitter, result, 16);
-    abi::emit_frame_restore(emitter, 32);
-    abi::emit_return(emitter);
-}
+#[cfg(test)]
+use crate::codegen_support::emit::Emitter;
 
 #[cfg(test)]
 mod tests {

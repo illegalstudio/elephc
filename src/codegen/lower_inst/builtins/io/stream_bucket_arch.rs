@@ -139,13 +139,7 @@ pub(super) fn lower_stream_bucket_insert_aarch64(
     ctx.emitter.instruction("mov x0, #4");                                      // initial bucket-array capacity
     ctx.emitter.instruction("mov x1, #8");                                      // bucket-array elements are Mixed-cell pointers
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
-    ctx.emitter.instruction("ldr x10, [x0, #-8]");                              // load the array metadata word
-    ctx.emitter.instruction("mov x12, #0x80ff");                                // preserve kind and COW bits while changing value type
-    ctx.emitter.instruction("and x10, x10, x12");                               // keep only the persistent array metadata bits
-    ctx.emitter.instruction("mov x11, #7");                                     // value_type 7 = boxed Mixed pointer
-    ctx.emitter.instruction("lsl x11, x11, #8");                                // move the value type into the metadata byte lane
-    ctx.emitter.instruction("orr x10, x10, x11");                               // merge the boxed-Mixed value type
-    ctx.emitter.instruction("str x10, [x0, #-8]");                              // store the updated array metadata word
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(ctx.emitter, elephc_memoir::ValueTag::new(7));
 
     ctx.emitter.label(existing);
     // -- protect the independent array lease while COW, growth and boxing can allocate --
@@ -255,13 +249,7 @@ pub(super) fn lower_stream_bucket_insert_x86_64(
     ctx.emitter.instruction("mov rdi, 4");                                      // initial bucket-array capacity
     ctx.emitter.instruction("mov rsi, 8");                                      // bucket-array elements are Mixed-cell pointers
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
-    ctx.emitter.instruction("mov r10, QWORD PTR [rax - 8]");                    // load the array metadata word
-    ctx.emitter.instruction("mov r11, 0xffffffff000080ff");                     // preserve magic, kind, and COW bits while changing value type
-    ctx.emitter.instruction("and r10, r11");                                    // keep only the persistent array metadata bits
-    ctx.emitter.instruction("mov r11, 7");                                      // value_type 7 = boxed Mixed pointer
-    ctx.emitter.instruction("shl r11, 8");                                      // move the value type into the metadata byte lane
-    ctx.emitter.instruction("or r10, r11");                                     // merge the boxed-Mixed value type
-    ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // store the updated array metadata word
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(ctx.emitter, elephc_memoir::ValueTag::new(7));
 
     ctx.emitter.label(existing);
     // -- protect the independent array lease while COW, growth and boxing can allocate --

@@ -68,14 +68,11 @@
 //!   leaf helpers (`__rt_vd_seen_*`, `__rt_vd_obj_desc`, `__rt_vd_obj_count`)
 //!   make no calls at all and touch caller-saved scratch only.
 
+use elephc_memoir::values::incomplete_object::{CLASS_ID, PROPERTY_HASH};
 use super::super::objects::emit_load_dump_dyn_hash;
 use crate::codegen_support::abi;
 use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-
-/// Capacity of the `_vd_seen` visited-object stack, in pointers. Kept in sync
-/// with the `.comm _vd_seen` reservation in `runtime::data::fixed`.
-const VD_SEEN_CAPACITY: u64 = 256;
 
 /// Byte width of one `_class_vd_desc_*` property row.
 const VD_DESC_ROW_BYTES: u64 = 48;
@@ -93,148 +90,7 @@ fn emit_uninit_sentinel_aarch64(emitter: &mut Emitter, reg: &str) {
     emitter.instruction(&format!("movk {}, #0x7fff, lsl #48", reg));            // top halfword of the uninitialized sentinel
 }
 
-/// `__rt_vd_seen_find`: report whether an object pointer is already being walked.
-///
-/// Input: AArch64 x0 / x86_64 rdi = object pointer.
-/// Output: AArch64 x0 / x86_64 rax = 1 when the pointer is on the visited stack
-/// OR the stack is full, 0 otherwise. Treating a full stack as a hit is what
-/// bounds the walk: the caller renders `*RECURSION*` and stops descending.
-pub fn emit_vd_seen_find(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_vd_seen_find_linux_x86_64(emitter);
-        return;
-    }
-
-    emitter.blank();
-    emitter.comment("--- runtime: vd_seen_find ---");
-    emitter.label_global("__rt_vd_seen_find");
-
-    abi::emit_symbol_address(emitter, "x9", "_vd_seen_n");                      // resolve the visited-stack depth counter
-    emitter.instruction("ldr x10, [x9]");                                       // load the current visited-stack depth
-    emitter.instruction(&format!("cmp x10, #{}", VD_SEEN_CAPACITY));            // is the visited stack already full?
-    emitter.instruction("b.ge __rt_vd_seen_find_hit");                          // a full stack reports a hit so the walk terminates
-    abi::emit_symbol_address(emitter, "x11", "_vd_seen");                       // resolve the visited-pointer stack base
-    emitter.instruction("mov x12, #0");                                         // start the scan at the bottom of the stack
-
-    emitter.label("__rt_vd_seen_find_loop");
-    emitter.instruction("cmp x12, x10");                                        // scanned every live entry?
-    emitter.instruction("b.ge __rt_vd_seen_find_miss");                         // the pointer is not currently being walked
-    emitter.instruction("ldr x13, [x11, x12, lsl #3]");                         // load the visited pointer at this depth
-    emitter.instruction("cmp x13, x0");                                         // does it match the candidate object?
-    emitter.instruction("b.eq __rt_vd_seen_find_hit");                          // already on the walk stack → recursion
-    emitter.instruction("add x12, x12, #1");                                    // advance to the next visited entry
-    emitter.instruction("b __rt_vd_seen_find_loop");                            // continue scanning
-
-    emitter.label("__rt_vd_seen_find_hit");
-    emitter.instruction("mov x0, #1");                                          // report recursion (or exhausted guard capacity)
-    emitter.instruction("ret");                                                 // return to caller
-
-    emitter.label("__rt_vd_seen_find_miss");
-    emitter.instruction("mov x0, #0");                                          // the object is safe to descend into
-    emitter.instruction("ret");                                                 // return to caller
-}
-
-/// Emits the Linux x86_64 visited-object lookup helper.
-fn emit_vd_seen_find_linux_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: vd_seen_find ---");
-    emitter.label_global("__rt_vd_seen_find");
-
-    abi::emit_symbol_address(emitter, "r9", "_vd_seen_n");                      // resolve the visited-stack depth counter
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current visited-stack depth
-    emitter.instruction(&format!("cmp r10, {}", VD_SEEN_CAPACITY));             // is the visited stack already full?
-    emitter.instruction("jge __rt_vd_seen_find_hit_x86");                       // a full stack reports a hit so the walk terminates
-    abi::emit_symbol_address(emitter, "r11", "_vd_seen");                       // resolve the visited-pointer stack base
-    emitter.instruction("xor rcx, rcx");                                        // start the scan at the bottom of the stack
-
-    emitter.label("__rt_vd_seen_find_loop_x86");
-    emitter.instruction("cmp rcx, r10");                                        // scanned every live entry?
-    emitter.instruction("jge __rt_vd_seen_find_miss_x86");                      // the pointer is not currently being walked
-    emitter.instruction("mov rax, QWORD PTR [r11 + rcx * 8]");                  // load the visited pointer at this depth
-    emitter.instruction("cmp rax, rdi");                                        // does it match the candidate object?
-    emitter.instruction("je __rt_vd_seen_find_hit_x86");                        // already on the walk stack → recursion
-    emitter.instruction("add rcx, 1");                                          // advance to the next visited entry
-    emitter.instruction("jmp __rt_vd_seen_find_loop_x86");                      // continue scanning
-
-    emitter.label("__rt_vd_seen_find_hit_x86");
-    emitter.instruction("mov rax, 1");                                          // report recursion (or exhausted guard capacity)
-    emitter.instruction("ret");                                                 // return to caller
-
-    emitter.label("__rt_vd_seen_find_miss_x86");
-    emitter.instruction("xor rax, rax");                                        // the object is safe to descend into
-    emitter.instruction("ret");                                                 // return to caller
-}
-
-/// `__rt_vd_seen_push`: record an object pointer as being walked.
-///
-/// Silently drops the entry when the stack is full — `__rt_vd_seen_find` already
-/// refuses to descend at that depth, so the pop below can never underflow.
-/// Input: AArch64 x0 / x86_64 rdi = object pointer.
-pub fn emit_vd_seen_push(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.blank();
-        emitter.comment("--- runtime: vd_seen_push ---");
-        emitter.label_global("__rt_vd_seen_push");
-        abi::emit_symbol_address(emitter, "r9", "_vd_seen_n");                  // resolve the visited-stack depth counter
-        emitter.instruction("mov r10, QWORD PTR [r9]");                         // load the current visited-stack depth
-        emitter.instruction(&format!("cmp r10, {}", VD_SEEN_CAPACITY));         // is there room for another entry?
-        emitter.instruction("jge __rt_vd_seen_push_done_x86");                  // a full stack is already refusing to descend
-        abi::emit_symbol_address(emitter, "r11", "_vd_seen");                   // resolve the visited-pointer stack base
-        emitter.instruction("mov QWORD PTR [r11 + r10 * 8], rdi");              // store the object pointer at the top of the stack
-        emitter.instruction("add r10, 1");                                      // grow the visited-stack depth
-        emitter.instruction("mov QWORD PTR [r9], r10");                         // publish the new depth
-        emitter.label("__rt_vd_seen_push_done_x86");
-        emitter.instruction("ret");                                             // return to caller
-        return;
-    }
-
-    emitter.blank();
-    emitter.comment("--- runtime: vd_seen_push ---");
-    emitter.label_global("__rt_vd_seen_push");
-    abi::emit_symbol_address(emitter, "x9", "_vd_seen_n");                      // resolve the visited-stack depth counter
-    emitter.instruction("ldr x10, [x9]");                                       // load the current visited-stack depth
-    emitter.instruction(&format!("cmp x10, #{}", VD_SEEN_CAPACITY));            // is there room for another entry?
-    emitter.instruction("b.ge __rt_vd_seen_push_done");                         // a full stack is already refusing to descend
-    abi::emit_symbol_address(emitter, "x11", "_vd_seen");                       // resolve the visited-pointer stack base
-    emitter.instruction("str x0, [x11, x10, lsl #3]");                          // store the object pointer at the top of the stack
-    emitter.instruction("add x10, x10, #1");                                    // grow the visited-stack depth
-    emitter.instruction("str x10, [x9]");                                       // publish the new depth
-    emitter.label("__rt_vd_seen_push_done");
-    emitter.instruction("ret");                                                 // return to caller
-}
-
-/// `__rt_vd_seen_pop`: drop the innermost visited-object entry. Takes no arguments.
-///
-/// Clamps at zero so an unbalanced pop can never make the depth negative and turn
-/// the next `__rt_vd_seen_find` scan into an out-of-bounds read.
-pub fn emit_vd_seen_pop(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.blank();
-        emitter.comment("--- runtime: vd_seen_pop ---");
-        emitter.label_global("__rt_vd_seen_pop");
-        abi::emit_symbol_address(emitter, "r9", "_vd_seen_n");                  // resolve the visited-stack depth counter
-        emitter.instruction("mov r10, QWORD PTR [r9]");                         // load the current visited-stack depth
-        emitter.instruction("cmp r10, 0");                                      // is the stack already empty?
-        emitter.instruction("jle __rt_vd_seen_pop_done_x86");                   // clamp at zero rather than underflow
-        emitter.instruction("sub r10, 1");                                      // leave the innermost object
-        emitter.instruction("mov QWORD PTR [r9], r10");                         // publish the new depth
-        emitter.label("__rt_vd_seen_pop_done_x86");
-        emitter.instruction("ret");                                             // return to caller
-        return;
-    }
-
-    emitter.blank();
-    emitter.comment("--- runtime: vd_seen_pop ---");
-    emitter.label_global("__rt_vd_seen_pop");
-    abi::emit_symbol_address(emitter, "x9", "_vd_seen_n");                      // resolve the visited-stack depth counter
-    emitter.instruction("ldr x10, [x9]");                                       // load the current visited-stack depth
-    emitter.instruction("cmp x10, #0");                                         // is the stack already empty?
-    emitter.instruction("b.le __rt_vd_seen_pop_done");                          // clamp at zero rather than underflow
-    emitter.instruction("sub x10, x10, #1");                                    // leave the innermost object
-    emitter.instruction("str x10, [x9]");                                       // publish the new depth
-    emitter.label("__rt_vd_seen_pop_done");
-    emitter.instruction("ret");                                                 // return to caller
-}
+pub use elephc_memoir::values::diagnostic_stack::{emit_vd_seen_find, emit_vd_seen_pop, emit_vd_seen_push};
 
 /// `__rt_vd_obj_desc`: resolve an object's var_dump property descriptor.
 ///
@@ -305,7 +161,7 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
 
     emitter.instruction("mov x1, x0");                                          // keep the object pointer for slot addressing
     emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
-    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    emitter.instruction(&format!("cmn x9, #{}", -CLASS_ID));                    // class id -2 marks an incomplete object
     emitter.instruction("b.eq __rt_vd_obj_count_incomplete");                   // count the synthetic name plus opaque properties
     abi::emit_local_symbol_address(emitter, "x10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("ldr x10, [x10]");                                      // load the number of registered class ids
@@ -349,7 +205,7 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 
     emitter.label("__rt_vd_obj_count_incomplete");
-    emitter.instruction("ldr x9, [x1, #24]");                                   // opaque property hash
+    emitter.instruction(&format!("ldr x9, [x1, #{PROPERTY_HASH}]"));            // opaque property hash
     emitter.instruction("cbz x9, __rt_vd_obj_count_incomplete_one");            // no properties still has the synthetic name
     emitter.instruction("ldr x0, [x9]");                                        // property hash entry count
     emitter.instruction("add x0, x0, #1");                                      // plus __PHP_Incomplete_Class_Name
@@ -370,7 +226,7 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_vd_obj_count");
 
     emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
-    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    emitter.instruction(&format!("cmp r9, {CLASS_ID}"));                        // class id -2 marks an incomplete object
     emitter.instruction("je __rt_vd_obj_count_incomplete_x86");                 // count the synthetic name plus opaque properties
     abi::emit_local_symbol_address(emitter, "r10", "_class_gc_desc_count");           // resolve the class-id table extent
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of registered class ids
@@ -413,7 +269,7 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the initialized property count in rax
 
     emitter.label("__rt_vd_obj_count_incomplete_x86");
-    emitter.instruction("mov rax, QWORD PTR [rdi + 24]");                       // opaque property hash
+    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {PROPERTY_HASH}]")); // opaque property hash
     emitter.instruction("test rax, rax");                                       // no properties?
     emitter.instruction("jz __rt_vd_obj_count_incomplete_one_x86");             // the synthetic name row still exists
     emitter.instruction("mov rax, QWORD PTR [rax]");                            // property hash entry count
@@ -477,7 +333,7 @@ pub fn emit_var_dump_open_object(emitter: &mut Emitter) {
     // -- class name from the shared class-id → (name ptr, name len) table --
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("ldr x9, [x9]");                                        // load the runtime class id from the object header
-    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    emitter.instruction(&format!("cmn x9, #{}", -CLASS_ID));                    // class id -2 marks an incomplete object
     emitter.instruction("b.eq __rt_vd_open_obj_incomplete");                    // render the synthetic internal class name
     abi::emit_local_symbol_address(emitter, "x10", "_class_name_count");              // resolve the class-name table extent
     emitter.instruction("ldr x10, [x10]");                                      // load the number of named class ids
@@ -561,7 +417,7 @@ fn emit_var_dump_open_object_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the object pointer
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the runtime class id from the object header
-    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    emitter.instruction(&format!("cmp r9, {CLASS_ID}"));                        // class id -2 marks an incomplete object
     emitter.instruction("je __rt_vd_open_obj_incomplete_x86");                  // render the synthetic internal class name
     abi::emit_local_symbol_address(emitter, "r10", "_class_name_count");              // resolve the class-name table extent
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of named class ids
@@ -809,7 +665,7 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer
     emitter.instruction("str xzr, [sp, #48]");                                  // dynamic-properties-first flag not yet emitted
     emitter.instruction("ldr x9, [x0]");                                        // object header class id
-    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    emitter.instruction(&format!("cmn x9, #{}", -CLASS_ID));                    // class id -2 marks an incomplete object
     emitter.instruction("b.eq __rt_vd_obj_incomplete");                         // dump the projected name and properties
 
     // -- classes whose contract projects after the dynamic tail (GMP) dump it first --
@@ -932,7 +788,7 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // dynamic-properties-first flag not yet emitted
     emitter.instruction("mov r9, QWORD PTR [rdi]");                             // object header class id
-    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    emitter.instruction(&format!("cmp r9, {CLASS_ID}"));                        // class id -2 marks an incomplete object
     emitter.instruction("je __rt_vd_obj_incomplete_x86");                       // dump the projected name and properties
 
     // -- classes whose contract projects after the dynamic tail (GMP) dump it first --

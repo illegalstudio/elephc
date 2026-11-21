@@ -17,6 +17,7 @@
 //! - Any other family (e.g. AF_INET6) currently returns a null pointer; the
 //!   builtin boxes that as PHP false. IPv6 support is a follow-up.
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::{
     emit::Emitter,
     platform::{Arch, Platform},
@@ -161,9 +162,7 @@ pub fn emit_stream_socket_get_name(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #184]");                                  // port string length
     emitter.instruction("add x0, x2, x3");                                      // total length = ip + port
     emitter.instruction("add x0, x0, #1");                                      // plus the ':' separator
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the buffer, x0 = pointer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
 
     // -- copy the address bytes into the buffer --
     emitter.instruction("ldr x4, [sp, #152]");                                  // address string pointer
@@ -234,9 +233,7 @@ pub fn emit_stream_socket_get_name(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_ssgn_unix_alloc");                           // alloc the real path bytes
     emitter.instruction("mov x0, #1");                                          // empty path: alloc a single-byte slot so the heap header is valid
     emitter.label("__rt_ssgn_unix_alloc");
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = persisted-string buffer pointer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
 
     // -- copy sun_path into the heap string --
     emitter.instruction("ldr x10, [sp, #176]");                                 // reload the sun_path pointer
@@ -259,9 +256,7 @@ pub fn emit_stream_socket_get_name(emitter: &mut Emitter) {
     emitter.label("__rt_ssgn_unix_unnamed");
     // -- unbound Unix socket: return an empty heap-allocated string --
     emitter.instruction("mov x0, #1");                                          // alloc one byte so the heap header is well-formed
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = single-byte buffer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov x1, x0");                                          // result string pointer
     emitter.instruction("mov x2, #0");                                          // result length = 0 (empty string)
     emitter.instruction("ldp x29, x30, [sp], #208");                            // restore frame pointer and return address
@@ -383,12 +378,7 @@ fn emit_stream_socket_get_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdx");                                        // address string length
     emitter.instruction("add rax, QWORD PTR [rbp - 176]");                      // plus the port string length
     emitter.instruction("add rax, 1");                                          // plus the ':' separator
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the buffer, rax = pointer
-    emitter.instruction(&format!(                                               // owned-string heap-kind word with the x86_64 heap marker
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
 
     // -- copy the address bytes into the buffer --
     emitter.instruction("mov r8, QWORD PTR [rbp - 144]");                       // address string pointer
@@ -456,12 +446,7 @@ fn emit_stream_socket_get_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_ssgn_unix_alloc_x86");                        // non-empty: allocate the actual length
     emitter.instruction("mov rax, 1");                                          // empty path: alloc one byte so the heap header is valid
     emitter.label("__rt_ssgn_unix_alloc_x86");
-    emitter.instruction("call __rt_heap_alloc");                                // rax = persisted-string buffer pointer
-    emitter.instruction(&format!(                                               // owned-string heap-kind word with the x86_64 heap marker
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
 
     // -- copy sun_path into the heap string --
     emitter.instruction("mov r8, QWORD PTR [rbp - 168]");                       // reload the sun_path pointer
@@ -484,12 +469,7 @@ fn emit_stream_socket_get_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_ssgn_unix_unnamed_x86");
     // -- unbound Unix socket: return an empty heap-allocated string --
     emitter.instruction("mov rax, 1");                                          // alloc one byte so the heap header is well-formed
-    emitter.instruction("call __rt_heap_alloc");                                // rax = single-byte buffer
-    emitter.instruction(&format!(                                               // owned-string heap-kind word with the x86_64 heap marker
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("xor edx, edx");                                        // result length = 0 (empty string)
     emitter.instruction("add rsp, 208");                                        // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

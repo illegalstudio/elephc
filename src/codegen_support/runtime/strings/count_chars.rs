@@ -185,14 +185,7 @@ pub fn emit_count_chars(emitter: &mut Emitter) {
     emitter.label("__rt_count_chars_fill_done");
     emitter.instruction("ldr x1, [sp, #40]");                                   // the byte list starts at the reserved pointer
     emitter.instruction("ldr x2, [sp, #48]");                                   // the byte list is exactly as long as it was sized
-    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
-    emitter.instruction("bl __rt_str_persist");                                 // hand back owned heap storage, matching the Fresh ownership contract
-    emitter.instruction("str x1, [sp, #56]");                                   // save the owned byte-list pointer across the reservation release
-    emitter.instruction("str x2, [sp, #64]");                                   // save the owned byte-list length across the reservation release
-    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the superseded reservation
-    emitter.instruction("bl __rt_heap_free_safe");                              // release a heap-backed reservation; concat-scratch pointers are skipped
-    emitter.instruction("ldr x1, [sp, #56]");                                   // restore the owned byte-list pointer
-    emitter.instruction("ldr x2, [sp, #64]");                                   // restore the owned byte-list length
+    elephc_memoir::strings::concat_scratch::emit_finish_owned(emitter, 40, 56);
     emitter.instruction("ldp x29, x30, [sp]");                                  // restore the frame pointer and return address
     emitter.instruction("add sp, sp, #2128");                                   // release the tally frame
     emitter.instruction("ret");                                                 // return the byte list as a PHP string pair
@@ -339,14 +332,7 @@ fn emit_count_chars_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_count_chars_fill_done_linux_x86_64");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // the byte list starts at the reserved pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // the byte list is exactly as long as it was sized
-    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
-    emitter.instruction("call __rt_str_persist");                               // hand back owned heap storage, matching the Fresh ownership contract
-    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the owned byte-list pointer across the reservation release
-    emitter.instruction("mov QWORD PTR [rbp - 80], rdx");                       // save the owned byte-list length across the reservation release
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the superseded reservation
-    emitter.instruction("call __rt_heap_free_safe");                            // release a heap-backed reservation; concat-scratch pointers are skipped
-    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // restore the owned byte-list pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // restore the owned byte-list length
+    elephc_memoir::strings::concat_scratch::emit_finish_owned(emitter, 56, 72);
     emitter.instruction("add rsp, 2128");                                       // release the tally frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the byte list as a PHP string pair

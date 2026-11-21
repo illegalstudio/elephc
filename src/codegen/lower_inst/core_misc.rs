@@ -7,6 +7,7 @@
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 
+use elephc_memoir::{FrameOffset, strings::concat_cursor::SavedConcatCursor};
 use super::*;
 
 /// Lowers a statement-boundary concat-buffer reset.
@@ -18,8 +19,8 @@ pub(super) fn lower_concat_reset(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// Restores `_concat_off` to the offset inherited by this EIR frame.
 pub(super) fn reset_concat_to_frame_base(ctx: &mut FunctionContext<'_>) {
     let scratch = abi::temp_int_reg(ctx.emitter.target);
-    abi::load_at_offset(ctx.emitter, scratch, ctx.concat_base_offset);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_concat_off", 0);
+    SavedConcatCursor::Frame(FrameOffset::new(ctx.concat_base_offset))
+        .emit_restore(ctx.emitter, scratch);
 }
 
 /// Lowers metadata-only NOPs, emitting data-backed messages as assembly comments.

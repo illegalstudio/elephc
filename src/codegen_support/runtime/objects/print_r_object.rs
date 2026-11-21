@@ -41,6 +41,7 @@
 //!   appends the instance's dynamic-property hash (`__rt_obj_dump_dyn_props`) through
 //!   `__rt_print_r_hash_entries`, in insertion order, at the same entry indent.
 
+use elephc_memoir::values::incomplete_object::CLASS_ID;
 use crate::codegen_support::abi;
 use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
@@ -143,7 +144,7 @@ pub fn emit_print_r_object(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("ldr x9, [x0]");                                        // object header class id
-    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    emitter.instruction(&format!("cmn x9, #{}", -CLASS_ID));                    // class id -2 marks an incomplete object
     emitter.instruction("b.eq __rt_pr_obj_incomplete_body");                    // project the synthetic name and opaque properties
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
@@ -314,7 +315,7 @@ fn emit_print_r_object_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("mov r9, QWORD PTR [rdi]");                             // object header class id
-    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    emitter.instruction(&format!("cmp r9, {CLASS_ID}"));                        // class id -2 marks an incomplete object
     emitter.instruction("je __rt_pr_obj_incomplete_body_x86");                  // project the synthetic name and opaque properties
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
@@ -434,7 +435,7 @@ fn emit_print_r_object_header(emitter: &mut Emitter) {
             emitter.instruction("str x0, [sp, #0]");                            // preserve the receiver through header writes
     // -- header: the class name from the shared class-id → (ptr, len) table --
     emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id from the object header
-    emitter.instruction("cmn x9, #2");                                          // class id -2 marks an incomplete object
+    emitter.instruction(&format!("cmn x9, #{}", -CLASS_ID));                    // class id -2 marks an incomplete object
     emitter.instruction("b.eq __rt_pr_obj_incomplete_name");                    // render the synthetic internal class name
     abi::emit_symbol_address(emitter, "x10", "_class_name_count");              // resolve the class-name table extent
     emitter.instruction("ldr x10, [x10]");                                      // load the number of named class ids
@@ -485,7 +486,7 @@ fn emit_print_r_object_header(emitter: &mut Emitter) {
         Arch::X86_64 => {
             emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // preserve the receiver through header writes
     emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id from the object header
-    emitter.instruction("cmp r9, -2");                                          // class id -2 marks an incomplete object
+    emitter.instruction(&format!("cmp r9, {CLASS_ID}"));                        // class id -2 marks an incomplete object
     emitter.instruction("je __rt_pr_obj_incomplete_name_x86");                  // render the synthetic internal class name
     abi::emit_symbol_address(emitter, "r10", "_class_name_count");              // resolve the class-name table extent
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of named class ids

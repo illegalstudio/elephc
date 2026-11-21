@@ -8,14 +8,9 @@
 //! - The versioned C ABI consumes one value and updates an owned, nullable Throwable accumulator.
 //! - Cleanup installs its jump target below Rust and restores the enclosing native exception state.
 //! - Its integer result distinguishes a new destructor throw from an earlier pending exception.
+//! - Memoir emits contained retirement; versioned C ABI and hook selection remain here.
 
-use super::{abi, label_c_global, Emitter};
-
-const FRAME: usize = 64;
-const VALUE: usize = 8;
-const OUTPUT: usize = 16;
-const THROWN: usize = 24;
-const CAUGHT: usize = 32;
+use super::{label_c_global, Emitter};
 
 /// Emits bounded value release, preserving and chaining any exception already owned by the slot.
 pub(super) fn emit(emitter: &mut Emitter) {
@@ -28,40 +23,15 @@ pub(super) fn emit_reference_pin_release(emitter: &mut Emitter) {
         "__rt_eval_reference_pin_release", true);
 }
 
-/// Shares exception containment after optionally transferring a pin's owner out of its record.
+/// Selects the versioned C ABI and ownership hooks for Memoir's contained release body.
 fn emit_boundary(emitter: &mut Emitter, entry: &str, prefix: &str, take_pin: bool) {
     label_c_global(emitter, entry);
-    let begin = format!("{prefix}_begin");
-    let done = format!("{prefix}_return");
-    let result = abi::int_result_reg(emitter);
-    let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_frame_prologue(emitter, FRAME);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), VALUE);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), OUTPUT);
-    abi::load_at_offset(emitter, scratch, OUTPUT);
-    abi::emit_load_from_address(emitter, result, scratch, 0);
-    abi::emit_store_zero_to_address(emitter, scratch, 0);
-    abi::emit_branch_if_int_result_zero(emitter, &begin);
-    abi::emit_call_label(emitter, "__rt_throwable_take_boxed");
-    emitter.label(&begin);
-    abi::store_at_offset(emitter, result, THROWN);
-    abi::load_at_offset(emitter, result, VALUE);
-    if take_pin {
-        abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), result);
-        abi::emit_call_label(emitter, "__rt_reference_validation_pin_take");
-    }
-    // The generic release suppresses child decrefs for graph members swept by the collector.
-    super::super::exceptions::emit_guarded_cleanup_call(emitter, "__rt_decref_any", result, THROWN);
-    abi::store_at_offset(emitter, result, CAUGHT);
-    abi::load_at_offset(emitter, result, THROWN);
-    abi::emit_branch_if_int_result_zero(emitter, &done);
-    abi::emit_call_label(emitter, "__rt_throwable_box_owned");
-    abi::load_at_offset(emitter, scratch, OUTPUT);
-    abi::emit_store_to_address(emitter, result, scratch, 0);
-    emitter.label(&done);
-    abi::load_at_offset(emitter, result, CAUGHT);
-    abi::emit_frame_restore(emitter, FRAME);
-    abi::emit_return(emitter);
+    elephc_memoir::foreign_release::emit_body(emitter, elephc_memoir::foreign_release::Context {
+        prefix,
+        take_owner: take_pin.then_some("__rt_reference_validation_pin_take"),
+        take_pending: "__rt_throwable_take_boxed",
+        box_pending: "__rt_throwable_box_owned",
+    });
 }
 
 #[cfg(test)]

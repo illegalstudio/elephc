@@ -9,27 +9,19 @@
 //! - Both setter frames save mode at sp+56 on AArch64 and rbp-64 on x86_64.
 //! - Refusal precedes container consumption; ordinary raw-local owners remain untouched.
 //! - The pending Error is rooted before either rejected owner can run a throwing destructor.
+//! - Memoir emits optional owner retirement; refusal diagnostics and propagation stay here.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter};
 
-/// Drops only a separately acquired helper owner while the original storage still owns the array.
+/// Retires the extra container owner using the compiler's setter-frame layout.
 pub(super) fn emit_release(emitter: &mut Emitter) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("ldr x9, [sp, #56]");                           // recover the diagnosed/shared bit and independent helper-owner bit
-            emitter.instruction("tbz x9, #1, 986f");                            // raw-local transfers retain their original owner on refusal
-            emitter.instruction("ldr x0, [sp]");                                // release the extra owner while the destination storage still keeps its own
-        }
-        Arch::X86_64 => {
-            emitter.instruction("test QWORD PTR [rbp - 64], 2");                // distinguish an extra helper owner from an ordinary transferred local owner
-            emitter.instruction("jz 986f");                                     // keep raw-local destinations valid for their surviving catch
-            emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                // use the generic native release convention for indexed or hash storage
-        }
-    }
-    abi::emit_unary_cleanup_preserving_exception(
-        emitter, "__rt_decref_any", abi::int_result_reg(emitter),
-    );
-    emitter.label("986");
+    elephc_memoir::conditional_owner::emit(emitter, elephc_memoir::conditional_owner::Layout {
+        aarch64_mode: elephc_memoir::RecordOffset::new(56),
+        aarch64_payload: elephc_memoir::RecordOffset::new(0),
+        x86_64_mode: elephc_memoir::FrameOffset::new(64),
+        x86_64_payload: elephc_memoir::FrameOffset::new(8),
+        owner_bit: 1,
+    });
 }
 
 /// Consumes the boxed rejected value and optional extra destination owner before propagating Error.

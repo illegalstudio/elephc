@@ -13,55 +13,10 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits boxed cell COW and the shared pop/shift operation for the active target.
 pub fn emit_array_take_boxed(emitter: &mut Emitter) {
-    emit_cell_ensure_unique(emitter);
+    elephc_memoir::values::boxed_array::emit_cell_ensure_unique(emitter);
     emit_take(emitter);
     emit_hash_pop(emitter);
     emit_hash_shift(emitter);
-}
-
-/// Accepts an array cell in the first C argument and consumes its old owner only when splitting.
-fn emit_cell_ensure_unique(emitter: &mut Emitter) {
-    let arg = abi::int_arg_reg_name(emitter.target, 0);
-    let result = abi::int_result_reg(emitter);
-    emitter.blank();
-    emitter.label_global("__rt_array_cell_ensure_unique");
-    abi::emit_frame_prologue(emitter, 32);
-    abi::store_at_offset(emitter, arg, 8);
-    abi::emit_reg_move(emitter, result, arg);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("cbz x0, __rt_array_cell_invalid");             // null is not a boxed PHP array
-            emitter.instruction("ldr x9, [x0]");                                // validate the cell tag before reading allocation metadata
-            emitter.instruction("sub x9, x9, #4");                              // array and hash tags become zero and one
-            emitter.instruction("cmp x9, #1");                                  // only the two PHP array layouts can be mutated
-            emitter.instruction("b.hi __rt_array_cell_invalid");                // reject scalar, object and resource cells
-            emitter.instruction("ldr w9, [x0, #-12]");                          // inspect the outer cell's owner count
-            emitter.instruction("cmp w9, #1");                                  // unique cells can retain their address
-            emitter.instruction("b.ls __rt_array_cell_unique");                 // skip allocation when no value alias shares this cell
-        }
-        Arch::X86_64 => {
-            emitter.instruction("test rax, rax");                               // null is not a boxed PHP array
-            emitter.instruction("jz __rt_array_cell_invalid");                  // reject null before dereferencing its tag
-            emitter.instruction("mov r10, QWORD PTR [rax]");                    // validate the cell tag before reading allocation metadata
-            emitter.instruction("sub r10, 4");                                  // array and hash tags become zero and one
-            emitter.instruction("cmp r10, 1");                                  // only the two PHP array layouts can be mutated
-            emitter.instruction("ja __rt_array_cell_invalid");                  // reject scalar, object and resource cells
-            emitter.instruction("cmp DWORD PTR [rax - 12], 1");                 // inspect the outer cell's owner count
-            emitter.instruction("jbe __rt_array_cell_unique");                  // skip allocation when no value alias shares this cell
-        }
-    }
-    abi::emit_call_label(emitter, "__rt_mixed_clone");
-    // A split can retire the final external owner of a cyclic old cell.
-    abi::store_at_offset(emitter, result, 16);
-    abi::load_at_offset(emitter, result, 8);
-    abi::emit_call_label(emitter, "__rt_decref_mixed");
-    abi::load_at_offset(emitter, result, 16);
-    abi::emit_jump(emitter, "__rt_array_cell_unique");
-    emitter.label("__rt_array_cell_invalid");
-    abi::emit_load_int_immediate(emitter, result, 0);
-    emitter.label("__rt_array_cell_unique");
-    abi::emit_frame_restore(emitter, 32);
-    abi::emit_return(emitter);
 }
 
 /// Mutates a published unique cell in argument zero; argument one selects shift rather than pop.

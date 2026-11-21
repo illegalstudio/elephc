@@ -20,6 +20,7 @@
 //!   temporary stack exactly as they found it.
 
 use crate::codegen::data_section::DataWord;
+use elephc_memoir::callables::storage;
 
 use super::*;
 
@@ -251,15 +252,11 @@ pub(super) fn emit_instance_target_table_lookup(
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, state + receiver_offset);
     abi::emit_incref_if_refcounted(ctx.emitter, &receiver_ty);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        result_reg,
-        (callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16) as i64,
+    storage::emit_allocate_descriptor(
+        ctx.emitter, storage::capture_offset(1), descriptor_reg, storage::ObjectHandle::Internal,
     );
-    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    abi::emit_reg_move(ctx.emitter, descriptor_reg, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, template_reg, 16);
-    callable_descriptor::emit_copy_descriptor_header_to_runtime(ctx.emitter, descriptor_reg, template_reg);
+    storage::emit_copy_descriptor_header_to_runtime(ctx.emitter, descriptor_reg, template_reg);
     abi::emit_pop_reg(ctx.emitter, result_reg);
     abi::emit_release_temporary_stack(ctx.emitter, SCAN_STATE_BYTES);
     callable_descriptor::emit_store_current_result_to_runtime_capture(

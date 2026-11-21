@@ -10,7 +10,7 @@
 
 use super::*;
 
-const BORROWED_BYTES: usize = 96;
+const BORROWED_BYTES: usize = 3 * elephc_memoir::values::stack_cell::BORROWED_MIXED_ARG_CELL_BYTES;
 
 /// Selects first-array entries that compare unequal to every second-array value.
 pub(crate) fn lower_array_udiff(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {

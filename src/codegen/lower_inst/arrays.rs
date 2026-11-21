@@ -9,6 +9,8 @@
 //! - Runtime append helpers may grow arrays and return a new heap pointer, so
 //!   the backend writes that pointer back to the source SSA slot and local slot.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
@@ -116,11 +118,11 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
             abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::NULL_SENTINEL);
             ctx.emitter.instruction("cmp x0, x9");                              // does the array carry the in-band null-container sentinel?
             ctx.emitter.instruction(&format!("b.eq {}", done));                 // missed-read sentinels pass through unconverted
-            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load the uniform heap-kind header word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x1", "x0");
             ctx.emitter.instruction("and x1, x1, #0xff");                       // isolate the runtime storage kind
             ctx.emitter.instruction("cmp x1, #3");                              // kind 3 = a typed packed local promoted to a hash
             ctx.emitter.instruction(&format!("b.eq {}", promoted));             // its raw entries widen through the hash converter
-            ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load the indexed-array packed header to recover the runtime slot tag
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x1", "x0");
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the source element value_type for Mixed boxing
             if pointer_elements {
@@ -143,13 +145,12 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
             abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
             ctx.emitter.instruction("cmp rdi, r10");                            // does the array carry the in-band null-container sentinel?
             ctx.emitter.instruction(&format!("je {}", done));                   // missed-read sentinels pass through unconverted
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load the uniform heap-kind header word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "rsi", "rdi");
             ctx.emitter.instruction("and rsi, 0xff");                           // isolate the runtime storage kind
             ctx.emitter.instruction("cmp rsi, 3");                              // kind 3 = a typed packed local promoted to a hash
             ctx.emitter.instruction(&format!("je {}", promoted));               // its raw entries widen through the hash converter
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load the indexed-array packed header to recover the runtime slot tag
-            ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type byte into the low bits
-            ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the source element value_type for Mixed boxing
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "rsi", "rdi");
+            elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "rsi", "rsi");
             if pointer_elements {
                 abi::emit_load_int_immediate(
                     ctx.emitter,
@@ -393,19 +394,12 @@ pub(super) fn lower_array_push_reserved(
         Arch::AArch64 => {
             ctx.load_value_to_reg(value, "x1")?;
             ctx.load_value_to_reg(array, "x9")?;
-            ctx.emitter.instruction("ldr x10, [x9]");                           // load the current logical length
-            ctx.emitter.instruction("add x11, x9, #24");                        // skip the indexed-array header to the payload base
-            ctx.emitter.instruction("str x1, [x11, x10, lsl #3]");              // store the appended int in the reserved slot
-            ctx.emitter.instruction("add x10, x10, #1");                        // advance the logical length
-            ctx.emitter.instruction("str x10, [x9]");                           // publish the updated length
+            elephc_memoir::values::packed_slots::emit_append_reserved_word(ctx.emitter);
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(value, "rsi")?;
             ctx.load_value_to_reg(array, "rdi")?;
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load the current logical length
-            ctx.emitter.instruction("mov QWORD PTR [rdi + 24 + r10 * 8], rsi"); // store the appended int in the reserved slot
-            ctx.emitter.instruction("add r10, 1");                              // advance the logical length
-            ctx.emitter.instruction("mov QWORD PTR [rdi], r10");                // publish the updated length
+            elephc_memoir::values::packed_slots::emit_append_reserved_word(ctx.emitter);
         }
     }
     Ok(())
@@ -557,7 +551,7 @@ pub(super) fn lower_array_get_unchecked(
         Arch::AArch64 => {
             ctx.load_value_to_reg(index, "x0")?;
             ctx.load_value_to_reg(array, "x9")?;
-            ctx.emitter.instruction("add x10, x9, #24");                        // skip the indexed-array header to the payload base
+            packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x10", "x9");
             ctx.emitter.instruction("ldr x0, [x10, x0, lsl #3]");               // load the proven in-bounds int slot
         }
         Arch::X86_64 => {
@@ -1478,7 +1472,7 @@ fn lower_promotable_scalar_array_set(
             }
             abi::emit_push_reg(ctx.emitter, "x1");                              // keep the integer key across the storage probes
             ctx.load_value_to_reg(array, "x0")?;
-            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the uniform heap-kind header word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x9", "x0");
             ctx.emitter.instruction("and x9, x9, #0xff");                       // isolate the runtime storage kind
             ctx.emitter.instruction("cmp x9, #3");                              // kind 3 = already promoted to a hash
             ctx.emitter.instruction(&format!("b.eq {hash_pop}"));               // a promoted array writes through the hash writer
@@ -1509,7 +1503,7 @@ fn lower_promotable_scalar_array_set(
 
             ctx.emitter.label(&string_key);
             ctx.load_value_to_reg(array, "x0")?;
-            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the uniform heap-kind header word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x9", "x0");
             ctx.emitter.instruction("and x9, x9, #0xff");                       // isolate the runtime storage kind
             ctx.emitter.instruction("cmp x9, #3");                              // kind 3 = already promoted to a hash
             ctx.emitter.instruction(&format!("b.eq {hash}"));                   // a promoted array writes through the hash writer
@@ -1557,7 +1551,7 @@ fn lower_promotable_scalar_array_set(
             }
             abi::emit_push_reg(ctx.emitter, "rsi");                             // keep the integer key across the storage probes
             ctx.load_value_to_reg(array, "rdi")?;
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi - 8]");            // load the uniform heap-kind header word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r10", "rdi");
             ctx.emitter.instruction("and r10, 0xff");                           // isolate the runtime storage kind
             ctx.emitter.instruction("cmp r10, 3");                              // kind 3 = already promoted to a hash
             ctx.emitter.instruction(&format!("je {hash_pop}"));                 // a promoted array writes through the hash writer
@@ -1588,7 +1582,7 @@ fn lower_promotable_scalar_array_set(
 
             ctx.emitter.label(&string_key);
             ctx.load_value_to_reg(array, "rdi")?;
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi - 8]");            // load the uniform heap-kind header word
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r10", "rdi");
             ctx.emitter.instruction("and r10, 0xff");                           // isolate the runtime storage kind
             ctx.emitter.instruction("cmp r10, 3");                              // kind 3 = already promoted to a hash
             ctx.emitter.instruction(&format!("je {hash}"));                     // a promoted array writes through the hash writer
@@ -1627,7 +1621,7 @@ fn lower_promotable_scalar_array_set(
 fn emit_promote_unless_hash_aarch64(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
     let keep = ctx.next_label("promotable_null_keep_hash");
     ctx.load_value_to_reg(array, "x0")?;
-    ctx.emitter.instruction("ldr x9, [x0, #-8]");                               // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x9", "x0");
     ctx.emitter.instruction("and x9, x9, #0xff");                               // isolate the runtime storage kind
     ctx.emitter.instruction("cmp x9, #3");                                      // kind 3 = already promoted to a hash
     ctx.emitter.instruction(&format!("b.eq {keep}"));                           // an existing hash takes the null entry directly
@@ -1645,7 +1639,7 @@ fn emit_promote_unless_hash_aarch64(ctx: &mut FunctionContext<'_>, array: ValueI
 fn emit_promote_unless_hash_x86_64(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
     let keep = ctx.next_label("promotable_null_keep_hash");
     ctx.load_value_to_reg(array, "rdi")?;
-    ctx.emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                    // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r10", "rdi");
     ctx.emitter.instruction("and r10, 0xff");                                   // isolate the runtime storage kind
     ctx.emitter.instruction("cmp r10, 3");                                      // kind 3 = already promoted to a hash
     ctx.emitter.instruction(&format!("je {keep}"));                             // an existing hash takes the null entry directly
@@ -2038,7 +2032,7 @@ fn lower_runtime_polymorphic_array_push(
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
             ctx.emitter.instruction(&format!("cbz x0, {indexed}"));             // null receivers take the allocating indexed path
-            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the packed storage-kind metadata
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "x9", "x0");
             ctx.emitter.instruction("and x9, x9, #0xff");                       // isolate the low storage-kind byte
             ctx.emitter.instruction("cmp x9, #3");                              // kind 3 = storage promoted to a hash
             ctx.emitter.instruction(&format!("b.eq {hash}"));                   // hash append has a distinct header and growth helper
@@ -2077,7 +2071,7 @@ fn lower_runtime_polymorphic_array_push(
             ctx.load_value_to_reg(array, "rax")?;
             ctx.emitter.instruction("test rax, rax");                           // null receivers take the allocating indexed path
             ctx.emitter.instruction(&format!("jz {indexed}"));                  // route null storage to the indexed helper
-            ctx.emitter.instruction("mov r10, QWORD PTR [rax - 8]");            // load the packed storage-kind metadata
+            elephc_memoir::heap_kind::emit_load_metadata(ctx.emitter, "r10", "rax");
             ctx.emitter.instruction("and r10d, 0xff");                          // isolate the low storage-kind byte
             ctx.emitter.instruction("cmp r10d, 3");                             // kind 3 = storage promoted to a hash
             ctx.emitter.instruction(&format!("je {hash}"));                     // hash append has a distinct header and growth helper
@@ -2670,7 +2664,7 @@ fn emit_array_get_in_bounds_aarch64(
         let typed = ctx.next_label("array_get_typed_payload");
         let done = ctx.next_label("array_get_widened_done");
         ctx.emitter.instruction(&format!("ldr x11, [{}, #-8]", array_reg));     // load the runtime indexed-array value type
-        ctx.emitter.instruction("ubfx x11, x11, #8, #7");                       // isolate the value type without the COW flag
+        elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(ctx.emitter, "x11", "x11");
         ctx.emitter.instruction("cmp x11, #7");                                 // tag 7 means the slots were widened to boxed Mixed
         ctx.emitter.instruction(&format!("b.ne {}", typed));                    // preserve the ordinary typed-slot fast path
         ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // move to the pointer-sized Mixed payload base
@@ -2811,8 +2805,7 @@ fn emit_array_get_in_bounds_x86_64(
             array_reg
         );
         ctx.emitter.instruction(&load_value_type);                              // load the runtime indexed-array value type
-        ctx.emitter.instruction("shr rcx, 8");                                  // move the value type byte into the low bits
-        ctx.emitter.instruction("and rcx, 0x7f");                               // isolate the value type without the COW flag
+        elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(ctx.emitter, "rcx", "rcx");
         ctx.emitter.instruction("cmp rcx, 7");                                  // tag 7 means the slots were widened to boxed Mixed
         ctx.emitter.instruction(&format!("jne {}", typed));                     // preserve the ordinary typed-slot fast path
         ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // move to the pointer-sized Mixed payload base
@@ -3392,26 +3385,7 @@ fn scalar_slot_element_tag(elem_ty: &PhpType, value_ty: &PhpType) -> Option<PhpT
 fn emit_array_push_int_fast_path_aarch64(ctx: &mut FunctionContext<'_>) {
     let slow = ctx.next_label("array_push_int_slow");
     let done = ctx.next_label("array_push_int_done");
-    ctx.emitter.instruction(&format!("cbz x0, {slow}"));                        // null receivers need the allocating slow path
-    ctx.emitter.instruction("ldr w9, [x0, #-12]");                              // load the indexed-array refcount
-    ctx.emitter.instruction("cmp w9, #1");                                      // can this owner append without a COW split?
-    ctx.emitter.instruction(&format!("b.hi {slow}"));                           // shared arrays still need ensure_unique
-    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the current logical length
-    ctx.emitter.instruction(&format!("cbz x9, {slow}"));                        // the first append still specializes the empty-array shape
-    ctx.emitter.instruction("ldr x10, [x0, #8]");                               // load the current capacity
-    ctx.emitter.instruction("cmp x9, x10");                                     // is there room for one more scalar slot?
-    ctx.emitter.instruction(&format!("b.hs {slow}"));                           // full arrays still need the growth path
-    ctx.emitter.instruction("ldr x10, [x0, #-8]");                              // load the packed array metadata
-    ctx.emitter.instruction("ubfx x10, x10, #8, #7");                           // isolate the value type from the COW flag
-    ctx.emitter.instruction(&format!("cbnz x10, {slow}"));                      // only the int shape stores a raw word inline
-    ctx.emitter.instruction("add x10, x0, #24");                                // compute the payload base
-    ctx.emitter.instruction("str x1, [x10, x9, lsl #3]");                       // store the appended int in the next slot
-    ctx.emitter.instruction("add x9, x9, #1");                                  // advance the logical length
-    ctx.emitter.instruction("str x9, [x0]");                                    // publish the updated length
-    ctx.emitter.instruction(&format!("b {done}"));                              // skip the slow helper after the inline append
-    ctx.emitter.label(&slow);
-    abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
-    ctx.emitter.label(&done);
+    elephc_memoir::values::array_push_int::emit_inline_append(ctx.emitter, &slow, &done);
 }
 
 /// Appends one raw int inline when the receiver is unique, shaped and has spare capacity.
@@ -3421,28 +3395,7 @@ fn emit_array_push_int_fast_path_aarch64(ctx: &mut FunctionContext<'_>) {
 fn emit_array_push_int_fast_path_x86_64(ctx: &mut FunctionContext<'_>) {
     let slow = ctx.next_label("array_push_int_slow");
     let done = ctx.next_label("array_push_int_done");
-    ctx.emitter.instruction("test rdi, rdi");                                   // null receivers need the allocating slow path
-    ctx.emitter.instruction(&format!("jz {slow}"));                             // route null storage to the helper
-    ctx.emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                  // load the indexed-array refcount
-    ctx.emitter.instruction("cmp r10d, 1");                                     // can this owner append without a COW split?
-    ctx.emitter.instruction(&format!("ja {slow}"));                             // shared arrays still need ensure_unique
-    ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                        // load the current logical length
-    ctx.emitter.instruction("test r10, r10");                                   // is this the first append into an empty array?
-    ctx.emitter.instruction(&format!("jz {slow}"));                             // the first append still specializes the empty-array shape
-    ctx.emitter.instruction("mov r11, QWORD PTR [rdi + 8]");                    // load the current capacity
-    ctx.emitter.instruction("cmp r10, r11");                                    // is there room for one more scalar slot?
-    ctx.emitter.instruction(&format!("jae {slow}"));                            // full arrays still need the growth path
-    ctx.emitter.instruction("mov r11, QWORD PTR [rdi - 8]");                    // load the packed array metadata
-    ctx.emitter.instruction("shr r11, 8");                                      // move the value type into the low bits
-    ctx.emitter.instruction("and r11d, 0x7f");                                  // ignore the persistent COW flag
-    ctx.emitter.instruction(&format!("jnz {slow}"));                            // only the int shape stores a raw word inline
-    ctx.emitter.instruction("mov QWORD PTR [rdi + 24 + r10 * 8], rsi");         // store the appended int in the next slot
-    ctx.emitter.instruction("add r10, 1");                                      // advance the logical length
-    ctx.emitter.instruction("mov QWORD PTR [rdi], r10");                        // publish the updated length
-    ctx.emitter.instruction(&format!("jmp {done}"));                            // skip the slow helper after the inline append
-    ctx.emitter.label(&slow);
-    abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
-    ctx.emitter.label(&done);
+    elephc_memoir::values::array_push_int::emit_inline_append(ctx.emitter, &slow, &done);
 }
 
 /// Lowers an indexed-array append for x86_64 targets.
@@ -3553,36 +3506,10 @@ fn lower_array_push_tagged_scalar_aarch64(
     ctx.emitter.instruction("str x0, [sp, #0]");                                // save the tagged-scalar payload across uniqueness and growth calls
     ctx.emitter.instruction("str x1, [sp, #8]");                                // save the tagged-scalar runtime tag across uniqueness and growth calls
     ctx.load_value_to_reg(array, "x0")?;
-    abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
-    ctx.emitter.instruction("str x0, [sp, #16]");                               // preserve the unique indexed-array pointer across the capacity check
-    ctx.emitter.instruction("ldr x9, [x0]");                                    // load length before first-write tagged-scalar shape specialization
-    ctx.emitter.instruction(&format!("cbnz x9, {}", check_label));              // existing arrays already have their tagged-scalar shape fixed
-    ctx.emitter.instruction("mov x10, #16");                                    // tagged-scalar slots store payload and runtime tag words
-    ctx.emitter.instruction("str x10, [x0, #16]");                              // elem_size = 16 before growth can copy tagged-scalar slots
-    emit_tagged_scalar_array_value_type_stamp(ctx, "x0");
-    ctx.emitter.label(&check_label);
-    ctx.emitter.instruction("ldr x0, [sp, #16]");                               // reload the current indexed-array pointer before checking capacity
-    ctx.emitter.instruction("ldr x9, [x0]");                                    // load the current logical length
-    ctx.emitter.instruction("ldr x10, [x0, #8]");                               // load the current capacity
-    ctx.emitter.instruction("cmp x9, x10");                                     // is the tagged-scalar array already full?
-    ctx.emitter.instruction(&format!("b.ge {}", grow_label));                   // grow before writing when the append would exceed capacity
-    ctx.emitter.instruction("lsl x10, x9, #4");                                 // convert length to a byte offset for 16-byte tagged-scalar slots
-    ctx.emitter.instruction("add x10, x0, x10");                                // move to the selected append slot base
-    ctx.emitter.instruction("add x10, x10, #24");                               // skip the indexed-array header before storing the slot
-    ctx.emitter.instruction("ldr x11, [sp, #0]");                               // reload the tagged-scalar payload for the appended slot
-    ctx.emitter.instruction("ldr x12, [sp, #8]");                               // reload the tagged-scalar runtime tag for the appended slot
-    ctx.emitter.instruction("str x11, [x10]");                                  // store the tagged-scalar payload word in the append slot
-    ctx.emitter.instruction("str x12, [x10, #8]");                              // store the tagged-scalar runtime tag word in the append slot
-    ctx.emitter.instruction("add x9, x9, #1");                                  // advance the indexed-array logical length
-    ctx.emitter.instruction("str x9, [x0]");                                    // publish the updated logical length
-    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the growth path after storing the tagged-scalar slot
-    ctx.emitter.label(&grow_label);
-    ctx.emitter.instruction("ldr x0, [sp, #16]");                               // reload the unique indexed-array pointer for growth
-    abi::emit_call_label(ctx.emitter, "__rt_array_grow");
-    ctx.emitter.instruction("str x0, [sp, #16]");                               // preserve the grown indexed-array pointer before retrying the append
-    ctx.emitter.instruction(&format!("b {}", check_label));                     // retry the capacity check against the grown storage
-    ctx.emitter.label(&done_label);
-    ctx.emitter.instruction("add sp, sp, #32");                                 // release tagged-scalar append spill slots
+    elephc_memoir::values::packed_slots::emit_append_tagged_scalar_aarch64(
+        ctx.emitter, elephc_memoir::ValueTag::new(TAGGED_SCALAR_ARRAY_VALUE_TYPE as u8),
+        &check_label, &grow_label, &done_label,
+    );
     Ok(())
 }
 
@@ -3600,36 +3527,10 @@ fn lower_array_push_tagged_scalar_x86_64(
     ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the tagged-scalar payload across uniqueness and growth calls
     ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                    // save the tagged-scalar runtime tag across uniqueness and growth calls
     ctx.load_value_to_reg(array, "rdi")?;
-    abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");                   // preserve the unique indexed-array pointer across the capacity check
-    ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // load length before first-write tagged-scalar shape specialization
-    ctx.emitter.instruction("test r10, r10");                                   // is this the first append into a tagged-scalar array?
-    ctx.emitter.instruction(&format!("jnz {}", check_label));                   // existing arrays already have their tagged-scalar shape fixed
-    ctx.emitter.instruction("mov QWORD PTR [rax + 16], 16");                    // elem_size = 16 before growth can copy tagged-scalar slots
-    emit_tagged_scalar_array_value_type_stamp(ctx, "rax");
-    ctx.emitter.label(&check_label);
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                   // reload the current indexed-array pointer before checking capacity
-    ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // load the current logical length
-    ctx.emitter.instruction("mov r11, QWORD PTR [rax + 8]");                    // load the current capacity
-    ctx.emitter.instruction("cmp r10, r11");                                    // is the tagged-scalar array already full?
-    ctx.emitter.instruction(&format!("jae {}", grow_label));                    // grow before writing when the append would exceed capacity
-    ctx.emitter.instruction("mov rcx, r10");                                    // copy the logical length before scaling it into a byte offset
-    ctx.emitter.instruction("shl rcx, 4");                                      // convert length to a byte offset for 16-byte tagged-scalar slots
-    ctx.emitter.instruction("lea rcx, [rax + rcx + 24]");                       // compute the address of the next tagged-scalar append slot
-    ctx.emitter.instruction("mov r8, QWORD PTR [rsp]");                         // reload the tagged-scalar payload for the appended slot
-    ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");                     // reload the tagged-scalar runtime tag for the appended slot
-    ctx.emitter.instruction("mov QWORD PTR [rcx], r8");                         // store the tagged-scalar payload word in the append slot
-    ctx.emitter.instruction("mov QWORD PTR [rcx + 8], r9");                     // store the tagged-scalar runtime tag word in the append slot
-    ctx.emitter.instruction("add r10, 1");                                      // advance the indexed-array logical length
-    ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // publish the updated logical length
-    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the growth path after storing the tagged-scalar slot
-    ctx.emitter.label(&grow_label);
-    ctx.emitter.instruction("mov rdi, rax");                                    // pass the unique indexed-array pointer to the growth helper
-    abi::emit_call_label(ctx.emitter, "__rt_array_grow");
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");                   // preserve the grown indexed-array pointer before retrying the append
-    ctx.emitter.instruction(&format!("jmp {}", check_label));                   // retry the capacity check against the grown storage
-    ctx.emitter.label(&done_label);
-    ctx.emitter.instruction("add rsp, 32");                                     // release tagged-scalar append spill slots
+    elephc_memoir::values::packed_slots::emit_append_tagged_scalar_x86_64(
+        ctx.emitter, elephc_memoir::ValueTag::new(TAGGED_SCALAR_ARRAY_VALUE_TYPE as u8),
+        &check_label, &grow_label, &done_label,
+    );
     Ok(())
 }
 
@@ -4302,29 +4203,9 @@ fn lower_array_elem_addr_prepare_aarch64(
     ctx.load_value_to_reg(array, "x0")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
     abi::emit_pop_reg(ctx.emitter, "x1");
-    ctx.emitter.label(&grow_check);
-    ctx.emitter.instruction("ldr x10, [x0, #8]");                               // load indexed-array capacity before exposing an element address
-    ctx.emitter.instruction("cmp x1, x10");                                     // does the referenced slot fit in the current allocation?
-    ctx.emitter.instruction(&format!("b.lo {}", ready));                        // skip growth once the slot is addressable
-    abi::emit_push_reg(ctx.emitter, "x1");
-    abi::emit_call_label(ctx.emitter, "__rt_array_grow");
-    abi::emit_pop_reg(ctx.emitter, "x1");
-    ctx.emitter.instruction(&format!("b {}", grow_check));                      // keep growing until the by-reference slot fits
-    ctx.emitter.label(&ready);
-    ctx.emitter.instruction("ldr x9, [x0]");                                    // load current logical length before filling missing by-reference slots
-    ctx.emitter.instruction("cmp x1, x9");                                      // is the referenced slot already inside the logical array length?
-    ctx.emitter.instruction(&format!("b.lo {}", done));                         // existing slots can be referenced without extending length
-    ctx.emitter.instruction("mov x11, x9");                                     // start zero-filling at the previous logical end
-    ctx.emitter.label(&fill_loop);
-    ctx.emitter.instruction("cmp x11, x1");                                     // have all gap slots before the referenced slot been initialized?
-    ctx.emitter.instruction(&format!("b.ge {}", store_len));                    // stop filling before the referenced slot
-    emit_zero_array_slot_aarch64(ctx, elem_size, "x0", "x11")?;
-    ctx.emitter.instruction("add x11, x11, #1");                                // advance to the next gap slot
-    ctx.emitter.instruction(&format!("b {}", fill_loop));                       // continue zero-filling until the referenced slot
-    ctx.emitter.label(&store_len);
-    ctx.emitter.instruction("add x11, x1, #1");                                 // compute new logical length after materializing the reference slot
-    ctx.emitter.instruction("str x11, [x0]");                                   // publish the extended indexed-array length
-    ctx.emitter.label(&done);
+    elephc_memoir::values::packed_slots::emit_prepare_address_aarch64(
+        ctx.emitter, elem_size == 16, [&grow_check, &ready, &fill_loop, &store_len, &done],
+    );
     Ok(())
 }
 
@@ -4348,98 +4229,9 @@ fn lower_array_elem_addr_prepare_x86_64(
     ctx.load_value_to_reg(array, "rdi")?;
     abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
     abi::emit_pop_reg(ctx.emitter, "rsi");
-    ctx.emitter.label(&grow_check);
-    ctx.emitter.instruction("mov r10, QWORD PTR [rax + 8]");                    // load indexed-array capacity before exposing an element address
-    ctx.emitter.instruction("cmp rsi, r10");                                    // does the referenced slot fit in the current allocation?
-    ctx.emitter.instruction(&format!("jb {}", ready));                          // skip growth once the slot is addressable
-    abi::emit_push_reg(ctx.emitter, "rsi");
-    ctx.emitter.instruction("mov rdi, rax");                                    // pass the current indexed-array pointer to the growth helper
-    abi::emit_call_label(ctx.emitter, "__rt_array_grow");
-    abi::emit_pop_reg(ctx.emitter, "rsi");
-    ctx.emitter.instruction(&format!("jmp {}", grow_check));                    // keep growing until the by-reference slot fits
-    ctx.emitter.label(&ready);
-    ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                         // load current logical length before filling missing by-reference slots
-    ctx.emitter.instruction("cmp rsi, r9");                                     // is the referenced slot already inside the logical array length?
-    ctx.emitter.instruction(&format!("jb {}", done));                           // existing slots can be referenced without extending length
-    ctx.emitter.instruction("mov r11, r9");                                     // start zero-filling at the previous logical end
-    ctx.emitter.label(&fill_loop);
-    ctx.emitter.instruction("cmp r11, rsi");                                    // have all gap slots before the referenced slot been initialized?
-    ctx.emitter.instruction(&format!("jae {}", store_len));                     // stop filling before the referenced slot
-    emit_zero_array_slot_x86_64(ctx, elem_size, "rax", "r11")?;
-    ctx.emitter.instruction("add r11, 1");                                      // advance to the next gap slot
-    ctx.emitter.instruction(&format!("jmp {}", fill_loop));                     // continue zero-filling until the referenced slot
-    ctx.emitter.label(&store_len);
-    ctx.emitter.instruction("lea r11, [rsi + 1]");                              // compute new logical length after materializing the reference slot
-    ctx.emitter.instruction("mov QWORD PTR [rax], r11");                        // publish the extended indexed-array length
-    ctx.emitter.label(&done);
-    Ok(())
-}
-
-/// Emits one zero-filled indexed-array slot on AArch64.
-fn emit_zero_array_slot_aarch64(
-    ctx: &mut FunctionContext<'_>,
-    elem_size: i64,
-    array_reg: &str,
-    index_reg: &str,
-) -> Result<()> {
-    match elem_size {
-        8 => {
-            ctx.emitter.instruction(&format!("add x12, {}, #24", array_reg));   // compute the base address of pointer-sized indexed-array slots
-            ctx.emitter
-                .instruction(
-                &format!("str xzr, [x12, {}, lsl #3]", index_reg)
-            );                                                                  // initialize the missing by-reference slot to null
-        }
-        16 => {
-            ctx.emitter.instruction(&format!("lsl x12, {}, #4", index_reg));    // scale the gap index by the two-word slot size
-            ctx.emitter.instruction(&format!("add x12, {}, x12", array_reg));   // move to the selected two-word indexed-array slot
-            ctx.emitter.instruction("add x12, x12, #24");                       // skip the indexed-array header before clearing the slot
-            ctx.emitter.instruction("stp xzr, xzr, [x12]");                     // initialize both words of the missing by-reference slot
-        }
-        other => {
-            return Err(CodegenIrError::unsupported(format!(
-                "array_elem_addr element size {}",
-                other
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Emits one zero-filled indexed-array slot on x86_64.
-fn emit_zero_array_slot_x86_64(
-    ctx: &mut FunctionContext<'_>,
-    elem_size: i64,
-    array_reg: &str,
-    index_reg: &str,
-) -> Result<()> {
-    match elem_size {
-        8 => {
-            let clear_slot = format!(
-                "mov QWORD PTR [{} + 24 + {} * 8], 0",
-                array_reg, index_reg
-            );
-            ctx.emitter.instruction(&clear_slot);                               // initialize the missing by-reference slot to null
-        }
-        16 => {
-            ctx.emitter.instruction(&format!("mov r12, {}", index_reg));        // copy the gap index before scaling for a two-word slot
-            ctx.emitter.instruction("shl r12, 4");                              // scale the gap index by the two-word slot size
-            ctx.emitter
-                .instruction(
-                &format!("mov QWORD PTR [{} + 24 + r12], 0", array_reg)
-            );                                                                  // initialize the first word of the missing slot
-            ctx.emitter
-                .instruction(
-                &format!("mov QWORD PTR [{} + 32 + r12], 0", array_reg)
-            );                                                                  // initialize the second word of the missing slot
-        }
-        other => {
-            return Err(CodegenIrError::unsupported(format!(
-                "array_elem_addr element size {}",
-                other
-            )));
-        }
-    }
+    elephc_memoir::values::packed_slots::emit_prepare_address_x86_64(
+        ctx.emitter, elem_size == 16, [&grow_check, &ready, &fill_loop, &store_len, &done],
+    );
     Ok(())
 }
 
@@ -4550,36 +4342,9 @@ fn array_element_size(ty: &PhpType) -> Result<i64> {
 
 /// Stamps an indexed array as carrying inline tagged-scalar `{payload, tag}` slots.
 fn emit_tagged_scalar_array_value_type_stamp(ctx: &mut FunctionContext<'_>, array_reg: &str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr x10, [{}, #-8]", array_reg)); // load the packed indexed-array metadata before replacing value_type bits
-            ctx.emitter.instruction("mov x11, #0x80ff");                        // preserve heap kind and persistent COW metadata only
-            ctx.emitter.instruction("and x10, x10, x11");                       // clear stale indexed-array value_type bits
-            ctx.emitter
-                .instruction(
-                &format!("mov x11, #{}", TAGGED_SCALAR_ARRAY_VALUE_TYPE)
-            );                                                                  // value_type 11 = inline tagged-scalar slots
-            ctx.emitter.instruction("lsl x11, x11, #8");                        // move the tagged-scalar value_type into the packed kind word
-            ctx.emitter.instruction("orr x10, x10, x11");                       // combine stable metadata with the tagged-scalar value_type tag
-            ctx.emitter.instruction(&format!("str x10, [{}, #-8]", array_reg)); // publish tagged-scalar indexed-array metadata
-        }
-        Arch::X86_64 => {
-            ctx.emitter
-                .instruction(
-                &format!("mov r10, QWORD PTR [{} - 8]", array_reg)
-            );                                                                  // load the packed indexed-array metadata before replacing value_type bits
-            ctx.emitter.instruction("mov r11, 0xffffffff000080ff");             // preserve heap marker, indexed-array kind, and persistent COW metadata
-            ctx.emitter.instruction("and r10, r11");                            // clear stale indexed-array value_type bits
-            ctx.emitter
-                .instruction(
-                &format!("or r10, 0x{:x}", TAGGED_SCALAR_ARRAY_VALUE_TYPE << 8)
-            );                                                                  // add value_type 11 for inline tagged-scalar slots
-            ctx.emitter
-                .instruction(
-                &format!("mov QWORD PTR [{} - 8], r10", array_reg)
-            );                                                                  // publish tagged-scalar indexed-array metadata
-        }
-    }
+    elephc_memoir::values::array_header::emit_array_value_type_stamp(
+        ctx.emitter, array_reg, elephc_memoir::ValueTag::new(TAGGED_SCALAR_ARRAY_VALUE_TYPE as u8),
+    );
 }
 
 /// Verifies that an array opcode receives an indexed array.

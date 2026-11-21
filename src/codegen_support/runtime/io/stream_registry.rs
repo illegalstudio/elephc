@@ -10,6 +10,7 @@
 //! - Application orphan pruning preserves registrations across requests.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::buffers::stream_tables;
 
 /// Emits registration retirement and process-shutdown cleanup for both supported architectures.
 pub(crate) fn emit_stream_registry(emitter: &mut Emitter) {
@@ -50,18 +51,7 @@ fn emit_retire(emitter: &mut Emitter) {
     emitter.label_global("__rt_stream_registry_retire");
     // -- retain both string owners before clearing the complete registration row --
     prologue(emitter);
-    for (source, destination) in [(0, 0), (16, 8)] {
-        abi::emit_load_from_address(emitter, scratch, result, source);
-        abi::emit_store_to_address(emitter, scratch, frame, destination);
-    }
-    for offset in [0, 8, 16, 24] {
-        abi::emit_store_zero_to_address(emitter, result, offset);
-    }
-    // -- release each transferred owner after the row no longer publishes it --
-    for offset in [0, 8] {
-        abi::emit_load_from_address(emitter, result, frame, offset);
-        abi::emit_call_label(emitter, "__rt_heap_free_safe");
-    }
+    elephc_memoir::strings::owner_pair::emit_retire_row(emitter, result, frame, scratch);
     abi::emit_load_int_immediate(emitter, result, 1);
     epilogue(emitter);
 }
@@ -73,12 +63,15 @@ fn emit_cleanup(emitter: &mut Emitter) {
     emitter.label_global("__rt_stream_registry_cleanup");
     // -- preserve table cursors across each registration's owned-string releases --
     prologue(emitter);
-    for (symbol, count, suffix) in [("_user_wrappers", 64, "wrapper"), ("_user_filter_registry", 128, "filter")] {
+    for (storage, count, suffix) in [
+        (stream_tables::USER_WRAPPERS, stream_tables::WRAPPER_REGISTRATION_CAPACITY, "wrapper"),
+        (stream_tables::USER_FILTER_REGISTRY, stream_tables::FILTER_REGISTRATION_CAPACITY, "filter"),
+    ] {
         let scan = format!("__rt_stream_registry_{suffix}_scan");
         let next = format!("__rt_stream_registry_{suffix}_next");
-        abi::emit_symbol_address(emitter, result, symbol);
+        storage.emit_address(emitter, result);
         abi::emit_store_to_address(emitter, result, frame, 0);
-        abi::emit_load_int_immediate(emitter, scratch, count);
+        abi::emit_load_int_immediate(emitter, scratch, count as i64);
         abi::emit_store_to_address(emitter, scratch, frame, 8);
         // -- visit occupied fixed-width rows without invoking PHP code --
         emitter.label(&scan);
@@ -89,7 +82,8 @@ fn emit_cleanup(emitter: &mut Emitter) {
         abi::emit_call_label(emitter, "__rt_stream_registry_retire");
         emitter.label(&next);
         abi::emit_load_from_address(emitter, scratch, frame, 0);
-        emitter.instruction(if arm { "add x9, x9, #32" } else { "add r9, 32" }); // advance by one four-word registration row
+        let step = if arm { "add x9, x9, #" } else { "add r9, " };
+        emitter.instruction(&format!("{step}{}", stream_tables::REGISTRATION_BYTES)); // advance by one four-word registration row
         abi::emit_store_to_address(emitter, scratch, frame, 0);
         abi::emit_load_from_address(emitter, scratch, frame, 8);
         emitter.instruction(if arm { "sub x9, x9, #1" } else { "sub r9, 1" });  // consume one slot from the bounded table scan

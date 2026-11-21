@@ -476,15 +476,7 @@ fn emit_constructor_x86_64(
 fn emit_aarch64_constructor_exception_boundary_push(emitter: &mut Emitter, escape_label: &str) {
     let handler_offset = CONSTRUCTOR_HELPER_HANDLER_OFFSET - 48;
     emitter.comment("push eval constructor exception boundary");
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset));       // save the previous native exception-handler head
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-    emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + 8));   // preserve the caller activation frame across constructor unwinding
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(                                               // save diagnostic suppression depth for restoration
-        "str x10, [x29, #{}]",
-        handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));
+    elephc_memoir::activation_records::emit_save_arm_fp_try_prefix(emitter, "x10", handler_offset);
     emitter.instruction(&format!("add x10, x29, #{}", handler_offset));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp
@@ -512,19 +504,7 @@ fn emit_aarch64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
 fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape_label: &str) {
     let handler_base = CONSTRUCTOR_HELPER_FRAME_SIZE;
     emitter.comment("push eval constructor exception boundary");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(                                                        //save the previous native exception-handler head
-        &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
-    );
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction(                                                        //preserve the caller activation frame across constructor unwinding
-        &format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)
-    );
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(                                               // save diagnostic suppression depth for restoration
-        "mov QWORD PTR [rbp - {}], r10",
-        handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", handler_base);
     emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp
@@ -729,7 +709,7 @@ fn emit_aarch64_builtin_throwable_previous_arg(
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the previous argument is an object
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed non-object previous arguments
     emitter.instruction("ldr x9, [sp, #16]");                                   // inspect the actual receiver allocated by AOT or the by-name eval bridge
-    emitter.instruction("ldr x10, [x9, #-8]");                                  // recover the heap kind independently of the PHP class id
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x10", "x9");
     emitter.instruction("and x10, x10, #0xff");                                 // discard collector and ownership flags
     emitter.instruction("cmp x10, #6");                                         // only compact Throwable payloads own a raw previous pointer
     emitter.instruction("ldr x0, [x29, #-16]");                                 // ordinary objects retain the nullable property's Mixed argument cell
@@ -758,7 +738,7 @@ fn emit_x86_64_builtin_throwable_previous_arg(
     emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means the previous argument is an object
     emitter.instruction(&format!("jne {}", fail_label));                        // reject malformed non-object previous arguments
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // inspect the receiver allocated by AOT or the by-name eval bridge
-    emitter.instruction("mov r10, QWORD PTR [r11 - 8]");                        // recover the actual heap layout independently of the PHP class id
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "r11");
     emitter.instruction("and r10, 0xff");                                       // discard the heap marker and collector flags
     emitter.instruction("cmp r10, 6");                                          // compact Throwable payloads own raw previous pointers
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // ordinary objects retain the nullable property's Mixed argument cell

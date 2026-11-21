@@ -17,12 +17,11 @@
 //! - v1 caps the compressed input at the 64 KiB `_stream_filter_buf` scratch
 //!   and sizes the inflate output at 256x the input (min 64 KiB).
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 
-/// Capacity of the shared `_stream_filter_buf` scratch, reused here as the
-/// compressed-input slurp buffer.
-const FILTER_BUF_SIZE: i64 = 65536;
+use elephc_memoir::buffers::stream_scratch::CAPACITY as FILTER_BUF_SIZE;
 
 /// ARM64: a 176-byte scratch frame holds the 112-byte `z_stream` at `[sp, #0]`
 /// plus the descriptor, lengths, and buffers at `[sp, #112..168)`.
@@ -44,7 +43,7 @@ where
     emitter.instruction("str xzr, [sp, #120]");                                 // slurp offset = 0
     emitter.label(&slurp);
     emitter.instruction("ldr x0, [sp, #112]");                                  // fd to read compressed bytes from
-    abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "x1");
     emitter.instruction("ldr x9, [sp, #120]");                                  // current slurp offset
     emitter.instruction("add x1, x1, x9");                                      // write pointer = scratch base + offset
     emitter.instruction(&format!("mov x2, #{}", FILTER_BUF_SIZE));              // scratch capacity
@@ -68,9 +67,7 @@ where
     emitter.instruction("csel x9, x9, x10, gt");                                // pick the larger buffer size
     emitter.instruction("str x9, [sp, #152]");                                  // save the output buffer capacity
     emitter.instruction("mov x0, x9");                                          // buffer size into the allocator argument
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the decompressed-data buffer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #128]");                                  // save the decompressed buffer pointer
 
     // -- zero the 112-byte z_stream so zalloc/zfree start NULL --
@@ -91,7 +88,7 @@ where
     emitter.bl_c("inflateInit2_"); // initialize a raw-inflate zlib stream
 
     // -- point the stream at the slurped input and the output buffer --
-    abi::emit_symbol_address(emitter, "x9", "_stream_filter_buf");
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "x9");
     emitter.instruction("str x9, [sp, #0]");                                    // z_stream.next_in = scratch base
     emitter.instruction("ldr x9, [sp, #120]");                                  // compressed length
     emitter.instruction("str w9, [sp, #8]");                                    // z_stream.avail_in = compressed length
@@ -178,7 +175,7 @@ where
     emitter.instruction("mov QWORD PTR [rsp + 120], 0");                        // slurp offset = 0
     emitter.label(&slurp);
     emitter.instruction("mov rdi, QWORD PTR [rsp + 112]");                      // fd to read compressed bytes from
-    abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf"); // scratch base address
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "rsi"); // scratch base address
     emitter.instruction("add rsi, QWORD PTR [rsp + 120]");                      // write pointer = scratch base + offset
     emitter.instruction(&format!("mov rdx, {}", FILTER_BUF_SIZE));              // scratch capacity
     emitter.instruction("sub rdx, QWORD PTR [rsp + 120]");                      // remaining scratch capacity
@@ -201,13 +198,7 @@ where
     emitter.label(&sized);
     emitter.instruction("mov QWORD PTR [rsp + 152], r9");                       // save the output buffer capacity
     emitter.instruction("mov rax, r9");                                         // buffer size into the allocator argument
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the decompressed-data buffer
-    emitter.instruction(&format!(
-        // owned-string heap-kind word with the x86_64 heap marker
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));                                                                         // materialize the owned output-buffer heap kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rsp + 128], rax");                      // save the decompressed buffer pointer
 
     // -- zero the 112-byte z_stream so zalloc/zfree start NULL --
@@ -228,7 +219,7 @@ where
     emitter.instruction("call inflateInit2_");                                  // initialize a raw-inflate zlib stream
 
     // -- point the stream at the slurped input and the output buffer --
-    abi::emit_symbol_address(emitter, "r9", "_stream_filter_buf"); // scratch base address
+    elephc_memoir::buffers::stream_scratch::emit_input_address(emitter, "r9"); // scratch base address
     emitter.instruction("mov QWORD PTR [rsp + 0], r9");                         // z_stream.next_in = scratch base
     emitter.instruction("mov r9, QWORD PTR [rsp + 120]");                       // compressed length
     emitter.instruction("mov DWORD PTR [rsp + 8], r9d");                        // z_stream.avail_in = compressed length

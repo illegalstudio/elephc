@@ -8,6 +8,8 @@
 //! Key details:
 //! - Mirrors `__rt_array_walk` (scalar leaf passed in one word, env optional) but descends into array-valued elements.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -35,7 +37,7 @@ pub fn emit_array_walk_recursive(emitter: &mut Emitter) {
     emitter.instruction("mov x19, x0");                                         // x19 = callback address (callee-saved across recursion and calls)
     emitter.instruction("mov x20, x2");                                         // x20 = optional callback environment (callee-saved)
     emitter.instruction("str x1, [sp, #0]");                                    // save the current array pointer
-    emitter.instruction("ldr x9, [x1, #-8]");                                   // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x1");
     emitter.instruction("and x10, x9, #0xff");                                  // isolate the low-byte heap kind
     emitter.instruction("cmp x10, #3");                                         // is the container an associative hash?
     emitter.instruction("b.eq __rt_array_walk_recursive_hash");                 // hashes iterate in insertion order
@@ -54,7 +56,7 @@ pub fn emit_array_walk_recursive(emitter: &mut Emitter) {
     emitter.instruction("cmp x13, x12");                                        // has the index reached the length?
     emitter.instruction("b.ge __rt_array_walk_recursive_done");                 // finish once every element is visited
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the array pointer
-    emitter.instruction("add x1, x1, #24");                                     // skip the 24-byte indexed-array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x1", "x1");
     emitter.instruction("ldr x0, [x1, x13, lsl #3]");                           // load the scalar leaf at element[i]
     emitter.instruction("cbz x20, __rt_array_walk_recursive_idx_call");         // no environment keeps the one-argument callback ABI
     emitter.instruction("mov x1, x20");                                         // pass the callback environment as the second argument
@@ -70,7 +72,7 @@ pub fn emit_array_walk_recursive(emitter: &mut Emitter) {
     emitter.instruction("cmp x13, x12");                                        // has the index reached the length?
     emitter.instruction("b.ge __rt_array_walk_recursive_done");                 // finish once every sub-array is visited
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the array pointer
-    emitter.instruction("add x1, x1, #24");                                     // skip the 24-byte indexed-array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x1", "x1");
     emitter.instruction("ldr x1, [x1, x13, lsl #3]");                           // load the sub-array pointer at element[i]
     emitter.instruction("mov x0, x19");                                         // pass the callback address to the recursive call
     emitter.instruction("mov x2, x20");                                         // pass the callback environment to the recursive call
@@ -128,13 +130,12 @@ fn emit_array_walk_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r12, rdi");                                        // r12 = callback address (callee-saved)
     emitter.instruction("mov r14, rdx");                                        // r14 = optional callback environment (callee-saved)
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the current array pointer
-    emitter.instruction("mov r10, QWORD PTR [rsi - 8]");                        // load the uniform heap-kind header word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r10", "rsi");
     emitter.instruction("mov r11, r10");                                        // copy the header word before masking the heap kind
     emitter.instruction("and r11, 255");                                        // isolate the low-byte heap kind
     emitter.instruction("cmp r11, 3");                                          // is the container an associative hash?
     emitter.instruction("je __rt_array_walk_recursive_hash");                   // hashes iterate in insertion order
-    emitter.instruction("shr r10, 8");                                          // shift the packed indexed-array value_type into the low bits
-    emitter.instruction("and r10, 127");                                        // isolate the indexed-array value_type tag
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r10", "r10");
     emitter.instruction("mov rax, QWORD PTR [rsi]");                            // load the indexed-array length
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the length for the loop bound
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // index i = 0

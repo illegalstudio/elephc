@@ -21,10 +21,12 @@ use crate::types::PhpType;
 use super::{
     emit_boundary_pop_aarch64, emit_boundary_pop_x86_64, emit_boundary_push_aarch64,
     emit_boundary_push_x86_64, emit_clear_error_inline, emit_set_static_error_aarch64,
-    emit_set_static_error_x86_64, emit_store_immediate_to_symbol, label_suffix, BOUNDARY_ACTIVE,
+    emit_set_static_error_x86_64, emit_store_immediate_to_symbol, label_suffix,
     BOUNDARY_STATUS, STATUS_ALLOCATION_FAILURE,
     STATUS_INVALID_ARGUMENT, STATUS_OK, STATUS_PHP_EXCEPTION, STATUS_RUNTIME_FAILURE,
 };
+
+pub(super) use elephc_memoir::strings::export_scratch::{emit_enter_boundary, emit_leave_boundary};
 
 /// Fixed frame metadata for one recoverable scalar export wrapper.
 struct ScalarBoundaryLayout {
@@ -358,69 +360,6 @@ pub(super) fn emit_validate_string_inputs(
             }
         }
         emitter.label(&valid);
-    }
-}
-
-/// Saves concat state, isolates nested scratch use, and increments boundary depth.
-pub(super) fn emit_enter_boundary(emitter: &mut Emitter, concat_offset: usize, suffix: &str) {
-    let nested = format!("L_cdylib_{suffix}_boundary_nested");
-    let configured = format!("L_cdylib_{suffix}_boundary_concat_configured");
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(emitter, "x9", BOUNDARY_ACTIVE, 0);
-            emitter.instruction(&format!("cbnz x9, {nested}"));                 // isolate concat scratch only for a nested host entry
-            emitter.instruction("mov x10, #0");                                 // outer entries restore an empty concat arena on return
-            abi::store_at_offset(emitter, "x10", concat_offset);
-            emit_store_immediate_to_symbol(emitter, "_concat_off", 0);
-            emitter.instruction(&format!("b {configured}"));                    // join nested and outer concat setup
-            emitter.label(&nested);
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_concat_off", 0);
-            abi::store_at_offset(emitter, "x10", concat_offset);
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_concat_capacity", 0);
-            abi::emit_store_reg_to_symbol(emitter, "x10", "_concat_off", 0);
-            emitter.label(&configured);
-            abi::emit_load_symbol_to_reg(emitter, "x9", BOUNDARY_ACTIVE, 0);
-            emitter.instruction("add x9, x9, #1");                              // increment the re-entrant boundary depth
-            abi::emit_store_reg_to_symbol(emitter, "x9", BOUNDARY_ACTIVE, 0);
-        }
-        Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(emitter, "r10", BOUNDARY_ACTIVE, 0);
-            emitter.instruction("test r10, r10");                               // distinguish an outer entry from a re-entrant call
-            emitter.instruction(&format!("jnz {nested}"));                      // isolate concat scratch only for a nested host entry
-            emitter.instruction("xor r11d, r11d");                              // outer entries restore an empty concat arena on return
-            abi::store_at_offset(emitter, "r11", concat_offset);
-            emit_store_immediate_to_symbol(emitter, "_concat_off", 0);
-            emitter.instruction(&format!("jmp {configured}"));                  // join nested and outer concat setup
-            emitter.label(&nested);
-            abi::emit_load_symbol_to_reg(emitter, "r11", "_concat_off", 0);
-            abi::store_at_offset(emitter, "r11", concat_offset);
-            abi::emit_load_symbol_to_reg(emitter, "r11", "_concat_capacity", 0);
-            abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);
-            emitter.label(&configured);
-            abi::emit_load_symbol_to_reg(emitter, "r10", BOUNDARY_ACTIVE, 0);
-            emitter.instruction("add r10, 1");                                  // increment the re-entrant boundary depth
-            abi::emit_store_reg_to_symbol(emitter, "r10", BOUNDARY_ACTIVE, 0);
-        }
-    }
-}
-
-/// Decrements boundary depth and restores the caller's concat scratch cursor.
-pub(super) fn emit_leave_boundary(emitter: &mut Emitter, concat_offset: usize) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(emitter, "x9", BOUNDARY_ACTIVE, 0);
-            emitter.instruction("sub x9, x9, #1");                              // leave exactly one nested host boundary
-            abi::emit_store_reg_to_symbol(emitter, "x9", BOUNDARY_ACTIVE, 0);
-            abi::load_at_offset(emitter, "x10", concat_offset);
-            abi::emit_store_reg_to_symbol(emitter, "x10", "_concat_off", 0);
-        }
-        Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(emitter, "r10", BOUNDARY_ACTIVE, 0);
-            emitter.instruction("sub r10, 1");                                  // leave exactly one nested host boundary
-            abi::emit_store_reg_to_symbol(emitter, "r10", BOUNDARY_ACTIVE, 0);
-            abi::load_at_offset(emitter, "r11", concat_offset);
-            abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);
-        }
     }
 }
 

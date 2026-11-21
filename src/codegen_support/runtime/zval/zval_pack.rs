@@ -188,13 +188,7 @@ fn emit_zval_pack_element_aarch64(emitter: &mut Emitter) {
 
     // -- build the 16-byte zval from the staged value and type_info --
     emitter.label("__rt_zval_pack_build");
-    emitter.instruction("mov x0, #16");                                         // zval structures are exactly 16 bytes
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = zval storage pointer
-    emitter.instruction("ldr x10, [sp, #32]");                                  // reload the staged zval value
-    emitter.instruction("str x10, [x0]");                                       // store the zval value at offset 0
-    emitter.instruction("ldr w9, [sp, #40]");                                   // reload the staged type_info (32-bit)
-    emitter.instruction("str w9, [x0, #8]");                                    // store the type_info at offset 8
-    emitter.instruction("str wzr, [x0, #12]");                                  // zero the u2 slot at offset 12
+    elephc_memoir::interop::zval::emit_owned_staged_cell(emitter);
 
     emitter.label("__rt_zval_pack_done");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
@@ -353,15 +347,7 @@ fn emit_zval_pack_element_linux_x86_64(emitter: &mut Emitter) {
 
     // -- build the 16-byte zval from the staged value and type_info --
     emitter.label("__rt_zval_pack_build");
-    emitter.instruction("mov rax, 16");                                         // zval structures are exactly 16 bytes
-    emitter.instruction("call __rt_heap_alloc");                                // rax = zval storage pointer
-    emitter.instruction("mov rcx, rax");                                        // preserve the zval pointer across stores
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the staged zval value
-    emitter.instruction("mov QWORD PTR [rcx], rax");                            // store the zval value at offset 0
-    emitter.instruction("mov eax, DWORD PTR [rbp - 48]");                       // reload the staged type_info (32-bit)
-    emitter.instruction("mov DWORD PTR [rcx + 8], eax");                        // store the type_info at offset 8
-    emitter.instruction("mov DWORD PTR [rcx + 12], 0");                         // zero the u2 slot at offset 12
-    emitter.instruction("mov rax, rcx");                                        // return the zval pointer in rax
+    elephc_memoir::interop::zval::emit_owned_staged_cell(emitter);
 
     emitter.label("__rt_zval_pack_done");
     emitter.instruction("add rsp, 64");                                         // release the local slots

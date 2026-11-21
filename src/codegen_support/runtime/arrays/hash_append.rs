@@ -13,7 +13,8 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// Emits C-ABI hash/value-low/value-high/tag append and transfers the supplied value owner.
 pub fn emit_hash_append(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
-    super::hash_next_index::emit(emitter);
+    super::hash_next_index::emit_try_next_index(emitter);
+    emit_required_next_index(emitter);
     emitter.label_global("__rt_hash_append");
     if arm {
         emitter.instruction("sub sp, sp, #48");                                 // retain inputs and linkage across append-key lookup
@@ -68,6 +69,25 @@ pub fn emit_hash_append(emitter: &mut Emitter) {
     emitter.label("__rt_hash_append_throw");
     restore(emitter);
     emitter.instruction(if arm { "b __rt_hash_append_error" } else { "jmp __rt_hash_append_error" }); // raise Error after retiring local transferred ownership
+}
+
+/// Raises the PHP append error when the next integer key is unavailable.
+fn emit_required_next_index(emitter: &mut Emitter) {
+    let arm = emitter.target.arch == Arch::AArch64;
+    emitter.label_global("__rt_hash_next_index");
+    emitter.instruction(if arm { "stp x29, x30, [sp, #-16]!" } else { "sub rsp, 8" }); // preserve linkage and align the shared probe
+    abi::emit_call_label(emitter, "__rt_hash_try_next_index");
+    emitter.instruction(if arm { "ldp x29, x30, [sp], #16" } else { "add rsp, 8" }); // restore the caller before any exception unwinding
+    if arm {
+        emitter.instruction("cbnz x1, __rt_hash_next_index_available");         // keep the successful conditional transfer inside the current Mach-O atom
+        emitter.instruction("b __rt_hash_append_error");                        // raise PHP's catchable Error through the shared global helper
+        emitter.label("__rt_hash_next_index_available");
+    } else {
+        emitter.instruction("test edx, edx");                                   // inspect availability for ordinary PHP append
+        emitter.instruction("jz __rt_hash_append_error");                       // saturated occupied keys raise PHP's catchable Error
+    }
+    emitter.instruction("ret");                                                 // return the available index to EIR before value ownership transfer
+    super::hash_append_error::emit(emitter);
 }
 
 /// Restores append linkage while preserving the returned hash or completed release outcome.

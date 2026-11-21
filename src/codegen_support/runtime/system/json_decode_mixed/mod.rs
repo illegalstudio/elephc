@@ -65,3 +65,6 @@ pub(crate) fn emit_json_decode_mixed(emitter: &mut Emitter) {
     arrays::emit_aarch64(emitter);
     objects::emit_aarch64(emitter);
 }
+
+#[cfg(test)]
+mod memoir_tests;

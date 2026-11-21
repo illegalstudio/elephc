@@ -8,6 +8,7 @@
 //! Key details:
 //! - Integer keys append with renumbering; string-key collisions recurse (both assoc) or wrap-and-merge; temporaries are released.
 
+use elephc_memoir::values::hash_payload::{self, StringSlotStore};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -35,15 +36,10 @@ pub fn emit_amr_box_value(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_amr_box_value_new");                         // scalar values need no retain
     emitter.instruction("cmp x0, #7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("b.gt __rt_amr_box_value_new");                         // non-heap tags need no retain
-    emitter.instruction("ldr x0, [sp, #8]");                                    // load the heap-backed value low word
-    emitter.instruction("bl __rt_incref");                                      // retain the heap-backed value for the wrapper hash
+    hash_payload::emit_retain_staged_pointer(emitter, 8);
     emitter.instruction("b __rt_amr_box_value_new");                            // continue to wrapper allocation
     emitter.label("__rt_amr_box_value_persist");
-    emitter.instruction("ldr x1, [sp, #8]");                                    // string pointer to persist
-    emitter.instruction("ldr x2, [sp, #16]");                                   // string length to persist
-    emitter.instruction("bl __rt_str_persist");                                 // copy the string to an independent heap block, x1 = new pointer
-    emitter.instruction("str x1, [sp, #8]");                                    // store the persisted string pointer as the wrapper value
-    emitter.instruction("str x2, [sp, #16]");                                   // store the persisted string length
+    hash_payload::emit_persist_staged_string(emitter, 8, StringSlotStore::Separate);
     emitter.label("__rt_amr_box_value_new");
     emitter.instruction("mov x0, #8");                                          // initial capacity for the wrapper hash
     emitter.instruction("mov x1, #7");                                          // value_type 7 = mixed
@@ -78,15 +74,10 @@ fn emit_amr_box_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_amr_box_value_new");                           // scalar values need no retain
     emitter.instruction("cmp rdi, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_amr_box_value_new");                           // non-heap tags need no retain
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the heap-backed value into the incref input register
-    emitter.instruction("call __rt_incref");                                    // retain the heap-backed value for the wrapper hash
+    hash_payload::emit_retain_staged_pointer(emitter, 16);
     emitter.instruction("jmp __rt_amr_box_value_new");                          // continue to wrapper allocation
     emitter.label("__rt_amr_box_value_persist");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // string pointer to persist
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // string length to persist
-    emitter.instruction("call __rt_str_persist");                               // copy the string to an independent heap block, rax = new pointer
-    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // store the persisted string pointer as the wrapper value
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // store the persisted string length
+    hash_payload::emit_persist_staged_string(emitter, 16, StringSlotStore::Separate);
     emitter.label("__rt_amr_box_value_new");
     emitter.instruction("mov rdi, 8");                                          // initial capacity for the wrapper hash
     emitter.instruction("mov rsi, 7");                                          // value_type 7 = mixed
@@ -290,15 +281,10 @@ pub fn emit_array_merge_recursive(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_amr_str_new_set");                           // scalar values need no retain
     emitter.instruction("cmp x9, #7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("b.gt __rt_amr_str_new_set");                           // non-heap tags need no retain
-    emitter.instruction("ldr x0, [sp, #72]");                                   // load the heap-backed value low word
-    emitter.instruction("bl __rt_incref");                                      // retain the heap-backed value for the result
+    hash_payload::emit_retain_staged_pointer(emitter, 72);
     emitter.instruction("b __rt_amr_str_new_set");                              // continue to the insertion
     emitter.label("__rt_amr_str_new_persist");
-    emitter.instruction("ldr x1, [sp, #72]");                                   // string pointer to persist
-    emitter.instruction("ldr x2, [sp, #80]");                                   // string length to persist
-    emitter.instruction("bl __rt_str_persist");                                 // copy the string into an independent heap block, x1 = new pointer
-    emitter.instruction("str x1, [sp, #72]");                                   // store the persisted string pointer
-    emitter.instruction("str x2, [sp, #80]");                                   // store the persisted string length
+    hash_payload::emit_persist_staged_string(emitter, 72, StringSlotStore::Separate);
     emitter.label("__rt_amr_str_new_set");
     emitter.instruction("ldr x0, [sp, #16]");                                   // result hash pointer
     emitter.instruction("ldr x1, [sp, #56]");                                   // key pointer
@@ -317,15 +303,10 @@ pub fn emit_array_merge_recursive(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_amr_int_set");                               // scalar values need no retain
     emitter.instruction("cmp x9, #7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("b.gt __rt_amr_int_set");                               // non-heap tags need no retain
-    emitter.instruction("ldr x0, [sp, #72]");                                   // load the heap-backed value low word
-    emitter.instruction("bl __rt_incref");                                      // retain the heap-backed value for the result
+    hash_payload::emit_retain_staged_pointer(emitter, 72);
     emitter.instruction("b __rt_amr_int_set");                                  // continue to the insertion
     emitter.label("__rt_amr_int_persist");
-    emitter.instruction("ldr x1, [sp, #72]");                                   // string pointer to persist
-    emitter.instruction("ldr x2, [sp, #80]");                                   // string length to persist
-    emitter.instruction("bl __rt_str_persist");                                 // copy the string into an independent heap block, x1 = new pointer
-    emitter.instruction("str x1, [sp, #72]");                                   // store the persisted string pointer
-    emitter.instruction("str x2, [sp, #80]");                                   // store the persisted string length
+    hash_payload::emit_persist_staged_string(emitter, 72, StringSlotStore::Separate);
     emitter.label("__rt_amr_int_set");
     emitter.instruction("ldr x0, [sp, #16]");                                   // result hash pointer
     emitter.instruction("ldr x1, [sp, #24]");                                   // next integer key
@@ -528,15 +509,10 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_amr_str_new_set");                             // scalar values need no retain
     emitter.instruction("cmp rax, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_amr_str_new_set");                             // non-heap tags need no retain
-    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // load the heap-backed value into the incref input register
-    emitter.instruction("call __rt_incref");                                    // retain the heap-backed value for the result
+    hash_payload::emit_retain_staged_pointer(emitter, 80);
     emitter.instruction("jmp __rt_amr_str_new_set");                            // continue to the insertion
     emitter.label("__rt_amr_str_new_persist");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // string pointer to persist
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 88]");                       // string length to persist
-    emitter.instruction("call __rt_str_persist");                               // copy the string into an independent heap block, rax = new pointer
-    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // store the persisted string pointer
-    emitter.instruction("mov QWORD PTR [rbp - 88], rdx");                       // store the persisted string length
+    hash_payload::emit_persist_staged_string(emitter, 80, StringSlotStore::Separate);
     emitter.label("__rt_amr_str_new_set");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // result hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // key pointer
@@ -555,15 +531,10 @@ fn emit_array_merge_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_amr_int_set");                                 // scalar values need no retain
     emitter.instruction("cmp rax, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_amr_int_set");                                 // non-heap tags need no retain
-    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // load the heap-backed value into the incref input register
-    emitter.instruction("call __rt_incref");                                    // retain the heap-backed value for the result
+    hash_payload::emit_retain_staged_pointer(emitter, 80);
     emitter.instruction("jmp __rt_amr_int_set");                                // continue to the insertion
     emitter.label("__rt_amr_int_persist");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // string pointer to persist
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 88]");                       // string length to persist
-    emitter.instruction("call __rt_str_persist");                               // copy the string into an independent heap block, rax = new pointer
-    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // store the persisted string pointer
-    emitter.instruction("mov QWORD PTR [rbp - 88], rdx");                       // store the persisted string length
+    hash_payload::emit_persist_staged_string(emitter, 80, StringSlotStore::Separate);
     emitter.label("__rt_amr_int_set");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // result hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // next integer key

@@ -1743,3 +1743,21 @@ fn test_spl_autoload_call_with_literal_loads_class() {
     );
     assert_eq!(out, "forced");
 }
+
+/// A hash produced at the scratch limit uses a heap reservation that ordinary cleanup retires.
+#[test]
+fn test_spl_object_hash_distinct_at_scratch_limit() {
+    let out = compile_cli_file_and_run_with_flags(
+        r#"<?php
+class HashFixture {}
+$object = new HashFixture();
+$allocations = memory_get_allocations();
+$frees = memory_get_frees();
+echo ord(str_repeat("z", 65520)) > strlen(spl_object_hash($object));
+echo "|", memory_get_allocations() > $allocations ? "allocated" : "scratch";
+echo "|", memory_get_frees() > $frees ? "released" : "retained";
+"#,
+        &["--heap-size=65536", "--no-ir-opt"],
+    );
+    assert_eq!(out, "1|allocated|released");
+}

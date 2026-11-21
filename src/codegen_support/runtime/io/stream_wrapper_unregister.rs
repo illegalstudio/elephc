@@ -11,6 +11,8 @@
 //!   wins; the complete slot is cleared and both persisted strings are released. Returns 1 on
 //!   a successful unregistration, 0 when no registered protocol matches.
 
+use elephc_memoir::buffers::stream_tables;
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_stream_wrapper_unregister` runtime helper.
@@ -30,9 +32,9 @@ pub fn emit_stream_wrapper_unregister(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x4", "_user_wrappers");
     emitter.instruction("mov x5, #0");                                          // wrapper slot index
     emitter.label("__rt_swu_scan");
-    emitter.instruction("cmp x5, #64");                                         // scanned every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp x5, #{}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                         // scanned every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("b.ge __rt_swu_miss");                                  // no match found
-    emitter.instruction("add x6, x4, x5, lsl #5");                              // slot base = table + index * 32
+    emitter.instruction(&format!("add x6, x4, x5, lsl #{}", stream_tables::REGISTRATION_SHIFT));                              // slot base = table + index * 32
     emitter.instruction("ldr x7, [x6]");                                        // stored protocol pointer
     emitter.instruction("cbz x7, __rt_swu_next");                               // skip empty slots
     emitter.instruction("ldr x8, [x6, #8]");                                    // stored protocol length
@@ -74,10 +76,10 @@ fn emit_stream_wrapper_unregister_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r8", "_user_wrappers");                  // wrapper table base
     emitter.instruction("xor r9, r9");                                          // wrapper slot index
     emitter.label("__rt_swu_scan_x86");
-    emitter.instruction("cmp r9, 64");                                          // scanned every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    emitter.instruction(&format!("cmp r9, {}", stream_tables::WRAPPER_REGISTRATION_CAPACITY));                                          // scanned every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
     emitter.instruction("jge __rt_swu_miss_x86");                               // no match found
     emitter.instruction("mov r10, r9");                                         // copy the slot index for scaling
-    emitter.instruction("shl r10, 5");                                          // slot offset = index * 32
+    emitter.instruction(&format!("shl r10, {}", stream_tables::REGISTRATION_SHIFT));                                          // slot offset = index * 32
     emitter.instruction("add r10, r8");                                         // slot base = table + offset
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // stored protocol pointer
     emitter.instruction("test rax, rax");                                       // is this slot empty?

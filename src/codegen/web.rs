@@ -26,6 +26,8 @@
 //!   Raw static properties retain their old words until their initializers re-run.
 //!   Optional managed Mixed bindings detach their cell and restore the uninitialized marker.
 
+use elephc_memoir::arena_reset::{emit_gc_state_reset, emit_heap_arena_reset};
+
 use crate::codegen::abi;
 use crate::codegen::data_section::{DataSection, StaticLocalRecord};
 use crate::codegen::emit::Emitter;
@@ -80,7 +82,9 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // A request cannot legitimately finish inside a boxed-array callback or reference validation.
     // Clear both stack-backed registries before reset cleanup can run user destructors, so a
     // failed request never leaves readers scanning its retired native stack.
-    abi::emit_store_zero_to_symbol(emitter, "_rt_unmanaged_ref_borrow_top", 0);
+    abi::emit_store_zero_to_symbol(
+        emitter, elephc_memoir::reference_cells::unmanaged_borrows::HEAD_SYMBOL, 0,
+    );
     abi::emit_store_zero_to_symbol(emitter, "_rt_reference_validation_pins_top", 0);
     // A normal or throwing `__set` call unlinks its stack-backed recursion node locally. The web
     // reset is the final backstop for non-Throwable request escapes, before the retired request
@@ -214,8 +218,8 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
 /// armed for its successor.
 fn emit_output_buffer_reset(emitter: &mut Emitter) {
     emitter.comment("discard output buffers left open by the previous request");
+    elephc_memoir::buffers::output::emit_reset_depth(emitter);
     for symbol in [
-        "_ob_level",
         "_ob_in_handler",
         "_ob_flushing",
         "_ob_implicit_flush",
@@ -299,62 +303,14 @@ fn emit_transient_pointer_reset(emitter: &mut Emitter) {
 /// not consume are cleared here rather than left dangling.
 fn emit_extension_request_state_reset(emitter: &mut Emitter) {
     emitter.comment("clear request-scoped stream tables before the heap arena is reclaimed");
-    for (symbol, byte_len) in [
-        ("_user_wrappers", 2_048),
-        ("_user_wrapper_handles", 2_048),
-        ("_user_filter_registry", 4_096),
-        ("_user_filter_instances", 4_096),
-        ("_dir_handles", 2_048),
-        ("_glob_handles", 2_048),
-        ("_popen_files", 2_048),
-        ("_iconv_handles", 2_048),
-        ("_bzstream_handles", 2_048),
-        ("_zstream_handles", 2_048),
-        ("_stream_read_filters", 256),
-        ("_stream_write_filters", 256),
-        ("_eof_flags", 256),
-        ("_stream_chunk_size", 2_048),
-        ("_stream_connect_host", 4_096),
-    ] {
-        emit_zero_symbol_bytes(emitter, symbol, byte_len);
-    }
-}
-
-/// Zero-fills one request-state symbol through libc `memset`.
-///
-/// The tables above are up to 4 KiB each and run on every web request. A byte-at-a-time loop
-/// would add thousands of generated instructions and stores per request; one optimized libc call
-/// keeps the reset proportional to its actual size. `__rt_web_reset` already owns a 16-byte frame,
-/// so the call site keeps the C ABI's stack alignment on every supported target.
-fn emit_zero_symbol_bytes(emitter: &mut Emitter, symbol: &str, byte_len: usize) {
-    debug_assert!(byte_len > 0);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, "x0", symbol);
-            abi::emit_load_int_immediate(emitter, "x1", 0);
-            abi::emit_load_int_immediate(emitter, "x2", byte_len as i64);
-            emitter.bl_c("memset");
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(emitter, "rdi", symbol);
-            emitter.instruction("xor esi, esi");                                // zero-fill byte for the memset call
-            abi::emit_load_int_immediate(emitter, "rdx", byte_len as i64);
-            emitter.bl_c("memset");
-        }
-    }
+    elephc_memoir::buffers::stream_tables::emit_request_clear(emitter);
 }
 
 /// Restores the growable C-string buffers to their inline storage before the
 /// request heap is reclaimed, so the next request cannot reuse a heap pointer
 /// that now belongs to a different allocation.
 fn emit_cstr_buffer_reset(emitter: &mut Emitter) {
-    let scratch = abi::symbol_scratch_reg(emitter);
-    abi::emit_symbol_address(emitter, scratch, "_cstr_buf");
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_cstr_base", 0);
-    abi::emit_store_imm_to_symbol(emitter, "_cstr_cap", 0, 4096);
-    abi::emit_symbol_address(emitter, scratch, "_cstr_buf2");
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_cstr2_base", 0);
-    abi::emit_store_imm_to_symbol(emitter, "_cstr2_cap", 0, 4096);
+    elephc_memoir::interop::cstr_scratch::emit_reset(emitter);
 }
 
 /// Drains both handler stacks and their eval owners while the request heap is still valid.
@@ -388,73 +344,38 @@ fn emit_core_handler_reset(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), "_php_error_reporting", 0);
 }
 
-/// Restores request-local cycle-collector controls and counters to process-start defaults.
-fn emit_gc_state_reset(emitter: &mut Emitter) {
-    emitter.comment("reset cycle collector controls and counters for the next request");
-    abi::emit_call_label(emitter, "__rt_gc_drop_pins");
-    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);
-    abi::emit_store_reg_to_symbol(
-        emitter,
-        abi::int_result_reg(emitter),
-        "_gc_enabled",
-        0,
-    );
-    for symbol in [
-        "_gc_collecting",
-        "_gc_pending_throw",
-        "_gc_freeing_unreachable",
-        "_gc_release_suppressed",
-        "_gc_runs",
-        "_gc_collected",
-        "_gc_safe_point_credit",
-        "_gc_safe_point_live_limit",
-        "_gc_destructor_depth",
-    ] {
-        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
-    }
-}
-
-/// Resets the PHP heap arena to a pristine bump-only state: `_heap_off = 0`, an empty
-/// ordered free list, and empty exact size-class bins. Emitted as the final step of the
-/// per-request `__rt_web_reset`, so the whole arena is reclaimed at once after every
-/// refcounted per-request value has already been released above. Valid only under
-/// `--web` full-reset semantics — nothing in the PHP arena legitimately survives a
-/// request; Rust-side state (the PDO persistent-connection pool, bridge result cells)
-/// lives outside `_heap_buf` and is unaffected.
-fn emit_heap_arena_reset(emitter: &mut Emitter) {
-    emitter.comment("reset the PHP heap arena to pure-bump allocation for the next request");
-    crate::codegen_support::runtime::emit_heap_live_bases_reset(emitter);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_off", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_heap_free_list", 0);
-    abi::emit_call_label(emitter, "__rt_heap_bins_clear");
-    // A request that called `ini_set('memory_limit', …)` moved `_heap_limit`; the next
-    // request must start from the compile-time ceiling again, exactly like PHP's INI reset.
-    abi::emit_load_symbol_to_reg(
-        emitter,
-        abi::int_result_reg(emitter),
-        "_heap_limit_startup",
-        0,
-    );
-    abi::emit_store_reg_to_symbol(
-        emitter,
-        abi::int_result_reg(emitter),
-        "_heap_limit",
-        0,
-    );
-    // Bulk reclamation also retires every block that remained after typed cleanup.
-    // Keep cumulative allocation totals, but do not carry their live footprint into a new arena.
-    let value = abi::int_result_reg(emitter);
-    abi::emit_load_symbol_to_reg(emitter, value, "_gc_allocs", 0);
-    abi::emit_store_reg_to_symbol(emitter, value, "_gc_frees", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_gc_live", 0);
-    // `memory_get_peak_usage()` is per request in PHP, so its watermark starts over with the arena.
-    abi::emit_store_zero_to_symbol(emitter, "_gc_peak", 0);
-}
-
 #[cfg(test)]
 mod handler_reset_tests {
     use super::*;
     use crate::codegen::platform::{AppleVariant, Platform, Target};
+
+    /// Preserves both web reset paths captured before extraction at 8730c1a837.
+    #[test]
+    fn memoir_storage_followup_preserves_web_assembly() {
+        use sha2::{Digest, Sha256};
+
+        let mut fingerprints = Vec::new();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for mode in 0..6 {
+                for application in [false, true] {
+                    let mut module = Module::new(target);
+                    module.web_application = application;
+                    let mut emitter = Emitter::new(target);
+                    emitter.pic_data_refs = mode == 1 || mode == 2;
+                    emitter.cdylib_boundary = mode == 2 || mode == 3;
+                    emitter.phpext_output = mode == 4;
+                    emitter.dead_strip = mode == 5;
+                    emit_web_reset(&mut emitter, &module, &DataSection::new());
+                    let mut labels = emitter.take_internal_labels().into_iter().collect::<Vec<_>>();
+                    labels.sort();
+                    let hash = Sha256::digest(format!("{}\n{labels:?}", emitter.output()));
+                    fingerprints.push(format!("{name} {mode} {application} {hash:x}"));
+                }
+            }
+        }
+        assert_eq!(fingerprints.join("\n"), include_str!("web/memoir_cstr_reset_baseline.txt").trim());
+    }
 
     /// Weak type sources expire only after PHP shutdown callbacks and before arena addresses recycle.
     #[test]
@@ -776,5 +697,5 @@ fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
 /// correct base; the handler then captures this fresh base for its frame.
 fn emit_concat_offset_reset(emitter: &mut Emitter) {
     emitter.comment("reset the concat-buffer write offset for the next request");
-    abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
+    elephc_memoir::strings::concat_cursor::emit_reset(emitter);
 }

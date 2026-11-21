@@ -27,6 +27,9 @@
 //! - Growth publishes the new output base into its stack slot before returning, so
 //!   the throw path releases that block rather than a register `setjmp` restored.
 
+use elephc_memoir::buffers::native_words;
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
+use elephc_memoir::buffers::offset_pairs;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Branches to `next_label` when `reg` is a modifier the pre-scan must not reject.
@@ -179,12 +182,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
 
     // -- allocate a reusable fixed offset-pair buffer --
     emitter.instruction(&format!("ldr x9, [sp, #{}]", nmatch_off));             // load match-slot count returned by the shim
-    emitter.instruction("lsr x10, x9, #60");                                    // reject slot counts whose 16-byte size would overflow
-    emitter.instruction("cbnz x10, __rt_preg_replace_callback_malloc_fail");    // free the handle instead of allocating a wrapped size
-    emitter.instruction("lsl x0, x9, #4");                                      // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
-    emitter.instruction("cbz x0, __rt_preg_replace_callback_malloc_fail");      // allocation failure frees the handle and returns null
-    emitter.instruction(&format!("str x0, [sp, #{}]", regmatches_ptr_off));     // save dynamic offset-pair buffer pointer
+    offset_pairs::emit_allocate(emitter, "x9", regmatches_ptr_off, "__rt_preg_replace_callback_malloc_fail");
 
     // -- materialize a private subject copy for repeated regexec calls --
     // The callback may run another regex that grows the shared `__rt_cstr2`
@@ -195,9 +193,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("b.cc __rt_preg_replace_callback_subject_len_ok");      // a representable length continues to allocation
     emitter.instruction("b __rt_alloc_overflow");                               // a wrapped length can never be terminated
     emitter.label("__rt_preg_replace_callback_subject_len_ok");
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate a private subject copy callbacks cannot replace
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned string payload
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the private copy so the epilogue can release it
+    emit_allocate_owned_string(emitter);
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save the private null-terminated subject pointer
     emitter.instruction("mov x9, x0");                                          // destination cursor
     emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_ptr_off));       // source byte pointer
@@ -216,9 +212,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     // -- allocate a dedicated output buffer that callback scratch cannot clobber --
     emitter.instruction("mov x19, #4096");                                      // initial output capacity
     emitter.instruction("mov x0, x19");                                         // request the initial output block
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate owned output storage
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned string payload
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the output block so growth can release it
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov x20, x0");                                         // output write cursor
     emitter.instruction("mov x19, x0");                                         // output base pointer
     emitter.instruction("mov x21, #4096");                                      // output capacity in bytes
@@ -419,8 +413,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_heap_free_safe");                              // release the subject copy now that no cursor points into it
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
+    native_words::emit_release_stack_vector(emitter, regmatches_ptr_off, native_words::RetireSlot::Keep);
     emitter.instruction(&format!("ldr x1, [sp, #{}]", output_start_off));       // return output start pointer
     emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // reload output end pointer
     emitter.instruction("sub x2, x11, x1");                                     // compute output byte length
@@ -585,14 +578,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_preg_replace_callback_fail_linux_x86_64");    // PHP returns null when regex compilation fails
 
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // load match-slot count returned by the shim
-    emitter.instruction("mov r10, rdi");                                        // copy slot count for allocation-overflow validation
-    emitter.instruction("shr r10, 60");                                         // detect a wrapped 16-byte pair-vector size
-    emitter.instruction("jnz __rt_preg_replace_callback_malloc_fail_linux_x86_64"); // free the handle instead of allocating a wrapped size
-    emitter.instruction("shl rdi, 4");                                          // allocate one 16-byte signed-64-bit pair per slot
-    emitter.bl_c("malloc");                                                     // allocate the fixed offset-pair vector
-    emitter.instruction("test rax, rax");                                       // did malloc return a capture buffer?
-    emitter.instruction("jz __rt_preg_replace_callback_malloc_fail_linux_x86_64"); // allocation failure frees the opaque handle and returns null
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", regmatches_ptr_off)); // save dynamic offset-pair buffer pointer
+    offset_pairs::emit_allocate(emitter, "rdi", regmatches_ptr_off, "__rt_preg_replace_callback_malloc_fail_linux_x86_64");
 
     // -- materialize a private subject copy for repeated regexec calls --
     // The callback may run another regex that grows the shared `__rt_cstr2`
@@ -604,9 +590,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnc __rt_preg_replace_callback_subject_len_ok_linux_x86_64"); // a representable length continues to allocation
     emitter.instruction("jmp __rt_alloc_overflow");                             // a wrapped length can never be terminated
     emitter.label("__rt_preg_replace_callback_subject_len_ok_linux_x86_64");
-    emitter.instruction("call __rt_heap_alloc");                                // allocate a private subject copy callbacks cannot replace
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the private copy so the epilogue can release it
+    emit_allocate_owned_string(emitter);
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // save the private null-terminated subject pointer
     emitter.instruction("mov rdi, rax");                                        // destination cursor
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_ptr_off)); // source byte pointer
@@ -624,9 +608,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
 
     // -- allocate a dedicated output buffer that callback scratch cannot clobber --
     emitter.instruction("mov rax, 4096");                                       // initial output capacity
-    emitter.instruction("call __rt_heap_alloc");                                // allocate owned output storage
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the output block so growth can release it
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov r12, rax");                                        // output base pointer
     emitter.instruction("mov r13, rax");                                        // output write cursor
     emitter.instruction("mov r14, 4096");                                       // output capacity in bytes
@@ -830,8 +812,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_free_safe");                            // release the subject copy now that no cursor points into it
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
-    emitter.bl_c("free");                                                       // release the reusable offset-pair vector
+    native_words::emit_release_stack_vector(emitter, regmatches_ptr_off, native_words::RetireSlot::Keep);
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_start_off)); // return output start pointer
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", output_write_off)); // reload output end pointer
     emitter.instruction("sub rdx, rax");                                        // compute output byte length
@@ -902,32 +883,10 @@ fn emit_preg_replace_callback_install_boundary(
     handler_off: usize,
     threw_label: &str,
 ) {
-    let diag_off =
-        handler_off + crate::codegen_support::try_handlers::TRY_HANDLER_DIAG_DEPTH_OFFSET;
     let jmp_off = handler_off + crate::codegen_support::try_handlers::TRY_HANDLER_JMP_BUF_OFFSET;
     match emitter.target.arch {
         Arch::AArch64 => {
-            crate::codegen_support::abi::emit_load_symbol_to_reg(
-                emitter,
-                "x10",
-                "_exc_handler_top",
-                0,
-            );
-            emitter.instruction(&format!("str x10, [sp, #{}]", handler_off));   // previous handler-stack top
-            crate::codegen_support::abi::emit_load_symbol_to_reg(
-                emitter,
-                "x10",
-                "_exc_call_frame_top",
-                0,
-            );
-            emitter.instruction(&format!("str x10, [sp, #{}]", handler_off + 8)); // frame cleanup stops at this survivor
-            crate::codegen_support::abi::emit_load_symbol_to_reg(
-                emitter,
-                "x10",
-                "_rt_diag_suppression",
-                0,
-            );
-            emitter.instruction(&format!("str x10, [sp, #{}]", diag_off));      // saved diagnostic depth
+            elephc_memoir::activation_records::emit_save_sp_try_prefix(emitter, "x10", handler_off);
             emitter.instruction(&format!("add x10, sp, #{}", handler_off));     // address of this handler record
             crate::codegen_support::abi::emit_store_reg_to_symbol(
                 emitter,
@@ -940,27 +899,7 @@ fn emit_preg_replace_callback_install_boundary(
             emitter.instruction(&format!("cbnz x0, {}", threw_label));          // nonzero means a callback throw resumed here
         }
         Arch::X86_64 => {
-            crate::codegen_support::abi::emit_load_symbol_to_reg(
-                emitter,
-                "r10",
-                "_exc_handler_top",
-                0,
-            );
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", handler_off)); // previous handler-stack top
-            crate::codegen_support::abi::emit_load_symbol_to_reg(
-                emitter,
-                "r10",
-                "_exc_call_frame_top",
-                0,
-            );
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", handler_off + 8)); // frame cleanup stops at this survivor
-            crate::codegen_support::abi::emit_load_symbol_to_reg(
-                emitter,
-                "r10",
-                "_rt_diag_suppression",
-                0,
-            );
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", diag_off)); // saved diagnostic depth
+            elephc_memoir::activation_records::emit_save_sp_try_prefix(emitter, "r10", handler_off);
             emitter.instruction(&format!("lea r10, [rsp + {}]", handler_off));  // address of this handler record
             crate::codegen_support::abi::emit_store_reg_to_symbol(
                 emitter,
@@ -1053,9 +992,7 @@ fn emit_preg_replace_callback_rethrow(
             emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));     // reload the compiled PCRE2 handle
             emitter.instruction(&format!("str xzr, [sp, #{}]", handle_off));    // drop the handle slot before the free
             emitter.bl_c("elephc_pcre2_v1_free");
-            emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_off)); // reload the offset-pair vector
-            emitter.instruction(&format!("str xzr, [sp, #{}]", regmatches_off)); // drop the vector slot before the free
-            emitter.bl_c("free");
+            native_words::emit_release_stack_vector(emitter, regmatches_off, native_words::RetireSlot::BeforeFree);
             emitter.instruction("b __rt_throw_current");                        // rethrow with the original exception still pending
         }
         Arch::X86_64 => {
@@ -1070,9 +1007,7 @@ fn emit_preg_replace_callback_rethrow(
             emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload the compiled PCRE2 handle
             emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", handle_off)); // drop the handle slot before the free
             emitter.bl_c("elephc_pcre2_v1_free");
-            emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_off)); // reload the offset-pair vector
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", regmatches_off)); // drop the vector slot before the free
-            emitter.bl_c("free");
+            native_words::emit_release_stack_vector(emitter, regmatches_off, native_words::RetireSlot::BeforeFree);
             emitter.instruction("leave");                                       // restore entry alignment before the tail jump into the unwinder
             emitter.instruction("jmp __rt_throw_current");                      // rethrow with the original exception still pending
         }

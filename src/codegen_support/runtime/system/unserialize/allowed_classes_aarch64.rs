@@ -7,6 +7,8 @@
 //! Key details:
 //! - Option values are normalized into owned direct-string arrays before object hydration.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::data::{
     UNSER_ALLOWED_CLASSES_ENTRY_PREFIX, UNSER_ALLOWED_CLASSES_POLICY_PREFIX,
@@ -99,8 +101,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_unser_options_done");                        // publish is already complete
     emitter.instruction("add x11, x10, #1");                                    // advance index before any nested helper call
     emitter.instruction("str x11, [sp, #16]");                                  // preserve next index across conversion helpers
-    emitter.instruction("ldr x11, [x9, #-8]");                                  // packed array metadata precedes the payload header
-    emitter.instruction("ubfx x11, x11, #8, #7");                               // extract the runtime element tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x11", "x9");
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x11", "x11");
     emitter.instruction("cmp x11, #1");                                         // direct string payload?
     emitter.instruction("b.eq __rt_unser_options_indexed_string");              // direct strings append without conversion
     emitter.instruction("cmp x11, #6");                                         // direct object pointer payload?
@@ -236,12 +238,12 @@ pub(super) fn emit(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_unser_allowed_list_mixed");
     emitter.instruction("ldr x12, [x12]");                                      // heterogeneous allow-list representation?
     emitter.instruction("cbnz x12, __rt_unser_class_allowed_mixed_cell");       // boxed cells need an extra dereference
-    emitter.instruction("add x9, x9, #24");                                     // skip indexed-array header
+    packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x9");
     emitter.instruction("lsl x10, x11, #4");                                    // direct string element stride = pointer + length
     emitter.instruction("add x9, x9, x10");                                     // select the current direct-string pair
     emitter.instruction("b __rt_unser_class_allowed_compare");                  // compare against the requested class name
     emitter.label("__rt_unser_class_allowed_mixed_cell");
-    emitter.instruction("add x9, x9, #24");                                     // skip the indexed-array header to the cell slots
+    packed_slots::emit_packed_payload_aarch64(emitter, "x9", "x9");
     emitter.instruction("lsl x10, x11, #3");                                    // boxed Mixed elements are pointers
     emitter.instruction("ldr x9, [x9, x10]");                                   // load the validated boxed string cell
     emitter.instruction("add x9, x9, #8");                                      // string payload pair follows Mixed tag

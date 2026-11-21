@@ -8,6 +8,8 @@
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -78,7 +80,7 @@ pub fn emit_array_map_str(emitter: &mut Emitter) {
     // -- load element from source array based on elem_size --
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload source array pointer
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload source elem_size
-    emitter.instruction("add x1, x1, #24");                                     // skip header to data region
+    packed_slots::emit_packed_payload_aarch64(emitter, "x1", "x1");
     emitter.instruction("mul x11, x0, x10");                                    // x11 = i * elem_size
     emitter.instruction("add x11, x1, x11");                                    // x11 = &source_data[i]
 

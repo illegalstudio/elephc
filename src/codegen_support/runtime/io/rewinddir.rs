@@ -11,6 +11,7 @@
 //! - A descriptor with no recorded `DIR*` is a no-op.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use elephc_memoir::interop::glob_storage;
 
 /// rewinddir: rewind a directory stream to its first entry.
 /// Input:  AArch64 x0 = directory descriptor / x86_64 rdi = directory descriptor
@@ -32,7 +33,7 @@ pub fn emit_rewinddir(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_glob_handles");
     emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // glob_state* = _glob_handles[fd]
     emitter.instruction("cbz x10, __rt_rewinddir_libc");                        // no glob handle: fall through to libc rewinddir
-    emitter.instruction("str xzr, [x10, #16]");                                 // reset the glob iteration index to 0
+    glob_storage::emit_rewind(emitter, "x10");
     emitter.instruction("b __rt_rewinddir_done");                               // skip the libc path
 
     emitter.label("__rt_rewinddir_libc");
@@ -63,7 +64,7 @@ fn emit_rewinddir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r9 + rdi * 8]");                   // glob_state* = _glob_handles[fd]
     emitter.instruction("test r10, r10");                                       // glob handle present?
     emitter.instruction("jz __rt_rewinddir_libc_x86");                          // no glob handle: fall through to libc rewinddir
-    emitter.instruction("mov QWORD PTR [r10 + 16], 0");                         // reset the glob iteration index to 0
+    glob_storage::emit_rewind(emitter, "r10");
     emitter.instruction("jmp __rt_rewinddir_done_x86");                         // skip the libc path
 
     emitter.label("__rt_rewinddir_libc_x86");

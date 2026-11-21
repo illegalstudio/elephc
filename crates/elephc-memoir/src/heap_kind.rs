@@ -1,0 +1,165 @@
+//! Purpose:
+//! Emits the `__rt_heap_kind`, `__rt_heap_kind_zero` runtime helper assembly for heap kind.
+//! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
+//!
+//! Called from:
+//! - `elephc::codegen_support::runtime::emitters::emit_runtime()` via `elephc::codegen_support::runtime::arrays`.
+//!
+//! Key details:
+//! - Heap helpers own allocator metadata, debug accounting, and free-list invariants used by all refcounted runtime values.
+
+use crate::{Emitter, Arch};
+
+/// Loads the packed metadata word of a known-live native allocation.
+pub fn emit_load_metadata(emitter: &mut impl Emitter, destination: &str, payload: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => emitter.instruction(&format!("ldr {destination}, [{payload}, #-8]")), // read the native metadata word
+        Arch::X86_64 => emitter.instruction(&format!("mov {destination}, QWORD PTR [{payload} - 8]")), // read the native metadata word
+    }
+}
+
+/// Loads the low allocation-kind byte without interpreting any adjacent flags.
+pub fn emit_load_kind_byte(emitter: &mut impl Emitter, destination: &str, payload: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => emitter.instruction(&format!("ldurb {destination}, [{payload}, #-8]")), // the low byte is the native allocation kind
+        Arch::X86_64 => emitter.instruction(&format!("movzx {destination}, BYTE PTR [{payload} - 8]")), // zero-extend the native allocation kind
+    }
+}
+
+/// Compares a known-live x86-64 payload's allocation kind in place.
+pub fn emit_compare_kind_x86_64(emitter: &mut impl Emitter, payload: &str, kind: u32) {
+    emitter.instruction(&format!("cmp BYTE PTR [{payload} - 8], {kind}"));     // test only the low allocation-kind byte
+}
+
+/// Emits the `__rt_heap_kind` runtime helper.
+///
+/// Returns the uniform heap kind tag for a heap-backed value by probing the
+/// in-header kind word and validating the heap ownership marker.
+///
+/// ## Inputs
+/// - `x0` / `rax`: heap user pointer (pointer into the managed heap)
+///
+/// ## Outputs
+/// - `x0` / `eax`: kind tag (0 = not heap-backed, 1..255 = PHP array/hash kind)
+///
+/// ## Behavior
+/// - Null pointers → returns 0 immediately.
+/// - Pointers below the managed heap base → returns 0 (covers scalar integers and static data).
+/// - Pointers at or beyond the heap extent → returns 0.
+/// - On x86_64: validates the high-word ownership marker (`X86_64_HEAP_MAGIC_HI32`) before returning the kind.
+///   Foreign or freed pointers report kind 0.
+/// - On ARM64: validates the heap range via `_heap_buf` / `_heap_off` symbols, loads kind word,
+///   and masks to low byte.
+///
+/// ## ABI constraints
+/// - Caller-saved registers used for transient heap address calculations.
+/// - Result returned in the standard integer register (`x0` / `eax`).
+pub fn emit_heap_kind(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
+        emitter.blank();
+        emitter.comment("--- runtime: heap_kind ---");
+        emitter.label_global("__rt_heap_kind");
+
+        emitter.instruction("test rax, rax");                                   // null pointers have no heap kind
+        emitter.instruction("jz __rt_heap_kind_zero");                          // return heap kind 0 for null pointers
+        crate::abi::emit_symbol_address(emitter, "rcx", "_heap_buf");
+        emitter.instruction("cmp rax, rcx");                                    // reject values below the managed x86_64 heap before probing metadata
+        emitter.instruction("jb __rt_heap_kind_zero");                          // scalar integers and static data below the heap report kind 0
+        crate::abi::emit_symbol_address(emitter, "rdx", "_heap_off");
+        emitter.instruction("mov rdx, QWORD PTR [rdx]");                        // load the current x86_64 heap bump extent
+        emitter.instruction("add rdx, rcx");                                    // compute the managed heap end address
+        emitter.instruction("cmp rax, rdx");                                    // is the candidate pointer outside the live heap window?
+        emitter.instruction("jae __rt_heap_kind_zero");                         // non-heap values above the managed heap report kind 0
+        emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                    // load the stamped x86_64 heap kind word from the uniform header
+        emitter.instruction("mov rdx, rcx");                                    // preserve the low-byte heap kind before validating the ownership marker
+        emitter.instruction("shr rcx, 32");                                     // isolate the high-word heap marker from the packed heap metadata
+        emitter.instruction(&format!("cmp ecx, 0x{:x}", crate::layout::X86_64_HEAP_MAGIC_HI32)); // verify that this pointer belongs to the elephc x86_64 heap runtime
+        emitter.instruction("jne __rt_heap_kind_zero");                         // foreign or freed pointers report heap kind 0
+        emitter.instruction("and edx, 0xff");                                   // isolate the low-byte uniform heap kind tag from the packed kind word
+        emitter.instruction("mov eax, edx");                                    // return the low-byte heap kind tag in the integer result register
+        emitter.instruction("ret");                                             // return the heap kind to the caller
+
+        emitter.label("__rt_heap_kind_zero");
+        emitter.instruction("xor eax, eax");                                    // report raw/non-heap kind 0
+        emitter.instruction("ret");                                             // return default kind 0
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: heap_kind ---");
+    emitter.label_global("__rt_heap_kind");
+
+    // -- reject null pointers up front --
+    emitter.instruction("cbz x0, __rt_heap_kind_zero");                         // null pointers have no heap kind
+
+    // -- heap range check: x0 >= _heap_buf --
+    crate::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    emitter.instruction("cmp x0, x9");                                          // is the pointer below the heap base?
+    emitter.instruction("b.lo __rt_heap_kind_zero");                            // non-heap pointers report kind 0
+
+    // -- heap range check: x0 < _heap_buf + _heap_off --
+    crate::abi::emit_symbol_address(emitter, "x10", "_heap_off");
+    emitter.instruction("ldr x10, [x10]");                                      // load the current bump offset
+    emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
+    emitter.instruction("cmp x0, x10");                                         // is the pointer at or beyond the heap end?
+    emitter.instruction("b.hs __rt_heap_kind_zero");                            // non-heap pointers report kind 0
+
+    // -- load the uniform kind tag from the heap header --
+    emitter.instruction("ldr x0, [x0, #-8]");                                   // load the full 64-bit heap kind word from the uniform header
+    emitter.instruction("and x0, x0, #0xff");                                   // mask away packed value_type bits and transient GC metadata
+    emitter.instruction("ret");                                                 // return the heap kind to the caller
+
+    emitter.label("__rt_heap_kind_zero");
+    emitter.instruction("mov x0, #0");                                          // report raw/non-heap kind 0
+    emitter.instruction("ret");                                                 // return default kind 0
+}
+
+/// Lower bound of a managed-arena range check.
+pub enum HeapStart {
+    /// Includes the start of the arena, for preserving a legacy range-only probe.
+    Arena,
+    /// Starts after the first physical header, before code that reads one.
+    Payload,
+}
+
+/// Branches if the result register falls outside the current managed range.
+///
+/// This is a range probe only. It does not validate a live allocation or read its header.
+pub fn emit_branch_outside_heap(
+    emitter: &mut (impl crate::AssemblyEmitter + crate::TargetAbi), start: HeapStart, outside: &str,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            crate::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+            let base = if matches!(start, HeapStart::Payload) {
+                emitter.instruction("add x10, x9, #16");                        // skip the first physical header
+                "x10"
+            } else {
+                "x9"
+            };
+            emitter.instruction(&format!("cmp x0, {base}"));                    // is the result below the selected lower bound?
+            emitter.instruction(&format!("b.lo {outside}"));                    // leave the non-managed path without reading a header
+            crate::abi::emit_symbol_address(emitter, "x10", "_heap_off");
+            emitter.instruction("ldr x10, [x10]");                              // read the current bump extent
+            emitter.instruction("add x10, x9, x10");                            // derive the exclusive heap end
+            emitter.instruction("cmp x0, x10");                                 // is the candidate at or above that end?
+            emitter.instruction(&format!("b.hs {outside}"));                    // reject addresses outside initialized heap storage
+        }
+        Arch::X86_64 => {
+            crate::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
+            let base = if matches!(start, HeapStart::Payload) {
+                emitter.instruction("lea r11, [r10 + 16]");                     // skip the first physical header
+                "r11"
+            } else {
+                "r10"
+            };
+            emitter.instruction(&format!("cmp rax, {base}"));                   // is the result below the selected lower bound?
+            emitter.instruction(&format!("jb {outside}"));                      // leave the non-managed path without reading a header
+            crate::abi::emit_symbol_address(emitter, "r11", "_heap_off");
+            emitter.instruction("mov r11, QWORD PTR [r11]");                    // read the current bump extent
+            emitter.instruction("add r11, r10");                                // derive the exclusive heap end
+            emitter.instruction("cmp rax, r11");                                // is the candidate at or above that end?
+            emitter.instruction(&format!("jae {outside}"));                     // reject addresses outside initialized heap storage
+        }
+    }
+}

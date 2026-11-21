@@ -44,6 +44,8 @@ mod tagged_args;
 pub(crate) use string_return::function_returns_owned_string;
 pub(super) use string_return::method_returns_owned_string;
 
+use elephc_memoir::values::throwable_storage;
+use elephc_memoir::{FrameOffset, strings::concat_cursor::SavedConcatCursor};
 use public_args::InvokerParamShape;
 
 use argument_owners::InvokerArgumentOwners;
@@ -387,16 +389,7 @@ fn emit_invoker_exception_boundary_push(
     emitter.comment("push eval callable exception boundary");
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
-            abi::store_at_offset(emitter, "x10", handler_base);
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
-            abi::store_at_offset(emitter, "x10", handler_base - 8);
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-            abi::store_at_offset(
-                emitter,
-                "x10",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-            );
+            elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "x10", handler_base);
             emitter.instruction(&format!("sub x10, x29, #{}", handler_base));   // compute the boundary handler record address
             abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
             emitter.instruction(&format!(                                       // pass the boundary jmp_buf to setjmp
@@ -407,19 +400,7 @@ fn emit_invoker_exception_boundary_push(
             emitter.instruction(&format!("cbnz x0, {}", escape_label));         // non-zero setjmp result means a callable Throwable escaped
         }
         Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-            emitter.instruction(                                                // save the previous native exception-handler head
-                &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
-            );
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-            emitter.instruction(                                                // preserve the caller activation frame across callable unwinding
-                &format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)
-            );
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-            emitter.instruction(&format!(                                       // save diagnostic suppression depth for restoration
-                "mov QWORD PTR [rbp - {}], r10",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            ));
+            elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", handler_base);
             emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base)); // compute the boundary handler record address
             abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
             emitter.instruction(&format!(                                       // pass the boundary jmp_buf to setjmp
@@ -3159,7 +3140,8 @@ fn call_target_with_pushed_args(
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(emitter.target, &abi_arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
-    save_concat_offset_before_nested_call(emitter);
+    let scratch = abi::temp_int_reg(emitter.target);
+    invoker_concat_slot(emitter.target.arch).emit_save(emitter, scratch);
     emit_restore_invoker_php_frame_head(emitter);
     abi::emit_call_reg(emitter, call_reg);
     emit_restore_invoker_php_frame_head(emitter);
@@ -3185,13 +3167,11 @@ fn emit_restore_invoker_php_frame_head(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
 }
 
-/// Saves the current concat offset before the nested callable target runs.
-fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
-    let scratch = abi::temp_int_reg(emitter.target);
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_concat_off", 0);
-    match emitter.target.arch {
-        Arch::AArch64 => abi::emit_push_reg(emitter, scratch),
-        Arch::X86_64 => abi::store_at_offset(emitter, scratch, INVOKER_CONCAT_OFFSET),
+/// Selects the target-specific spill for the concat cursor across a callable invocation.
+fn invoker_concat_slot(arch: Arch) -> SavedConcatCursor {
+    match arch {
+        Arch::AArch64 => SavedConcatCursor::Pushed,
+        Arch::X86_64 => SavedConcatCursor::Frame(FrameOffset::new(INVOKER_CONCAT_OFFSET)),
     }
 }
 
@@ -3210,11 +3190,7 @@ fn restore_concat_offset_after_nested_call(
         }
     }
     let scratch = abi::temp_int_reg(emitter.target);
-    match emitter.target.arch {
-        Arch::AArch64 => abi::emit_pop_reg(emitter, scratch),
-        Arch::X86_64 => abi::load_at_offset(emitter, scratch, INVOKER_CONCAT_OFFSET),
-    }
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_concat_off", 0);
+    invoker_concat_slot(emitter.target.arch).emit_restore(emitter, scratch);
 }
 
 /// Returns whether this callee's variadic collector may receive a NAMED tail entry.
@@ -3700,35 +3676,19 @@ fn emit_invoker_throwable(
     let (message_label, message_len) = data.add_string(message.as_bytes());
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, #56");                                 // request the compact Throwable payload
-            emitter.instruction("bl __rt_heap_alloc");                          // allocate the catchable builtin throwable
-            emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
-            emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation before acquiring its PHP handle
-            emitter.instruction("bl __rt_object_handle_acquire");               // assign the object its runtime handle
+            throwable_storage::emit_allocate(emitter);
             abi::emit_load_symbol_to_reg(emitter, "x9", class_id_symbol, 0);
             emitter.instruction("str x9, [x0]");                                // identify the requested builtin throwable class
             abi::emit_symbol_address(emitter, "x9", &message_label);
-            emitter.instruction("str x9, [x0, #8]");                            // store the immutable diagnostic bytes
+            abi::emit_store_to_address(emitter, "x9", "x0", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_int_immediate(emitter, "x9", message_len as i64);
-            emitter.instruction("str x9, [x0, #16]");                           // store the diagnostic byte length
-            emitter.instruction("str xzr, [x0, #24]");                          // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
-                emitter, "x0",
-            );
-            emitter.instruction("str xzr, [x0, #40]");                          // previous exception defaults to null
+            abi::emit_store_to_address(emitter, "x9", "x0", throwable_storage::MESSAGE_LENGTH);
+            throwable_storage::emit_default_fields(emitter, "x0");
             abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);
             emitter.instruction("b __rt_throw_current");                        // release argument guards and enter PHP exception handling
         }
         Arch::X86_64 => {
-            emitter.instruction("mov eax, 56");                                 // request the compact Throwable payload
-            emitter.instruction("call __rt_heap_alloc");                        // allocate the catchable builtin throwable
-            abi::emit_load_int_immediate(
-                emitter,
-                "r10",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(6) as i64,
-            );
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the canonical throwable heap kind
-            emitter.instruction("call __rt_object_handle_acquire");             // assign the object its runtime handle
+            throwable_storage::emit_allocate_cold(emitter, "eax");
             abi::emit_load_symbol_to_reg(
                 emitter,
                 "r10",
@@ -3737,14 +3697,10 @@ fn emit_invoker_throwable(
             );
             emitter.instruction("mov QWORD PTR [rax], r10");                    // identify the requested builtin throwable class
             abi::emit_symbol_address(emitter, "r10", &message_label);
-            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // store the immutable diagnostic bytes
+            abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_POINTER);
             abi::emit_load_int_immediate(emitter, "r10", message_len as i64);
-            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // store the diagnostic byte length
-            emitter.instruction("mov QWORD PTR [rax + 24], 0");                 // exception code defaults to zero
-            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(
-                emitter, "rax",
-            );
-            emitter.instruction("mov QWORD PTR [rax + 40], 0");                 // previous exception defaults to null
+            abi::emit_store_to_address(emitter, "r10", "rax", throwable_storage::MESSAGE_LENGTH);
+            throwable_storage::emit_default_fields(emitter, "rax");
             abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);
             emitter.instruction("jmp __rt_throw_current");                      // release argument guards and enter PHP exception handling
         }

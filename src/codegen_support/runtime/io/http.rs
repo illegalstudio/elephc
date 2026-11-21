@@ -16,10 +16,12 @@
 //! - Reuses `__rt_stream_socket_client` to connect and `__rt_tmpfile` to back
 //!   the returned descriptor.
 
+use elephc_memoir::buffers::io_scratch;
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Capacity of the `_http_resp_buf` response buffer, in bytes.
-const HTTP_RESP_BUF_SIZE: i64 = 1048576;
+const HTTP_RESP_BUF_SIZE: i64 = io_scratch::HTTP_RESPONSE.bytes as i64;
 
 /// Emits the `__rt_http_open` runtime helper.
 /// Input:  AArch64 x0/x1 = TCP address, x2/x3 = HTTP request text.
@@ -103,7 +105,7 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #24]");                                  // accumulated response length = 0
     emitter.label("__rt_http_open_read");
     emitter.instruction("ldr x0, [sp, #0]");                                    // socket descriptor for the read
-    abi::emit_symbol_address(emitter, "x1", "_http_resp_buf");
+    io_scratch::HTTP_RESPONSE.emit_address(emitter, "x1");
     emitter.instruction("ldr x9, [sp, #24]");                                   // response bytes already buffered
     emitter.instruction("add x1, x1, x9");                                      // read into the buffer past the buffered bytes
     emitter.instruction(&format!("mov x2, #{}", HTTP_RESP_BUF_SIZE));           // response buffer capacity
@@ -126,7 +128,7 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.instruction("ldr x5, [sp, #24]");                                   // response length
     emitter.instruction("cmp x5, #12");                                         // need at least 12 bytes
     emitter.instruction("b.lt __rt_http_open_status_ok_aarch64");               // branch when comparison is below target
-    abi::emit_symbol_address(emitter, "x4", "_http_resp_buf");
+    io_scratch::HTTP_RESPONSE.emit_address(emitter, "x4");
     emitter.instruction("ldrb w6, [x4, #9]");                                   // status hundreds
     emitter.instruction("sub w6, w6, #48");                                     // reduce runtime pointer or counter
     emitter.instruction("ldrb w7, [x4, #10]");                                  // tens
@@ -194,7 +196,7 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.label("__rt_http_open_loc_copy_aarch64");
     // Copy bytes[x12..] until '\r' or '\n' into _http_redirect_path_buf,
     // capped at 2047 bytes.
-    abi::emit_symbol_address(emitter, "x15", "_http_redirect_path_buf");
+    io_scratch::HTTP_REDIRECT.emit_address(emitter, "x15");
     emitter.instruction("mov x16, #0");                                         // write index
     emitter.label("__rt_http_open_loc_copy_loop_aarch64");
     emitter.instruction("cmp x12, x5");                                         // compare runtime values for the next branch
@@ -331,11 +333,11 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x9]");                                        // load runtime value
     abi::emit_symbol_address(emitter, "x9", "_http_active_host_len");
     emitter.instruction("ldr x1, [x9]");                                        // load runtime value
-    abi::emit_symbol_address(emitter, "x2", "_http_redirect_path_buf");
+    io_scratch::HTTP_REDIRECT.emit_address(emitter, "x2");
     abi::emit_symbol_address(emitter, "x9", "_http_redirect_path_len");
     emitter.instruction("ldr x3, [x9]");                                        // load runtime value
     emitter.instruction("bl __rt_http_build_request");                          // returns new req_len in x0
-    abi::emit_symbol_address(emitter, "x9", "_http_req_scratch");
+    io_scratch::HTTP_REQUEST.emit_address(emitter, "x9");
     emitter.instruction("str x9, [sp, #8]");                                    // request_ptr = _http_req_scratch
     emitter.instruction("str x0, [sp, #16]");                                   // request_len = new length
     emitter.instruction("b __rt_http_open_loop_top_aarch64");                   // loop back: reconnect, send, read
@@ -354,7 +356,7 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.label("__rt_http_open_status_ok_aarch64");
 
     // -- scan for the CRLFCRLF that separates headers from the body --
-    abi::emit_symbol_address(emitter, "x4", "_http_resp_buf");
+    io_scratch::HTTP_RESPONSE.emit_address(emitter, "x4");
     emitter.instruction("ldr x5, [sp, #24]");                                   // response length
     emitter.instruction("str xzr, [sp, #32]");                                  // body start = 0 when no separator is found
     emitter.instruction("mov x6, #0");                                          // response scan index
@@ -392,7 +394,7 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #40]");                                   // save the temp-file descriptor
 
     // -- write(temp, body, body length) --
-    abi::emit_symbol_address(emitter, "x1", "_http_resp_buf");
+    io_scratch::HTTP_RESPONSE.emit_address(emitter, "x1");
     emitter.instruction("ldr x9, [sp, #32]");                                   // body start offset
     emitter.instruction("add x1, x1, x9");                                      // body pointer = buffer + body start
     emitter.instruction("ldr x10, [sp, #24]");                                  // response length
@@ -516,7 +518,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // accumulated response length = 0
     emitter.label("__rt_http_open_read_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // socket descriptor for the read
-    abi::emit_symbol_address(emitter, "rsi", "_http_resp_buf");                 // response buffer base
+    io_scratch::HTTP_RESPONSE.emit_address(emitter, "rsi");                 // response buffer base
     emitter.instruction("add rsi, QWORD PTR [rbp - 32]");                       // read past the bytes already buffered
     emitter.instruction(&format!("mov rdx, {}", HTTP_RESP_BUF_SIZE));           // response buffer capacity
     emitter.instruction("sub rdx, QWORD PTR [rbp - 32]");                       // remaining buffer capacity
@@ -539,7 +541,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // response length
     emitter.instruction("cmp r10, 12");                                         // compare runtime values for the next branch
     emitter.instruction("jl __rt_http_open_status_ok_x");                       // branch when comparison is below target
-    abi::emit_symbol_address(emitter, "r8", "_http_resp_buf");                  // load runtime data address
+    io_scratch::HTTP_RESPONSE.emit_address(emitter, "r8");                  // load runtime data address
     emitter.instruction("movzx eax, BYTE PTR [r8 + 9]");                        // hundreds
     emitter.instruction("sub eax, 48");                                         // reduce runtime pointer or counter
     emitter.instruction("movzx r9d, BYTE PTR [r8 + 10]");                       // tens
@@ -598,7 +600,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc rcx");                                             // advance runtime pointer or counter
     emitter.instruction("jmp __rt_http_open_loc_skip_ws_x");                    // continue at target label
     emitter.label("__rt_http_open_loc_copy_x");
-    abi::emit_symbol_address(emitter, "r12", "_http_redirect_path_buf");        // load runtime data address
+    io_scratch::HTTP_REDIRECT.emit_address(emitter, "r12");        // load runtime data address
     emitter.instruction("xor r13, r13");                                        // write index
     emitter.label("__rt_http_open_loc_copy_loop_x");
     emitter.instruction("cmp rcx, r10");                                        // compare runtime values for the next branch
@@ -722,10 +724,10 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     // Rebuild request: __rt_http_build_request(host, host_len, redirect_buf, redirect_len).
     abi::emit_load_symbol_to_reg(emitter, "rdi", "_http_active_host_ptr", 0);   // prepare SysV call argument
     abi::emit_load_symbol_to_reg(emitter, "rsi", "_http_active_host_len", 0);   // prepare SysV call argument
-    abi::emit_symbol_address(emitter, "rdx", "_http_redirect_path_buf");        // load runtime data address
+    io_scratch::HTTP_REDIRECT.emit_address(emitter, "rdx");        // load runtime data address
     abi::emit_load_symbol_to_reg(emitter, "rcx", "_http_redirect_path_len", 0); // prepare SysV call argument
     emitter.instruction("call __rt_http_build_request");                        // returns new req len in rax
-    abi::emit_symbol_address(emitter, "r9", "_http_req_scratch");               // load runtime data address
+    io_scratch::HTTP_REQUEST.emit_address(emitter, "r9");               // load runtime data address
     emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // store runtime value
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // store runtime value
     emitter.instruction("jmp __rt_http_open_loop_top_x");                       // continue at target label
@@ -744,7 +746,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_http_open_status_ok_x");
 
     // -- scan for the CRLFCRLF that separates headers from the body --
-    abi::emit_symbol_address(emitter, "r8", "_http_resp_buf");                  // response buffer base
+    io_scratch::HTTP_RESPONSE.emit_address(emitter, "r8");                  // response buffer base
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // response length
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // body start = 0 when no separator is found
     emitter.instruction("xor rcx, rcx");                                        // response scan index
@@ -783,7 +785,7 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
 
     // -- write(temp, body, body length) --
     emitter.instruction("mov rdi, rax");                                        // temp-file descriptor for the write
-    abi::emit_symbol_address(emitter, "rsi", "_http_resp_buf");                 // response buffer base
+    io_scratch::HTTP_RESPONSE.emit_address(emitter, "rsi");                 // response buffer base
     emitter.instruction("add rsi, QWORD PTR [rbp - 40]");                       // body pointer = buffer + body start
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // response length
     emitter.instruction("sub rdx, QWORD PTR [rbp - 40]");                       // body length = response length - body start

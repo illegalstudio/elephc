@@ -56,13 +56,7 @@ pub fn emit_array_column_mixed(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x9");                                          // result capacity matches the outer row count
     emitter.instruction("mov x1, #8");                                          // boxed Mixed slots store one pointer each
     emitter.instruction("bl __rt_array_new");                                   // allocate the result indexed array
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the result array metadata word
-    emitter.instruction("mov x10, #0x80ff");                                    // preserve indexed-array kind and persistent COW metadata
-    emitter.instruction("and x9, x9, x10");                                     // clear the stale value-type byte
-    emitter.instruction("mov x10, #7");                                         // runtime value_type 7 = boxed Mixed
-    emitter.instruction("lsl x10, x10, #8");                                    // move the Mixed tag into the packed metadata byte
-    emitter.instruction("orr x9, x9, x10");                                     // combine stable metadata with the Mixed value type
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the result array as Mixed-valued
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, elephc_memoir::ValueTag::new(7));
     emitter.instruction("str x0, [sp, #32]");                                   // save result array pointer across hash lookups
 
     // -- iterate outer array --
@@ -133,11 +127,7 @@ fn emit_array_column_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, r10");                                        // pass result capacity equal to the outer row count
     emitter.instruction("mov rsi, 8");                                          // boxed Mixed slots store one pointer each
     emitter.instruction("call __rt_array_new");                                 // allocate the result indexed array
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load result array metadata word
-    emitter.instruction("mov r11, 0xffffffff000080ff");                         // materialize the x86_64 result-array metadata preservation mask
-    emitter.instruction("and r10, r11");                                        // preserve heap marker, indexed-array kind, and persistent COW metadata
-    emitter.instruction("or r10, 0x700");                                       // stamp runtime value_type 7 = boxed Mixed
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // persist the Mixed-valued result array metadata
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, elephc_memoir::ValueTag::new(7));
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save result array pointer across hash lookups
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // initialize outer loop index to zero
 

@@ -13,6 +13,7 @@
 //! - Raw callable descriptors require their own release entry, not the heap-kind dispatcher.
 
 use super::{abi, Emitter, PhpType};
+use elephc_memoir::{cleanup_preserve, frame_owners, FrameOffset};
 
 /// Frame-relative slots for the caller-owned argument cells and an in-flight boxed return.
 pub(super) struct InvokerArgumentOwners {
@@ -122,27 +123,19 @@ impl InvokerArgumentOwners {
 
     /// Finishes all owners after exception escape, accumulating further destructor throws.
     pub(super) fn release_all(&self, emitter: &mut Emitter) {
-        let result = abi::int_result_reg(emitter);
-        let pending = self.offset(self.count + 1);
-        abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
-        abi::store_at_offset(emitter, result, pending);
-        abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+        let pending = FrameOffset::new(self.offset(self.count + 1));
+        cleanup_preserve::emit_take_exception(emitter, pending);
         for index in 0..=self.count {
-            abi::load_at_offset(emitter, result, self.offset(index));
-            self.clear_slot(index, emitter);
-            crate::codegen_support::runtime::emit_guarded_cleanup_call(
-                emitter, self.release_entry(index), result, pending,
+            frame_owners::emit_guarded_release(
+                emitter, FrameOffset::new(self.offset(index)), self.release_entry(index), pending,
             );
         }
-        abi::load_at_offset(emitter, result, pending);
-        abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
+        cleanup_preserve::emit_restore_exception(emitter, pending);
     }
 
     /// Clears one owner before its release so reentrant cleanup cannot consume it twice.
     fn release_slot(&self, index: usize, emitter: &mut Emitter) {
-        abi::load_at_offset(emitter, abi::int_result_reg(emitter), self.offset(index));
-        self.clear_slot(index, emitter);
-        abi::emit_call_label(emitter, self.release_entry(index));
+        frame_owners::emit_release(emitter, FrameOffset::new(self.offset(index)), self.release_entry(index));
     }
 
     /// Selects descriptor cleanup only for raw callable arguments, never boxed returns or ref cells.
@@ -156,9 +149,7 @@ impl InvokerArgumentOwners {
 
     /// Writes an empty cleanup marker while preserving the current result register.
     fn clear_slot(&self, index: usize, emitter: &mut Emitter) {
-        let zero = abi::secondary_scratch_reg(emitter);
-        abi::emit_load_int_immediate(emitter, zero, 0);
-        abi::store_at_offset(emitter, zero, self.offset(index));
+        frame_owners::emit_clear(emitter, FrameOffset::new(self.offset(index)));
     }
 }
 

@@ -8,6 +8,8 @@
 //! - Indexed and associative arrays share PHP weak integer coercion, warnings, and deprecations.
 //! - Fresh normalization arrays are released on success, OS failure, and catchable validation errors.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen::context::FunctionContext;
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, CodegenIrError, Result};
@@ -122,7 +124,7 @@ fn emit_load_indexed_signal_value(
             ctx.emitter.instruction(&format!("b.ge {done}"));                   // finish the normalized array
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x11", NORMALIZE_SOURCE_OFFSET);
             ctx.emitter.instruction(&format!("add x11, x11, x10, lsl #{}", if wide { 4 } else { 3 })); // select the source slot
-            ctx.emitter.instruction("add x11, x11, #24");                       // skip the indexed-array header
+            packed_slots::emit_packed_payload_aarch64(ctx.emitter, "x11", "x11");
             ctx.emitter.instruction("ldr x3, [x11]");                           // load the source payload low word
             if wide {
                 ctx.emitter.instruction("ldr x4, [x11, #8]");                   // load the source payload high word

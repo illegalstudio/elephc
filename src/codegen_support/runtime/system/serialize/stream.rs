@@ -21,6 +21,9 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+/// Slot carrying the native descriptor for the active serializer output.
+pub(super) const ACTIVE_STREAM: &str = "_ser_stream";
+
 /// Emits `__rt_ser_reserve`, `__rt_ser_tell`, and `__rt_ser_seek`.
 ///
 /// - `__rt_ser_reserve`: `x1`/`rsi` = bytes about to be written. Returns the descriptor in
@@ -33,12 +36,12 @@ pub(super) fn emit_serialize_stream(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.label_global("__rt_ser_reserve");
-            abi::emit_symbol_address(emitter, "x9", "_ser_stream");
+            abi::emit_symbol_address(emitter, "x9", ACTIVE_STREAM);
             emitter.instruction("ldr x0, [x9]");                                // active stream descriptor
             emitter.instruction("b __rt_strbuf_ensure");                        // grow it when x1 more bytes would not fit
 
             emitter.label_global("__rt_ser_tell");
-            abi::emit_symbol_address(emitter, "x9", "_ser_stream");
+            abi::emit_symbol_address(emitter, "x9", ACTIVE_STREAM);
             emitter.instruction("ldr x9, [x9]");                                // active stream descriptor
             emitter.instruction("ldr x10, [x9, #8]");                           // stream cursor
             emitter.instruction("ldr x9, [x9]");                                // stream start
@@ -46,7 +49,7 @@ pub(super) fn emit_serialize_stream(emitter: &mut Emitter) {
             emitter.instruction("ret");                                         // return the stream offset
 
             emitter.label_global("__rt_ser_seek");
-            abi::emit_symbol_address(emitter, "x9", "_ser_stream");
+            abi::emit_symbol_address(emitter, "x9", ACTIVE_STREAM);
             emitter.instruction("ldr x9, [x9]");                                // active stream descriptor
             emitter.instruction("ldr x10, [x9]");                               // stream start
             emitter.instruction("add x10, x10, x0");                            // cursor at the requested offset
@@ -55,17 +58,17 @@ pub(super) fn emit_serialize_stream(emitter: &mut Emitter) {
         }
         Arch::X86_64 => {
             emitter.label_global("__rt_ser_reserve");
-            abi::emit_load_symbol_to_reg(emitter, "rdi", "_ser_stream", 0);
+            abi::emit_load_symbol_to_reg(emitter, "rdi", ACTIVE_STREAM, 0);
             emitter.instruction("jmp __rt_strbuf_ensure");                      // grow it when rsi more bytes would not fit
 
             emitter.label_global("__rt_ser_tell");
-            abi::emit_load_symbol_to_reg(emitter, "r8", "_ser_stream", 0);
+            abi::emit_load_symbol_to_reg(emitter, "r8", ACTIVE_STREAM, 0);
             emitter.instruction("mov rax, QWORD PTR [r8 + 8]");                 // stream cursor
             emitter.instruction("sub rax, QWORD PTR [r8]");                     // bytes written so far
             emitter.instruction("ret");                                         // return the stream offset
 
             emitter.label_global("__rt_ser_seek");
-            abi::emit_load_symbol_to_reg(emitter, "r8", "_ser_stream", 0);
+            abi::emit_load_symbol_to_reg(emitter, "r8", ACTIVE_STREAM, 0);
             emitter.instruction("add rax, QWORD PTR [r8]");                     // cursor at the requested offset
             emitter.instruction("mov QWORD PTR [r8 + 8], rax");                 // truncate the stream back to it
             emitter.instruction("ret");                                         // return to the serializer

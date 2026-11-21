@@ -12,6 +12,8 @@
 //!   in front of it: like PHP, the count covers only the named properties that exist and are
 //!   initialized, which is only known once each name was looked up.
 
+use elephc_memoir::{FrameOffset, strings::scoped_stream::StreamScope};
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::data::{SLEEP_WARNING_PREFIX, SLEEP_WARNING_SUFFIX};
 
@@ -26,6 +28,11 @@ const VALUE_LO: usize = 56;
 const VALUE_TAG: usize = 64;
 const BODY_START: usize = 72;
 const WRITTEN: usize = 80;
+
+const OUTPUT_STREAM: StreamScope<'static> = StreamScope {
+    active: super::stream::ACTIVE_STREAM,
+    saved: FrameOffset::new(CONCAT),
+};
 
 /// Selects the target encoding for one shared serializer operation.
 fn ins(emitter: &mut Emitter, arm: &str, x86: &str) {
@@ -105,7 +112,7 @@ pub(super) fn emit_sleep_result(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, high, VALUE_HI);
     // A non-string name warns (a user error handler may run) and is converted (`__toString`
     // may run): park the stream and move `_concat_off` past a scratch-backed stream first.
-    emit_park_stream(emitter);
+    OUTPUT_STREAM.emit_save_and_sync(emitter);
     abi::load_at_offset(emitter, result, VALUE_TAG);
     branch_eq(emitter, 1, "__rt_sleep_name_convert");
     emit_names_warning(emitter);
@@ -117,8 +124,7 @@ pub(super) fn emit_sleep_result(emitter: &mut Emitter) {
     abi::emit_store_to_address(emitter, string, scratch, 8);
     abi::store_at_offset(emitter, string, VALUE_LO);
     abi::store_at_offset(emitter, length, VALUE_HI);
-    abi::load_at_offset(emitter, result, CONCAT);
-    abi::emit_store_reg_to_symbol(emitter, result, "_ser_stream", 0);
+    OUTPUT_STREAM.emit_restore(emitter);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), OBJECT);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), VALUE_LO);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 2), VALUE_HI);
@@ -145,26 +151,15 @@ pub(super) fn emit_sleep_result(emitter: &mut Emitter) {
     abi::emit_return(emitter);
 
     emitter.label("__rt_sleep_invalid_return");
-    emit_park_stream(emitter);
+    OUTPUT_STREAM.emit_save_and_sync(emitter);
     emit_names_warning(emitter);
-    abi::load_at_offset(emitter, result, CONCAT);
-    abi::emit_store_reg_to_symbol(emitter, result, "_ser_stream", 0);
+    OUTPUT_STREAM.emit_restore(emitter);
     abi::load_at_offset(emitter, result, CONTEXT);
     abi::emit_load_from_address(emitter, result, result, 0);
     abi::emit_call_label(emitter, "__rt_ser_seek");
     append(emitter, b"N;");
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_return(emitter);
-}
-
-/// Parks the active `_ser_stream` in the `CONCAT` slot and moves `_concat_off` past a
-/// scratch-backed stream, before code that can run a user hook (a warning handler, `__toString`).
-/// The caller reinstates the stream from the slot afterwards.
-fn emit_park_stream(emitter: &mut Emitter) {
-    let desc = abi::int_arg_reg_name(emitter.target, 0);
-    abi::emit_load_symbol_to_reg(emitter, desc, "_ser_stream", 0);
-    abi::store_at_offset(emitter, desc, CONCAT);
-    abi::emit_call_label(emitter, "__rt_strbuf_sync");
 }
 
 /// Formats a class-qualified warning without releasing any of the callback's borrowed operands.

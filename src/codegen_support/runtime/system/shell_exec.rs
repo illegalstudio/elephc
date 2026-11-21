@@ -8,6 +8,7 @@
 //! Key details:
 //! - The helper crosses libc process I/O and must copy command output into runtime-owned string storage.
 
+use elephc_memoir::strings::str_new_owned;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_shell_exec` runtime helper.
@@ -77,9 +78,7 @@ pub fn emit_shell_exec(emitter: &mut Emitter, web: bool) {
     emitter.instruction("mov x0, x9");                                          // current buffer pointer
     emitter.instruction("mov x1, x10");                                         // bytes to preserve
     emitter.instruction("lsl x2, x11, #1");                                     // double the capacity
-    emitter.instruction("bl __rt_concat_grow");                                 // move the output into a larger owned block
-    emitter.instruction("mov x9, #1");                                          // shell output is an owned call result, not a concat operand
-    emitter.instruction("str x9, [x0, #-8]");                                   // retag the grown block so persistence copies instead of adopting it
+    str_new_owned::emit_grow_owned_string(emitter, "r10");
     emitter.instruction("str x0, [sp, #8]");                                    // publish the grown buffer pointer
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the old capacity
     emitter.instruction("lsl x9, x9, #1");                                      // double it in the tracking slot
@@ -155,9 +154,7 @@ fn emit_shell_exec_linux_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // bytes to preserve
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // current capacity
     emitter.instruction("shl rsi, 1");                                          // double the capacity
-    emitter.instruction("call __rt_concat_grow");                               // move the output into a larger owned block
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // retag the grown block so persistence copies instead of adopting it
+    str_new_owned::emit_grow_owned_string(emitter, "r10");
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // publish the grown buffer pointer
     emitter.instruction("shl QWORD PTR [rbp - 40], 1");                         // record the doubled capacity
     emitter.instruction("mov al, BYTE PTR [rbp - 48]");                         // restore the pending output byte

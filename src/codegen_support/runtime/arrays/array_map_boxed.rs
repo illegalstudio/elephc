@@ -185,8 +185,8 @@ fn read_aarch64_entry(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, "x9", CURSOR);
     emitter.instruction("mov x9, #-1");                                         // integer keys carry a negative high word
     abi::store_at_offset(emitter, "x9", KEY_HI);
-    emitter.instruction("ldr x0, [x11, #-8]");                                  // inspect the actual packed element representation
-    emitter.instruction("ubfx x0, x0, #8, #7");                                 // isolate the value tag from heap flags
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x0", "x11");
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x0", "x0");
     emitter.instruction("ldr x12, [x11, #16]");                                 // read the physical slot width
     emitter.instruction("madd x11, x10, x12, x11");                             // address the current element before its header offset
     emitter.instruction("ldr x1, [x11, #24]");                                  // borrow its low payload word
@@ -223,9 +223,8 @@ fn read_x86_64_entry(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, "r9", CURSOR);
     emitter.instruction("mov r9, -1");                                          // mark the preserved key as an integer
     abi::store_at_offset(emitter, "r9", KEY_HI);
-    emitter.instruction("mov rdx, QWORD PTR [r11 - 8]");                        // inspect the packed element metadata
-    emitter.instruction("shr rdx, 8");                                          // move the element tag to the low bits
-    emitter.instruction("and rdx, 127");                                        // discard heap flags outside the value tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "rdx", "r11");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "rdx", "rdx");
     emitter.instruction("mov rcx, QWORD PTR [r11 + 16]");                       // read the actual eight- or sixteen-byte stride
     emitter.instruction("imul r10, rcx");                                       // convert the logical index to a payload offset
     emitter.instruction("add r11, r10");                                        // locate the current packed entry
@@ -344,15 +343,9 @@ fn insert_mapped_value(emitter: &mut Emitter) {
 /// Saves the caller's state and installs a local handler while all map-owned slots remain reachable.
 fn install_boundary(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_value", PREVIOUS),
-        ("_exc_handler_top", HANDLER),
-        ("_exc_call_frame_top", HANDLER - 8),
-        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
-        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
-        abi::store_at_offset(emitter, result, offset);
-    }
+    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
+    abi::store_at_offset(emitter, result, PREVIOUS);
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
@@ -375,16 +368,12 @@ fn restore_boundary(emitter: &mut Emitter) {
 
 /// Clears a helper-owned slot without destroying a loaded value or outgoing hash arguments.
 fn clear_slot(emitter: &mut Emitter, offset: usize) {
-    let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, scratch, 0);
-    abi::store_at_offset(emitter, scratch, offset);
+    elephc_memoir::frame_owners::emit_clear(emitter, elephc_memoir::FrameOffset::new(offset));
 }
 
 /// Releases an owner only after clearing its slot, making subsequent cleanup safe to resume.
 fn release_slot(emitter: &mut Emitter, offset: usize, helper: &str) {
-    abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
-    clear_slot(emitter, offset);
-    abi::emit_call_label(emitter, helper);
+    elephc_memoir::frame_owners::emit_release(emitter, elephc_memoir::FrameOffset::new(offset), helper);
 }
 
 /// Returns the previous-owner argument register of the shared raw-Throwable chain helper.

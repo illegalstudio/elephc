@@ -21,6 +21,8 @@
 //!   a builtin call (`x9`–`x13`, `d0`/`d1`; `rax`/`rcx`/`rdx`/`r10`/`r11`, `xmm0`/`xmm1`),
 //!   so no register-allocated value can be destroyed by the loop.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
@@ -31,7 +33,7 @@ use super::super::super::super::context::FunctionContext;
 use super::super::expect_operand;
 
 /// Byte offset of the first payload slot inside an indexed-array allocation.
-const ARRAY_DATA_OFFSET: i64 = 24;
+const ARRAY_DATA_OFFSET: i64 = packed_slots::PACKED_PAYLOAD_OFFSET as i64;
 
 /// Selects the runtime reduction that matches a container's element storage.
 #[derive(Clone, Copy)]

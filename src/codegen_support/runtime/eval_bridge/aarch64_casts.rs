@@ -123,7 +123,7 @@ pub(super) fn emit_aarch64_casts(emitter: &mut Emitter) {
 
     label_c_global(emitter, "__elephc_eval_value_from_raw_heap_word");
     emitter.instruction("cbz x0, __elephc_eval_value_from_raw_heap_word_miss"); // null raw heap words cannot be boxed
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap kind word for tag recovery
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind tag
     emitter.instruction("cmp x9, #2");                                          // heap kind 2 stores indexed-array payloads
     emitter.instruction("b.eq __elephc_eval_value_from_raw_heap_word_array");   // box indexed arrays with runtime tag 4

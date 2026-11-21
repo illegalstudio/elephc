@@ -8,6 +8,7 @@
 //! - The resource-usage input is the 17-word `ElephcPcntlRUsage` C ABI, not libc's
 //!   target-specific `rusage` layout.
 
+use elephc_memoir::callables::argument_storage;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -260,23 +261,11 @@ fn emit_pcntl_invoke_descriptor_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #8");                                          // argument array element type = refcounted Mixed
     emitter.instruction("bl __rt_array_new");                                   // allocate the callback argument array
     emitter.instruction("ldr x1, [sp, #24]");                                   // append the boxed signal
-    emitter.instruction("bl __rt_array_push_refcounted");                       // retain signal in the argument array
-    emitter.instruction("str x0, [sp, #32]");                                   // preserve the possibly relocated array
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the local boxed-signal owner
-    emitter.instruction("bl __rt_decref_any");                                  // leave the array as its sole owner
+    argument_storage::emit_append_owned_cell(emitter, 32, 24);
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the callback argument array
     emitter.instruction("ldr x1, [sp, #40]");                                   // append the boxed siginfo value
-    emitter.instruction("bl __rt_array_push_refcounted");                       // retain siginfo in the argument array
-    emitter.instruction("str x0, [sp, #32]");                                   // preserve the possibly relocated array
-    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the local boxed-siginfo owner
-    emitter.instruction("bl __rt_decref_any");                                  // leave the array as its sole owner
-    emitter.instruction("ldr x1, [sp, #32]");                                   // Mixed payload = callback argument array
-    emitter.instruction("mov x2, #0");                                          // clear the unused high payload word
-    emitter.instruction("mov x0, #4");                                          // Mixed source tag = indexed array
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the callback argument array
-    emitter.instruction("str x0, [sp, #48]");                                   // preserve the boxed argument owner
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the raw argument array owner
-    emitter.instruction("bl __rt_decref_any");                                  // transfer ownership to its Mixed box
+    argument_storage::emit_append_owned_cell(emitter, 32, 40);
+    argument_storage::emit_box_arguments(emitter, 32, 48);
     emitter.instruction("add x11, sp, #48");                                    // address the boxed arguments before reserving their unwind record
     abi::emit_push_call_operand_owner(emitter, "x11", false);
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload the descriptor above the 48-byte unwind record
@@ -328,23 +317,11 @@ fn emit_pcntl_invoke_descriptor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_new");                                 // allocate the callback argument array
     emitter.instruction("mov rdi, rax");                                        // mutation arg0 = argument array
     emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // mutation arg1 = boxed signal
-    emitter.instruction("call __rt_array_push_refcounted");                     // retain signal in the argument array
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the possibly relocated array
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the local boxed-signal owner
-    emitter.instruction("call __rt_decref_any");                                // leave the array as its sole owner
+    argument_storage::emit_append_owned_cell(emitter, 40, 32);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the callback argument array
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // mutation arg1 = boxed siginfo
-    emitter.instruction("call __rt_array_push_refcounted");                     // retain siginfo in the argument array
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the possibly relocated array
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the local boxed-siginfo owner
-    emitter.instruction("call __rt_decref_any");                                // leave the array as its sole owner
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // Mixed payload = callback argument array
-    emitter.instruction("xor esi, esi");                                        // clear the unused high payload word
-    emitter.instruction("mov eax, 4");                                          // Mixed source tag = indexed array
-    emitter.instruction("call __rt_mixed_from_value");                          // box the callback argument array
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the boxed argument owner
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the raw argument array owner
-    emitter.instruction("call __rt_decref_any");                                // transfer ownership to its Mixed box
+    argument_storage::emit_append_owned_cell(emitter, 40, 48);
+    argument_storage::emit_box_arguments(emitter, 40, 56);
     emitter.instruction("lea r11, [rbp - 56]");                                 // address the boxed callback argument owner
     abi::emit_push_call_operand_owner(emitter, "r11", false);
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the callable descriptor
@@ -747,22 +724,22 @@ fn emit_pcntl_release_handlers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x11, #2");                                         // detect an owned callable descriptor
     emitter.instruction("b.ne __rt_pcntl_release_handlers_zero");               // skip release for SIG_IGN
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_descriptor");
-    emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // load the descriptor owned by the table
+    elephc_memoir::guarded_owners::emit_load_indexed_owner(emitter, "x10", "x9", "x0");
     emitter.instruction("bl __rt_callable_descriptor_release");                 // release the handler-table ownership
     emitter.instruction("ldr x9, [sp, #96]");                                   // reload the table index after release
     emitter.label("__rt_pcntl_release_handlers_zero");
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_value");
-    emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // load the preserved PHP handler value
+    elephc_memoir::guarded_owners::emit_load_indexed_owner(emitter, "x10", "x9", "x0");
     emitter.instruction("cbz x0, __rt_pcntl_release_handlers_clear");           // untouched signals own no boxed value
     emitter.instruction("bl __rt_decref_any");                                  // release the table's PHP-value ownership
     emitter.instruction("ldr x9, [sp, #96]");                                   // reload the table index after value release
     emitter.label("__rt_pcntl_release_handlers_clear");
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_kind");
-    emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the handler-kind entry
+    elephc_memoir::guarded_owners::emit_clear_indexed_owner(emitter, "x10", "x9");
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_descriptor");
-    emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the descriptor entry
+    elephc_memoir::guarded_owners::emit_clear_indexed_owner(emitter, "x10", "x9");
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_value");
-    emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the PHP handler-value entry
+    elephc_memoir::guarded_owners::emit_clear_indexed_owner(emitter, "x10", "x9");
     emitter.label("__rt_pcntl_release_handlers_next");
     emitter.instruction("ldr x9, [sp, #96]");                                   // reload the completed table index
     emitter.instruction("add x9, x9, #1");                                      // advance to the next signal
@@ -819,23 +796,23 @@ fn emit_pcntl_release_handlers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [r10 + r9*8], 2");                       // detect an owned callable descriptor
     emitter.instruction("jne __rt_pcntl_release_handlers_zero_x86");            // skip release for SIG_IGN
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_descriptor");
-    emitter.instruction("mov rax, QWORD PTR [r10 + r9*8]");                     // load the descriptor owned by the table
+    elephc_memoir::guarded_owners::emit_load_indexed_owner(emitter, "r10", "r9", "rax");
     emitter.instruction("call __rt_callable_descriptor_release");               // release the handler-table ownership
     emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the table index after release
     emitter.label("__rt_pcntl_release_handlers_zero_x86");
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_value");
-    emitter.instruction("mov rax, QWORD PTR [r10 + r9*8]");                     // load the preserved PHP handler value
+    elephc_memoir::guarded_owners::emit_load_indexed_owner(emitter, "r10", "r9", "rax");
     emitter.instruction("test rax, rax");                                       // untouched signals own no boxed value
     emitter.instruction("jz __rt_pcntl_release_handlers_clear_x86");            // skip release for an empty value slot
     emitter.instruction("call __rt_decref_any");                                // release the table's PHP-value ownership
     emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the table index after value release
     emitter.label("__rt_pcntl_release_handlers_clear_x86");
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_kind");
-    emitter.instruction("mov QWORD PTR [r10 + r9*8], 0");                       // clear the handler-kind entry
+    elephc_memoir::guarded_owners::emit_clear_indexed_owner(emitter, "r10", "r9");
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_descriptor");
-    emitter.instruction("mov QWORD PTR [r10 + r9*8], 0");                       // clear the descriptor entry
+    elephc_memoir::guarded_owners::emit_clear_indexed_owner(emitter, "r10", "r9");
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_value");
-    emitter.instruction("mov QWORD PTR [r10 + r9*8], 0");                       // clear the PHP handler-value entry
+    elephc_memoir::guarded_owners::emit_clear_indexed_owner(emitter, "r10", "r9");
     emitter.label("__rt_pcntl_release_handlers_next_x86");
     emitter.instruction("add QWORD PTR [rbp - 104], 1");                        // advance and preserve the next signal index
     emitter.instruction("jmp __rt_pcntl_release_handlers_loop_x86");            // continue scanning registered handlers

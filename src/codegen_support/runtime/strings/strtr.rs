@@ -373,14 +373,7 @@ fn emit_strtr_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #56]");                                   // the replaced result starts at the reservation
     emitter.instruction("ldr x12, [sp, #48]");                                  // reload the final destination cursor
     emitter.instruction("sub x2, x12, x1");                                     // the written byte count is the result length
-    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
-    emitter.instruction("bl __rt_str_persist");                                 // hand back owned heap storage, matching the Fresh ownership contract
-    emitter.instruction("str x1, [sp, #72]");                                   // save the owned result pointer across the reservation release
-    emitter.instruction("str x2, [sp, #80]");                                   // save the owned result length across the reservation release
-    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the superseded reservation
-    emitter.instruction("bl __rt_heap_free_safe");                              // release a heap-backed reservation; concat-scratch pointers are skipped
-    emitter.instruction("ldr x1, [sp, #72]");                                   // restore the owned result pointer
-    emitter.instruction("ldr x2, [sp, #80]");                                   // restore the owned result length
+    elephc_memoir::strings::concat_scratch::emit_finish_owned(emitter, 56, 72);
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore the frame pointer and return address
     emitter.instruction("add sp, sp, #128");                                    // release the replacement frame
     emitter.instruction("ret");                                                 // return the replaced string as a PHP string pair
@@ -735,14 +728,7 @@ fn emit_strtr_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // the replaced result starts at the reservation
     emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // reload the final destination cursor
     emitter.instruction("sub rdx, rax");                                        // the written byte count is the result length
-    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
-    emitter.instruction("call __rt_str_persist");                               // hand back owned heap storage, matching the Fresh ownership contract
-    emitter.instruction("mov QWORD PTR [rbp - 104], rax");                      // save the owned result pointer across the reservation release
-    emitter.instruction("mov QWORD PTR [rbp - 112], rdx");                      // save the owned result length across the reservation release
-    emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                       // reload the superseded reservation
-    emitter.instruction("call __rt_heap_free_safe");                            // release a heap-backed reservation; concat-scratch pointers are skipped
-    emitter.instruction("mov rax, QWORD PTR [rbp - 104]");                      // restore the owned result pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 112]");                      // restore the owned result length
+    elephc_memoir::strings::concat_scratch::emit_finish_owned(emitter, 88, 104);
     emitter.instruction("add rsp, 112");                                        // release the replacement frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the replaced string as a PHP string pair

@@ -13,6 +13,8 @@
 //! - A set passed as `null` arrives as a zero array pointer and is skipped on both passes.
 //!   The three resource arrays are compacted in place to the ready subset.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
 
 /// stream_select: select across three resource arrays, compacting each to the
@@ -93,10 +95,10 @@ fn emit_build_fdset_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, s
     emitter.instruction(&format!("ldr x9, [sp, #{}]", arr_off));                // load the resource array pointer
     emitter.instruction(&format!("cbz x9, {}", done_l));                        // a null set (no array) adds no descriptors
     emitter.instruction("ldr x10, [x9]");                                       // load the array length
-    emitter.instruction("ldr x4, [x9, #-8]");                                   // load the packed indexed-array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x4", "x9");
     emitter.instruction("lsr x4, x4, #8");                                      // shift the value_type tag into the low byte
     emitter.instruction("and x4, x4, #0x7f");                                   // isolate the value_type tag
-    emitter.instruction("add x12, x9, #24");                                    // skip the array header to the data region
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x9");
     emitter.instruction("mov x11, #0");                                         // descriptor index
     emitter.label(&loop_l);
     emitter.instruction("cmp x11, x10");                                        // have all descriptors been scanned?
@@ -160,10 +162,10 @@ fn emit_compact_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     emitter.instruction(&format!("cbz x9, {}", absent_l));                      // a null set has no array to compact
     emitter.instruction("ldr x10, [x9]");                                       // load the array length
     emitter.instruction(&format!("ldr x14, [sp, #{}]", fds_off));               // load the post-select bitmap word
-    emitter.instruction("ldr x4, [x9, #-8]");                                   // load the packed indexed-array kind word
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x4", "x9");
     emitter.instruction("lsr x4, x4, #8");                                      // shift the value_type tag into the low byte
     emitter.instruction("and x4, x4, #0x7f");                                   // isolate the value_type tag
-    emitter.instruction("add x12, x9, #24");                                    // skip the array header to the data region
+    packed_slots::emit_packed_payload_aarch64(emitter, "x12", "x9");
     emitter.instruction("mov x11, #0");                                         // source descriptor index
     emitter.instruction("mov x13, #0");                                         // destination (kept) descriptor index
     emitter.label(&loop_l);
@@ -284,9 +286,8 @@ fn emit_build_fdset_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     emitter.instruction("test r11, r11");                                       // is this set absent (a null argument)?
     emitter.instruction(&format!("jz {}", done_l));                             // a null set adds no descriptors
     emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the array length
-    emitter.instruction("mov r12, QWORD PTR [r11 - 8]");                        // load the packed indexed-array kind word
-    emitter.instruction("shr r12, 8");                                          // shift the value_type tag into the low byte
-    emitter.instruction("and r12, 0x7f");                                       // isolate the value_type tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r12", "r11");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r12", "r12");
     emitter.instruction("xor rsi, rsi");                                        // descriptor index
     emitter.label(&loop_l);
     emitter.instruction("cmp rsi, rdi");                                        // have all descriptors been scanned?
@@ -343,9 +344,8 @@ fn emit_compact_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffix: &
     emitter.instruction(&format!("jz {}", absent_l));                           // a null set has no array to compact
     emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the array length
     emitter.instruction(&format!("mov r8, QWORD PTR [rbp - {}]", fds_off));     // load the post-select bitmap word
-    emitter.instruction("mov r12, QWORD PTR [r11 - 8]");                        // load the packed indexed-array kind word
-    emitter.instruction("shr r12, 8");                                          // shift the value_type tag into the low byte
-    emitter.instruction("and r12, 0x7f");                                       // isolate the value_type tag
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r12", "r11");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r12", "r12");
     emitter.instruction("xor rsi, rsi");                                        // source descriptor index
     emitter.instruction("xor r9, r9");                                          // destination (kept) descriptor index
     emitter.label(&loop_l);

@@ -8,6 +8,7 @@
 //! Key details:
 //! - Regex helpers preserve PHP PCRE-flavored inputs for PCRE2 and must preserve match array construction.
 
+use elephc_memoir::strings::scratch_window::ScratchWindow;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 const PREG_REPLACE_NMATCH: usize = 100;
@@ -17,7 +18,6 @@ const PREG_REPLACE_NMATCH: usize = 100;
 ///         x5=subject ptr, x6=subject len
 /// Output: x1=result ptr, x2=result len
 pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
-    let cap = emitter.concat_capacity;
     if emitter.target.arch == Arch::X86_64 {
         emit_preg_replace_linux_x86_64(emitter);
         return;
@@ -89,16 +89,8 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save subject C string
 
     // -- set up output buffer in concat_buf --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x11, x11, x10");                                   // output position
-    emitter.instruction(&format!("str x11, [sp, #{}]", output_start_off));      // save output start
-    emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save output write pos
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_concat_buf"); // load the arena base
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x13", cap as i64); // load the shared scratch capacity
-    emitter.instruction("add x12, x12, x13");                                   // compute the one-past-end arena address
-    emitter.instruction(&format!("str x12, [sp, #{}]", output_end_off));        // save the output guard for every copy loop
+    let output = ScratchWindow::new(output_start_off, output_write_off, output_end_off);
+    output.emit_prepare(emitter);
 
     // -- initialize current position --
     emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_cstr_off));       // subject C string start
@@ -284,11 +276,7 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // output end
     emitter.instruction("sub x2, x11, x1");                                     // result length
 
-    // -- update concat_off --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    emitter.instruction("add x10, x10, x2");                                    // add result length
-    emitter.instruction("str x10, [x9]");                                       // store updated offset
+    output.emit_advance(emitter);
     emitter.instruction("b __rt_preg_replace_ret");                             // return
 
     // -- oversized result: fail closed instead of overwriting adjacent BSS --
@@ -331,7 +319,6 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
 /// Handles backreference expansion (`$0`..`$99`, `${0}`..`${99}`, `\0`..`\99`) in replacement strings.
 /// Uses the concat scratch buffer for output and updates `_concat_off` accordingly.
 fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
-    let cap = emitter.concat_capacity;
     let handle_off = 0;
     let match_slot_count_off = handle_off + 8;
     let match_pairs_off = match_slot_count_off + 8;
@@ -384,16 +371,9 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // reload the elephc subject length before null-terminating it in the secondary scratch buffer
     emitter.instruction("call __rt_cstr2");                                     // materialize a null-terminated subject C string for repeated PCRE2 regex execution probes
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // preserve the subject C string pointer across the full replacement loop
-    abi::emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the current concat scratch-buffer offset before appending the replacement output
-    abi::emit_symbol_address(emitter, "rax", "_concat_buf");
-    emitter.instruction("add rax, r11");                                        // compute the first free byte inside the concat scratch buffer for the replacement output
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_start_off)); // preserve the start of the replacement output string inside the concat scratch buffer
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_write_off)); // initialize the replacement output write cursor from the output start pointer
-    abi::emit_symbol_address(emitter, "rax", "_concat_buf");                    // load the arena base instead of the already-offset output cursor
-    abi::emit_load_int_immediate(emitter, "r10", cap as i64);                   // load the shared scratch capacity
-    emitter.instruction("add rax, r10");                                        // compute the one-past-end arena address
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", output_end_off)); // save the output guard for every copy loop
+    let output = ScratchWindow::new(output_start_off, output_write_off, output_end_off);
+    output.emit_prepare(emitter);
+
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", current_pos_off)); // reserve the current position slot before storing the initial subject cursor
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", subject_cstr_off)); // reload the subject C string pointer as the initial regex execution cursor
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_pos_off)); // initialize the current subject cursor from the start of the null-terminated subject string
@@ -574,10 +554,7 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", output_start_off)); // reload the replacement output start pointer from the concat scratch buffer
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", output_write_off)); // reload the final replacement output write cursor before computing the string length
     emitter.instruction("sub rdx, rax");                                        // compute the replacement output length from the output start and final write cursor
-    abi::emit_symbol_address(emitter, "r9", "_concat_off");
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // reload the concat scratch-buffer offset before reserving the emitted replacement bytes
-    emitter.instruction("add r10, rdx");                                        // extend the concat scratch-buffer offset by the length of the replacement result
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // publish the updated concat scratch-buffer offset for later string-producing helpers
+    output.emit_advance(emitter);
     emitter.instruction("jmp __rt_preg_replace_ret_linux_x86_64");              // share the common epilogue after materializing the replacement string result
 
     emitter.label("__rt_preg_replace_overflow_linux_x86_64");

@@ -8,6 +8,8 @@
 //! - Key normalization and boxed Mixed ownership remain runtime-compatible.
 
 use super::*;
+use elephc_memoir::ValueTag;
+use elephc_memoir::values::owned_payload::emit_owned_pointer_from_slot;
 
 /// Emits AArch64 array and object-property iteration eval wrappers.
 pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
@@ -20,23 +22,9 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("csel x0, x0, x9, hs");                                 // use max(requested, 4) as the runtime allocation capacity
     emitter.instruction("mov x1, #8");                                          // Mixed indexed arrays store boxed-cell pointers
     emitter.instruction("bl __rt_array_new");                                   // allocate indexed-array storage for boxed Mixed slots
-    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the packed indexed-array heap kind word
-    emitter.instruction("mov x12, #0x80ff");                                    // preserve indexed-array kind and persistent COW metadata
-    emitter.instruction("and x10, x10, x12");                                   // clear the default scalar value_type bits
-    emitter.instruction("mov x11, #7");                                         // runtime value_type 7 = boxed Mixed
-    emitter.instruction("lsl x11, x11, #8");                                    // move the value_type tag into the packed kind word
-    emitter.instruction("orr x10, x10, x11");                                   // stamp the array as carrying boxed Mixed slots
-    emitter.instruction("str x10, [x0, #-8]");                                  // persist the updated indexed-array metadata
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, ValueTag::new(7));
     emitter.instruction("str x0, [sp, #0]");                                    // save the owned array pointer while allocating the Mixed box
-    emitter.instruction("mov x0, #24");                                         // Mixed cells store tag plus two payload words
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate a boxed Mixed cell without retaining the new array
-    emitter.instruction("mov x9, #5");                                          // low byte 5 = mixed cell heap kind
-    emitter.instruction("str x9, [x0, #-8]");                                   // install the mixed-cell heap kind in the uniform header
-    emitter.instruction("mov x10, #4");                                         // runtime tag 4 = indexed array
-    emitter.instruction("str x10, [x0]");                                       // store the indexed-array tag in the Mixed cell
-    emitter.instruction("ldr x11, [sp, #0]");                                   // reload the owned indexed-array pointer
-    emitter.instruction("str x11, [x0, #8]");                                   // store the array pointer as the Mixed low payload word
-    emitter.instruction("str xzr, [x0, #16]");                                  // indexed arrays do not use the high payload word
+    emit_owned_pointer_from_slot(emitter, ValueTag::new(4), "[sp, #0]");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the array-new wrapper frame
     emitter.instruction("ret");                                                 // return the boxed array Mixed cell to Rust
@@ -51,15 +39,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #16");                                         // direct string arrays store pointer/length pairs
     emitter.instruction("bl __rt_array_new");                                   // allocate indexed-array storage for direct string slots
     emitter.instruction("str x0, [sp, #0]");                                    // save the owned string-array pointer while boxing it
-    emitter.instruction("mov x0, #24");                                         // Mixed cells store tag plus two payload words
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate a boxed Mixed cell without retaining the new array
-    emitter.instruction("mov x9, #5");                                          // low byte 5 = mixed cell heap kind
-    emitter.instruction("str x9, [x0, #-8]");                                   // install the mixed-cell heap kind in the uniform header
-    emitter.instruction("mov x10, #4");                                         // runtime tag 4 = indexed array
-    emitter.instruction("str x10, [x0]");                                       // store the indexed-array tag in the Mixed cell
-    emitter.instruction("ldr x11, [sp, #0]");                                   // reload the owned direct-string array pointer
-    emitter.instruction("str x11, [x0, #8]");                                   // store the string-array pointer as the Mixed low payload word
-    emitter.instruction("str xzr, [x0, #16]");                                  // indexed arrays do not use the high payload word
+    emit_owned_pointer_from_slot(emitter, ValueTag::new(4), "[sp, #0]");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the string-array-new wrapper frame
     emitter.instruction("ret");                                                 // return the boxed direct-string array Mixed cell to Rust
@@ -101,23 +81,9 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("csel x0, x0, x9, hs");                                 // use max(requested, 4) as the runtime allocation capacity
     emitter.instruction("mov x1, #8");                                          // direct object arrays store one object pointer per slot
     emitter.instruction("bl __rt_array_new");                                   // allocate indexed-array storage for direct object slots
-    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the packed indexed-array heap kind word
-    emitter.instruction("mov x12, #0x80ff");                                    // preserve indexed-array kind and persistent COW metadata
-    emitter.instruction("and x10, x10, x12");                                   // clear the default scalar value_type bits
-    emitter.instruction("mov x11, #6");                                         // runtime value_type 6 = object
-    emitter.instruction("lsl x11, x11, #8");                                    // move the value_type tag into the packed kind word
-    emitter.instruction("orr x10, x10, x11");                                   // stamp the array as carrying direct object slots
-    emitter.instruction("str x10, [x0, #-8]");                                  // persist the updated indexed-array metadata
+    elephc_memoir::values::array_header::emit_result_value_type_stamp(emitter, ValueTag::new(6));
     emitter.instruction("str x0, [sp, #0]");                                    // save the owned object-array pointer while boxing it
-    emitter.instruction("mov x0, #24");                                         // Mixed cells store tag plus two payload words
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate a boxed Mixed cell without retaining the new array
-    emitter.instruction("mov x9, #5");                                          // low byte 5 = mixed cell heap kind
-    emitter.instruction("str x9, [x0, #-8]");                                   // install the mixed-cell heap kind in the uniform header
-    emitter.instruction("mov x10, #4");                                         // runtime tag 4 = indexed array
-    emitter.instruction("str x10, [x0]");                                       // store the indexed-array tag in the Mixed cell
-    emitter.instruction("ldr x11, [sp, #0]");                                   // reload the owned object-array pointer
-    emitter.instruction("str x11, [x0, #8]");                                   // store the object-array pointer as the Mixed low payload word
-    emitter.instruction("str xzr, [x0, #16]");                                  // indexed arrays do not use the high payload word
+    emit_owned_pointer_from_slot(emitter, ValueTag::new(4), "[sp, #0]");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the object-array-new wrapper frame
     emitter.instruction("ret");                                                 // return the boxed direct-object array Mixed cell to Rust
@@ -163,15 +129,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #7");                                          // runtime value_type 7 = boxed Mixed hash values
     emitter.instruction("bl __rt_hash_new");                                    // allocate associative-array storage for boxed Mixed entries
     emitter.instruction("str x0, [sp, #0]");                                    // save the owned hash pointer while allocating the Mixed box
-    emitter.instruction("mov x0, #24");                                         // Mixed cells store tag plus two payload words
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate a boxed Mixed cell without retaining the new hash
-    emitter.instruction("mov x9, #5");                                          // low byte 5 = mixed cell heap kind
-    emitter.instruction("str x9, [x0, #-8]");                                   // install the mixed-cell heap kind in the uniform header
-    emitter.instruction("mov x10, #5");                                         // runtime tag 5 = associative array
-    emitter.instruction("str x10, [x0]");                                       // store the associative-array tag in the Mixed cell
-    emitter.instruction("ldr x11, [sp, #0]");                                   // reload the owned hash pointer
-    emitter.instruction("str x11, [x0, #8]");                                   // store the hash pointer as the Mixed low payload word
-    emitter.instruction("str xzr, [x0, #16]");                                  // associative arrays do not use the high payload word
+    emit_owned_pointer_from_slot(emitter, ValueTag::new(5), "[sp, #0]");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the assoc-new wrapper frame
     emitter.instruction("ret");                                                 // return the boxed associative-array Mixed cell to Rust

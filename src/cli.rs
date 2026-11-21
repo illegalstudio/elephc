@@ -1934,3 +1934,31 @@ mod tests {
         assert_eq!(config.filename, "./native");
     }
 }
+
+#[cfg(test)]
+mod memoir_tests {
+    /// Memoir remains a compiler library with no generated-program bridge or opt-in flag.
+    #[test]
+    fn memoir_remains_a_compiler_only_library() {
+        let manifest: toml::Value = toml::from_str(include_str!(
+            "../crates/elephc-memoir/Cargo.toml"
+        )).unwrap();
+        let crate_types = manifest["lib"]["crate-type"].as_array().unwrap();
+        assert_eq!(crate_types.len(), 1);
+        assert_eq!(crate_types[0].as_str(), Some("rlib"));
+        for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+            assert!(manifest.get(section).is_none_or(|value| value.as_table().is_some_and(|table| table.is_empty())),
+                "Memoir must remain dependency-free: {section}");
+        }
+        assert!(manifest.get("target").is_none(), "target-specific dependencies belong in the compiler adapter");
+        assert!(manifest["package"].get("links").is_none(), "Memoir must not own native linkage");
+        assert_eq!(crate::linker::bridge_lib_for_flag("memoir"), None);
+        assert_eq!(crate::linker::archive_filename_for_flag("memoir"), None);
+        assert!(!crate::linker::crate_flag_names().contains(&"memoir"));
+        assert!(!super::with_flag_names().contains(&"memoir"));
+        let report = super::capability_report();
+        assert!(!report.split_whitespace().any(|field| {
+            matches!(field, "memoir" | "libelephc_memoir.a" | "native:memoir")
+        }), "unexpected Memoir capability in:\n{report}");
+    }
+}

@@ -7,6 +7,8 @@
 //! Key details:
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
+use elephc_memoir::buffers::io_scratch;
+
 use super::*;
 
 /// Lowers a literal `fopen("ftp://...", ...)` through the FTP runtime wrapper.
@@ -107,7 +109,7 @@ pub(super) fn emit_literal_http_fopen_result(ctx: &mut FunctionContext<'_>, path
                     abi::emit_push_reg(ctx.emitter, "x0");
                     abi::emit_symbol_address(ctx.emitter, "x0", &addr_sym);
                     ctx.emitter.instruction(&format!("mov x1, #{}", addr_len)); // pass the TCP address byte length
-                    abi::emit_symbol_address(ctx.emitter, "x2", "_http_req_scratch");
+                    io_scratch::HTTP_REQUEST.emit_address(ctx.emitter, "x2");
                     abi::emit_pop_reg(ctx.emitter, "x3");
                     abi::emit_call_label(ctx.emitter, "__rt_http_open");
                 }
@@ -120,7 +122,7 @@ pub(super) fn emit_literal_http_fopen_result(ctx: &mut FunctionContext<'_>, path
                     abi::emit_push_reg(ctx.emitter, "rax");
                     abi::emit_symbol_address(ctx.emitter, "rdi", &addr_sym);
                     ctx.emitter.instruction(&format!("mov rsi, {}", addr_len)); // pass the TCP address byte length
-                    abi::emit_symbol_address(ctx.emitter, "rdx", "_http_req_scratch");
+                    io_scratch::HTTP_REQUEST.emit_address(ctx.emitter, "rdx");
                     abi::emit_pop_reg(ctx.emitter, "rcx");
                     abi::emit_call_label(ctx.emitter, "__rt_http_open");
                 }

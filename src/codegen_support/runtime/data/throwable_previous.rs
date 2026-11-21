@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use crate::types::{ClassInfo, PhpType};
+use elephc_memoir::values::throwable_previous::{SLOT_COUNT_SYMBOL, SLOT_DESCRIPTORS_SYMBOL, slot_descriptor};
 
 /// Emits a bounded class-id table, preserving holes left by class reachability pruning.
 pub(super) fn emit_previous_slots(
@@ -19,9 +20,9 @@ pub(super) fn emit_previous_slots(
     classes: &HashMap<u64, &ClassInfo>,
 ) {
     let count = max_class_id.map_or(0, |id| id + 1);
-    out.push_str(".p2align 3\n.globl _class_previous_slot_count\n_class_previous_slot_count:\n");
+    out.push_str(&format!(".p2align 3\n.globl {SLOT_COUNT_SYMBOL}\n{SLOT_COUNT_SYMBOL}:\n"));
     out.push_str(&format!("    .quad {count}\n"));
-    out.push_str(".globl _class_previous_slots\n_class_previous_slots:\n");
+    out.push_str(&format!(".globl {SLOT_DESCRIPTORS_SYMBOL}\n{SLOT_DESCRIPTORS_SYMBOL}:\n"));
     for id in 0..count {
         let descriptor = classes.get(&id).map_or(0, |class| previous_slot_descriptor(class));
         out.push_str(&format!("    .quad {descriptor}\n"));
@@ -34,9 +35,9 @@ fn previous_slot_descriptor(class: &ClassInfo) -> u64 {
         .find(|(_, (name, _))| name == "previous") else {
         return 0;
     };
-    let boxed = u64::from(matches!(ty.codegen_repr(), PhpType::Mixed));
-    let reference = u64::from(class.property_slot_is_reference(index, name));
-    (8 + index as u64 * 16) | boxed | (reference << 1)
+    let boxed = matches!(ty.codegen_repr(), PhpType::Mixed);
+    let reference = class.property_slot_is_reference(index, name);
+    slot_descriptor(index, boxed, reference)
 }
 
 #[cfg(test)]

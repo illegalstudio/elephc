@@ -196,26 +196,10 @@ fn ensure_unique_array_unshift_source(ctx: &mut FunctionContext<'_>, array: Valu
 /// caller stores back into the array value before the local-slot write-back runs.
 fn ensure_array_unshift_capacity(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
     let done_label = ctx.next_label("array_unshift_capacity_ok");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_value_to_reg(array, "x0")?;
-            ctx.emitter.instruction("ldr x9, [x0]");                            // load the current indexed-array logical length
-            ctx.emitter.instruction("ldr x10, [x0, #8]");                       // load the current indexed-array slot capacity
-            ctx.emitter.instruction("cmp x9, x10");                             // does the prepended element still fit inside the payload?
-            ctx.emitter.instruction(&format!("b.lt {}", done_label));           // a spare slot means the shift stays inside the allocation
-            abi::emit_call_label(ctx.emitter, "__rt_array_grow");
-            ctx.store_result_value(array)?;
-        }
-        Arch::X86_64 => {
-            ctx.load_value_to_reg(array, "rdi")?;
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load the current indexed-array logical length
-            ctx.emitter.instruction("mov r11, QWORD PTR [rdi + 8]");            // load the current indexed-array slot capacity
-            ctx.emitter.instruction("cmp r10, r11");                            // does the prepended element still fit inside the payload?
-            ctx.emitter.instruction(&format!("jb {}", done_label));             // a spare slot means the shift stays inside the allocation
-            abi::emit_call_label(ctx.emitter, "__rt_array_grow");
-            ctx.store_result_value(array)?;
-        }
-    }
+    let argument = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, argument)?;
+    elephc_memoir::values::packed_slots::emit_grow_if_full(ctx.emitter, &done_label);
+    ctx.store_result_value(array)?;
     ctx.emitter.label(&done_label);
     Ok(())
 }

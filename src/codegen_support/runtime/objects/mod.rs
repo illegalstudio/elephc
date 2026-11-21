@@ -47,8 +47,7 @@ pub(crate) use debug_info::{
 };
 pub(crate) use print_r_object::{emit_pr_obj_desc, emit_print_r_object};
 pub(crate) use handles::{
-    emit_acquire_object_handle, emit_object_handles, object_handle_free_slots,
-    object_handle_index_slots,
+    emit_acquire_object_handle, emit_object_handles,
 };
 pub(crate) use mixed_array_append::emit_mixed_array_append;
 pub(crate) use magic_set_guard::emit_magic_set_guard;

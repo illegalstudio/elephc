@@ -32,8 +32,53 @@ test('unclassified titles and branches receive the triage type', () => {
 });
 
 test('docs-only changes do not acquire source-code areas', () => {
-  const result = selectAreas(['README.md', 'docs/php/functions.md', '.plans/next-step.md']);
+  const result = selectAreas([
+    'README.md', 'docs/php/functions.md', '.plans/next-step.md',
+    'crates/elephc-memoir/README.md',
+  ]);
   assert.deepEqual(result.labels, ['area:docs']);
+});
+
+test('Memoir source and package metadata select the memory area', () => {
+  for (const file of [
+    'crates/elephc-memoir/Cargo.toml',
+    'crates/elephc-memoir/src/lib.rs',
+    'crates/elephc-memoir/src/gc/collect.rs',
+    'crates/elephc-memoir/tests/layout.rs',
+  ]) {
+    assert.deepEqual(selectAreas([file]).labels, ['area:memory'], file);
+  }
+});
+
+test('Memoir-like crate names do not select the memory area', () => {
+  assert.deepEqual(
+    selectAreas(['crates/elephc-memoir-tools/src/lib.rs']).labels,
+    ['area:runtime'],
+  );
+});
+
+test('Memoir keeps its area when a PR exceeds the area cap', () => {
+  const result = classifyPullRequest({
+    title: 'refactor(codegen): centralize memory emission',
+    headBranch: 'refactor/memoir-extraction',
+    files: [
+      'crates/elephc-memoir/src/lib.rs',
+      'crates/elephc-web/src/lib.rs',
+      'crates/elephc-magician/src/lib.rs',
+      'src/parser/stmt.rs',
+      'src/parser/expr.rs',
+      'src/types/checker.rs',
+      'src/types/schema.rs',
+      'src/codegen/context.rs',
+      'src/codegen/lower_inst.rs',
+      'src/codegen_support/runtime/mod.rs',
+    ],
+  });
+  assert.deepEqual(
+    result.labels.filter((label) => label.startsWith('area:')),
+    ['area:web', 'area:magician', 'area:memory'],
+  );
+  assert.ok(result.labels.includes('scope:multi-area'));
 });
 
 test('unified benchmark paths retain tooling and Magician classification', () => {

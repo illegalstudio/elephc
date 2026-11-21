@@ -19,6 +19,7 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::arrays::slice_bounds::emit_slice_bounds;
+use elephc_memoir::values::packed_slice;
 
 /// Emits the `__rt_array_slice_str` runtime helper.
 ///
@@ -54,44 +55,7 @@ pub fn emit_array_slice_str(emitter: &mut Emitter) {
 
     // -- normalize the requested slice window against PHP's offset/length rules --
     emit_slice_bounds(emitter, "__rt_array_slice_str");
-    emitter.instruction("str x1, [sp, #16]");                                   // save normalized offset
-    emitter.instruction("str x2, [sp, #24]");                                   // save normalized slice length
-
-    // -- create destination array with 16-byte string slots --
-    emitter.instruction("mov x0, x2");                                          // move slice length into destination capacity
-    emitter.instruction("mov x1, #16");                                         // request 16-byte slots for {pointer, length} pairs
-    emitter.instruction("bl __rt_array_new");                                   // allocate destination array
-    emitter.instruction("str x0, [sp, #32]");                                   // save destination array pointer
-
-    // -- copy the requested range, duplicating each string --
-    //
-    // The index is SPILLED rather than parked in a register: `__rt_array_push_str` persists the
-    // payload and may grow the destination, so it is a full call and every caller-saved register
-    // is fair game across it.
-    emitter.instruction("mov x6, #0");                                          // initialize loop index
-    emitter.instruction("str x6, [sp, #40]");                                   // seed the spilled loop index
-    emitter.label("__rt_array_slice_str_loop");
-    emitter.instruction("ldr x6, [sp, #40]");                                   // reload the loop index for this iteration
-    emitter.instruction("ldr x4, [sp, #24]");                                   // reload slice length
-    emitter.instruction("cmp x6, x4");                                          // compare loop index with slice length
-    emitter.instruction("b.ge __rt_array_slice_str_done");                      // finish after copying every requested element
-    emitter.instruction("ldr x1, [sp, #0]");                                    // reload source array pointer
-    emitter.instruction("add x2, x1, #24");                                     // compute source data base past the 24-byte header
-    emitter.instruction("ldr x3, [sp, #16]");                                   // reload normalized offset
-    emitter.instruction("add x7, x3, x6");                                      // compute source index = offset + loop index
-    emitter.instruction("lsl x7, x7, #4");                                      // scale the source index by the 16-byte string slot
-    emitter.instruction("add x7, x2, x7");                                      // compute the address of the source {pointer, length} pair
-    emitter.instruction("ldp x1, x2, [x7]");                                    // load the borrowed source pointer and length together
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload destination array pointer
-    emitter.instruction("bl __rt_array_push_str");                              // append a PERSISTED copy of the pair into the destination
-    emitter.instruction("str x0, [sp, #32]");                                   // persist destination pointer after possible growth
-    emitter.instruction("ldr x6, [sp, #40]");                                   // reload loop index across the append helper call
-    emitter.instruction("add x6, x6, #1");                                      // increment loop index
-    emitter.instruction("str x6, [sp, #40]");                                   // save the updated loop index for the next iteration
-    emitter.instruction("b __rt_array_slice_str_loop");                         // continue copying
-
-    emitter.label("__rt_array_slice_str_done");
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload destination array pointer
+    packed_slice::emit_copy_strings(emitter);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return sliced array
@@ -114,40 +78,7 @@ fn emit_array_slice_str_linux_x86_64(emitter: &mut Emitter) {
 
     // -- normalize the requested slice window against PHP's offset/length rules --
     emit_slice_bounds(emitter, "__rt_array_slice_str");
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the normalized slice offset across the destination constructor call
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the clamped slice length across the destination constructor call
-    emitter.instruction("mov rdi, rdx");                                        // pass the clamped slice length as the destination capacity
-    emitter.instruction("mov rsi, 16");                                         // request 16-byte payload slots for the destination string array
-    emitter.instruction("call __rt_array_new");                                 // allocate the destination indexed array
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the destination pointer across the string append helper calls
-    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the slice-copy loop index
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the normalized offset before seeding the source cursor
-    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // preserve the current source slice cursor across append helper calls
-
-    emitter.label("__rt_array_slice_str_copy_x86");
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the destination slice index before the bound test
-    emitter.instruction("cmp rcx, QWORD PTR [rbp - 24]");                       // compare the destination index against the clamped slice length
-    emitter.instruction("jge __rt_array_slice_str_done_x86");                   // finish once every requested string pair has been copied
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer
-    emitter.instruction("lea r10, [r10 + 24]");                                 // compute the payload base past the 24-byte header
-    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the current source slice cursor
-    emitter.instruction("shl r11, 4");                                          // scale the source cursor by the 16-byte string slot
-    emitter.instruction("add r10, r11");                                        // compute the address of the source {pointer, length} pair
-    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // load the borrowed source string pointer
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // load the borrowed source string length
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the destination indexed-array pointer
-    emitter.instruction("call __rt_array_push_str");                            // append a PERSISTED copy of the pair into the destination
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // persist the possibly-grown destination pointer
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the destination index after the call clobbered caller-saved registers
-    emitter.instruction("add rcx, 1");                                          // advance the destination index
-    emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // persist the updated destination index
-    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the source cursor after the call
-    emitter.instruction("add r11, 1");                                          // advance the source cursor to the next string pair
-    emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // persist the updated source cursor
-    emitter.instruction("jmp __rt_array_slice_str_copy_x86");                   // continue copying until the window is exhausted
-
-    emitter.label("__rt_array_slice_str_done_x86");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // return the destination pointer in the standard result register
+    packed_slice::emit_copy_strings(emitter);
     emitter.instruction("add rsp, 48");                                         // release the string-slice spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the sliced string array

@@ -18,6 +18,7 @@
 //!   `$address` writeback stays well-typed). A failed receive clears the
 //!   stashed-address globals.
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::{
     abi,
     emit::Emitter,
@@ -65,9 +66,7 @@ pub fn emit_stream_socket_recvfrom(emitter: &mut Emitter) {
 
     // -- allocate an owned heap buffer for the payload --
     emitter.instruction("mov x0, x1");                                          // allocation size = requested length
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the buffer, x0 = pointer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #24]");                                   // save the buffer pointer
 
     // -- zero the sender sockaddr leading bytes and set the addrlen parameter --
@@ -140,9 +139,7 @@ pub fn emit_stream_socket_recvfrom(emitter: &mut Emitter) {
     // -- empty $address: connected socket, AF_INET6, or unsupported family --
     emitter.label("__rt_ssr_empty_addr");
     emitter.instruction("mov x0, #1");                                          // alloc one byte so the heap header is well-formed
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = single-byte buffer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov x1, x0");                                          // empty address pointer
     emitter.instruction("mov x2, #0");                                          // empty address length
 
@@ -177,12 +174,7 @@ fn emit_stream_socket_recvfrom_linux_x86_64(emitter: &mut Emitter) {
 
     // -- allocate an owned heap buffer for the payload --
     emitter.instruction("mov rax, rsi");                                        // allocation size = requested length
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the buffer, rax = pointer
-    emitter.instruction(&format!(                                               // owned-string heap-kind word with the x86_64 heap marker
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the buffer pointer
 
     // -- zero the sender sockaddr leading bytes and set the addrlen parameter --
@@ -245,12 +237,7 @@ fn emit_stream_socket_recvfrom_linux_x86_64(emitter: &mut Emitter) {
     // -- empty $address: connected socket, AF_INET6, or unsupported family --
     emitter.label("__rt_ssr_empty_addr_x86");
     emitter.instruction("mov rax, 1");                                          // alloc one byte so the heap header is well-formed
-    emitter.instruction("call __rt_heap_alloc");                                // rax = single-byte buffer
-    emitter.instruction(&format!(                                               // owned-string heap-kind word with the x86_64 heap marker
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
+    emit_allocate_owned_string(emitter);
     emitter.instruction("xor edx, edx");                                        // empty address length
 
     emitter.label("__rt_ssr_stash_addr_x86");

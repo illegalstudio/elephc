@@ -21,6 +21,8 @@
 //!   step a synthetic `ArrayObject` read as `$m["a"]` answered null while `$m->offsetGet("a")` on
 //!   the SAME object answered correctly.
 
+use elephc_memoir::values::packed_slots;
+
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -205,9 +207,9 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_mixed_array_get_indexed_missing");           // warn and return null for a negative indexed-array key
     emitter.instruction("cmp x12, x9");                                         // index >= length → null
     emitter.instruction("b.ge __rt_mixed_array_get_indexed_missing");           // warn and return null for an out-of-bounds indexed-array key
-    emitter.instruction("ldr x13, [x10, #-8]");                                 // load packed indexed-array kind metadata
-    emitter.instruction("ubfx x13, x13, #8, #7");                               // extract the runtime element value_type tag
-    emitter.instruction("add x10, x10, #24");                                   // skip the 24-byte array header to reach the contiguous payload
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x13", "x10");
+    elephc_memoir::values::array_header::emit_extract_value_tag_aarch64(emitter, "x13", "x13");
+    packed_slots::emit_packed_payload_aarch64(emitter, "x10", "x10");
     emitter.instruction("cmp x13, #7");                                         // are indexed slots already boxed Mixed pointers?
     emitter.instruction("b.eq __rt_mixed_array_get_indexed_boxed");             // boxed slots must be retained before returning
     emitter.instruction("cmp x13, #1");                                         // do indexed slots contain string pointer/length pairs?
@@ -572,10 +574,9 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_mixed_array_get_indexed_missing");             // warn and return null for a negative indexed-array key
     emitter.instruction("cmp r8, r9");                                          // index >= length → null
     emitter.instruction("jge __rt_mixed_array_get_indexed_missing");            // warn and return null for an out-of-bounds indexed-array key
-    emitter.instruction("mov r9, QWORD PTR [r10 - 8]");                         // load packed indexed-array kind metadata
-    emitter.instruction("shr r9, 8");                                           // shift the runtime element value_type tag into the low bits
-    emitter.instruction("and r9, 0x7f");                                        // remove the persistent COW flag from the extracted tag
-    emitter.instruction("lea r10, [r10 + 24]");                                 // skip the 24-byte array header to reach the contiguous payload
+    elephc_memoir::heap_kind::emit_load_metadata(emitter, "r9", "r10");
+    elephc_memoir::values::array_header::emit_extract_value_tag_x86_64(emitter, "r9", "r9");
+    packed_slots::emit_packed_payload_x86_64(emitter, "r10", "r10");
     emitter.instruction("cmp r9, 7");                                           // are indexed slots already boxed Mixed pointers?
     emitter.instruction("je __rt_mixed_array_get_indexed_boxed");               // boxed slots must be retained before returning
     emitter.instruction("cmp r9, 1");                                           // do indexed slots contain string pointer/length pairs?

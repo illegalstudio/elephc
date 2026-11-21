@@ -17,6 +17,7 @@
 //!   wrappers and native hosts that keep state in it across PHP calls get it back intact.
 //! - Web handlers preserve every host callee-saved register before request reset can run.
 
+use elephc_memoir::{FrameOffset, strings::concat_cursor::SavedConcatCursor};
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::abi;
@@ -52,13 +53,13 @@ pub(super) use web_host_abi::preserve_host_callee_saved;
 
 const FRAME_FOOTER_BYTES: usize = 16;
 // Every activation has readable reader/line words, including synthetic frames hidden from backtraces.
-const EXCEPTION_ACTIVATION_BYTES: usize = crate::codegen_support::try_handlers::ACTIVATION_OWNER_VISITOR_OFFSET + 8;
+const EXCEPTION_ACTIVATION_BYTES: usize = elephc_memoir::activation_records::EXTENDED_BYTES;
 
 /// Bytes reserved for one addressable iterator state record.
 ///
 /// Fourteen 8-byte words hold the source, cursor, current key/value, source snapshot, and two
 /// owned successor-key anchors used to recover from associative-table relocation.
-const ITERATOR_STATE_BYTES: usize = 112;
+const ITERATOR_STATE_BYTES: usize = elephc_memoir::values::iterator_storage::STATE_BYTES;
 
 /// Symbol name for the C-callable `--web` top-level handler.
 ///
@@ -663,50 +664,24 @@ fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &s
     let Some(offset) = ctx.exception_activation_offset else {
         return;
     };
-    let callback = format!("{entry_label}__cdylib_exception_cleanup");
-    ctx.emitter.comment("publish PHP frame activation");
-    let scratch = match ctx.emitter.target.arch {
-        Arch::AArch64 => "x10",
-        Arch::X86_64 => "r10",
-    };
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_call_frame_top", 0);
-    abi::store_at_offset(ctx.emitter, scratch, offset);
-    if ctx.exception_cleanup_activation {
-        abi::emit_symbol_address(ctx.emitter, scratch, &callback);
-    } else {
-        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
-    }
-    abi::store_at_offset(ctx.emitter, scratch, offset - 8);
-    let frame_pointer = match ctx.emitter.target.arch {
-        Arch::AArch64 => "x29",
-        Arch::X86_64 => "rbp",
-    };
-    abi::store_at_offset(ctx.emitter, frame_pointer, offset - 16);
-    // Main carries source coordinates for generated diagnostics but is not a PHP-visible
-    // backtrace frame, so its reader stays null.
-    if ctx.backtrace_activation && !ctx.is_main {
-        abi::emit_symbol_address(ctx.emitter, scratch, &frame_reader_label(entry_label));
-    } else {
-        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
-    }
-    abi::store_at_offset(ctx.emitter, scratch, offset - 24);
-    // Synthetic cleanup frames still retain their incoming source coordinate. Their
-    // reader stays absent, so PHP backtraces omit them while generated diagnostics can
-    // recover source coordinates through helpers that do not appear in PHP backtraces.
-    if ctx.backtrace_enabled {
-        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
-    }
-    abi::store_at_offset(ctx.emitter, scratch, offset - 32);
-    if ctx.exception_cleanup_activation
-        && (ctx.module.required_runtime_features.fiber || ctx.module.required_runtime_features.generator)
-    {
-        abi::emit_symbol_address(ctx.emitter, scratch, &format!("{entry_label}__gc_frame_owners"));
-    } else {
-        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
-    }
-    abi::store_at_offset(ctx.emitter, scratch, offset - crate::codegen_support::try_handlers::ACTIVATION_OWNER_VISITOR_OFFSET);
-    abi::emit_frame_slot_address(ctx.emitter, scratch, offset);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
+    let cleanup = ctx.exception_cleanup_activation.then(|| format!("{entry_label}__cdylib_exception_cleanup"));
+    // Main has diagnostics coordinates but does not furnish a PHP backtrace frame.
+    let reader = (ctx.backtrace_activation && !ctx.is_main).then(|| frame_reader_label(entry_label));
+    let caller_line = ctx.backtrace_enabled.then_some("_php_backtrace_next_line");
+    let features = &ctx.module.required_runtime_features;
+    let visitor = (ctx.exception_cleanup_activation && (features.fiber || features.generator))
+        .then(|| format!("{entry_label}__gc_frame_owners"));
+    elephc_memoir::activation_records::emit_push_frame(
+        ctx.emitter,
+        elephc_memoir::FrameOffset::new(offset),
+        elephc_memoir::activation_records::FrameActivation {
+            head: "_exc_call_frame_top",
+            cleanup: cleanup.as_deref(),
+            reader: reader.as_deref(),
+            caller_line,
+            visitor: visitor.as_deref(),
+        },
+    );
 }
 
 /// Removes the current PHP frame from the cleanup activation chain on return.
@@ -714,12 +689,9 @@ fn emit_exception_activation_pop(ctx: &mut FunctionContext<'_>) {
     let Some(offset) = ctx.exception_activation_offset else {
         return;
     };
-    let scratch = match ctx.emitter.target.arch {
-        Arch::AArch64 => "x10",
-        Arch::X86_64 => "r10",
-    };
-    abi::load_at_offset(ctx.emitter, scratch, offset);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
+    elephc_memoir::activation_records::emit_pop_frame(
+        ctx.emitter, elephc_memoir::FrameOffset::new(offset), "_exc_call_frame_top",
+    );
 }
 
 /// Emits a non-escaping cleanup callback for one abandoned PHP activation.
@@ -797,8 +769,8 @@ fn retain_owned_parameter_local(emitter: &mut Emitter, offset: usize, ty: &PhpTy
 /// Captures the caller-visible concat-buffer offset as this frame's reset base.
 fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
     let scratch = abi::temp_int_reg(ctx.emitter.target);
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_concat_off", 0);
-    abi::store_at_offset(ctx.emitter, scratch, ctx.concat_base_offset);
+    SavedConcatCursor::Frame(FrameOffset::new(ctx.concat_base_offset))
+        .emit_save(ctx.emitter, scratch);
 }
 
 /// Emits frame teardown and exits the process with status 0.

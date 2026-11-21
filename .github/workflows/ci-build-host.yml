@@ -114,6 +114,11 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
+      - name: Audit Memoir compiler boundary
+        run: |
+          python3 -B -m unittest scripts.ci.test_memoir_boundary
+          python3 -B scripts/audit_memoir_boundary.py
+
       - name: Cache Rust build state
         # Dependencies only (registry, git checkouts, and the dependency
         # artifacts under target/); the action prunes the workspace crates'
@@ -133,6 +138,11 @@ jobs:
 
       - name: Install native test dependencies
         run: brew install freetds pcre2 unixodbc
+
+      - name: Test Memoir typed contracts
+        run: |
+          cargo test --locked -p elephc-memoir --lib
+          cargo test --locked -p elephc-memoir --doc
 
       - name: Check (no warnings)
         shell: bash
@@ -444,6 +454,11 @@ jobs:
         with:
           ref: ${{ inputs.source-sha || github.sha }}
 
+      - name: Audit Memoir compiler boundary
+        run: |
+          python3 -B -m unittest scripts.ci.test_memoir_boundary
+          python3 -B scripts/audit_memoir_boundary.py
+
       - name: Cache Rust build state
         # Dependencies only (registry, git checkouts, and the dependency
         # artifacts under target/); the action prunes the workspace crates'
@@ -457,6 +472,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
+
+      - name: Test Memoir typed contracts
+        run: |
+          cargo test --locked -p elephc-memoir --lib
+          cargo test --locked -p elephc-memoir --doc
 
       - name: Check (no warnings)
         shell: bash
@@ -762,6 +782,11 @@ jobs:
         with:
           ref: ${{ inputs.source-sha || github.sha }}
 
+      - name: Audit Memoir compiler boundary
+        run: |
+          python3 -B -m unittest scripts.ci.test_memoir_boundary
+          python3 -B scripts/audit_memoir_boundary.py
+
       - name: Cache Rust build state
         # Dependencies only (registry, git checkouts, and the dependency
         # artifacts under target/); the action prunes the workspace crates'
@@ -775,6 +800,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-bin: false
           cache-on-failure: true
+
+      - name: Test Memoir typed contracts
+        run: |
+          cargo test --locked -p elephc-memoir --lib
+          cargo test --locked -p elephc-memoir --doc
 
       - name: Check (no warnings)
         shell: bash

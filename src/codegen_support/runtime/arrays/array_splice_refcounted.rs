@@ -14,6 +14,7 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::arrays::slice_bounds::emit_slice_bounds;
+use elephc_memoir::values::array_splice_remove;
 
 /// Emits the `__rt_array_splice_refcounted` runtime helper for array splice.
 ///
@@ -58,70 +59,7 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
 
     // -- normalize the requested removal window against PHP's offset/length rules --
     emit_slice_bounds(emitter, "__rt_array_splice_ref");
-    emitter.instruction("str x1, [sp, #8]");                                    // save normalized offset
-    emitter.instruction("str x2, [sp, #16]");                                   // save clamped removal length
-
-    // -- create result array for removed elements --
-    emitter.instruction("mov x0, x2");                                          // use removal length as result capacity
-    emitter.instruction("mov x1, #8");                                          // use 8-byte slots for heap pointers
-    emitter.instruction("bl __rt_array_new");                                   // allocate result array
-    emitter.instruction("str x0, [sp, #24]");                                   // save result array pointer
-    emitter.instruction("ldr x9, [sp, #0]");                                    // load the separated source container
-    emitter.instruction("ldur x9, [x9, #-8]");                                  // read its element metadata
-    emitter.instruction("and x9, x9, #0x7f00");                                 // exclude the persistent COW flag from the new result
-    emitter.instruction("ldur x10, [x0, #-8]");                                 // preserve the destination heap metadata
-    emitter.instruction("orr x10, x10, x9");                                    // stamp the transferred element type
-    emitter.instruction("stur x10, [x0, #-8]");                                 // publish result element ownership
-    emitter.instruction("ldr x9, [sp, #16]");                                   // load the exact removal count
-    emitter.instruction("str x9, [x0]");                                        // set result length before the non-calling copy loop
-
-    // -- transfer removed element owners into the preallocated result --
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload source array pointer
-    emitter.instruction("add x5, x0, #24");                                     // compute source data base
-    emitter.instruction("ldr x6, [sp, #8]");                                    // reload offset
-    emitter.instruction("ldr x7, [sp, #16]");                                   // reload removal length
-    emitter.instruction("mov x8, #0");                                          // initialize copy-loop index
-    emitter.label("__rt_array_splice_ref_copy");
-    emitter.instruction("cmp x8, x7");                                          // compare copy index with removal length
-    emitter.instruction("b.ge __rt_array_splice_ref_shift");                    // move on to in-place shifting after copying removed elements
-    emitter.instruction("add x9, x6, x8");                                      // compute source index = offset + copy index
-    emitter.instruction("ldr x1, [x5, x9, lsl #3]");                            // load the source-owned slot for transfer
-    emitter.instruction("ldr x10, [sp, #24]");                                  // load the preallocated result container
-    emitter.instruction("add x10, x10, #24");                                   // address its pointer slots
-    emitter.instruction("str x1, [x10, x8, lsl #3]");                           // transfer the removed owner without incrementing its refcount
-    emitter.instruction("add x8, x8, #1");                                      // increment copy-loop index
-    emitter.instruction("b __rt_array_splice_ref_copy");                        // continue copying removed elements
-
-    // -- shift remaining elements left inside the source array --
-    emitter.label("__rt_array_splice_ref_shift");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload source array pointer
-    emitter.instruction("ldr x3, [x0]");                                        // reload original source length
-    emitter.instruction("add x5, x0, #24");                                     // compute source data base
-    emitter.instruction("ldr x6, [sp, #8]");                                    // reload offset as destination start
-    emitter.instruction("ldr x7, [sp, #16]");                                   // reload removal length
-    emitter.instruction("add x8, x6, x7");                                      // initialize source read index
-    emitter.label("__rt_array_splice_ref_shift_loop");
-    emitter.instruction("cmp x8, x3");                                          // compare source read index with original length
-    emitter.instruction("b.ge __rt_array_splice_ref_update");                   // stop shifting after exhausting the tail segment
-    emitter.instruction("ldr x9, [x5, x8, lsl #3]");                            // load tail payload
-    emitter.instruction("str x9, [x5, x6, lsl #3]");                            // move tail payload left in-place
-    emitter.instruction("add x6, x6, #1");                                      // increment destination write index
-    emitter.instruction("add x8, x8, #1");                                      // increment source read index
-    emitter.instruction("b __rt_array_splice_ref_shift_loop");                  // continue shifting
-
-    emitter.label("__rt_array_splice_ref_update");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload source array pointer
-    emitter.instruction("ldr x3, [x0]");                                        // reload original source length
-    emitter.instruction("ldr x7, [sp, #16]");                                   // reload removal length
-    emitter.instruction("sub x3, x3, x7");                                      // compute new source length
-    emitter.instruction("str x3, [x0]");                                        // store new source length
-
-    // -- return removed-elements result array --
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload result array pointer
-    emitter.instruction("ldr x1, [sp, #8]");                                    // return the normalized removal offset, the index a $replacement is inserted at
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
-    emitter.instruction("ret");                                                 // return result array
+    array_splice_remove::emit_remove_refcounted(emitter);
 }
 
 /// Emits the x86_64 Linux variant of `__rt_array_splice_refcounted`.
@@ -145,68 +83,7 @@ fn emit_array_splice_refcounted_linux_x86_64(emitter: &mut Emitter) {
 
     // -- normalize the requested removal window against PHP's offset/length rules --
     emit_slice_bounds(emitter, "__rt_array_splice_ref");
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the normalized splice offset across the result-array constructor call and later compaction loop
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the clamped removal length across the result-array constructor call and later compaction loop
-    emitter.instruction("mov rdi, rdx");                                        // pass the clamped removal length as the removed-elements result capacity to the shared constructor
-    emitter.instruction("mov rsi, 8");                                          // request 8-byte payload slots for the removed-elements result indexed array
-    emitter.instruction("call __rt_array_new");                                 // allocate the removed-elements result indexed array through the shared x86_64 constructor
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // keep the preallocated removed-elements array across compaction
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // load the separated source container
-    emitter.instruction("mov r10, QWORD PTR [r10 - 8]");                        // load the source element metadata
-    emitter.instruction("and r10, 0x7f00");                                     // exclude the persistent flag and heap magic
-    emitter.instruction("or QWORD PTR [rax - 8], r10");                         // retain destination magic while stamping transferred owners
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // load the exact removal count
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // publish the preallocated result length
-    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the removal-copy loop index to the first removed payload slot
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the requested splice offset before seeding the source removal cursor
-    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // initialize the source cursor at the normalized offset
-
-    emitter.label("__rt_array_splice_ref_copy_x86");
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the removal-copy index before testing whether every removed payload has been copied out
-    emitter.instruction("cmp rcx, QWORD PTR [rbp - 24]");                       // compare the removal-copy index against the clamped removal length
-    emitter.instruction("jge __rt_array_splice_ref_shift_x86");                 // start compacting the source indexed array once every removed payload has been copied into the result array
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before reading the next removed payload
-    emitter.instruction("lea r10, [r10 + 24]");                                 // compute the payload base address for the source indexed array
-    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the current source removal cursor before reading the next removed payload
-    emitter.instruction("mov rsi, QWORD PTR [r10 + r11 * 8]");                  // load the next source-owned pointer for transfer
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // load the preallocated removed-elements array
-    emitter.instruction("mov QWORD PTR [rdi + rcx * 8 + 24], rsi");             // transfer the removed owner without retaining it again
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the next destination slot index
-    emitter.instruction("add rcx, 1");                                          // advance the removal-copy index after copying one removed refcounted payload
-    emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // save the next destination slot index
-    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the source removal cursor
-    emitter.instruction("add r11, 1");                                          // advance the source removal cursor to the next payload inside the removed splice window
-    emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // save the next source slot index
-    emitter.instruction("jmp __rt_array_splice_ref_copy_x86");                  // continue copying removed refcounted payloads until the full splice window has been materialized
-
-    emitter.label("__rt_array_splice_ref_shift_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before compacting the remaining refcounted payloads in place
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // reload the original source indexed-array logical length before starting the in-place compaction loop
-    emitter.instruction("lea r10, [r10 + 24]");                                 // recompute the payload base address for the source indexed array
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // seed the destination compaction cursor from the requested splice offset
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the clamped removal length before computing the source compaction cursor
-    emitter.instruction("add r9, r8");                                          // seed the source compaction cursor from the first payload after the removed splice window
-
-    emitter.label("__rt_array_splice_ref_shift_loop_x86");
-    emitter.instruction("cmp r9, r11");                                         // compare the source compaction cursor against the original source indexed-array logical length
-    emitter.instruction("jge __rt_array_splice_ref_update_x86");                // stop compacting once every trailing refcounted payload has moved left over the removed splice window
-    emitter.instruction("mov rax, QWORD PTR [r10 + r9 * 8]");                   // load the next trailing refcounted payload that must slide left over the removed splice window
-    emitter.instruction("mov QWORD PTR [r10 + r8 * 8], rax");                   // store that trailing refcounted payload into the next compacted destination slot in the source indexed array
-    emitter.instruction("add r8, 1");                                           // advance the compacted destination cursor after filling one payload slot
-    emitter.instruction("add r9, 1");                                           // advance the trailing source cursor to the next payload beyond the removed splice window
-    emitter.instruction("jmp __rt_array_splice_ref_shift_loop_x86");            // continue compacting trailing refcounted payloads until the source indexed-array gap is closed
-
-    emitter.label("__rt_array_splice_ref_update_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source indexed-array pointer before publishing the shortened logical length
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // reload the original source indexed-array logical length before subtracting the removed splice window
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the clamped removal length that must be subtracted from the source indexed-array logical length
-    emitter.instruction("sub r11, r9");                                         // compute the shortened source indexed-array logical length after removing the splice window
-    emitter.instruction("mov QWORD PTR [r10], r11");                            // persist the shortened source indexed-array logical length back into the array header
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the removed-elements result indexed-array pointer before returning it to the caller
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // return the normalized removal offset, the index a $replacement is inserted at
-    emitter.instruction("add rsp, 48");                                         // release the refcounted splice spill slots before returning
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the caller
-    emitter.instruction("ret");                                                 // return the removed-elements result indexed-array pointer in rax
+    array_splice_remove::emit_remove_refcounted(emitter);
 }
 
 #[cfg(test)]

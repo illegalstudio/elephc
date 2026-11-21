@@ -91,15 +91,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], rdi");                       // remember how many records the caller pushed
     emitter.instruction("mov QWORD PTR [rbp - 680], rsi");                      // preserve optional eval context for Stringable dispatch
     emitter.instruction("mov QWORD PTR [rbp - 688], 0");                        // no formatter-owned temporary string is live
-    abi::emit_symbol_address(emitter, "r10", "_concat_off");
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // current concat-buffer write offset
-    abi::emit_symbol_address(emitter, "rcx", "_concat_buf");
-    emitter.instruction("lea rbx, [rcx + r11]");                                // write cursor = buffer base + offset
-    emitter.instruction("mov QWORD PTR [rbp - 48], rbx");                       // remember where this result starts
-    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // remember the concat-offset symbol address
-    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r11", emitter.concat_capacity as i64); // load the shared scratch capacity
-    emitter.instruction("add rcx, r11");                                        // one-past-the-end address of the concat buffer
-    emitter.instruction("mov QWORD PTR [rbp - 120], rcx");                      // publish the hard write limit for every copy below
+    elephc_memoir::strings::format_buffer::emit_open_x86_64(emitter);
 
     // ================================================================
     // MAIN SCAN LOOP: literal bytes are copied, '%' starts a specifier
@@ -112,9 +104,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r13, 1");                                          // account for the consumed format byte
     emitter.instruction("cmp r8b, 37");                                         // is it '%'?
     emitter.instruction("je __rt_sprintf_fmt_x64");                             // yes → parse a conversion specifier
-    emitter.instruction("mov r9, QWORD PTR [rbp - 120]");                       // reload the concat-buffer write limit
-    emitter.instruction("cmp rbx, r9");                                         // would this literal byte land outside the arena?
-    emitter.instruction("jae __rt_sprintf_ofatal_x64");                         // yes → controlled fatal instead of an overrun
+    elephc_memoir::strings::format_buffer::emit_require_literal_room(emitter, "__rt_sprintf_ofatal_x64");
     emitter.instruction("mov BYTE PTR [rbx], r8b");                             // copy the literal byte to the result
     emitter.instruction("add rbx, 1");                                          // advance the write cursor
     emitter.instruction("jmp __rt_sprintf_loop_x64");                           // continue scanning
@@ -127,9 +117,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_sprintf_spec_x64");                           // no → parse a real specifier
     emitter.instruction("add r12, 1");                                          // consume the second '%'
     emitter.instruction("sub r13, 1");                                          // account for the consumed byte
-    emitter.instruction("mov r9, QWORD PTR [rbp - 120]");                       // reload the concat-buffer write limit
-    emitter.instruction("cmp rbx, r9");                                         // would the literal '%' land outside the arena?
-    emitter.instruction("jae __rt_sprintf_ofatal_x64");                         // yes → controlled fatal instead of an overrun
+    elephc_memoir::strings::format_buffer::emit_require_literal_room(emitter, "__rt_sprintf_ofatal_x64");
     emitter.instruction("mov BYTE PTR [rbx], r8b");                             // emit the literal '%'
     emitter.instruction("add rbx, 1");                                          // advance the write cursor
     emitter.instruction("jmp __rt_sprintf_loop_x64");                           // continue scanning
@@ -153,10 +141,7 @@ pub(super) fn emit_sprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // result pointer inside the concat buffer
     emitter.instruction("mov rdx, rbx");                                        // current write cursor
     emitter.instruction("sub rdx, rax");                                        // result byte length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // concat-offset symbol address
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
-    emitter.instruction("sub rbx, r11");                                        // derive the absolute cursor after nested concat-producing conversions
-    emitter.instruction("mov QWORD PTR [r10], rbx");                            // publish the exact new write offset without double-counting
+    elephc_memoir::strings::format_buffer::emit_finish_x86_64(emitter);
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // packed argument record count
     emitter.instruction("shl rcx, 4");                                          // records are 16 bytes each
     emitter.instruction("add rsp, 648");                                        // release local buffers and formatter state
@@ -436,11 +421,7 @@ fn emit_string_conversion(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sprintf_t_int_x64");                          // format through the integer path
 
     emitter.label("__rt_sprintf_str_mixed_x64");
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
-    emitter.instruction("mov rax, rbx");                                        // copy the partial-result write cursor
-    emitter.instruction("sub rax, r9");                                         // compute bytes already written before nested __toString
-    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // reload the address of the global concat offset
-    emitter.instruction("mov QWORD PTR [r9], rax");                             // make nested concat users start after the partial result
+    elephc_memoir::strings::format_buffer::emit_partial_x86_64(emitter);
     emitter.instruction("mov rdi, r11");                                        // recover the deferred record metadata
     emitter.instruction("and rdi, 255");                                        // pass only its low-byte tag
     emitter.instruction("mov rsi, r10");                                        // pass the preserved record payload
@@ -815,9 +796,7 @@ fn emit_pad_and_copy(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_emit_nopad_x64");
     emitter.instruction("mov rdx, r11");                                        // body length
     emitter.instruction("add rdx, rcx");                                        // total bytes this conversion emits
-    emitter.instruction("add rdx, rbx");                                        // address just past the emitted bytes
-    emitter.instruction("cmp rdx, QWORD PTR [rbp - 120]");                      // would the conversion leave the arena?
-    emitter.instruction("ja __rt_sprintf_ofatal_x64");                          // yes → controlled fatal instead of an overrun
+    elephc_memoir::strings::format_buffer::emit_require_field_room(emitter, "__rt_sprintf_ofatal_x64");
     emitter.instruction("mov r8, rdx");                                         // preserve the end of the complete padded output range
     emitter.instruction("mov rdx, rbx");                                        // default final body destination for a left-aligned field
     emitter.instruction("test QWORD PTR [rbp - 88], 1");                        // is the left-align flag set?

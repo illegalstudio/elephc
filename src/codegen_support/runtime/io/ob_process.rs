@@ -9,6 +9,8 @@
 //! - Each protected step preserves previous exceptions while buffer depth and ownership are restored.
 //! - FINAL operations retire the buffer before the latest pending exception is rethrown.
 
+use elephc_memoir::buffers::output;
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
 
@@ -73,8 +75,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_any");                                  // release byte storage after every parent-write outcome
     emitter.label("__rt_ob_process_truncate");
     emitter.instruction("ldr x10, [sp]");                                       // recover the slot whose operation must complete
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");
-    emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // empty the buffer before exposing its exception
+    elephc_memoir::buffers::output::emit_truncate_slot(emitter);
     emitter.instruction("ldr x9, [sp, #8]");                                    // recover the requested finalization phase
     emitter.instruction("tbz x9, #3, __rt_ob_process_done");                    // clean and flush retain their emptied buffer
     emitter.instruction("mov x0, #0");                                          // the pop operation accepts no payload
@@ -142,8 +143,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_any");                                // free replacement storage after the parent returns or throws
     emitter.label("__rt_ob_process_truncate");
     emitter.instruction("mov r10, QWORD PTR [rsp]");                            // recover the slot to empty
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");                      // finish the requested cleanup before rethrowing
+    elephc_memoir::buffers::output::emit_truncate_slot(emitter);
     emitter.instruction("test QWORD PTR [rsp + 8], 8");                         // inspect the FINAL phase bit
     emitter.instruction("jz __rt_ob_process_done");                             // ordinary clean and flush retain their buffer
     emitter.instruction("xor edi, edi");                                        // the unary pop adapter requires no payload
@@ -198,10 +198,8 @@ fn write_request(emitter: &mut Emitter) {
         emitter.instruction("b __rt_ob_write_bytes");                           // skip raw-buffer lookup for a replacement
         emitter.label("__rt_ob_write_raw");
         emitter.instruction("ldr x10, [x9]");                                   // recover the original buffer slot
-        abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");
-        emitter.instruction("ldr x0, [x11, x10, lsl #3]");                      // borrow the original buffer storage
-        abi::emit_symbol_address(emitter, "x11", "_ob_lens");
-        emitter.instruction("ldr x1, [x11, x10, lsl #3]");                      // recover the original byte count
+        output::emit_load_buffer_field(emitter, output::BufferField::Pointer, "x11", "x10", "x0");
+        output::emit_load_buffer_field(emitter, output::BufferField::Length, "x11", "x10", "x1");
         emitter.label("__rt_ob_write_bytes");
         emitter.instruction("cbz x1, __rt_ob_write_empty");                     // empty writes do not commit response headers or trigger parent chunks
         emitter.instruction("b __rt_stdout_write");                             // complete forwarding before any pending exception escapes
@@ -214,10 +212,8 @@ fn write_request(emitter: &mut Emitter) {
         emitter.instruction("jmp __rt_ob_write_bytes");                         // use replacement bytes without consulting the raw slot
         emitter.label("__rt_ob_write_raw");
         emitter.instruction("mov r10, QWORD PTR [r9]");                         // recover the raw buffer slot
-        abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");
-        emitter.instruction("mov rdi, QWORD PTR [r11 + r10*8]");                // borrow original buffer bytes
-        abi::emit_symbol_address(emitter, "r11", "_ob_lens");
-        emitter.instruction("mov rsi, QWORD PTR [r11 + r10*8]");                // recover the original buffer length
+        output::emit_load_buffer_field(emitter, output::BufferField::Pointer, "r11", "r10", "rdi");
+        output::emit_load_buffer_field(emitter, output::BufferField::Length, "r11", "r10", "rsi");
         emitter.label("__rt_ob_write_bytes");
         emitter.instruction("test rsi, rsi");                                   // inspect whether the parent has any bytes to receive
         emitter.instruction("jz __rt_ob_write_empty");                          // empty writes leave response commitment and chunk processing untouched

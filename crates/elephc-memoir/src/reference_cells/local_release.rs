@@ -1,0 +1,110 @@
+//! Purpose:
+//! Retires an owned local reference cell even when its payload destructor throws.
+//!
+//! Called from:
+//! - The typed ABI release helper used by explicit reference retirement and function epilogues.
+//!
+//! Key details:
+//! - C arguments are a nullable unary payload-release entry, the owned cell pointer, and a defer flag.
+//! - The cell is freed before an accumulated exception rejoins the enclosing exception chain.
+
+use crate::layout::REFERENCE_CELL_HEAP_KIND;
+use crate::{abi, Emitter, Arch, TargetAbi};
+
+const FRAME: usize = 64;
+const ENTRY: usize = 8;
+const CELL: usize = 16;
+const THROWN: usize = 24;
+const DEFER: usize = 32;
+
+/// Stages a local cell owner and optional unary release for protected retirement.
+pub fn emit_call(
+    emitter: &mut impl TargetAbi, cell_reg: &str, entry: Option<&str>, defer_throw: bool,
+) {
+    let arg0 = abi::int_arg_reg_name(emitter, 0);
+    let arg1 = abi::int_arg_reg_name(emitter, 1);
+    let arg2 = abi::int_arg_reg_name(emitter, 2);
+    abi::emit_reg_move(emitter, arg1, cell_reg);
+    abi::emit_load_int_immediate(emitter, arg2, i64::from(defer_throw));
+    if let Some(entry) = entry {
+        abi::emit_symbol_address(emitter, arg0, entry);
+    } else {
+        abi::emit_load_int_immediate(emitter, arg0, 0);
+    }
+    abi::emit_call_label(emitter, "__rt_local_ref_cell_release");
+}
+
+/// Releases one cell owner and retires its payload and allocation only after the final alias is gone.
+pub fn emit_local_ref_cell_release(emitter: &mut impl Emitter) {
+    let result = abi::int_result_reg(emitter);
+    let scratch = abi::secondary_scratch_reg(emitter);
+    emitter.blank();
+    emitter.label_global("__rt_local_ref_cell_release");
+    abi::emit_frame_prologue(emitter, FRAME);
+    for (index, offset) in [ENTRY, CELL, DEFER].into_iter().enumerate() {
+        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter, index), offset);
+    }
+    abi::emit_store_zero_to_local_slot(emitter, THROWN);
+    abi::load_at_offset(emitter, result, CELL);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_local_ref_cell_release_return");
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("ldr w9, [x0, #-12]");                          // load the reference cell's current owner count
+            emitter.instruction("cbz w9, __rt_local_ref_cell_release_return");  // ignore reentrant retirement of an already released cell
+            emitter.instruction("subs w9, w9, #1");                             // retire this alias without releasing shared contents
+            emitter.instruction("str w9, [x0, #-12]");                          // publish the remaining owner count
+            emitter.instruction("b.ne __rt_local_ref_cell_release_candidate");  // other aliases still own the cell and its value
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp DWORD PTR [rax - 12], 0");                 // detect reentrant retirement before decrementing ownership
+            emitter.instruction("je __rt_local_ref_cell_release_return");       // already released cells own no payload
+            emitter.instruction("sub DWORD PTR [rax - 12], 1");                 // retire this alias from the uniform heap header
+            emitter.instruction("jne __rt_local_ref_cell_release_candidate");   // keep the cell and its contents while another owner remains
+        }
+    }
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction("ldrb w9, [x0, #-8]");                          // distinguish managed property cells from typed local fallback cells
+            emitter.instruction(&format!("cmp w9, #{REFERENCE_CELL_HEAP_KIND}")); // managed cells carry their own payload release metadata
+            emitter.instruction("b.eq __rt_local_ref_cell_release_managed");    // release the payload using its current cell shape
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!(                                       // managed cells carry their own payload release metadata
+                "cmp BYTE PTR [rax - 8], {REFERENCE_CELL_HEAP_KIND}"
+            ));
+            emitter.instruction("je __rt_local_ref_cell_release_managed");      // release the payload using its current cell shape
+        }
+    }
+    abi::load_at_offset(emitter, result, ENTRY);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_local_ref_cell_release_free");
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter, 0), ENTRY);
+    abi::load_at_offset(emitter, scratch, CELL);
+    abi::emit_load_from_address(emitter, abi::int_arg_reg_name(emitter, 1), scratch, 0);
+    abi::emit_jump(emitter, "__rt_local_ref_cell_release_invoke");
+    emitter.label("__rt_local_ref_cell_release_managed");
+    abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter, 0), "__rt_reference_cell_value_release");
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter, 1), CELL);
+    emitter.label("__rt_local_ref_cell_release_invoke");
+    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter, 2), THROWN);
+    abi::emit_call_label(emitter, "__rt_cleanup_invoke");
+    emitter.label("__rt_local_ref_cell_release_free");
+    abi::load_at_offset(emitter, result, CELL);
+    abi::emit_call_label(emitter, "__rt_heap_free");
+    abi::load_at_offset(emitter, result, THROWN);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_local_ref_cell_release_return");
+    let older = match emitter.arch() { Arch::AArch64 => "x1", Arch::X86_64 => "rdi" };
+    abi::emit_load_symbol_to_reg(emitter, older, "_exc_value", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    abi::emit_call_label(emitter, "__rt_exception_chain");
+    abi::load_at_offset(emitter, result, THROWN);
+    abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
+    abi::load_at_offset(emitter, result, DEFER);
+    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_local_ref_cell_release_return");
+    abi::emit_frame_restore(emitter, FRAME);
+    abi::emit_jump(emitter, "__rt_throw_current");
+    emitter.label("__rt_local_ref_cell_release_candidate");
+    abi::emit_call_label(emitter, "__rt_gc_note_candidate");
+    emitter.label("__rt_local_ref_cell_release_return");
+    abi::emit_frame_restore(emitter, FRAME);
+    abi::emit_return(emitter);
+}

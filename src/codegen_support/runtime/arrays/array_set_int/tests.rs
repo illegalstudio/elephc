@@ -9,7 +9,7 @@
 //! - The slow path must retain copy-on-write splitting for every supported target.
 
 use super::*;
-use crate::codegen_support::platform::Target;
+use crate::codegen_support::{emit::Emitter, platform::{Arch, Target}};
 use std::{
     fs,
     path::PathBuf,
