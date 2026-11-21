@@ -184,7 +184,9 @@ pub(super) fn lower_boxed_set(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue,
     key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
-    if ctx.builder.value_php_type(receiver.value).codegen_repr() != PhpType::Mixed {
+    if super::array_write_core::boxed_receiver_has_array_contract(ctx, receiver)
+        || ctx.builder.value_php_type(receiver.value).codegen_repr() != PhpType::Mixed
+    {
         ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value, value.value],
             key_already_diagnosed.then_some(Immediate::Bool(true)),
             Op::RuntimeCall.default_effects(), Some(span));

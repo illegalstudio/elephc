@@ -1202,7 +1202,8 @@ fn merge_local_assignment_type(
         checker.numeric_region_sites.retain(|_, names| !names.is_empty());
     }
     if checker.mixed_storage_locals.contains(name)
-        || checker.boxed_ref_aliased_locals.contains(name)
+        || (checker.boxed_ref_aliased_locals.contains(name)
+            && !checker.local_has_canonical_static_binding(name))
     {
         // A marked name still needs its binding depth on its FIRST store, for the same reason the
         // fresh-insert branch below records one: it is the name's single authority on whether a

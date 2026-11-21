@@ -16,6 +16,11 @@ pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
     key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
+    if super::array_write_core::boxed_receiver_has_array_contract(ctx, parent) {
+        crate::ir_lower::array_key_guards::for_prepared_write(ctx, parent, key, span);
+        store(ctx, parent, key, value, span, key_already_diagnosed);
+        return;
+    }
     if !super::nested_write_guards::guard_scalar_write_parent(ctx, parent, span) { return; }
     crate::ir_lower::array_key_guards::for_prepared_write(ctx, parent, key, span);
     if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {

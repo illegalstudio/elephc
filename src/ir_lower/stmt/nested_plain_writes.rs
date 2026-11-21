@@ -165,8 +165,15 @@ fn lower_captured_append_with_root(
 pub(super) fn append_prepared(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, value: LoweredValue, span: Span,
 ) {
+    let exact_array = super::array_write_core::boxed_receiver_has_array_contract(ctx, parent);
     let parent = resolve_parent_for_write(ctx, parent, span);
     let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
+    if exact_array {
+        ctx.emit_void(Op::MixedArrayAppend, vec![parent.value, value.value], None,
+            Op::MixedArrayAppend.default_effects(), Some(span));
+        retire_owner(ctx, parent_owner, span);
+        return;
+    }
     let pending = super::nested_false_errors::capture(ctx, parent, span);
     super::nested_false_errors::handle_pending(ctx, pending, None, span, |ctx| {
         emit_append(ctx, parent, value, span);

@@ -623,6 +623,14 @@ pub(super) fn lower_boxed_array_set_values(
     }
 }
 
+/// Recognizes boxed packed-or-hash storage whose PHP contract is still exactly `array`.
+pub(super) fn boxed_receiver_has_array_contract(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+) -> bool {
+    ctx.builder.value_php_type(receiver.value).is_php_array()
+}
+
 /// Routes impossible integer/float stores through the existing boxed PHP error path.
 fn boxed_invalid_scalar_receiver(
     ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, span: Span,
