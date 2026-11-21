@@ -621,7 +621,11 @@ impl Scanner<'_> {
         };
         for requirement in requirements {
             match requirement {
-                crate::builtins::semantics::BuiltinRequirement::Bridge(library)
+                crate::builtins::semantics::BuiltinRequirement::Bridge(library) => {
+                    self.usage.required_libraries.insert(library.to_string());
+                    self.usage.runtime_bridge_libraries.insert(library.to_string());
+                }
+                crate::builtins::semantics::BuiltinRequirement::BridgeIdentity(library)
                 | crate::builtins::semantics::BuiltinRequirement::SystemLibrary(library)
                 | crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library) => {
                     self.usage.required_libraries.insert(library.to_string());

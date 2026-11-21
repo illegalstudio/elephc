@@ -623,6 +623,23 @@ mbstring into their runtime object or link.
 Native eval scopes also omit mbstring dispatcher arms unless mbstring or the full
 eval bridge is enabled, preserving links that need only native scope helpers.
 
+`mb_check_encoding($string, 'UTF-8')` over a value already typed `string`, with a
+literal `UTF-8`/`UTF8` encoding, never enters the bridge: it calls the leaf validator
+`__rt_mb_strlen_utf8`, which every runtime object contains. Runtime-feature discovery
+and codegen share one predicate for this shape (`crate::ir::native_mbstring`), so such
+a call alone leaves the mbstring runtime feature off. The checker still links the
+bridge archive for it as a `BridgeIdentity` requirement, so `extension_loaded('mbstring')`
+stays true, but nothing in the archive is referenced. Arrays, nullable or coerced
+subjects, dynamic encodings, spread arguments and callable uses keep the bridge.
+
+The bridge's codec tables are compacted at build time. `crates/elephc-mbstring/build.rs`
+reads the generated `src/encoding/data/*.bin` files named by `index_table!` and
+`dense_table!` in the catalog: sorted key/value indexes become fixed-width offset
+blocks searched by bisection, and dense word arrays become page directories into one
+deduplicated page pool.
+`encoding::mapping` reads both layouts, and its tests compare every compacted table with
+its canonical file.
+
 The preparatory bridge entries `elephc_mbstring_arity_v1` and
 `elephc_mbstring_prepare_v1` validate the outer call before request-state dispatch.
 They derive arity, types, and parameter names from the shared contract. Preparation

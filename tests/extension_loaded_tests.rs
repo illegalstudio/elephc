@@ -156,6 +156,31 @@ fn hash_usage_reports_hash_extension_loaded() {
     );
 }
 
+/// Verifies a native UTF-8 `mb_check_encoding()` keeps mbstring loaded and rejects bad input
+/// even though the program no longer enables the mbstring bridge runtime.
+#[test]
+fn native_utf8_check_encoding_reports_mbstring_loaded() {
+    let dir = make_test_dir("ext_mbstring_native_utf8");
+    let src = "<?php function valid(string $text): bool { return mb_check_encoding($text, 'UTF-8'); } \
+        $bad = $argc > 5 ? 'x' : \"\\xC3\\x28\"; \
+        var_dump(valid('Caffè'), valid($bad), valid(''), extension_loaded('mbstring'));";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(run_binary(&bin), "bool(true)\nbool(false)\nbool(true)\nbool(true)\n");
+}
+
+/// Verifies a builtin string callback still runs through the mbstring bridge when a native
+/// UTF-8 check survives and the only direct bridge call is dead code.
+#[test]
+fn mbstring_string_callback_survives_dead_bridge_call_pruning() {
+    let dir = make_test_dir("ext_mbstring_string_callback");
+    let src = "<?php function unused(string $text): int { return mb_strlen($text); } \
+        function valid(string $text): bool { return mb_check_encoding($text, 'UTF-8'); } \
+        var_dump(valid('Caffè')); echo implode(',', array_map('mb_strtoupper', ['àb', 'c'])), \"\\n\"; \
+        var_dump(extension_loaded('mbstring'));";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(run_binary(&bin), "bool(true)\nÀB,C\nbool(true)\n");
+}
+
 /// Verifies a bridge-free program does not report BCMath merely because its names are known.
 #[test]
 fn unused_bcmath_reports_extension_not_loaded() {

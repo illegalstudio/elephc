@@ -16,6 +16,11 @@ use crate::parser::ast::{Expr, ExprKind};
 pub enum BuiltinRequirement {
     /// Link a bridge/static library on demand.
     Bridge(&'static str),
+    /// Link a bridge only so its PHP extension is reported as loaded.
+    ///
+    /// The call itself may lower natively, so this alone never enables the bridge's
+    /// runtime lifecycle; EIR feature discovery adds that when a bridge call survives.
+    BridgeIdentity(&'static str),
     /// Link a target-neutral system library on demand.
     SystemLibrary(&'static str),
     /// Link a macOS-only system library while Linux resolves the API from libc.
@@ -118,6 +123,25 @@ pub fn unlink_requirements(input: &BuiltinRequirementInput<'_>) -> Vec<BuiltinRe
     }
 }
 
+/// Resolves how `mb_check_encoding()` needs the mbstring bridge from its encoding literal.
+///
+/// A positional subject checked against a literal `UTF-8`/`UTF8` can lower to the native
+/// validator, so the bridge is required only for extension identity. Whether the call really
+/// stays native also depends on the subject's type, which EIR feature discovery decides.
+pub fn mb_check_encoding_requirements(
+    input: &BuiltinRequirementInput<'_>,
+) -> Vec<BuiltinRequirement> {
+    let native_shape = matches!(input.args, [subject, encoding]
+        if !matches!(subject.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. })
+            && matches!(&encoding.kind, ExprKind::StringLiteral(name)
+                if name.eq_ignore_ascii_case("UTF-8") || name.eq_ignore_ascii_case("UTF8")));
+    if native_shape {
+        vec![BuiltinRequirement::BridgeIdentity("elephc_mbstring")]
+    } else {
+        vec![BuiltinRequirement::Bridge("elephc_mbstring")]
+    }
+}
+
 /// Resolves libraries needed by a literal stream filter name.
 pub fn stream_filter_requirements(
     input: &BuiltinRequirementInput<'_>,
@@ -146,6 +170,21 @@ mod tests {
         BuiltinRequirementInput {
             args,
         }
+    }
+
+    /// Keeps the mbstring runtime only for check shapes that cannot lower natively.
+    #[test]
+    fn mb_check_encoding_requirements_separate_identity_from_runtime() {
+        let string = |value: &str| Expr::new(ExprKind::StringLiteral(value.to_string()), Span::dummy());
+        let variable = |name: &str| Expr::new(ExprKind::Variable(name.to_string()), Span::dummy());
+        let identity = vec![BuiltinRequirement::BridgeIdentity("elephc_mbstring")];
+        let runtime = vec![BuiltinRequirement::Bridge("elephc_mbstring")];
+        assert_eq!(mb_check_encoding_requirements(&input(&[variable("s"), string("UTF-8")])), identity);
+        assert_eq!(mb_check_encoding_requirements(&input(&[variable("s"), string("utf8")])), identity);
+        assert_eq!(mb_check_encoding_requirements(&input(&[variable("s"), string("ISO-8859-1")])), runtime);
+        assert_eq!(mb_check_encoding_requirements(&input(&[variable("s"), variable("e")])), runtime);
+        assert_eq!(mb_check_encoding_requirements(&input(&[variable("s")])), runtime);
+        assert_eq!(mb_check_encoding_requirements(&input(&[])), runtime);
     }
 
     /// Verifies literal and dynamic file reads select only the libraries they can reach.

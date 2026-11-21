@@ -345,6 +345,10 @@ pub(crate) struct Checker {
     pub extern_globals: HashMap<String, PhpType>,
     /// Libraries required by `#[link]` attributes on extern blocks, in link order.
     pub required_libraries: Vec<String>,
+    /// Subset of `required_libraries` whose bridge runtime a call site may reach.
+    pub runtime_bridge_libraries: Vec<String>,
+    /// Libraries a builtin named as a callable value requires (see `CheckResult`).
+    pub callable_builtin_libraries: Vec<String>,
     /// Best-known top-level variable types visible to `global` statements in the
     /// current file scope.
     pub top_level_env: TypeEnv,
@@ -1694,6 +1698,8 @@ fn check_types_on_compiler_stack(
         extern_classes: checker.extern_classes,
         extern_globals: checker.extern_globals,
         required_libraries: checker.required_libraries,
+        runtime_bridge_libraries: checker.runtime_bridge_libraries,
+        callable_builtin_libraries: checker.callable_builtin_libraries,
         warnings,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,

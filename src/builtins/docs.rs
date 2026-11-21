@@ -97,6 +97,9 @@ fn default_spec_json(default: &DefaultSpec) -> Value {
 fn requirement_json(requirement: BuiltinRequirement) -> Value {
     match requirement {
         BuiltinRequirement::Bridge(name) => json!({"kind": "bridge", "name": name}),
+        BuiltinRequirement::BridgeIdentity(name) => {
+            json!({"kind": "bridge_identity", "name": name})
+        }
         BuiltinRequirement::SystemLibrary(name) => {
             json!({"kind": "system_library", "name": name})
         }
