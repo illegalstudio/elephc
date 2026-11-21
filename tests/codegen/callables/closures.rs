@@ -36,6 +36,207 @@ echo $closure instanceof Closure ? 'yes' : 'no';
     assert_eq!(out, "HELLO|Closure|yes");
 }
 
+/// Only a Closure is an object: a function name or a method array passed as a `callable` is an
+/// implicit callable without object identity, so `instanceof Closure` and `is_object()` answer
+/// `false` for it, held as a callable or forwarded into a `mixed`. First-class callables,
+/// closures and arrow functions stay Closures. Expected output measured with php 8.5.12.
+#[test]
+fn test_implicit_callable_is_not_a_closure_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Cls { public function m() {} public static function sm() {} }
+function yn(bool $b): string { return $b ? "y" : "n"; }
+function m(mixed $f): string { return yn($f instanceof Closure) . yn(is_object($f)); }
+function c(callable $f): string { return yn($f instanceof Closure) . yn(is_object($f)) . m($f); }
+$o = new Cls();
+echo c('strlen'), " ", c([$o, 'm']), " ", c('Cls::sm'), " ", c(['Cls', 'sm']), " ";
+echo c(strlen(...)), " ", c($o->m(...)), " ", c(fn() => 1), " ", c(function () {}), "\n";
+"#,
+    );
+    assert_eq!(out, "nnnn nnnn nnnn nnnn yyyy yyyy yyyy yyyy\n");
+}
+
+/// An invokable object that a runtime call converts for a `callable` parameter is still an
+/// object, held as a callable or forwarded into a `mixed`, but no Closure. The same method as an
+/// array (`[$obj, '__invoke']`) stays an array. Expected output measured with php 8.5.12.
+#[test]
+fn test_invokable_object_converted_to_callable_is_an_object() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Inv { public function __invoke() { return 1; } }
+class Plain { public function m() { return 2; } }
+function yn(bool $b): string { return $b ? "y" : "n"; }
+function c(callable $f): string { return yn(is_object($f)) . yn($f instanceof Closure) . yn(is_a($f, 'Closure')) . m($f); }
+function m(mixed $f): string { return yn(is_object($f)) . yn($f instanceof Closure); }
+$o = new Inv();
+$cb = $argv[1] ?? 'c';
+echo $cb($o), " ", $cb(new Inv()), " ", $cb([new Plain(), 'm']), " ", $cb([$o, '__invoke']), " ", $cb('strlen'), " ", $cb(fn() => 1), "\n";
+"#,
+        &[&[]],
+    );
+    assert_eq!(out, ["ynnyn ynnyn nnnnn nnnnn nnnnn yyyyy\n"]);
+}
+
+/// `get_class()` of an invokable object converted for a `callable` parameter names the object's
+/// class, held as a callable or forwarded into a `mixed`, and `get_parent_class()` its parent.
+/// A closure stays `Closure`. Expected output measured with php 8.5.12.
+#[test]
+fn test_get_class_of_invokable_object_converted_to_callable() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Base {}
+class Inv extends Base { public function __invoke() { return 1; } }
+function c(callable $f): string { return get_class($f) . "/" . get_parent_class($f) . "/" . m($f); }
+function m(mixed $f): string { return get_class($f) . "/" . get_parent_class($f); }
+function k(callable $f): string { return get_class($f) . "/" . get_class(n($f)); }
+function n(mixed $f): mixed { return $f; }
+$cb = $argv[1] ?? 'c';
+$kb = $argv[2] ?? 'k';
+echo $cb(new Inv()), " ", m(new Inv()), " ", $kb(fn() => 1), "\n";
+"#,
+        &[&[]],
+    );
+    assert_eq!(out, ["Inv/Base/Inv/Base Inv/Base Closure/Closure\n"]);
+}
+
+/// A function name or method array passed as a `callable` is the string or array PHP sees:
+/// `gettype()` names it and `get_class()` throws PHP's TypeError, held as a callable or forwarded
+/// into a `mixed`, whether a literal was bound at compile time or a runtime call converted it.
+/// It is still callable. Closures and invokable objects are objects. Expected output measured
+/// with php 8.5.12.
+#[test]
+fn test_implicit_callable_reports_its_string_or_array_origin() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Cls { public function m() { return 1; } public static function sm() { return 2; } }
+class Inv { public function __invoke() { return 3; } }
+function t(callable $f): string {
+    $out = gettype($f) . "/" . (is_object($f) ? "o" : "-") . (is_callable($f) ? "c" : "-") . "/";
+    try { $out .= get_class($f); } catch (TypeError $e) { $out .= $e->getMessage(); }
+    return $out . "/" . m($f) . "/" . $f();
+}
+function m(mixed $f): string {
+    $out = gettype($f) . "/";
+    try { $out .= get_class($f); } catch (TypeError $e) { $out .= $e->getMessage(); }
+    return $out;
+}
+$o = new Cls();
+echo t('Cls::sm'), "\n", t(['Cls', 'sm']), "\n", t([$o, 'm']), "\n", t(fn() => 4), "\n";
+$cb = $argv[1] ?? 't';
+echo $cb('Cls::sm'), "\n", $cb(['Cls', 'sm']), "\n", $cb([$o, 'm']), "\n", $cb(new Inv()), "\n", $cb(fn() => 6), "\n";
+"#,
+        &[&[]],
+    );
+    let string = "string/-c/get_class(): Argument #1 ($object) must be of type object, string given/string/get_class(): Argument #1 ($object) must be of type object, string given";
+    let array = "array/-c/get_class(): Argument #1 ($object) must be of type object, array given/array/get_class(): Argument #1 ($object) must be of type object, array given";
+    assert_eq!(out, [format!(
+        "{string}/2\n{array}/2\n{array}/1\nobject/oc/Closure/object/Closure/4\n{string}/2\n{array}/2\n{array}/1\nobject/oc/Inv/object/Inv/3\nobject/oc/Closure/object/Closure/6\n"
+    )]);
+}
+
+/// `$f::class` on a `callable` names the class of a Closure or invokable object, as PHP does;
+/// it was rejected at compile time even for a closure. An implicit string or array callable
+/// throws PHP's TypeError (`Cannot use "::class" on string`), which a surrounding catch sees.
+/// Expected output measured with php 8.5.12.
+#[test]
+fn test_class_constant_on_callable() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Cls { public function m() { return 1; } public static function sm() { return 2; } }
+class Inv { public function __invoke() { return 3; } }
+function k(callable $f): string {
+    try { return $f::class; } catch (TypeError $e) { return get_class($e) . ": " . $e->getMessage(); }
+}
+$o = new Cls();
+echo k(fn() => 1), "|", k(strlen(...)), "|", k($o->m(...)), "|", k('Cls::sm'), "|", k(['Cls', 'sm']), "|", k([$o, 'm']), "\n";
+$kb = $argv[1] ?? 'k';
+echo $kb(new Inv()), "|", $kb('Cls::sm'), "|", $kb([$o, 'm']), "|", $kb(function () {}), "\n";
+"#,
+        &[&[]],
+    );
+    let string = "TypeError: Cannot use \"::class\" on string";
+    let array = "TypeError: Cannot use \"::class\" on array";
+    assert_eq!(out, [format!(
+        "Closure|Closure|Closure|{string}|{array}|{array}\nInv|{string}|{array}|Closure\n"
+    )]);
+}
+
+/// `$v::class` on a callable the IR holds as a Mixed (a `foreach` over an array of callables, a
+/// ternary of two callables) throws `Cannot use "::class" on string` for an implicit string
+/// callable, not get_class()'s argument error, which `get_class($v)` keeps. Expected output
+/// measured with php 8.5.12.
+#[test]
+fn test_class_constant_on_boxed_callable() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Cls { public function m() {} }
+function c(callable $f): callable { return $f; }
+$cbs = ['s' => c('strlen'), 'a' => c([new Cls(), 'm']), 'c' => c(fn() => 1)];
+foreach ($cbs as $k => $v) {
+    try { echo $k, ":", $v::class, "|"; } catch (TypeError $e) { echo $e->getMessage(), "|"; }
+    try { echo get_class($v), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+$f = $argc > 5 ? c(fn() => 1) : c('strlen');
+try { echo $f::class, "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+        &[&[]],
+    );
+    let get_class = "get_class(): Argument #1 ($object) must be of type object";
+    assert_eq!(out, [format!(
+        "s:Cannot use \"::class\" on string|{get_class}, string given\na:Cannot use \"::class\" on array|{get_class}, array given\nc:Closure|Closure\nCannot use \"::class\" on string\n"
+    )]);
+}
+
+/// In a function that runs eval() on runtime source, a callable is a Mixed, and get_class() asked
+/// the eval bridge, which only names objects (tag 6): a Closure, an invokable object and an
+/// implicit callable (tag 10) all answered "". They take the native lookup now, so a Closure is
+/// `Closure`, an invokable object names its class, and an implicit callable throws PHP's
+/// TypeError. Expected output measured with php 8.5.12.
+#[test]
+fn test_get_class_of_callable_in_eval_function() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Cls { public function m() {} public static function sm() {} }
+class Inv { public function __invoke() {} }
+function g(callable $f, string $code): string { eval($code); try { return get_class($f); } catch (TypeError $e) { return $e->getMessage(); } }
+$code = $argc > 9 ? 'echo 1;' : '$q = 1;';
+$o = new Cls();
+echo g(fn() => 1, $code), "|", g('strlen', $code), "|", g([$o, 'm'], $code), "|", g(strlen(...), $code), "\n";
+$gb = $argv[1] ?? 'g';
+echo $gb(new Inv(), $code), "|", $gb('Cls::sm', $code), "|", $gb(['Cls', 'sm'], $code), "\n";
+"#,
+        &[&[]],
+    );
+    let string = "get_class(): Argument #1 ($object) must be of type object, string given";
+    let array = "get_class(): Argument #1 ($object) must be of type object, array given";
+    assert_eq!(out, [format!("Closure|{string}|{array}|Closure\nInv|{string}|{array}\n")]);
+}
+
+/// A missed read from an array of closures leaves null in a `callable` slot, not a descriptor:
+/// `is_object()`, `instanceof Closure`, `is_a()` (literal and runtime target) and gettype() answer
+/// for null instead of reading through the sentinel, held as a callable or passed into a
+/// `mixed`, and get_class() throws PHP's TypeError for null. Expected output measured with
+/// php 8.5.12.
+#[test]
+fn test_missing_callable_array_element_is_null_for_object_checks() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+function yn(bool $b): string { return $b ? "y" : "n"; }
+function m(mixed $f): string { return yn(is_object($f)) . yn($f instanceof Closure) . yn(is_a($f, 'Closure')) . gettype($f); }
+$cbs = ['a' => fn() => 1, 'b' => function () { return 2; }];
+$k = $argv[1] ?? 'zz';
+$t = $argv[2] ?? 'Closure';
+echo yn(is_object(@$cbs[$k])), yn(@$cbs[$k] instanceof Closure), yn(is_a(@$cbs[$k], 'Closure')), yn(is_a(@$cbs[$k], $t)), gettype(@$cbs[$k]), " ", m(@$cbs[$k]), "\n";
+try { echo get_class(@$cbs[$k]), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+        &[&[], &["a"]],
+    );
+    assert_eq!(out, [
+        "nnnnNULL nnnNULL\nget_class(): Argument #1 ($object) must be of type object, null given\n",
+        "yyyyobject yyyobject\nClosure\n",
+    ]);
+}
+
 /// Verifies anonymous function with multiple parameters and a simple arithmetic body.
 #[test]
 fn test_closure_multiple_params() {
@@ -2667,4 +2868,114 @@ echo $f() + $b, "|", $g();
 "#,
     );
     assert_eq!(out, "110|7");
+}
+
+/// `Closure::fromCallable()` and `$callable(...)` wrap an implicit callable (a function name, a
+/// method array, a `callable` parameter holding either) or an invokable object in a new Closure,
+/// which is an object of class Closure, while the source callable keeps its string identity.
+/// Expected output measured with php 8.5.
+#[test]
+fn test_closure_factories_wrap_implicit_callables_in_a_closure() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class A { public static function s($x) { return $x + 1; } public function m($x) { return $x + 3; } }
+class Inv { public function __invoke($x) { return $x + 100; } }
+function f($x) { return $x * 10; }
+function g(callable $c) { return Closure::fromCallable($c); }
+function h(callable $c) { return $c(...); }
+function k(callable $c) { $w = Closure::fromCallable($c); return gettype($c) . "," . gettype($w) . "|"; }
+function d($c, $arg) { return gettype($c) . "," . get_class($c) . "," . ($c instanceof Closure ? "y" : "n") . "," . $c($arg) . "|"; }
+$names = ['f', 'A::s', ['A', 's'], [new A, 'm']];
+foreach ($names as $n) { echo d($n(...), 1), d(Closure::fromCallable($n), 2); }
+echo d(g('f'), 3), d(h('A::s'), 4), d(g([new A, 'm']), 5), d(h(['A', 's']), 6);
+$i = new Inv();
+echo d(Closure::fromCallable($i), 7), d($i(...), 8);
+$m = [new A, 'm'];
+$z = Closure::fromCallable($m);
+$y = Closure::fromCallable($z);
+echo d($z, 9), d($y, 10), gettype($m), "|", k('f'), "\n";
+"#);
+    assert_eq!(
+        out.stdout,
+        "object,Closure,y,10|object,Closure,y,20|object,Closure,y,2|object,Closure,y,3|\
+object,Closure,y,2|object,Closure,y,3|object,Closure,y,4|object,Closure,y,5|\
+object,Closure,y,30|object,Closure,y,5|object,Closure,y,8|object,Closure,y,7|\
+object,Closure,y,107|object,Closure,y,108|object,Closure,y,12|object,Closure,y,13|array|string,object|\n",
+        "{}", out.stderr,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Inside a class, `Closure::fromCallable()` of a runtime value naming a private method (tried
+/// before the shared public selector) makes a Closure object too, like a public one.
+/// Expected output measured with php 8.5.
+#[test]
+fn test_closure_factories_wrap_scope_private_methods_in_a_closure() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Inv { public function __invoke() { return 3; } }
+class Cls {
+    private function p() { return 1; }
+    private static function ps() { return 2; }
+    public function w(mixed $f): string {
+        $c = Closure::fromCallable($f);
+        return gettype($c) . "," . get_class($c) . "," . ($c instanceof Closure ? "y" : "n") . "," . $c() . "|";
+    }
+    public function run(array $argv): void {
+        $a = $argv[1] ?? 'p';
+        $s = $argv[2] ?? 'Cls::ps';
+        echo $this->w([$this, $a]), $this->w($s), $this->w(['Cls', 'ps']), $this->w(new Inv()), "\n";
+    }
+}
+(new Cls())->run($argv);
+"#);
+    assert_eq!(
+        out.stdout,
+        "object,Closure,y,1|object,Closure,y,2|object,Closure,y,2|object,Closure,y,3|\n",
+        "{}", out.stderr,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A missed read from an array of closures leaves null, which `Closure::fromCallable()` rejects
+/// with a TypeError and `$v(...)` with an Error, instead of reading through the null sentinel.
+/// Expected output measured with php 8.5.
+#[test]
+fn test_closure_factories_reject_a_missing_callback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$callbacks = ['a' => fn($x) => $x * 2];
+$key = $argv[1] ?? 'b';
+try { $c = Closure::fromCallable(@$callbacks[$key]); echo "made\n"; } catch (TypeError $e) { echo get_class($e), "\n"; }
+$v = @$callbacks[$key];
+try { $d = $v(...); echo "made\n"; } catch (Error $e) { echo get_class($e), "\n"; }
+echo "end\n";
+"#);
+    assert_eq!(out.stdout, "TypeError\nError\nend\n", "{}", out.stderr);
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An eval-created invokable object reaches a native `callable` parameter as an eval callback
+/// adapter. `Closure::fromCallable()` and `$c(...)` wrap it in a new Closure that still calls it.
+/// Expected output measured with php 8.5.
+#[test]
+fn test_closure_factories_wrap_an_eval_invokable_object() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function wrap(callable $c) { return Closure::fromCallable($c); }
+function fcc(callable $c) { return $c(...); }
+$o = eval('return new class { public function __invoke($x) { return $x + 1; } };');
+$cb = $argv[1] ?? 'wrap';
+$w = $cb($o);
+var_dump(gettype($w), $w instanceof Closure, get_class($w) === 'Closure', $w(4));
+$cb2 = $argv[2] ?? 'fcc';
+$f = $cb2($o);
+var_dump($f instanceof Closure, get_class($f) === 'Closure', $f(5));
+"#);
+    assert_eq!(
+        out.stdout,
+        "string(6) \"object\"\nbool(true)\nbool(true)\nint(5)\nbool(true)\nbool(true)\nint(6)\n",
+        "{}", out.stderr,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

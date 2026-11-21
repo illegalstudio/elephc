@@ -138,8 +138,8 @@ echo invokeJoinedCallable($argc);
             function
                 .instructions
                 .iter()
-                .any(|instruction| instruction.op == Op::CallableValueNew),
-            "{target}: the static callable-array target must materialize a descriptor",
+                .any(|instruction| instruction.op == Op::CallableArrayNew),
+            "{target}: the static callable-array target must materialize an array-origin descriptor",
         );
     }
 }
@@ -305,8 +305,8 @@ echo invokeResolvedArray(), invokeResolvedLiteral();
                 function
                     .instructions
                     .iter()
-                    .any(|instruction| instruction.op == Op::CallableValueNew),
-                "{target}/{name}: the instance target must become a descriptor",
+                    .any(|instruction| instruction.op == Op::CallableArrayNew),
+                "{target}/{name}: the instance target must become an array-origin descriptor",
             );
         }
     }

@@ -16,9 +16,16 @@ pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, targ
     lower_callable_descriptor(ctx, target, expr, Op::FirstClassCallableNew)
 }
 
-/// Lowers an implicit string or array callable without creating PHP Closure identity.
+/// Lowers an implicit string callable (`'strlen'`, `'Cls::m'`) without creating PHP Closure
+/// identity.
 pub(super) fn lower_callable_value(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
     lower_callable_descriptor(ctx, target, expr, Op::CallableValueNew)
+}
+
+/// Lowers an implicit array callable (`[$obj, 'm']`, `['Cls', 'm']`) without creating PHP
+/// Closure identity; the descriptor remembers that PHP sees an array.
+pub(super) fn lower_callable_array_value(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
+    lower_callable_descriptor(ctx, target, expr, Op::CallableArrayNew)
 }
 
 /// Shares invocation metadata while preserving whether the source created a PHP object.
@@ -129,6 +136,13 @@ pub(super) fn lower_object_class_name(
 ) -> LoweredValue {
     let object = lower_expr(ctx, object);
     let ty = ctx.builder.value_php_type(object.value).codegen_repr();
+    let mut operands = vec![object.value];
+    // A callable may be an implicit string or array callable, which `::class` rejects with its
+    // own message; a hidden literal `true` tells get_class() it lowers `::class`. A callable the
+    // IR holds boxed (a `foreach` value, a ternary of callables) is a Mixed here.
+    if matches!(ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_)) {
+        operands.push(emit_bool_literal(ctx, true, Some(expr.span)).value);
+    }
     // A nullable/mixed receiver can be null at run time. PHP raises its own TypeError
     // (`Cannot use "::class" on null`) instead of delegating to `get_class(null)`, whose
     // message names the builtin argument. A concrete object skips the branch entirely.
@@ -136,7 +150,7 @@ pub(super) fn lower_object_class_name(
         return emit_builtin_call_value(
             ctx,
             "get_class",
-            vec![object.value],
+            operands,
             PhpType::Str,
             expr.span,
             None,
@@ -178,7 +192,7 @@ pub(super) fn lower_object_class_name(
     let class = emit_builtin_call_value(
         ctx,
         "get_class",
-        vec![object.value],
+        operands,
         PhpType::Str,
         expr.span,
         None,
