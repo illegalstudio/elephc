@@ -300,6 +300,7 @@ impl AstVisitor for ClosureWriteValidator<'_> {
         }
         self.error = validate_closure_value(
             expr,
+            None,
             self.properties,
             self.profile,
             self.classes.last().map(String::as_str),
@@ -391,6 +392,17 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
             || self.statement_depth != 1
             || source.mode == crate::source::SourceMode::Internal
         {
+            return;
+        }
+        if matches!(&expr.kind, ExprKind::Closure { .. }) {
+            self.error = validate_closure_value(
+                expr,
+                Some(self.locals),
+                self.properties,
+                self.profile,
+                self.current_class,
+            )
+            .err();
             return;
         }
         let ExprKind::Assignment {
@@ -1007,6 +1019,7 @@ fn validate_methods(
 /// Audits a directly assigned closure body without inheriting unproven capture types.
 fn validate_closure_value(
     value: &Expr,
+    capture_facts: Option<&LocalFacts>,
     properties: &PropertyFacts,
     profile: SemanticProfile,
     current_class: Option<&str>,
@@ -1022,7 +1035,13 @@ fn validate_closure_value(
         return Ok(());
     };
     let mut locals = parameter_facts(params);
-    for name in captures.iter().chain(capture_refs) {
+    for name in captures {
+        locals.set(
+            name,
+            capture_facts.map_or(ValueFact::Unknown, |facts| facts.get(name)),
+        );
+    }
+    for name in capture_refs {
         locals.set(name, ValueFact::Unknown);
     }
     validate_block(body, &mut locals, properties, profile, current_class)

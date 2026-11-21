@@ -139,6 +139,7 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php $inner = [1]; $values = [$inner]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $inner = [1]; $values = ['a' => $inner]; if (PHP_OS_FAMILY === 'Windows') { $values['a'][false] = 2; }",
         "<?php $inner = [[1]]; $values = [...$inner]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [[1]]; $writer = function() use ($values): void { if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; } };",
     ] {
         let error = crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
@@ -182,6 +183,7 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php $values = []; foreach ([10] as $value) { $values[$value] = 1; }",
         "<?php $values = [[1]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = ($values[0] = 1); }",
         "<?php $values = [[1]]; do { $values[0] = 1; } while ($values[0][false] = false);",
+        "<?php $values = [[1]]; $writer = function() use (&$values): void { if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; } };",
     ] {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));
