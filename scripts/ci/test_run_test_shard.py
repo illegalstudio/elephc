@@ -49,6 +49,7 @@ class ShardExecution(unittest.TestCase):
                 self.assertEqual(args[args.index("-j") + 1], str(workers))
                 self.assertEqual(args[args.index("--archive-file") + 1], str(self.root / "nextest-archive.tar.zst"))
                 self.assertEqual(env["RUST_MIN_STACK"], "33554432")
+                self.assertEqual(env["ELEPHC_TEST_PREBUILT_BRIDGES"], "1")
 
     def test_codegen_keeps_native_requirements_and_excludes_separate_families(self):
         for target in ("macos-aarch64", "linux-x86_64", "linux-aarch64"):
