@@ -345,6 +345,13 @@ pub fn rerun_erasing(files: &[PathBuf], refusal: &CompileError) {
         .map(|path| path.display().to_string())
         .collect();
     crate::progress::clear();
+    if std::env::var_os("ELEPHC_GENERICS_STATS").is_some() {
+        // Which refusal costs a whole extra compile: the one thing the stats line cannot say.
+        let plain = crate::errors::render_plain(refusal);
+        for line in plain.lines().take(12) {
+            eprintln!("[elephc-generics] erasure refusal: {line}");
+        }
+    }
     for path in files {
         eprintln!(
             "note: '{}' is compiled with its written types: its PHPDoc generics refuse the program",
