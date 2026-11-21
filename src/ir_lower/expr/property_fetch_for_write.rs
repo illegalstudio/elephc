@@ -295,6 +295,10 @@ fn lower_property_write_source_from_value(
     dimension_guarded: bool,
 ) -> ByRefForeachPropertySource {
     let mixed_root = mode.is_some();
+    let mutable_fetch = !matches!(
+        mode,
+        Some(crate::ir_lower::stmt::PropertyDimensionFetchMode::ReadWrite)
+    );
     if let Some(mode) = mode.filter(|_| !dimension_guarded) {
         crate::ir_lower::stmt::guard_property_dimension_fetch(ctx, object_value, property, expr.span, mode);
     }
@@ -311,7 +315,16 @@ fn lower_property_write_source_from_value(
             receiver: None,
         };
     }
-    if !property_fetch_for_write_applies(ctx, &object_value, property, expr, mixed_root, scoped_receiver) {
+    if !mutable_fetch
+        || !property_fetch_for_write_applies(
+            ctx,
+            &object_value,
+            property,
+            expr,
+            mixed_root,
+            scoped_receiver,
+        )
+    {
         return ByRefForeachPropertySource {
             value: lower_property_get_from_value(ctx, object_value, property, Op::PropGet, expr),
             receiver: None,
