@@ -753,23 +753,13 @@ fn validate_lazy_expression_writes(
         } => {
             let subject_exit =
                 validate_expression_flow(subject, locals, properties, profile, current_class)?;
-            if let Some(selected) = statically_selected_match_value(
+            let selected = statically_selected_match_value(
                 subject,
                 arms,
                 default.as_deref(),
                 profile,
-            ) {
-                return selected.map_or(Ok(subject_exit.clone()), |value| {
-                    validate_expression_flow(
-                        value,
-                        &subject_exit,
-                        properties,
-                        profile,
-                        current_class,
-                    )
-                });
-            }
-            let mut fallthrough = subject_exit;
+            );
+            let mut fallthrough = subject_exit.clone();
             let mut exits = Vec::new();
             for (conditions, value) in arms {
                 for condition in conditions {
@@ -797,6 +787,17 @@ fn validate_lazy_expression_writes(
                     profile,
                     current_class,
                 )?);
+            }
+            if let Some(selected) = selected {
+                return selected.map_or(Ok(subject_exit.clone()), |value| {
+                    validate_expression_flow(
+                        value,
+                        &subject_exit,
+                        properties,
+                        profile,
+                        current_class,
+                    )
+                });
             }
             Ok(if exits.is_empty() {
                 fallthrough
