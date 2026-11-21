@@ -49,6 +49,7 @@ mod stream_sockets;
 mod stream_file_ops;
 mod stream_file_dispatch;
 mod host_directory_process;
+mod proc_resources;
 mod phar_write;
 mod phar_metadata;
 mod filesystem_ops;
@@ -167,6 +168,10 @@ pub(crate) use stat_ops::{
     lower_stat, lower_lstat, lower_fstat, lower_clearstatcache,
     lower_is_file, lower_is_dir, lower_is_readable, lower_is_writable,
     lower_is_writeable, lower_is_executable, lower_is_link,
+};
+pub(crate) use proc_resources::{
+    lower_elephc_fd_stream, lower_elephc_proc_resource, lower_elephc_resource_close,
+    lower_elephc_resource_kind, lower_elephc_resource_payload,
 };
 pub(super) use boxing_helpers::box_owned_string_or_false_result;
 pub(super) use boxing_helpers::box_readline_result;

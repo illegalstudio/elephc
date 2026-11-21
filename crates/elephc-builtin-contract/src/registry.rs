@@ -40,6 +40,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
                     + crate::catalog_locale::CONTRACTS.len()
                     + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
+                    + crate::catalog_proc::CONTRACTS.len()
                     + crate::catalog_tidy::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
                     + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
@@ -50,6 +51,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             contracts.extend_from_slice(crate::catalog_locale::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_proc::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_tidy::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
@@ -185,7 +187,9 @@ mod tests {
         // +3: the internal libc setlocale and nl_langinfo helpers it calls.
         // +3: `preg_grep`, `preg_last_error`, and `preg_last_error_msg`.
         // +1: the internal `__elephc_set_memory_limit` runtime setter.
-        assert_eq!(contracts().len(), 1319 + curl_surface);
+        // +10: the five `proc_*` functions and the five internal resource helpers their
+        // prelude composes.
+        assert_eq!(contracts().len(), 1329 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

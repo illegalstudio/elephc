@@ -23,7 +23,7 @@
 //!   are user-space addresses with bit 63 clear, and `EVAL_RESOURCE_PAYLOAD_BASE` is
 //!   `1 << 62`.
 //! - ALL NAMES ARE PERSISTENT `.data` LITERALS (`_resource_type_stream`,
-//!   `_resource_type_stream_filter`, and `_resource_type_unknown`, defined beside `_resource_id_prefix` in
+//!   `_resource_type_stream_filter`, `_resource_type_process`, and `_resource_type_unknown`, defined beside `_resource_id_prefix` in
 //!   `crate::codegen_support::runtime::data::fixed`). Nothing is allocated, retained or
 //!   freed here, so the `release` the EIR already emits against a `get_resource_type`
 //!   result stays the no-op it is today against a `.data` pointer. Returning a
@@ -47,11 +47,18 @@ const RESOURCE_TYPE_STREAM_FILTER_LEN: i64 = 13;
 /// Byte length of the closed-resource type name `"Unknown"`.
 const RESOURCE_TYPE_UNKNOWN_LEN: i64 = 7;
 
+/// Byte length of the `proc_open()` resource type name `"process"`.
+const RESOURCE_TYPE_PROCESS_LEN: i64 = 7;
+
+/// The Mixed high-word kind of a `proc_open()` process resource. It has no scope-exit
+/// destructor in `__rt_mixed_free_deep`; the word only selects the `process` type name.
+pub const PROCESS_RESOURCE_KIND: u64 = 11;
+
 /// Resolves a native resource payload to its PHP resource type name.
 ///
 /// # Inputs
 /// - `x0` / `rax`: native resource payload, or the `-id` sentinel of a closed handle.
-/// - `x3` / `rcx`: resource subtype, where 9 identifies a stream filter.
+/// - `x3` / `rcx`: resource subtype, where 9 identifies a stream filter and 11 a process.
 ///
 /// # Outputs
 /// - `x1` / `rax`: pointer to the type-name bytes (the target's string-result pointer register)
@@ -77,6 +84,8 @@ pub fn emit_resource_type_name(emitter: &mut Emitter) {
     emitter.instruction("tbnz x0, #63, __rt_resource_type_name_closed");        // a negative payload is the -id sentinel an explicit close stamped
     emitter.instruction("cmp x3, #9");                                          // stream-filter resources carry subtype 9 in their Mixed cell
     emitter.instruction("b.eq __rt_resource_type_name_filter");                 // preserve PHP's distinct stream filter resource name
+    emitter.instruction(&format!("cmp x3, #{PROCESS_RESOURCE_KIND}"));          // proc_open() resources carry the process kind
+    emitter.instruction("b.eq __rt_resource_type_name_process");                // report PHP's process resource name
     abi::emit_symbol_address(emitter, "x1", "_resource_type_stream");
     abi::emit_load_int_immediate(emitter, "x2", RESOURCE_TYPE_STREAM_LEN);       // an open resource reports the type it was created with
     emitter.instruction("ret");                                                 // return the open type name without touching any other register
@@ -95,6 +104,11 @@ pub fn emit_resource_type_name(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x1", "_resource_type_stream_context");
     abi::emit_load_int_immediate(emitter, "x2", 14);                           // byte length of stream-context
     emitter.instruction("ret");                                                 // return the implicit context type name
+
+    emitter.label("__rt_resource_type_name_process");
+    abi::emit_symbol_address(emitter, "x1", "_resource_type_process");
+    abi::emit_load_int_immediate(emitter, "x2", RESOURCE_TYPE_PROCESS_LEN);     // byte length of process
+    emitter.instruction("ret");                                                 // return the open process type name
 }
 
 /// x86_64 counterpart of `emit_resource_type_name`.
@@ -113,6 +127,8 @@ fn emit_resource_type_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("js __rt_resource_type_name_closed_x86");               // a negative payload is the -id sentinel an explicit close stamped
     emitter.instruction("cmp rcx, 9");                                          // stream-filter resources carry subtype 9 in their Mixed cell
     emitter.instruction("je __rt_resource_type_name_filter_x86");               // preserve PHP's distinct stream filter resource name
+    emitter.instruction(&format!("cmp rcx, {PROCESS_RESOURCE_KIND}"));          // proc_open() resources carry the process kind
+    emitter.instruction("je __rt_resource_type_name_process_x86");              // report PHP's process resource name
     abi::emit_symbol_address(emitter, "rax", "_resource_type_stream");
     abi::emit_load_int_immediate(emitter, "rdx", RESOURCE_TYPE_STREAM_LEN);     // an open resource reports the type it was created with
     emitter.instruction("ret");                                                 // return the open type name without touching any other register
@@ -131,6 +147,11 @@ fn emit_resource_type_name_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rax", "_resource_type_stream_context");
     abi::emit_load_int_immediate(emitter, "rdx", 14);                           // byte length of stream-context
     emitter.instruction("ret");                                                 // return the implicit context type name
+
+    emitter.label("__rt_resource_type_name_process_x86");
+    abi::emit_symbol_address(emitter, "rax", "_resource_type_process");
+    abi::emit_load_int_immediate(emitter, "rdx", RESOURCE_TYPE_PROCESS_LEN);    // byte length of process
+    emitter.instruction("ret");                                                 // return the open process type name
 }
 
 #[cfg(test)]
@@ -145,6 +166,7 @@ mod tests {
         assert_eq!(RESOURCE_TYPE_STREAM_LEN as usize, "stream".len());
         assert_eq!(RESOURCE_TYPE_STREAM_FILTER_LEN as usize, "stream filter".len());
         assert_eq!(RESOURCE_TYPE_UNKNOWN_LEN as usize, "Unknown".len());
+        assert_eq!(RESOURCE_TYPE_PROCESS_LEN as usize, "process".len());
     }
 
     /// Pins the whole AArch64 body as an ordered, exact-line block.
@@ -167,6 +189,8 @@ mod tests {
             "    tbnz x0, #63, __rt_resource_type_name_closed\n",
             "    cmp x3, #9\n",
             "    b.eq __rt_resource_type_name_filter\n",
+            "    cmp x3, #11\n",
+            "    b.eq __rt_resource_type_name_process\n",
             "    adrp x1, _resource_type_stream@PAGE\n",
             "    add x1, x1, _resource_type_stream@PAGEOFF\n",
             "    mov x2, #6\n",
@@ -185,6 +209,11 @@ mod tests {
             "    adrp x1, _resource_type_stream_context@PAGE\n",
             "    add x1, x1, _resource_type_stream_context@PAGEOFF\n",
             "    mov x2, #14\n",
+            "    ret\n",
+            "__rt_resource_type_name_process:\n",
+            "    adrp x1, _resource_type_process@PAGE\n",
+            "    add x1, x1, _resource_type_process@PAGEOFF\n",
+            "    mov x2, #7\n",
             "    ret\n",
         );
         assert!(asm.contains(expected), "expected block missing:\n{asm}");
@@ -206,6 +235,8 @@ mod tests {
             "    js __rt_resource_type_name_closed_x86\n",
             "    cmp rcx, 9\n",
             "    je __rt_resource_type_name_filter_x86\n",
+            "    cmp rcx, 11\n",
+            "    je __rt_resource_type_name_process_x86\n",
             "    lea rax, [rip + _resource_type_stream]\n",
             "    mov rdx, 6\n",
             "    ret\n",
@@ -220,6 +251,10 @@ mod tests {
             "__rt_resource_type_name_context_x86:\n",
             "    lea rax, [rip + _resource_type_stream_context]\n",
             "    mov rdx, 14\n",
+            "    ret\n",
+            "__rt_resource_type_name_process_x86:\n",
+            "    lea rax, [rip + _resource_type_process]\n",
+            "    mov rdx, 7\n",
             "    ret\n",
         );
         assert!(asm.contains(expected), "expected block missing:\n{asm}");

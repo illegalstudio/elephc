@@ -49,6 +49,7 @@ mod codegen {
     mod pdo_pgsql;
     mod image;
     mod pcntl;
+    mod proc_open;
     mod xml;
     mod tokenizer;
     mod calendar;

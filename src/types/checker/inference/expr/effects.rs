@@ -893,24 +893,21 @@ fn pcntl_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<PhpType>
     }
 }
 
-/// Returns the post-call type of an `xml_parse_into_struct()` write-only output argument:
-/// `$values` (the tag structures) and `$index` (positions by tag name) are boxed arrays
-/// handed over by the xml prelude, so both are `mixed` after the call.
+/// Returns the post-call type of a prelude-backed write-only output argument:
+/// `xml_parse_into_struct()`'s `$values` (the tag structures) and `$index` (positions by
+/// tag name), and `proc_open()`'s `$pipes`, are boxed values handed over by their
+/// prelude helpers, so each is `mixed` after the call.
 fn xml_struct_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<PhpType> {
-    if php_symbol_key(builtin) != "xml_parse_into_struct" {
-        return None;
-    }
+    let (parameters, outputs): (&[&str], &[&str]) = match php_symbol_key(builtin).as_str() {
+        "xml_parse_into_struct" => (&["parser", "data", "values", "index"], &["values", "index"]),
+        "proc_open" => (&["command", "descriptor_spec", "pipes"], &["pipes"]),
+        _ => return None,
+    };
     let parameter = match &arg.kind {
         ExprKind::NamedArg { name, .. } => php_symbol_key(name),
-        _ => ["parser", "data", "values", "index"]
-            .get(index)
-            .copied()?
-            .to_string(),
+        _ => parameters.get(index).copied()?.to_string(),
     };
-    match parameter.as_str() {
-        "values" | "index" => Some(PhpType::Mixed),
-        _ => None,
-    }
+    outputs.contains(&parameter.as_str()).then_some(PhpType::Mixed)
 }
 
 /// Returns true when one source-order argument is OpenSSL encrypt's by-reference tag.

@@ -127,20 +127,46 @@ pub(super) fn emit_resource_release_sentinel(emitter: &mut crate::codegen::emit:
 }
 
 /// Unboxes a Mixed stream resource or emits a fatal TypeError for non-resource values.
+///
+/// A `proc_open()` process resource also carries the resource tag, with its high payload
+/// word set to [`PROCESS_RESOURCE_KIND`]; its payload is a bridge process id, never a
+/// descriptor, so it is refused with php-src's "must be an open stream resource" TypeError
+/// before any stream runtime indexes a descriptor table with it.
 pub(super) fn emit_unbox_stream_or_type_error(ctx: &mut FunctionContext<'_>, function_name: &str) {
+    use crate::codegen_support::runtime::PROCESS_RESOURCE_KIND;
+    let resource_label = ctx.next_label("stream_resource_tag");
     let ok_label = ctx.next_label("stream_resource_ok");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #9");                              // check whether the boxed stream value uses the resource tag
-            ctx.emitter.instruction(&format!("b.eq {}", ok_label));             // continue only when the boxed value is a resource
+            ctx.emitter.instruction(&format!("b.eq {}", resource_label));       // continue only when the boxed value is a resource
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 9");                              // check whether the boxed stream value uses the resource tag
-            ctx.emitter.instruction(&format!("je {}", ok_label));               // continue only when the boxed value is a resource
+            ctx.emitter.instruction(&format!("je {}", resource_label));         // continue only when the boxed value is a resource
         }
     }
     emit_stream_type_error(ctx, function_name);
+    ctx.emitter.label(&resource_label);
+    // -- refuse a proc_open() process resource: its payload is a bridge id, not a descriptor --
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x2, #{PROCESS_RESOURCE_KIND}")); // does the high payload word mark a proc_open() process?
+            ctx.emitter.instruction(&format!("b.ne {}", ok_label));             // any other resource kind is a stream
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rdx, {PROCESS_RESOURCE_KIND}"));  // does the high payload word mark a proc_open() process?
+            ctx.emitter.instruction(&format!("jne {}", ok_label));              // any other resource kind is a stream
+        }
+    }
+    // -- report php-src's "must be an open stream resource" TypeError and exit --
+    let parameter = if function_name == "pclose" { "handle" } else { "stream" };
+    let message = format!(
+        "Fatal error: Uncaught TypeError: {function_name}(): Argument #1 (${parameter}) must be an open stream resource\n"
+    );
+    let (label, len) = ctx.data.add_string(message.as_bytes());
+    emit_stream_type_error_and_exit(ctx, &label, len);
     ctx.emitter.label(&ok_label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

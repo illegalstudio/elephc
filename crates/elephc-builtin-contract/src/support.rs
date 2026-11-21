@@ -323,6 +323,12 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "decoct",
     "hexdec",
     "octdec",
+    // The proc_open() family is AOT-only for now (`.plans/proc-open.md`).
+    "proc_close",
+    "proc_get_status",
+    "proc_nice",
+    "proc_open",
+    "proc_terminate",
     "substr_count",
     "zval_free",
     "zval_pack",
@@ -404,11 +410,13 @@ mod tests {
         // `__elephc_reflection_class_build` / `__elephc_eval_reflection_class_build`, which
         // only compiled reflector getters call. The two internal libc setlocale helpers and
         // the internal nl_langinfo helper join the internal eval inventory, as does the
-        // random prelude's `__elephc_call_strict_types` reader.
-        assert_eq!(eval_internal, 143);
-        // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
-        // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 381);
+        // random prelude's `__elephc_call_strict_types` reader, and the proc prelude's five
+        // internal resource helpers.
+        assert_eq!(eval_internal, 148);
+        // 34 registry builtins awaiting eval homes (the five `proc_*` functions among them),
+        // plus the 348 PHP-visible prelude-provided and name-resolver-rewritten functions
+        // eval does not reach (see `eval_support`).
+        assert_eq!(eval_pending, 386);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -422,8 +430,9 @@ mod tests {
         // contracts, two internal setlocale helpers, the internal nl_langinfo helper, and
         // the random prelude's `__elephc_call_strict_types` reader join the AOT registry,
         // `preg_last_error` and `preg_last_error_msg` add two more, as does the internal
-        // `__elephc_set_memory_limit` setter.
-        assert_eq!(aot_registry, 842);
+        // `__elephc_set_memory_limit` setter, and the `proc_*` family with its five
+        // internal resource helpers adds ten more.
+        assert_eq!(aot_registry, 852);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
         // The two PHP-visible locale functions are prelude-provided.
@@ -485,8 +494,9 @@ mod tests {
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
         // the internal nl_langinfo helper, the random prelude's
-        // `__elephc_call_strict_types` reader, and `__elephc_set_memory_limit`.
-        assert_eq!(unsupported, 524);
+        // `__elephc_call_strict_types` reader, and `__elephc_set_memory_limit`, and so do
+        // the five `proc_*` functions with their five internal resource helpers.
+        assert_eq!(unsupported, 534);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {
