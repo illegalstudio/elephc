@@ -18,13 +18,183 @@ use crate::parser::ast::{
     TypeExpr,
 };
 use crate::types::PhpType;
-use elephc_semantics::SemanticProfile;
+use elephc_semantics::{array_keys::StringKey, SemanticProfile};
+
+/// One exact literal key retained by a source array shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ArrayKeyFact {
+    Integer(i64),
+    String(String),
+}
+
+/// Ordered literal slots whose absence is known while the shape remains complete.
+#[derive(Clone, Debug, PartialEq)]
+struct ArrayFact {
+    entries: Vec<(ArrayKeyFact, ValueFact)>,
+    maximum_integer: Option<i64>,
+}
+
+impl ArrayFact {
+    /// Creates a complete empty literal shape.
+    fn empty() -> Self {
+        Self {
+            entries: Vec::new(),
+            maximum_integer: None,
+        }
+    }
+
+    /// Stores one explicit key, preserving its insertion position across overwrites.
+    fn insert(&mut self, key: ArrayKeyFact, value: ValueFact) {
+        if let Some((_, stored)) = self.entries.iter_mut().find(|(stored, _)| *stored == key) {
+            *stored = value;
+            return;
+        }
+        match key {
+            ArrayKeyFact::Integer(integer) => {
+                self.maximum_integer = Some(
+                    self.maximum_integer
+                        .map_or(integer, |maximum| maximum.max(integer)),
+                );
+                self.entries.push((ArrayKeyFact::Integer(integer), value));
+            }
+            ArrayKeyFact::String(key) => {
+                self.entries.push((ArrayKeyFact::String(key), value));
+            }
+        }
+    }
+
+    /// Appends one implicit value when version-independent integer-key history is known.
+    fn append(&mut self, value: ValueFact) -> Option<()> {
+        let key = match self.maximum_integer {
+            None => 0,
+            Some(maximum) if maximum >= 0 => maximum.checked_add(1)?,
+            Some(_) => return None,
+        };
+        self.insert(ArrayKeyFact::Integer(key), value);
+        Some(())
+    }
+
+    /// Appends a static spread, retaining string keys and renumbering integer keys.
+    fn spread(&mut self, source: &Self) -> Option<()> {
+        for (key, value) in &source.entries {
+            match key {
+                ArrayKeyFact::Integer(_) => self.append(value.clone())?,
+                ArrayKeyFact::String(key) => {
+                    self.insert(ArrayKeyFact::String(key.clone()), value.clone());
+                }
+            }
+        }
+        Some(())
+    }
+}
 
 /// One local receiver fact retained by the syntax-preserving write audit.
 #[derive(Clone, Debug, PartialEq)]
 enum ValueFact {
     Known(PhpType),
+    Integer(i64),
+    String(String),
+    Array(ArrayFact),
     Unknown,
+}
+
+impl ValueFact {
+    /// Returns the PHP category represented by this fact without discarding literal identity.
+    fn value_type(&self) -> Option<PhpType> {
+        match self {
+            Self::Known(ty) => Some(ty.clone()),
+            Self::Integer(_) => Some(PhpType::Int),
+            Self::String(_) => Some(PhpType::Str),
+            Self::Array(_) => Some(PhpType::php_array()),
+            Self::Unknown => None,
+        }
+    }
+
+    /// Returns an exact scalar key retained by a literal or assigned constant.
+    fn array_key(&self) -> Option<ArrayKeyFact> {
+        match self {
+            Self::Integer(value) => Some(ArrayKeyFact::Integer(*value)),
+            Self::String(value) => Some(ArrayKeyFact::String(value.clone())),
+            _ => None,
+        }
+    }
+
+    /// Reports whether every represented value becomes an array parent for a nested write.
+    fn is_write_array_parent(&self) -> bool {
+        match self {
+            Self::Array(_) | Self::Known(PhpType::Void | PhpType::False) => true,
+            Self::Known(ty) => definite_array_type(ty),
+            _ => false,
+        }
+    }
+}
+
+impl ArrayFact {
+    /// Projects one slot, distinguishing a plain read from a nested write parent.
+    fn element(&self, index: &ValueFact, write_parent: bool) -> ValueFact {
+        if let Some(key) = index.array_key() {
+            return self
+                .entries
+                .iter()
+                .find(|(stored, _)| *stored == key)
+                .map(|(_, value)| write_parent_fact(value.clone(), write_parent))
+                .unwrap_or_else(|| missing_element(write_parent));
+        }
+        let Some(index_type) = index.value_type() else {
+            return ValueFact::Unknown;
+        };
+        if !matches!(index_type, PhpType::Int | PhpType::Str) {
+            return ValueFact::Unknown;
+        }
+        let candidates: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|(key, _)| {
+                matches!(
+                    (key, &index_type),
+                    (ArrayKeyFact::Integer(_), PhpType::Int)
+                        | (ArrayKeyFact::String(_), PhpType::Str)
+                )
+            })
+            .map(|(_, value)| value)
+            .collect();
+        if candidates.is_empty() {
+            return missing_element(write_parent);
+        }
+        if write_parent && candidates.iter().all(|value| value.is_write_array_parent()) {
+            return ValueFact::Known(PhpType::php_array());
+        }
+        ValueFact::Unknown
+    }
+}
+
+/// Returns the missing-slot fact appropriate to a read or an autovivifying nested write.
+fn missing_element(write_parent: bool) -> ValueFact {
+    if write_parent {
+        ValueFact::Array(ArrayFact::empty())
+    } else {
+        ValueFact::Known(PhpType::Void)
+    }
+}
+
+/// Promotes null and false only when PHP uses the value as a nested write parent.
+fn write_parent_fact(fact: ValueFact, write_parent: bool) -> ValueFact {
+    if write_parent && matches!(&fact, ValueFact::Known(PhpType::Void | PhpType::False)) {
+        ValueFact::Array(ArrayFact::empty())
+    } else {
+        fact
+    }
+}
+
+/// Recognizes an array-only type without treating `Mixed` or object dimensions as arrays.
+fn definite_array_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+        PhpType::Union(members) => {
+            !members.is_empty() && members.iter().all(definite_array_type)
+        }
+        _ => false,
+    }
 }
 
 /// Flow facts for one PHP activation.
@@ -215,6 +385,7 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
                 self.locals,
                 prelude,
                 self.properties,
+                self.profile,
                 self.current_class,
             ))
         };
@@ -240,10 +411,11 @@ fn locals_with_prelude(
     entry: &LocalFacts,
     statements: &[Stmt],
     properties: &PropertyFacts,
+    profile: SemanticProfile,
     current_class: Option<&str>,
 ) -> LocalFacts {
     let mut locals = entry.clone();
-    apply_prelude_facts(statements, &mut locals, properties, current_class);
+    apply_prelude_facts(statements, &mut locals, properties, profile, current_class);
     locals
 }
 
@@ -252,12 +424,13 @@ fn apply_prelude_facts(
     statements: &[Stmt],
     locals: &mut LocalFacts,
     properties: &PropertyFacts,
+    profile: SemanticProfile,
     current_class: Option<&str>,
 ) {
     for stmt in statements {
         match &stmt.kind {
             StmtKind::Assign { name, value } => {
-                let fact = infer_expr(value, locals, properties, current_class);
+                let fact = infer_expr(value, locals, properties, profile, current_class);
                 locals.set(name, fact);
             }
             StmtKind::TypedAssign {
@@ -273,7 +446,7 @@ fn apply_prelude_facts(
                 }
             }
             StmtKind::StaticVar { name, init } => {
-                let fact = infer_expr(init, locals, properties, current_class);
+                let fact = infer_expr(init, locals, properties, profile, current_class);
                 locals.set(name, fact);
             }
             StmtKind::ListUnpack { vars, .. } => {
@@ -282,7 +455,7 @@ fn apply_prelude_facts(
                 }
             }
             StmtKind::Synthetic(body) => {
-                apply_prelude_facts(body, locals, properties, current_class);
+                apply_prelude_facts(body, locals, properties, profile, current_class);
             }
             _ => {}
         }
@@ -374,7 +547,10 @@ fn validate_stmt(
     validate_expression_writes(stmt, locals, properties, profile, current_class)?;
     match &stmt.kind {
         StmtKind::Assign { name, value } => {
-            locals.set(name, infer_expr(value, locals, properties, current_class));
+            locals.set(
+                name,
+                infer_expr(value, locals, properties, profile, current_class),
+            );
         }
         StmtKind::TypedAssign {
             type_expr,
@@ -398,14 +574,21 @@ fn validate_stmt(
             }
         }
         StmtKind::StaticVar { name, init } => {
-            locals.set(name, infer_expr(init, locals, properties, current_class));
+            locals.set(
+                name,
+                infer_expr(init, locals, properties, profile, current_class),
+            );
         }
         StmtKind::ListUnpack { vars, .. } => {
             for name in vars {
                 locals.set(name, ValueFact::Unknown);
             }
         }
-        StmtKind::ArrayAssign { array, index, .. } => {
+        StmtKind::ArrayAssign {
+            array,
+            index,
+            value,
+        } => {
             let receiver = locals.get(array);
             validate_index(
                 profile,
@@ -415,16 +598,16 @@ fn validate_stmt(
                 properties,
                 current_class,
             )?;
-            if matches!(receiver, ValueFact::Known(PhpType::Void | PhpType::False)) {
-                locals.set(array, ValueFact::Known(PhpType::php_array()));
-            }
+            let index = infer_expr(index, locals, properties, profile, current_class);
+            let value = infer_expr(value, locals, properties, profile, current_class);
+            locals.set(array, array_write_fact(receiver, index, value));
         }
-        StmtKind::ArrayPush { array, .. } => {
-            if matches!(locals.get(array), ValueFact::Known(PhpType::Void | PhpType::False)) {
-                locals.set(array, ValueFact::Known(PhpType::php_array()));
-            }
+        StmtKind::ArrayPush { array, value } => {
+            let receiver = locals.get(array);
+            let value = infer_expr(value, locals, properties, profile, current_class);
+            locals.set(array, array_push_fact(receiver, value));
         }
-        StmtKind::NestedArrayAssign { target, .. } => {
+        StmtKind::NestedArrayAssign { target, value } => {
             validate_array_access_chain(
                 profile,
                 target,
@@ -432,6 +615,18 @@ fn validate_stmt(
                 properties,
                 current_class,
             )?;
+            let mut indices = Vec::new();
+            if let Some(array) = local_array_target(target, &mut indices) {
+                let indices: Vec<_> = indices
+                    .into_iter()
+                    .map(|index| infer_expr(index, locals, properties, profile, current_class))
+                    .collect();
+                let value = infer_expr(value, locals, properties, profile, current_class);
+                locals.set(
+                    array,
+                    nested_array_write_fact(locals.get(array), &indices, value),
+                );
+            }
         }
         StmtKind::PropertyArrayAssign {
             object,
@@ -440,7 +635,7 @@ fn validate_stmt(
             ..
         } => {
             let receiver = property_fact(
-                infer_expr(object, locals, properties, current_class),
+                infer_expr(object, locals, properties, profile, current_class),
                 property,
                 properties,
             );
@@ -709,13 +904,13 @@ fn validate_index(
     properties: &PropertyFacts,
     current_class: Option<&str>,
 ) -> Result<(), CompileError> {
-    let ValueFact::Known(receiver) = receiver else {
+    let Some(receiver) = receiver.value_type() else {
         return Ok(());
     };
-    let ValueFact::Known(key) = infer_expr(index, locals, properties, current_class) else {
+    let Some(key) = infer_expr(index, locals, properties, profile, current_class).value_type() else {
         return Ok(());
     };
-    super::validate_write_receiver(profile, receiver, &key, index.span)
+    super::validate_write_receiver(profile, &receiver, &key, index.span)
 }
 
 /// Validates every key whose immediate receiver can be proven while walking to the root.
@@ -728,7 +923,7 @@ fn validate_array_access_chain(
 ) -> Result<(), CompileError> {
     let mut current = target;
     while let ExprKind::ArrayAccess { array, index } = &current.kind {
-        let receiver = infer_expr(array, locals, properties, current_class);
+        let receiver = infer_write_receiver(array, locals, properties, profile, current_class);
         validate_index(
             profile,
             &receiver,
@@ -747,10 +942,11 @@ fn infer_expr(
     expr: &Expr,
     locals: &LocalFacts,
     properties: &PropertyFacts,
+    profile: SemanticProfile,
     current_class: Option<&str>,
 ) -> ValueFact {
-    if let Some(ty) = source_expr_type(expr) {
-        return ValueFact::Known(ty);
+    if let Some(fact) = source_expr_fact(expr, profile) {
+        return fact;
     }
     match &expr.kind {
         ExprKind::Variable(name) => locals.get(name),
@@ -763,15 +959,16 @@ fn infer_expr(
         ExprKind::NewScopedObject { receiver, .. } => static_receiver_name(receiver, current_class)
             .map(|name| ValueFact::Known(PhpType::Object(name)))
             .unwrap_or(ValueFact::Unknown),
-        ExprKind::Clone(inner) => infer_expr(inner, locals, properties, current_class),
+        ExprKind::Clone(inner) => infer_expr(inner, locals, properties, profile, current_class),
         ExprKind::PropertyAccess { object, property } => property_fact(
-            infer_expr(object, locals, properties, current_class),
+            infer_expr(object, locals, properties, profile, current_class),
             property,
             properties,
         ),
         ExprKind::ArrayAccess { array, index } => array_element_fact(
-            infer_expr(array, locals, properties, current_class),
-            infer_expr(index, locals, properties, current_class),
+            infer_expr(array, locals, properties, profile, current_class),
+            infer_expr(index, locals, properties, profile, current_class),
+            false,
         ),
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_fact(receiver, property, properties, current_class)
@@ -781,28 +978,120 @@ fn infer_expr(
             else_expr,
             ..
         } => merge_value_facts(
-            infer_expr(then_expr, locals, properties, current_class),
-            infer_expr(else_expr, locals, properties, current_class),
+            infer_expr(then_expr, locals, properties, profile, current_class),
+            infer_expr(else_expr, locals, properties, profile, current_class),
         ),
         ExprKind::NullCoalesce { value, default } => merge_value_facts(
-            infer_expr(value, locals, properties, current_class),
-            infer_expr(default, locals, properties, current_class),
+            infer_expr(value, locals, properties, profile, current_class),
+            infer_expr(default, locals, properties, profile, current_class),
         ),
         _ => ValueFact::Unknown,
     }
 }
 
-/// Projects an element category only when both the array representation and key kind are known.
-fn array_element_fact(receiver: ValueFact, index: ValueFact) -> ValueFact {
+/// Infers a receiver that is itself an intermediate parent of a nested write.
+fn infer_write_receiver(
+    expr: &Expr,
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> ValueFact {
+    let ExprKind::ArrayAccess { array, index } = &expr.kind else {
+        return infer_expr(expr, locals, properties, profile, current_class);
+    };
+    array_element_fact(
+        infer_write_receiver(array, locals, properties, profile, current_class),
+        infer_expr(index, locals, properties, profile, current_class),
+        true,
+    )
+}
+
+/// Projects an element category while distinguishing reads from autovivifying write parents.
+fn array_element_fact(receiver: ValueFact, index: ValueFact, write_parent: bool) -> ValueFact {
     match (receiver, index) {
-        (ValueFact::Known(PhpType::Array(element)), ValueFact::Known(PhpType::Int)) => {
-            ValueFact::Known(*element)
+        (ValueFact::Array(array), index) => array.element(&index, write_parent),
+        (ValueFact::Known(PhpType::Void | PhpType::False), _) if write_parent => {
+            ValueFact::Array(ArrayFact::empty())
+        }
+        (ValueFact::Known(PhpType::Array(element)), index)
+            if index.value_type() == Some(PhpType::Int) =>
+        {
+            if *element == PhpType::Never {
+                missing_element(write_parent)
+            } else {
+                write_parent_fact(ValueFact::Known(*element), write_parent)
+            }
         }
         (
             ValueFact::Known(PhpType::AssocArray { key, value }),
-            ValueFact::Known(actual_key),
-        ) if *key == actual_key => ValueFact::Known(*value),
+            index,
+        ) if index.value_type().is_some_and(|actual| *key == actual) => {
+            if *value == PhpType::Never {
+                missing_element(write_parent)
+            } else {
+                write_parent_fact(ValueFact::Known(*value), write_parent)
+            }
+        }
         _ => ValueFact::Unknown,
+    }
+}
+
+/// Updates a local literal shape after a direct keyed write without guessing a dynamic slot.
+fn array_write_fact(receiver: ValueFact, index: ValueFact, value: ValueFact) -> ValueFact {
+    let mut array = match receiver {
+        ValueFact::Array(array) => array,
+        ValueFact::Known(PhpType::Void | PhpType::False) => ArrayFact::empty(),
+        other => return other,
+    };
+    let Some(key) = index.array_key() else {
+        return ValueFact::Known(PhpType::php_array());
+    };
+    array.insert(key, value);
+    ValueFact::Array(array)
+}
+
+/// Updates a local literal shape after an append while retaining a static next key.
+fn array_push_fact(receiver: ValueFact, value: ValueFact) -> ValueFact {
+    let mut array = match receiver {
+        ValueFact::Array(array) => array,
+        ValueFact::Known(PhpType::Void | PhpType::False) => ArrayFact::empty(),
+        other => return other,
+    };
+    if array.append(value).is_some() {
+        ValueFact::Array(array)
+    } else {
+        ValueFact::Known(PhpType::php_array())
+    }
+}
+
+/// Updates a local shape through an exact nested path, degrading dynamic paths conservatively.
+fn nested_array_write_fact(
+    receiver: ValueFact,
+    indices: &[ValueFact],
+    value: ValueFact,
+) -> ValueFact {
+    let Some((index, rest)) = indices.split_first() else {
+        return value;
+    };
+    if rest.is_empty() {
+        return array_write_fact(receiver, index.clone(), value);
+    }
+    let child = array_element_fact(receiver.clone(), index.clone(), true);
+    let child = nested_array_write_fact(child, rest, value);
+    array_write_fact(receiver, index.clone(), child)
+}
+
+/// Returns a plain local root and its array-access indices in source order.
+fn local_array_target<'a>(target: &'a Expr, indices: &mut Vec<&'a Expr>) -> Option<&'a str> {
+    match &target.kind {
+        ExprKind::Variable(name) => Some(name),
+        ExprKind::ArrayAccess { array, index } => {
+            let root = local_array_target(array, indices)?;
+            indices.push(index);
+            Some(root)
+        }
+        _ => None,
     }
 }
 
@@ -812,7 +1101,7 @@ fn property_fact(
     property: &str,
     properties: &PropertyFacts,
 ) -> ValueFact {
-    let ValueFact::Known(PhpType::Object(class)) = object else {
+    let Some(PhpType::Object(class)) = object.value_type() else {
         return ValueFact::Unknown;
     };
     properties
@@ -857,60 +1146,131 @@ fn static_receiver_name(
 fn merge_value_facts(left: ValueFact, right: ValueFact) -> ValueFact {
     if left == right {
         left
+    } else if let (Some(left), Some(right)) = (left.value_type(), right.value_type()) {
+        if left == right {
+            ValueFact::Known(left)
+        } else {
+            ValueFact::Unknown
+        }
     } else {
         ValueFact::Unknown
     }
 }
 
-/// Projects literal and explicit-cast categories used by source-only key validation.
-fn source_expr_type(expr: &Expr) -> Option<PhpType> {
+/// Projects literal identity and explicit-cast categories used by source-only key validation.
+fn source_expr_fact(expr: &Expr, profile: SemanticProfile) -> Option<ValueFact> {
     Some(match &expr.kind {
-        ExprKind::IntLiteral(_) => PhpType::Int,
-        ExprKind::FloatLiteral(_) => PhpType::Float,
-        ExprKind::BoolLiteral(_) | ExprKind::Not(_) => PhpType::Bool,
-        ExprKind::StringLiteral(_) => PhpType::Str,
-        ExprKind::Null => PhpType::Void,
-        ExprKind::ArrayLiteral(values) => {
-            PhpType::Array(Box::new(source_array_value_type(values.iter())))
-        }
-        ExprKind::ArrayLiteralAssoc(entries) => PhpType::AssocArray {
-            key: Box::new(source_array_value_type(entries.iter().map(|(key, _)| key))),
-            value: Box::new(source_array_value_type(entries.iter().map(|(_, value)| value))),
-        },
-        ExprKind::ArrayLiteralMixed(entries) => PhpType::AssocArray {
-            key: Box::new(PhpType::Mixed),
-            value: Box::new(source_array_value_type(entries.iter().map(|entry| match entry {
-                ArrayEntry::Spread(source)
-                | ArrayEntry::Value(source)
-                | ArrayEntry::Reference(source) => source,
-                ArrayEntry::Keyed(_, value) | ArrayEntry::KeyReference(_, value) => value,
-            }))),
-        },
-        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) => match source_expr_type(inner)? {
-            value @ (PhpType::Int | PhpType::Float) => value,
+        ExprKind::IntLiteral(value) => ValueFact::Integer(*value),
+        ExprKind::FloatLiteral(_) => ValueFact::Known(PhpType::Float),
+        ExprKind::BoolLiteral(false) => ValueFact::Known(PhpType::False),
+        ExprKind::BoolLiteral(true) | ExprKind::Not(_) => ValueFact::Known(PhpType::Bool),
+        ExprKind::StringLiteral(value) => ValueFact::String(value.clone()),
+        ExprKind::Null => ValueFact::Known(PhpType::Void),
+        ExprKind::ArrayLiteral(values) => source_indexed_array_fact(values, profile),
+        ExprKind::ArrayLiteralAssoc(entries) => source_assoc_array_fact(entries, profile),
+        ExprKind::ArrayLiteralMixed(entries) => source_mixed_array_fact(entries, profile),
+        ExprKind::Spread(inner) => source_expr_fact(inner, profile)?,
+        ExprKind::UnaryPlus(inner) => match source_expr_fact(inner, profile)? {
+            value @ (ValueFact::Integer(_) | ValueFact::Known(PhpType::Float)) => value,
             _ => return None,
         },
-        ExprKind::Cast { target, .. } => match target {
+        ExprKind::Negate(inner) => match source_expr_fact(inner, profile)? {
+            ValueFact::Integer(value) => ValueFact::Integer(value.checked_neg()?),
+            ValueFact::Known(PhpType::Float) => ValueFact::Known(PhpType::Float),
+            _ => return None,
+        },
+        ExprKind::Cast { target, .. } => ValueFact::Known(match target {
             CastType::Int => PhpType::Int,
             CastType::Float => PhpType::Float,
             CastType::Bool => PhpType::Bool,
             CastType::String | CastType::StringFormat => PhpType::Str,
             CastType::Array => PhpType::php_array(),
             CastType::Object => PhpType::Object(String::new()),
-        },
+        }),
         _ => return None,
     })
 }
 
-/// Merges literal element categories without inventing facts for unknown or heterogeneous values.
-fn source_array_value_type<'a>(values: impl Iterator<Item = &'a Expr>) -> PhpType {
-    values.fold(PhpType::Never, |current, value| {
-        let next = source_expr_type(value).unwrap_or(PhpType::Mixed);
-        match (current, next) {
-            (PhpType::Never, next) => next,
-            (current, PhpType::Never) => current,
-            (current, next) if current == next => current,
-            _ => PhpType::Mixed,
+/// Builds a complete indexed literal shape, expanding only literal array spreads.
+fn source_indexed_array_fact(values: &[Expr], profile: SemanticProfile) -> ValueFact {
+    let mut array = ArrayFact::empty();
+    for value in values {
+        if let ExprKind::Spread(source) = &value.kind {
+            let Some(ValueFact::Array(source)) = source_expr_fact(source, profile) else {
+                return ValueFact::Known(PhpType::php_array());
+            };
+            if array.spread(&source).is_none() {
+                return ValueFact::Known(PhpType::php_array());
+            }
+        } else if array
+            .append(source_expr_fact(value, profile).unwrap_or(ValueFact::Unknown))
+            .is_none()
+        {
+            return ValueFact::Known(PhpType::php_array());
         }
-    })
+    }
+    ValueFact::Array(array)
+}
+
+/// Builds a complete explicitly keyed literal shape under the selected exact-key policy.
+fn source_assoc_array_fact(entries: &[(Expr, Expr)], profile: SemanticProfile) -> ValueFact {
+    let mut array = ArrayFact::empty();
+    for (key, value) in entries {
+        let Some(key) = source_array_key(key, profile) else {
+            return ValueFact::Known(PhpType::php_array());
+        };
+        array.insert(
+            key,
+            source_expr_fact(value, profile).unwrap_or(ValueFact::Unknown),
+        );
+    }
+    ValueFact::Array(array)
+}
+
+/// Builds an ordered mixed literal shape when every spread and key is static.
+fn source_mixed_array_fact(entries: &[ArrayEntry], profile: SemanticProfile) -> ValueFact {
+    let mut array = ArrayFact::empty();
+    for entry in entries {
+        let success = match entry {
+            ArrayEntry::Spread(source) => {
+                let source = match &source.kind {
+                    ExprKind::Spread(source) => source.as_ref(),
+                    _ => source,
+                };
+                let Some(ValueFact::Array(source)) = source_expr_fact(source, profile) else {
+                    return ValueFact::Known(PhpType::php_array());
+                };
+                array.spread(&source)
+            }
+            ArrayEntry::Value(value) | ArrayEntry::Reference(value) => {
+                array.append(source_expr_fact(value, profile).unwrap_or(ValueFact::Unknown))
+            }
+            ArrayEntry::Keyed(key, value) | ArrayEntry::KeyReference(key, value) => {
+                let Some(key) = source_array_key(key, profile) else {
+                    return ValueFact::Known(PhpType::php_array());
+                };
+                array.insert(
+                    key,
+                    source_expr_fact(value, profile).unwrap_or(ValueFact::Unknown),
+                );
+                Some(())
+            }
+        };
+        if success.is_none() {
+            return ValueFact::Known(PhpType::php_array());
+        }
+    }
+    ValueFact::Array(array)
+}
+
+/// Converts one static key through the shared literal-array key classifier.
+/// Under exact keys, string `"0"` deliberately remains distinct from integer `0`; an integer
+/// lookup is then a known missing slot whose nested write still receives array-key validation.
+fn source_array_key(expr: &Expr, profile: SemanticProfile) -> Option<ArrayKeyFact> {
+    match crate::types::literal_array_key(expr, profile)? {
+        StringKey::Integer(value) => Some(ArrayKeyFact::Integer(value)),
+        StringKey::String(value) => Some(ArrayKeyFact::String(
+            String::from_utf8_lossy(value).into_owned(),
+        )),
+    }
 }

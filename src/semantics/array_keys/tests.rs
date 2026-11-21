@@ -115,6 +115,21 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php function nested_expression_key_write(array $values): int { if (PHP_OS_FAMILY === 'Windows') { return $values[false][1] = 3; } return 1; }",
         "<?php $values = [[1]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $values = [[1]]; if (PHP_OS_FAMILY === 'Windows') { return $values[0][false] = 2; }",
+        "<?php $values = []; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [[]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][0][false] = 2; }",
+        "<?php $values = null; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $empty = []; $slot = $empty[0]; if (PHP_OS_FAMILY === 'Windows') { $slot[false] = 2; }",
+        "<?php $values = ['0' => [1]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = ['0' => [1]]; if (PHP_OS_FAMILY === 'Windows') { $values['0'][false] = 2; }",
+        "<?php $values = ['a' => 1]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [1]; if (PHP_OS_FAMILY === 'Windows') { $values[1][false] = 2; }",
+        "<?php $values = [[1], ['a' => 2]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [[], 1]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php function guarded_dynamic_nested_key(int $key): void { $values = [[1], [2]]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][false] = 2; } }",
+        "<?php $values = [...[[1]]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = []; $values[0] = []; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [[]]; $values[0][0] = []; if (PHP_OS_FAMILY === 'Windows') { $values[0][0][false] = 2; }",
     ] {
         let error = crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
@@ -150,6 +165,10 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php class StringKeyWrites { public string $items = 'ab'; public static string $shared = 'ab'; } $value = new StringKeyWrites(); if (PHP_OS_FAMILY === 'Windows') { $value->items[1.5] = 'x'; StringKeyWrites::$shared[false] = 'y'; }",
         "<?php class KeyAccessWrite implements ArrayAccess { public function offsetExists(mixed $key): bool { return true; } public function offsetGet(mixed $key): mixed { return 1; } public function offsetSet(mixed $key, mixed $value): void {} public function offsetUnset(mixed $key): void {} } $value = new KeyAccessWrite(); if (PHP_OS_FAMILY === 'Windows') { $value[true] = 2; }",
         "<?php class NestedKeyAccessWrite implements ArrayAccess { public function offsetExists(mixed $key): bool { return true; } public function offsetGet(mixed $key): mixed { return 1; } public function offsetSet(mixed $key, mixed $value): void {} public function offsetUnset(mixed $key): void {} } $values = [new NestedKeyAccessWrite()]; if (PHP_OS_FAMILY === 'Windows') { $values[0][true] = 2; }",
+        "<?php $values = [1]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = []; $values[0] = 1; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [[]]; $values[0][0] = 1; if (PHP_OS_FAMILY === 'Windows') { $values[0][0][false] = 2; }",
+        "<?php class SpreadKeyAccessWrite implements ArrayAccess { public function offsetExists(mixed $key): bool { return true; } public function offsetGet(mixed $key): mixed { return 1; } public function offsetSet(mixed $key, mixed $value): void {} public function offsetUnset(mixed $key): void {} } $values = [...[new SpreadKeyAccessWrite()]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][true] = 2; }",
     ] {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));
