@@ -15,7 +15,7 @@
 //! - Counters are process-wide and cumulative, because the autoload rounds monomorphize the
 //!   program again from scratch; `erasure_reruns` is the docblock-erasure round of this process
 //!   (a re-run is a new process, so it does not accumulate here).
-//! - The line is `[elephc-generics] templates= doc_templates= instances= doc_instances=
+//! - The line is `[elephc-generics] templates= doc_templates= instances= doc_class_instances=
 //!   rounds= checks= erasure_reruns= check_ms= instantiate_ms=`, and each instantiation round
 //!   prints a `[elephc-generics] round N check_ms= instantiate_ms=` line.
 
@@ -102,7 +102,7 @@ pub(crate) fn report() {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0);
     eprintln!(
-        "[elephc-generics] templates={} doc_templates={} instances={} doc_instances={} rounds={} checks={} erasure_reruns={} check_ms={} instantiate_ms={}",
+        "[elephc-generics] templates={} doc_templates={} instances={} doc_class_instances={} rounds={} checks={} erasure_reruns={} check_ms={} instantiate_ms={}",
         TEMPLATES.load(Ordering::Relaxed),
         DOC_TEMPLATES.load(Ordering::Relaxed),
         INSTANCES.load(Ordering::Relaxed),

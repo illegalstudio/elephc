@@ -265,6 +265,7 @@ fn apply_to_stmt(
             *return_type = adopted_return;
         }
         StmtKind::ClassDecl {
+            name,
             generics,
             extends,
             implements,
@@ -273,10 +274,14 @@ fn apply_to_stmt(
             ..
         } => {
             let extends_args = adopt_inherited(block, extends.as_ref());
-            adopt_generics(block, generics, extends_args, implements);
-            members::apply(class_templates(generics), properties, methods, blocks, scope);
+            let overlaid = overlay_doc_template(block, generics, name, &extends_args, implements, scope);
+            if overlaid.is_empty() {
+                adopt_generics(block, generics, extends_args, implements);
+            }
+            members::apply(class_templates(generics), &overlaid, properties, methods, blocks, scope);
         }
         StmtKind::InterfaceDecl {
+            name,
             generics,
             extends,
             properties,
@@ -286,18 +291,24 @@ fn apply_to_stmt(
             // An interface has no single parent, so everything it inherits is an interface and
             // everything annotated lands in `interface_args` — which is why `GenericDecl` says
             // `extends_args` is always empty for one.
-            adopt_generics(block, generics, Vec::new(), extends);
-            members::apply(class_templates(generics), properties, methods, blocks, scope);
+            let overlaid = overlay_doc_template(block, generics, name, &[], extends, scope);
+            if overlaid.is_empty() {
+                adopt_generics(block, generics, Vec::new(), extends);
+            }
+            members::apply(class_templates(generics), &overlaid, properties, methods, blocks, scope);
         }
         StmtKind::TraitDecl {
-            generics, properties, methods, ..
+            name, generics, properties, methods, ..
         } => {
-            adopt_generics(block, generics, Vec::new(), &[]);
-            members::apply(class_templates(generics), properties, methods, blocks, scope);
+            let overlaid = overlay_doc_template(block, generics, name, &[], &[], scope);
+            if overlaid.is_empty() {
+                adopt_generics(block, generics, Vec::new(), &[]);
+            }
+            members::apply(class_templates(generics), &overlaid, properties, methods, blocks, scope);
         }
         // Enums carry no class templates, but their methods may declare their own templates.
         StmtKind::EnumDecl { methods, .. } => {
-            members::apply(&mut [], &mut [], methods, blocks, scope);
+            members::apply(&mut [], &[], &mut [], methods, blocks, scope);
         }
         StmtKind::NamespaceBlock { name, body } => {
             let nested = NameScope {
@@ -327,6 +338,88 @@ fn adopt_annotation(
     {
         *declared = Some(adopted);
     }
+}
+
+/// The PHPDoc reading of a class-like declaration whose type parameters exist only in its doc
+/// comment (`@template T` above `class Box`).
+///
+/// php never reads a docblock, so the declaration stays exactly as it is written: it is NOT a
+/// template, is never instantiated, and compiles as one class under its written name with its
+/// written native types. What the annotation says is kept here instead, keyed by the class's
+/// lowercased fully qualified name, for whatever pass wants the generic view of it (nothing
+/// consumes it yet beyond [`is_doc_template`], which lets a mention such as `@extends Box<T>` or
+/// `Collection<int, Post>` be forgotten rather than refused as a mention of a non-template).
+#[derive(Debug, Clone)]
+pub struct DocView {
+    /// The `@template` parameters, with their bounds and defaults.
+    pub type_params: Vec<TypeParam>,
+    /// The type arguments annotated on the single parent (`@extends Base<T>`).
+    pub extends_args: Vec<TypeExpr>,
+    /// The type arguments annotated on each inherited interface, aligned with the written list.
+    pub interface_args: Vec<Vec<TypeExpr>>,
+}
+
+fn doc_views() -> &'static std::sync::Mutex<HashMap<String, DocView>> {
+    static VIEWS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, DocView>>> =
+        std::sync::OnceLock::new();
+    VIEWS.get_or_init(|| std::sync::Mutex::new(HashMap::default()))
+}
+
+/// Whether the class-like `key` (lowercased fully qualified name) was declared with PHPDoc
+/// `@template`s only, so that it is an ordinary class whose generic view is a [`DocView`].
+pub(crate) fn is_doc_template(key: &str) -> bool {
+    doc_views()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains_key(key)
+}
+
+/// How many class-likes declared PHPDoc templates only (`ELEPHC_GENERICS_STATS`).
+pub(crate) fn doc_view_count() -> u64 {
+    doc_views().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len() as u64
+}
+
+/// The PHPDoc view recorded for the class-like `key`, if it declared PHPDoc templates.
+pub fn doc_view(key: &str) -> Option<DocView> {
+    doc_views()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(key)
+        .cloned()
+}
+
+/// Records the PHPDoc view of a class-like declaration that declares `@template`s without
+/// native generics, and returns those parameters' names (empty when the declaration is not one).
+///
+/// Written syntax wins, as in [`adopt_generics`]; an annotation that only names someone else's
+/// template (`@extends NativeBox<int>`, no `@template`) is not overlaid either, because that
+/// instantiation is honoured by [`adopt_generics`].
+fn overlay_doc_template(
+    block: Option<&DocBlock>,
+    generics: &Option<Box<GenericDecl>>,
+    name: &str,
+    extends_args: &[TypeExpr],
+    inherited_interfaces: &[Name],
+    scope: &NameScope,
+) -> Vec<String> {
+    if generics.is_some() {
+        return Vec::new();
+    }
+    let Some(block) = block.filter(|block| !block.type_params.is_empty()) else {
+        return Vec::new();
+    };
+    let key = scope.class_key(&Name::unqualified(name));
+    let view = DocView {
+        type_params: block.type_params.clone(),
+        extends_args: extends_args.to_vec(),
+        interface_args: align_inherited(inherited_interfaces, block),
+    };
+    let names = view.type_params.iter().map(|param| param.name.clone()).collect();
+    doc_views()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(key, view);
+    names
 }
 
 /// Gives a declaration its generic half from `block`.
@@ -903,7 +996,8 @@ mod tests {
         let StmtKind::ClassDecl { generics, methods, .. } = &program[0].kind else {
             panic!("expected a class");
         };
-        assert!(generics.is_some());
+        // A class template is only a `DocView` now: the declaration stays as written.
+        assert!(generics.is_none());
         assert!(methods.iter().all(|method| method.type_params.is_empty()));
     }
 
@@ -941,14 +1035,14 @@ mod tests {
         assert_eq!(methods[0].params[0].1, Some(TypeExpr::Named(Name::unqualified("T"))));
     }
 
-    /// `@template` on a class makes it a template, and its members' annotations name the type
-    /// parameter it declared.
+    /// `@template` on a class does NOT make it a template (php never reads a docblock): the
+    /// declaration stays exactly as written and the annotation is kept as a `DocView`.
     #[test]
-    fn a_class_adopts_its_template_and_member_annotations() {
+    fn a_class_template_stays_as_written_and_records_a_doc_view() {
         let program = program_of(concat!(
             "<?php\n",
             "/** @template T */\n",
-            "class Box {\n",
+            "class ViewBox {\n",
             "    /** @var T */\n",
             "    private $value;\n",
             "    /** @param T $value */\n",
@@ -966,13 +1060,38 @@ mod tests {
         else {
             panic!("expected a class declaration");
         };
-        let generics = generics.as_ref().expect("class became a template");
-        assert_eq!(generics.type_params.len(), 1);
-        assert_eq!(generics.type_params[0].name, "T");
-        let t = TypeExpr::Named(Name::unqualified("T"));
-        assert_eq!(properties[0].type_expr, Some(t.clone()));
-        assert_eq!(methods[0].params[0].1, Some(t.clone()));
-        assert_eq!(methods[1].return_type, Some(t));
+        assert!(generics.is_none());
+        assert_eq!(properties[0].type_expr, None);
+        assert_eq!(methods[0].params[0].1, None);
+        assert_eq!(methods[1].return_type, None);
+        let view = doc_view("viewbox").expect("the annotation is kept as a view");
+        assert_eq!(view.type_params.len(), 1);
+        assert_eq!(view.type_params[0].name, "T");
+        assert!(is_doc_template("viewbox"));
+    }
+
+    /// The restored declaration equals the one parsed with no adoption at all, byte for byte
+    /// (spans included): the overlay leaves nothing of the annotation in the AST.
+    #[test]
+    fn a_doc_template_class_equals_a_parse_without_adoption() {
+        let source = concat!(
+            "<?php\n",
+            "/**\n * @template T of object\n * @extends Base<T>\n * @implements Reader<T>\n */\n",
+            "class EqBox extends Base implements Reader {\n",
+            "    /** @var T */\n",
+            "    private $value;\n",
+            "    /** @param T $value */\n",
+            "    public function __construct($value) { $this->value = $value; }\n",
+            "    /** @return T */\n",
+            "    public function get() { return $this->value; }\n",
+            "}\n",
+        );
+        let tokens = crate::lexer::tokenize(source).expect("tokenizes");
+        let plain = crate::parser::parse(&tokens).expect("parses");
+        let overlaid = apply(plain.clone(), source);
+        assert_eq!(format!("{plain:?}"), format!("{overlaid:?}"));
+        let view = doc_view("eqbox").expect("view");
+        assert_eq!(view.extends_args, vec![TypeExpr::Named(Name::unqualified("T"))]);
     }
 
     /// `@template` on the class must not promote every annotation in the body into a type
@@ -1011,10 +1130,10 @@ mod tests {
         else {
             panic!("expected a class declaration");
         };
-        let t = Some(TypeExpr::Named(Name::unqualified("T")));
-        assert_eq!(methods[0].params[0].1, t);
+        // The class template is not adopted, so neither side is retyped: they still agree.
+        assert_eq!(methods[0].params[0].1, None);
         assert!(properties[0].is_promoted);
-        assert_eq!(properties[0].type_expr, t);
+        assert_eq!(properties[0].type_expr, None);
     }
 
     /// `@implements` aligns with the written list index by index, the way `parse_name_list` does,
@@ -1027,14 +1146,15 @@ mod tests {
             " * @template T\n",
             " * @implements Reader<T>\n",
             " */\n",
-            "class Box implements Countable, Reader {}\n",
+            "class ImplBox implements Countable, Reader {}\n",
         ));
         let StmtKind::ClassDecl { generics, .. } = &program[0].kind else {
             panic!("expected a class declaration");
         };
-        let generics = generics.as_ref().expect("class became a template");
+        assert!(generics.is_none());
+        let view = doc_view("implbox").expect("the annotation is kept as a view");
         assert_eq!(
-            generics.interface_args,
+            view.interface_args,
             vec![
                 Vec::new(),
                 vec![TypeExpr::Named(Name::unqualified("T"))],
@@ -1079,11 +1199,12 @@ mod tests {
         else {
             panic!("expected an interface declaration");
         };
-        let generics = generics.as_ref().expect("interface became a template");
-        assert_eq!(generics.type_params.len(), 1);
-        assert!(generics.extends_args.is_empty());
+        assert!(generics.is_none());
+        let view = doc_view("stream").expect("the annotation is kept as a view");
+        assert_eq!(view.type_params.len(), 1);
+        assert!(view.extends_args.is_empty());
         assert_eq!(
-            generics.interface_args,
+            view.interface_args,
             vec![vec![TypeExpr::Named(Name::unqualified("T"))]]
         );
         // A bodiless method keeps its native signature: its PHPDoc only describes what an
@@ -1294,7 +1415,8 @@ mod tests {
         };
         assert_eq!(properties[0].type_expr, None);
         assert_eq!(methods[0].type_params[0].name, "U");
-        assert_eq!(methods[0].params[0].1, Some(TypeExpr::Named(Name::unqualified("T"))));
+        // `T` is the class's PHPDoc template (a `DocView`, not adopted): it binds nothing here.
+        assert_eq!(methods[0].params[0].1, None);
         assert_eq!(methods[0].params[1].1, Some(TypeExpr::Named(Name::unqualified("U"))));
         assert!(methods[1].type_params.is_empty());
         assert_eq!(methods[1].params[0].1, None);

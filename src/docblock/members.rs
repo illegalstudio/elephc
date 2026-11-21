@@ -22,6 +22,7 @@ use super::{DocBlock, NameScope};
 /// Applies class-scoped member annotations and adopts each method's own template declaration.
 pub(super) fn apply(
     class_templates: &mut [TypeParam],
+    erased_class_params: &[String],
     properties: &mut [ClassProperty],
     methods: &mut [ClassMethod],
     blocks: &HashMap<(u32, u32), DocBlock>,
@@ -41,6 +42,7 @@ pub(super) fn apply(
                 &mut property.type_expr,
                 annotated,
                 class_params,
+                &[],
                 class_templates,
                 scope,
             );
@@ -86,6 +88,15 @@ pub(super) fn apply(
             Vec::new()
         };
         let own = own.as_slice();
+        // The class's PHPDoc templates are not adopted (`DocView`), so an annotation naming one
+        // has nothing to bind: the position keeps its written type. A method template of the
+        // same name shadows it.
+        let erased: Vec<String> = erased_class_params
+            .iter()
+            .filter(|name| !own.iter().any(|shadow| &shadow.name == *name))
+            .cloned()
+            .collect();
+        let erased = erased.as_slice();
         // The method's own templates shadow a class template of the same name.
         let templates: Vec<TypeParam> = own
             .iter()
@@ -103,7 +114,7 @@ pub(super) fn apply(
             let Some(annotated) = block.params.get(name) else {
                 continue;
             };
-            if apply_signature_type(declared, annotated, in_scope, templates, scope)
+            if apply_signature_type(declared, annotated, in_scope, erased, templates, scope)
                 && is_constructor
             {
                 promoted.extend(declared.clone().map(|adopted| (name.clone(), adopted)));
@@ -114,10 +125,10 @@ pub(super) fn apply(
             .as_ref()
             .and_then(|name| block.params.get(name))
         {
-            apply_signature_type(&mut method.variadic_type, annotated, in_scope, templates, scope);
+            apply_signature_type(&mut method.variadic_type, annotated, in_scope, erased, templates, scope);
         }
         if let Some(annotated) = &block.return_type {
-            apply_signature_type(&mut method.return_type, annotated, in_scope, templates, scope);
+            apply_signature_type(&mut method.return_type, annotated, in_scope, erased, templates, scope);
         }
         // A template whose `@param` lost to a native hint (`@param T $v` on `mixed $v`) but
         // whose `@return T` was adopted is kept: no argument binds it any more, and a call that
@@ -168,10 +179,11 @@ fn apply_signature_type(
     declared: &mut Option<TypeExpr>,
     annotated: &TypeExpr,
     in_scope: &[String],
+    erased: &[String],
     own: &[TypeParam],
     scope: &NameScope,
 ) -> bool {
-    if !annotated.mentions_type_param(in_scope) {
+    if !annotated.mentions_type_param(in_scope) || annotated.mentions_type_param(erased) {
         return false;
     }
     let Some(adopted) = adopted_signature_type(declared.as_ref(), annotated, own, scope) else {

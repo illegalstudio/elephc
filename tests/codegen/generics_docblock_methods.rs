@@ -11,12 +11,26 @@
 
 use crate::support::*;
 
+/// Compiles `source` (a class under a PHPDoc `@template`), asserts the docblock was bound to it
+/// as a `DocView` (the class is never instantiated), and returns the program's output.
+fn doc_class_output(source: &str) -> String {
+    let (stderr, stdout, _) = compile_cli_files_with_env_and_run(
+        &[("main.php", source)],
+        "main.php",
+        &[("ELEPHC_GENERICS_STATS", "1")],
+    );
+    let line = generics_stats_line(&stderr);
+    assert!(line.contains(" doc_templates=1 "), "{line}");
+    assert!(line.contains(" doc_class_instances=0 "), "{line}");
+    stdout
+}
+
 /// Constructor and ordinary methods on the class line retain their class-scoped types.
 #[test]
 fn test_docblock_shared_class_and_method_line() {
     let source = r#"<?php
 /** @template T */
-class Box { public function __construct(public T $value) {} public function id(T $v): T { return $v; } }
+class Box { public function __construct(public $value) {} public function id($v) { return $v; } }
 $box = new Box(7);
 echo get_class($box), ":", $box->value, "|", $box->id(8);
 "#;
@@ -30,9 +44,9 @@ echo get_class($box), ":", $box->value, "|", $box->id(8);
 fn test_docblock_same_line_class_declaration() {
     let source = r#"<?php
 /** @template T */ class Box {
-    public function __construct(public T $value) {}
+    public function __construct(public $value) {}
 }
-$box = new Box<int>(7);
+$box = new Box(7);
 echo get_class($box), ":", $box->value;
 "#;
     assert_eq!(compile_and_run(source), "Box:7");
@@ -351,19 +365,19 @@ fn test_docblock_method_templates_example_runs_in_both_modes() {
 /// the class's line does not adopt the class's `@template`.
 ///
 /// `collect` keyed every block to the line AFTER `*/`, so `/** @template T */ class Box` lost
-/// its template and `new Box<int>(7)` was refused. With the class and its constructor on one
+/// its template and `new Box(7)` was refused. With the class and its constructor on one
 /// line, the class block was also copied onto the constructor, which then expected no argument.
 #[test]
 fn test_docblock_on_the_declaration_line_binds_to_it() {
     let sources = [
-        "<?php\n/** @template T */ class Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
-        "<?php\n/** @template T */\nclass Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+        "<?php\n/** @template T */ class Box { public function __construct(public $v) {} }\n\
+         $b = new Box(7);\necho get_class($b), \":\", $b->v;\n",
+        "<?php\n/** @template T */\nclass Box { public function __construct(public $v) {} }\n\
+         $b = new Box(7);\necho get_class($b), \":\", $b->v;\n",
     ];
     // Without `--strict-php` only: the written `new Box<int>` is an elephc extension it refuses.
     for source in sources {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box:7", "{source}");
+        assert_eq!(doc_class_output(source), "Box:7", "{source}");
     }
 }
 
@@ -432,14 +446,14 @@ echo get_class($number), ":", $number->value, "|", get_class($text), ":", $text-
 fn test_docblock_closing_line_trailing_comment_or_attribute() {
     let sources = [
         "<?php\n#[Attribute]\nclass Marker {}\n/** @template T */ #[Marker]\n\
-         class Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+         class Box { public function __construct(public $v) {} }\n\
+         $b = new Box(7);\necho get_class($b), \":\", $b->v;\n",
         "<?php\n/** @template T */ // kept\n\
-         class Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+         class Box { public function __construct(public $v) {} }\n\
+         $b = new Box(7);\necho get_class($b), \":\", $b->v;\n",
     ];
     for source in sources {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box:7", "{source}");
+        assert_eq!(doc_class_output(source), "Box:7", "{source}");
     }
 }
 
@@ -451,16 +465,16 @@ fn test_docblock_closing_line_trailing_comment_or_attribute() {
 #[test]
 fn test_block_comment_between_docblock_and_declaration_keeps_the_template() {
     let class_sources = [
-        "<?php\n/** @template T */ /* kept */ class Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
-        "<?php\n/** @template T */\n/*\n * kept\n */\nclass Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+        "<?php\n/** @template T */ /* kept */ class Box { public function __construct(public $v) {} }\n\
+         $b = new Box(7);\necho get_class($b), \":\", $b->v;\n",
+        "<?php\n/** @template T */\n/*\n * kept\n */\nclass Box { public function __construct(public $v) {} }\n\
+         $b = new Box(7);\necho get_class($b), \":\", $b->v;\n",
         "<?php\n#[Attribute]\nclass Marker {}\n/** @template T */\n/* kept */\n#[Marker]\n\
-         class Box { public function __construct(public T $v) {} }\n\
-         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+         class Box { public function __construct(public $v) {} }\n\
+         $b = new Box(7);\necho get_class($b), \":\", $b->v;\n",
     ];
     for source in class_sources {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box:7", "{source}");
+        assert_eq!(doc_class_output(source), "Box:7", "{source}");
     }
     let bounded = r#"<?php
 /**
@@ -484,9 +498,9 @@ echo id("seven");
 #[test]
 fn test_star_banner_comment_keeps_the_docblock_above_it() {
     let banner = "<?php\n/** @template T */\n/***\n * banner\n */\n\
-                  class Box { public function __construct(public T $v) {} }\n\
-                  $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n";
-    assert_eq!(compile_cli_file_and_run_with_flags(banner, &[]), "Box:7");
+                  class Box { public function __construct(public $v) {} }\n\
+                  $b = new Box(7);\necho get_class($b), \":\", $b->v;\n";
+    assert_eq!(doc_class_output(banner), "Box:7");
     let bound = "/**\n * @template T of int\n * @param T $v\n * @return T\n */\n/*** kept */\n";
     for source in [
         format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n"),
@@ -526,11 +540,11 @@ fn test_comment_scan_follows_the_php_lexer() {
     for comment in ["/*/*/", "/**\u{0c}*/", "/**\u{0b}*/", "/**\u{a0}*/"] {
         let source = format!(
             "<?php\n/** @template T */\n{comment}\n\
-             class Box {{ public function __construct(public T $v) {{}} }}\n\
-             $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n"
+             class Box {{ public function __construct(public $v) {{}} }}\n\
+             $b = new Box(7);\necho get_class($b), \":\", $b->v;\n"
         );
         assert_eq!(
-            compile_cli_file_and_run_with_flags(&source, &[]),
+            doc_class_output(&source),
             "Box:7",
             "{comment:?}"
         );
@@ -1358,7 +1372,9 @@ fn test_docblock_erasure_takes_dependents_in_one_rerun() {
         &[("ELEPHC_DOCBLOCK_ERASURE_ROUND", "7")],
     );
     assert_eq!(stdout, "BoxSBoxBox\n", "{compile_stderr}");
-    assert!(compile_stderr.contains("Holder.php"), "{compile_stderr}");
+    // A PHPDoc template is no longer instantiated (`docblock::DocView`), so the refusal this
+    // fixture was built around cannot happen: nothing is erased and nothing re-runs.
+    assert!(!compile_stderr.contains(ERASED_NOTE), "{compile_stderr}");
 }
 
 /// The last `[elephc-generics]` totals line of a compile's stderr (`ELEPHC_GENERICS_STATS`).
@@ -1371,9 +1387,8 @@ fn generics_stats_line(stderr: &str) -> String {
         .to_string()
 }
 
-/// `ELEPHC_GENERICS_STATS` tells a native `<T>` template from a PHPDoc one, and counts what a
-/// build spends on each: the numbers a design change (erasing PHPDoc templates, or anything that
-/// moves the compile cost of the Symfony Demo) is measured against.
+/// `ELEPHC_GENERICS_STATS` tells a native `<T>` template from a PHPDoc one: the native class is
+/// monomorphized (one instance), the PHPDoc class is a `DocView` and never instantiated.
 #[test]
 fn test_generics_stats_tell_native_templates_from_doc_templates() {
     let main = "<?php\nclass NativeBox<T> { public function __construct(public T $v) {} }\n/** @template T */\nclass DocBox { /** @param T $v */ public function __construct(public $v) {} }\n$n = new NativeBox<int>(1);\n$d = new DocBox(2);\necho $n->v, $d->v, \"\\n\";\n";
@@ -1385,13 +1400,13 @@ fn test_generics_stats_tell_native_templates_from_doc_templates() {
     );
     assert_eq!(stdout, "12\n", "{stderr}");
     let line = generics_stats_line(&stderr);
-    assert!(line.contains("templates=2 doc_templates=1 instances=2 doc_instances=1 "), "{line}");
+    assert!(line.contains("templates=1 doc_templates=1 instances=1 doc_class_instances=0 "), "{line}");
     assert!(line.contains(" erasure_reruns=0 "), "{line}");
 }
 
 /// The three-file autoload shape of the Demo's refusals (`Box` is a PHPDoc template, `SBox`
-/// extends it with arguments, `Holder` annotates `Box<T>`). The refusal erases all three in ONE
-/// re-run; the final process's stats line records that single re-run and no PHPDoc instance.
+/// extends it with arguments, `Holder` annotates `Box<T>`). Nothing is instantiated, so nothing
+/// is refused and no erasure re-run (a whole extra compile) is ever needed.
 #[test]
 fn test_generics_stats_count_the_erasure_rerun_of_an_autoload_fixture() {
     let autoloader = "<?php\nspl_autoload_register(function (string $class): void {\n    $file = __DIR__ . \"/src/\" . $class . \".php\";\n    if (is_file($file)) { require $file; }\n});\n";
@@ -1420,6 +1435,121 @@ fn test_generics_stats_count_the_erasure_rerun_of_an_autoload_fixture() {
     );
     assert_eq!(stdout, "BoxSBoxBox\n", "{stderr}");
     let line = generics_stats_line(&stderr);
-    assert!(line.contains(" erasure_reruns=1 "), "{line}");
-    assert!(line.contains("doc_instances=0 "), "{line}");
+    assert!(line.contains(" erasure_reruns=0 "), "{line}");
+    assert!(line.contains("doc_class_instances=0 "), "{line}");
+    assert!(line.contains(" rounds=0 "), "{line}");
+}
+
+/// The refusals the Symfony Demo's first build met, as one namespaced program: a bare `new` of
+/// a PHPDoc template inside a trait factory (`Cannot instantiate interface: ...BuiltinType`), an
+/// `EntityRepository<mixed>` returned where `EntityRepository<object>` is declared, and a
+/// subclass annotated `@extends EntityRepository<User>`. php reads none of the annotations, so
+/// the output (taken from `php -n`) is that of plain classes: one `BuiltinType` class with one
+/// shared static, `get_class` without type arguments, and no instantiation, round or re-run.
+#[test]
+fn test_doc_templates_compile_as_plain_classes_with_no_instantiation() {
+    let source = r#"<?php
+namespace App;
+
+enum Id: string { case INT = 'int'; case STR = 'string'; }
+
+/** @template T of Id */
+final class BuiltinType {
+    public static int $made = 0;
+    /** @param T $id */
+    public function __construct(private readonly Id $id) { self::$made++; }
+    /** @return T */
+    public function get(): Id { return $this->id; }
+}
+
+trait Factory {
+    /**
+     * @template T of Id
+     * @template U value-of<T>
+     * @param T|U $identifier
+     * @return BuiltinType<T>
+     */
+    public static function builtin(Id|string $identifier): BuiltinType {
+        /** @var T $identifier */
+        $identifier = \is_string($identifier) ? Id::from($identifier) : $identifier;
+        return new BuiltinType($identifier);
+    }
+    /** @return BuiltinType<Id::INT> */
+    public static function int(): BuiltinType { return static::builtin(Id::INT); }
+}
+abstract class Type { use Factory; }
+
+/** @template T of object */
+class EntityRepository {
+    public function __construct(protected string $class) {}
+    /** @return EntityRepository<object> */
+    public function widen(): EntityRepository { return $this; }
+    /** @return T|null */
+    public function make(): ?object { return new ($this->class)(); }
+}
+class User {}
+/** @extends EntityRepository<User> */
+class UserRepository extends EntityRepository {
+    public function __construct() { parent::__construct(User::class); }
+}
+/** @return EntityRepository<mixed> */
+function repo(): EntityRepository { return new UserRepository(); }
+function take(EntityRepository $r): string { return get_class($r->widen()->make()); }
+
+$a = Type::int();
+$b = Type::builtin('string');
+$c = new BuiltinType(Id::STR);
+echo get_class($a), ' ', $a->get()->value, ' ', $b->get()->value, ' ', BuiltinType::$made, "\n";
+echo $c instanceof BuiltinType ? 'y' : 'n', ' ', take(repo()), ' ', get_class(repo()), "\n";
+"#;
+    let files = [("main.php", source)];
+    let (stderr, stdout, _) = compile_cli_files_with_env_and_run(
+        &files,
+        "main.php",
+        &[("ELEPHC_GENERICS_STATS", "1")],
+    );
+    assert_eq!(
+        stdout, "App\\BuiltinType int string 3\ny App\\User App\\UserRepository\n",
+        "{stderr}"
+    );
+    let line = generics_stats_line(&stderr);
+    assert!(line.contains(" doc_class_instances=0 "), "{line}");
+    assert!(line.contains(" erasure_reruns=0 "), "{line}");
+    assert!(!stderr.contains(ERASED_NOTE), "{stderr}");
+}
+
+/// An annotated `@extends` whose bound the reader cannot parse (`class-string<\UnitEnum>`) used to
+/// need the erasure fallback; as a plain class chain it never refuses, and costs no re-run.
+#[test]
+fn test_unparsable_doc_bounds_cost_no_erasure_rerun() {
+    let source = r#"<?php
+/** @template T of class-string */
+class ObjectType {
+    public function __construct(public string $name) {}
+}
+/**
+ * @template T of class-string<\UnitEnum>
+ *
+ * @extends ObjectType<T>
+ */
+class EnumType extends ObjectType {}
+/**
+ * @template T of class-string<\BackedEnum>
+ *
+ * @extends EnumType<T>
+ */
+final class BackedEnumType extends EnumType {}
+$t = new BackedEnumType("Suit");
+echo get_class($t), ":", $t->name, ":", $t instanceof ObjectType ? "y" : "n";
+"#;
+    let files = [("main.php", source)];
+    let (stderr, stdout, _) = compile_cli_files_with_env_and_run(
+        &files,
+        "main.php",
+        &[("ELEPHC_GENERICS_STATS", "1")],
+    );
+    assert_eq!(stdout, "BackedEnumType:Suit:y", "{stderr}");
+    let line = generics_stats_line(&stderr);
+    assert!(line.contains(" doc_class_instances=0 "), "{line}");
+    assert!(line.contains(" erasure_reruns=0 "), "{line}");
 }

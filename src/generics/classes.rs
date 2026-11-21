@@ -475,7 +475,9 @@ impl Instantiate<'_> {
         let key = template_key(name.as_str());
         !self.templates.contains_key(&key)
             && !self.conditional.contains(&key)
-            && !self.declared.contains(&key)
+            // A class whose templates exist only in its docblock is an ordinary class: php never
+            // read the arguments written on it (`DocView`), so the mention is forgotten.
+            && (!self.declared.contains(&key) || crate::docblock::is_doc_template(&key))
     }
 
     /// Whether `key` is the template the innermost class instantiates, written in its own

@@ -157,8 +157,9 @@ where
     let program = erasure::erase_dispatched(program);
     let mut class_templates = classes::collect(&program);
     if stats::enabled() {
+        // PHPDoc-only templates are not instantiated, so they are counted from their views.
         let (total, doc) = class_templates.counts();
-        stats::record_templates(total, doc);
+        stats::record_templates(total, doc + crate::docblock::doc_view_count());
     }
     // A variance marker is a promise about the DECLARATION, so it is checked once, here, before
     // anything is spliced. Checking it per instantiation would name a class the programmer never
