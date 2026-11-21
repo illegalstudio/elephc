@@ -153,7 +153,9 @@ fn collect_constant_decls(
                     {
                         constants
                             .get(reference.as_str().trim_start_matches('\\'))
-                            .cloned()
+                            .map(|(resolved, ty)| {
+                                alias_value(resolved.clone(), value, ty.clone())
+                            })
                             .unwrap_or_else(|| {
                                 (crate::types::constant_binding::bind_value(value.clone(), &PhpType::Mixed), constant_expr_type(&value.kind))
                             })
@@ -180,6 +182,14 @@ fn collect_constant_decls(
             _ => {}
         }
     }
+}
+
+/// Keeps a constant alias at its declaration source while reusing the prepared value producer.
+fn alias_value(resolved: Expr, alias: &Expr, ty: PhpType) -> (Expr, PhpType) {
+    let mut resolved = crate::optimize::fold_constant_expression(resolved);
+    resolved.span = alias.span;
+    resolved.source_profile = alias.source_profile;
+    (resolved, ty)
 }
 
 /// Infers the `PhpType` for a constant expression from its `ExprKind` variant.

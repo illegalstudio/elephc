@@ -250,6 +250,8 @@ fn resolve(mut expr: Expr, constants: &crate::types::GlobalConstants,
                         resolved = crate::types::constant_binding::bind_value(resolved, ty);
                     }
                     expr.kind = resolved.kind;
+                    expr.source_profile = resolved.source_profile;
+                    expr.producer_binding = resolved.producer_binding;
                 }
                 active.remove(&key);
             }
@@ -355,6 +357,12 @@ mod tests {
         let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true)
             .with(StrictFeature::Arithmetic, true).with(StrictFeature::Overflow, true);
         let _policy = crate::optimize::scoped_semantic_profile(profile);
+        let constants = context(&program, Target::detect_host());
+        let resolved = resolve(program.iter().find_map(|statement| match &statement.kind {
+            StmtKind::ConstDecl { name, value } if name == "HOST_PUBLIC_POWER" => Some(value.clone()),
+            _ => None,
+        }).unwrap(), &constants, &mut HashSet::new(), 0).unwrap();
+        assert!(matches!(resolved.kind, ExprKind::FloatLiteral(value) if value == 0.5), "{resolved:?}");
         let exports = collect(&program, &["HOST_PUBLIC_POWER".into(), "HOST_PUBLIC_OVERFLOW".into()], Target::detect_host()).unwrap();
         assert!(matches!(exports[0].value, ConstantValue::Float(value) if value == 0.5));
         assert!(matches!(exports[1].value, ConstantValue::Float(value) if value > 0.0));
