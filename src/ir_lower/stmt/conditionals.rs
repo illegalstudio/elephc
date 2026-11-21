@@ -487,7 +487,7 @@ fn finish_type_join(
         let conversions = arm_conversions(arm, &joined);
         let mixed_conversions = arm_mixed_conversions(arm, &edge_boxed);
         ctx.builder.position_at_end(arm.tail);
-        widen_arm_containers_to_hash(ctx, &hash_conversions, span);
+        widen_arm_containers_to_hash(ctx, &hash_conversions, &joined, span);
         widen_indexed_arrays_to_mixed(ctx, &conversions, span);
         box_arm_locals_as_mixed(ctx, &mixed_conversions, span);
         ctx.builder.terminate(Terminator::Br {
@@ -628,6 +628,22 @@ fn join_arm_types(
             continue;
         }
 
+        // An arm that leaves the local an empty indexed array holds no element storage, so it
+        // adopts the layout the other arms agree on instead of boxing every arm's elements.
+        if let Some(shared) = empty_array_arm_join(&arm_types) {
+            let adopted = raw_arm_types[shared].clone();
+            // The empty arm becomes a hash on its edge; an indexed layout needs no conversion.
+            if matches!(adopted.codegen_repr(), PhpType::AssocArray { .. })
+                && !arms
+                    .iter()
+                    .all(|arm| local_slot_is_convertible(ctx, &name, &arm.initialized))
+            {
+                continue;
+            }
+            joined.insert(name, adopted);
+            continue;
+        }
+
         if arm_types
             .iter()
             .all(|ty| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }))
@@ -673,6 +689,34 @@ fn join_arm_types(
         joined.insert(name, PhpType::Array(Box::new(PhpType::Mixed)));
     }
     (joined, edge_boxed)
+}
+
+/// Returns the index of the arm whose container layout the empty-array arms adopt.
+///
+/// `$out = []; if ($c) { $out[] = $v; }` ends one arm with `array<int>` and the other with the
+/// `array<never>` it entered with. The empty arm has no element to convert, and the checker joins
+/// the two to `array<int>`, so boxing both arms to `array<mixed>` left every consumer compiled
+/// against the checker's type reading boxed cells as raw payloads. The join applies only when
+/// at least one arm is still empty and every other arm agrees on one array or hash layout.
+fn empty_array_arm_join(arm_types: &[PhpType]) -> Option<usize> {
+    let mut shared: Option<usize> = None;
+    let mut has_empty_arm = false;
+    for (index, arm_type) in arm_types.iter().enumerate() {
+        match arm_type {
+            PhpType::Array(element)
+                if matches!(element.codegen_repr(), PhpType::Never | PhpType::Void) =>
+            {
+                has_empty_arm = true;
+            }
+            PhpType::Array(_) | PhpType::AssocArray { .. } => match shared {
+                None => shared = Some(index),
+                Some(previous) if arm_types[previous] == *arm_type => {}
+                Some(_) => return None,
+            },
+            _ => return None,
+        }
+    }
+    shared.filter(|_| has_empty_arm)
 }
 
 /// How an `if` merge reconciles a local whose arms disagree on a non-container representation.
@@ -835,7 +879,11 @@ fn arm_conversions(arm: &IfArmExit, joined: &TypeEnv) -> Vec<String> {
     let mut names = joined
         .keys()
         .filter(|name| {
-            if !matches!(joined.get(name.as_str()).map(PhpType::codegen_repr), Some(PhpType::Array(_))) {
+            // Only a join that boxes the elements converts; an empty arm adopting the other
+            // arms' layout (`empty_array_arm_join`) keeps every arm's storage as it is.
+            if !matches!(joined.get(name.as_str()).map(PhpType::codegen_repr),
+                Some(PhpType::Array(element)) if element.codegen_repr() == PhpType::Mixed)
+            {
                 return false;
             }
             matches!(
@@ -866,17 +914,20 @@ fn arm_hash_conversions(arm: &IfArmExit, joined: &TypeEnv) -> Vec<String> {
     names
 }
 
-/// Converts one arm's array-like locals to boxed-value hash storage before the merge.
+/// Converts one arm's array-like locals to the joined hash storage before the merge.
+///
+/// The joined type is boxed-value hash storage when the arms disagree on their payload, and
+/// the other arms' own typed hash when this arm is the still-empty array that adopts it.
 fn widen_arm_containers_to_hash(
     ctx: &mut LoweringContext<'_, '_>,
     names: &[String],
+    joined: &TypeEnv,
     span: Span,
 ) {
-    let target = PhpType::AssocArray {
-        key: Box::new(PhpType::Int),
-        value: Box::new(PhpType::Mixed),
-    };
     for name in names {
+        let Some(target) = joined.get(name).cloned() else {
+            continue;
+        };
         let source = ctx.load_local(name, Some(span));
         let op = match ctx.local_type(name).codegen_repr() {
             PhpType::Array(_) => Op::ArrayToHash,
