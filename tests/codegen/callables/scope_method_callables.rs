@@ -135,3 +135,30 @@ outer(new B());
     );
     assert_eq!(out, "A::m 1 | A::m 2 | true\nA::m 1 | A::m 2 | true\nB::m 3\n");
 }
+
+/// Verifies the calling class's private static method is callable through a subclass name
+/// written as a literal (`['Child', 'p']`, `[Child::class, 'p']`), as it already was through a
+/// runtime name, while an unrelated class name and code outside the class still answer false.
+#[test]
+fn test_scope_private_static_method_through_a_subclass_name() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static function p(int $x): int { return $x + 1; }
+    public function t(): void {
+        $n = 'B';
+        echo var_export(is_callable(['B', 'p']), true), " ", var_export(is_callable([B::class, 'p']), true), " ",
+            var_export(is_callable([$n, 'p']), true), " ", call_user_func(['B', 'p'], 1), " ", call_user_func([$n, 'p'], 2), "\n";
+        echo var_export(is_callable(['C', 'p']), true), " ", var_export(is_callable(['B', 'nope']), true), " ",
+            var_export(is_callable(['D', 'p']), true), "\n";
+    }
+}
+class B extends A {}
+class D {}
+class C extends A { public static function p(int $x): int { return $x + 10; } }
+(new A())->t();
+echo var_export(is_callable(['B', 'p']), true), "\n";
+"#,
+    );
+    assert_eq!(out, "true true true 2 3\ntrue false false\nfalse\n");
+}

@@ -281,7 +281,15 @@ pub(super) fn static_method_callback_is_callable(
     };
     let method_key = php_symbol_key(method);
     if !class_info.static_methods.contains_key(&method_key) {
-        return Some(false);
+        // A subclass does not list the calling class's private static methods, but the calling
+        // scope still reaches them through the subclass name (`is_callable(['Child', 'p'])`
+        // inside the parent), so that case is left to the runtime lookup too.
+        let scope_declares = ctx
+            .current_class
+            .as_ref()
+            .and_then(|scope| ctx.classes.get(scope))
+            .is_some_and(|scope| scope.static_methods.contains_key(&method_key));
+        return (!scope_declares).then_some(false);
     }
     if class_info.static_method_visibilities.get(&method_key) == Some(&Visibility::Public) {
         return Some(true);
