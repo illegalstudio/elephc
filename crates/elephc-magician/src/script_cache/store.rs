@@ -716,6 +716,7 @@ pub fn discard(path: &Path) -> bool {
 /// but does not report.
 pub fn invalidate(path: &Path, force: bool) -> bool {
     let key = cache_key(path);
+    let config = config();
     // THE ON-DISK ENTRY GOES FIRST, AND UNCONDITIONALLY. php-src calls
     // `zend_file_cache_invalidate` outside the `force || !validate_timestamps || stale`
     // test, so an invalidate that deliberately KEEPS the in-memory entry still drops the
@@ -735,8 +736,9 @@ pub fn invalidate(path: &Path, force: bool) -> bool {
     // the disk, unlink the source, `opcache_invalidate($p, true)` in a fresh process —
     // reference `false`, elephc `true`; both removed the disk entry.
     let was_live = is_present(&key);
-    super::file_store::invalidate(&config(), &key);
-    if !force && config().validate_timestamps && !entry_is_stale(&key) {
+    super::file_store::invalidate(&config, &key);
+    if !force && config.validate_timestamps {
+        discard_stale_profiles(&key);
         return was_live;
     }
     // A SECOND INVALIDATE RETIRES NOTHING. `discard` answers whether an entry is PRESENT,
@@ -754,38 +756,32 @@ pub fn invalidate(path: &Path, force: bool) -> bool {
     was_live
 }
 
-/// Returns whether `key`'s entry no longer matches the file on disk — php-src's
-/// `do_validate_timestamps(...) == FAILURE`.
+/// Discards only live profile variants that no longer match the file on disk.
 ///
 /// THE TIMESTAMP ONLY. php-src hands that function a `NULL` size output and compares the
 /// mtime, so a rewrite that changes the length while preserving the timestamp leaves the
-/// entry valid. Comparing the size here too made such a file stale and retired an entry
-/// reference keeps.
+/// matching variants valid. Comparing the size here too would retire an entry reference keeps.
 ///
-/// A path with NO live entry is not stale; there is nothing to be stale about, and reporting
-/// it so would make the predicate above take a branch that has no work to do. Discarded
-/// profile variants are ignored because they can no longer be served and must not retire a
-/// fresh sibling. A file that can no longer be stated IS stale: it was cached and is now
-/// unreadable, which is the strongest possible reason not to keep serving it.
+/// Discarded profile variants are ignored because they can no longer be served. One stale
+/// live profile must not retire a sibling recorded at the current timestamp.
 ///
 /// NO `is_unrecorded` SHORT-CIRCUIT HERE, unlike the include and query paths: php-src's
 /// `accel_invalidate` calls `do_validate_timestamps` directly, so an entry admitted without
 /// a timestamp compares `0` against the real mtime and is stale.
-fn entry_is_stale(key: &Path) -> bool {
-    let cache = lock_script_cache();
-    let timestamps: Vec<i64> = cache
-        .entries
-        .iter()
-        .filter_map(|(entry_key, entry)| {
-            (entry_key.path == key && !entry.discarded).then_some(entry.timestamp)
-        })
-        .collect();
-    if timestamps.is_empty() {
-        return false;
-    }
-    drop(cache);
+fn discard_stale_profiles(key: &Path) -> bool {
     let timestamp = file_timestamp(key);
-    timestamps.into_iter().any(|recorded| recorded != timestamp)
+    let mut cache = lock_script_cache();
+    let mut discarded = false;
+    for (entry_key, entry) in &mut cache.entries {
+        if entry_key.path == key && !entry.discarded && entry.timestamp != timestamp {
+            entry.discarded = true;
+            discarded = true;
+        }
+    }
+    if discarded {
+        cache.generation = cache.generation.wrapping_add(1);
+    }
+    discarded
 }
 
 /// Returns whether a path has a live cache entry — present, not discarded, and not known to

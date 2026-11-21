@@ -166,6 +166,43 @@ fn strict_cache_discarded_stale_profile_keeps_fresh_sibling_visible() {
     );
 }
 
+/// Non-forced invalidation retires a stale live profile without discarding its fresh sibling.
+#[test]
+fn strict_cache_live_stale_profile_keeps_fresh_sibling_visible() {
+    let _guard = store::lock_for_test();
+    let fixture = Fixture::new();
+    config::set_config(config::ScriptCacheConfig {
+        enabled: true,
+        validate_timestamps: true,
+        revalidate_freq: 0,
+        file_update_protection: 0,
+        ..config::ScriptCacheConfig::disabled()
+    });
+    file_cache::set_file_cache_config(file_cache::FileCacheConfig::default());
+    config::stamp_request_time(1_000_000);
+    std::fs::write(&fixture.source, b"<?php return 1;").unwrap();
+    set_mtime(&fixture.source, 990_000);
+    store::load_script_with_semantics(
+        &fixture.source,
+        SemanticProfile::PERMISSIVE,
+    )
+    .unwrap();
+
+    std::fs::write(&fixture.source, b"<?php return 2;").unwrap();
+    set_mtime(&fixture.source, 1_000_000);
+    store::load_script_with_semantics(&fixture.source, checked_literals()).unwrap();
+
+    assert!(store::invalidate(&fixture.source, false));
+    assert!(
+        store::is_cached_with_semantics(&fixture.source, checked_literals()),
+        "a stale live profile must not retire its fresh sibling",
+    );
+    assert!(
+        !store::is_cached_with_semantics(&fixture.source, SemanticProfile::PERMISSIVE),
+        "the stale live profile must be retired",
+    );
+}
+
 /// Rejects disk entries from another profile, including ABI mismatches before replay.
 #[test]
 fn strict_cache_disk_headers_require_matching_semantics() {
