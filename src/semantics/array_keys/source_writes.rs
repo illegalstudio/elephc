@@ -14,7 +14,8 @@ use std::collections::{BTreeSet, HashMap};
 use crate::ast_visit::{self, AstVisitor, SourcePolicy};
 use crate::errors::CompileError;
 use crate::parser::ast::{
-    CastType, ClassMethod, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind, TypeExpr,
+    ArrayEntry, CastType, ClassMethod, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind,
+    TypeExpr,
 };
 use crate::types::PhpType;
 use elephc_semantics::SemanticProfile;
@@ -768,6 +769,10 @@ fn infer_expr(
             property,
             properties,
         ),
+        ExprKind::ArrayAccess { array, index } => array_element_fact(
+            infer_expr(array, locals, properties, current_class),
+            infer_expr(index, locals, properties, current_class),
+        ),
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_fact(receiver, property, properties, current_class)
         }
@@ -783,6 +788,20 @@ fn infer_expr(
             infer_expr(value, locals, properties, current_class),
             infer_expr(default, locals, properties, current_class),
         ),
+        _ => ValueFact::Unknown,
+    }
+}
+
+/// Projects an element category only when both the array representation and key kind are known.
+fn array_element_fact(receiver: ValueFact, index: ValueFact) -> ValueFact {
+    match (receiver, index) {
+        (ValueFact::Known(PhpType::Array(element)), ValueFact::Known(PhpType::Int)) => {
+            ValueFact::Known(*element)
+        }
+        (
+            ValueFact::Known(PhpType::AssocArray { key, value }),
+            ValueFact::Known(actual_key),
+        ) if *key == actual_key => ValueFact::Known(*value),
         _ => ValueFact::Unknown,
     }
 }
@@ -851,9 +870,22 @@ fn source_expr_type(expr: &Expr) -> Option<PhpType> {
         ExprKind::BoolLiteral(_) | ExprKind::Not(_) => PhpType::Bool,
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::Null => PhpType::Void,
-        ExprKind::ArrayLiteral(_)
-        | ExprKind::ArrayLiteralAssoc(_)
-        | ExprKind::ArrayLiteralMixed(_) => PhpType::php_array(),
+        ExprKind::ArrayLiteral(values) => {
+            PhpType::Array(Box::new(source_array_value_type(values.iter())))
+        }
+        ExprKind::ArrayLiteralAssoc(entries) => PhpType::AssocArray {
+            key: Box::new(source_array_value_type(entries.iter().map(|(key, _)| key))),
+            value: Box::new(source_array_value_type(entries.iter().map(|(_, value)| value))),
+        },
+        ExprKind::ArrayLiteralMixed(entries) => PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(source_array_value_type(entries.iter().map(|entry| match entry {
+                ArrayEntry::Spread(source)
+                | ArrayEntry::Value(source)
+                | ArrayEntry::Reference(source) => source,
+                ArrayEntry::Keyed(_, value) | ArrayEntry::KeyReference(_, value) => value,
+            }))),
+        },
         ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) => match source_expr_type(inner)? {
             value @ (PhpType::Int | PhpType::Float) => value,
             _ => return None,
@@ -867,5 +899,18 @@ fn source_expr_type(expr: &Expr) -> Option<PhpType> {
             CastType::Object => PhpType::Object(String::new()),
         },
         _ => return None,
+    })
+}
+
+/// Merges literal element categories without inventing facts for unknown or heterogeneous values.
+fn source_array_value_type<'a>(values: impl Iterator<Item = &'a Expr>) -> PhpType {
+    values.fold(PhpType::Never, |current, value| {
+        let next = source_expr_type(value).unwrap_or(PhpType::Mixed);
+        match (current, next) {
+            (PhpType::Never, next) => next,
+            (current, PhpType::Never) => current,
+            (current, next) if current == next => current,
+            _ => PhpType::Mixed,
+        }
     })
 }

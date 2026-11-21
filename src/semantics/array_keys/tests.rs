@@ -113,6 +113,8 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php accept_key_writer(function(array $values): int { if (PHP_OS === 'Linux') { return $values[false] = 2; } return 1; });",
         "<?php function nested_statement_key_write(array $values): void { if (PHP_OS_FAMILY === 'Windows') { $values[false][0] = 2; } }",
         "<?php function nested_expression_key_write(array $values): int { if (PHP_OS_FAMILY === 'Windows') { return $values[false][1] = 3; } return 1; }",
+        "<?php $values = [[1]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
+        "<?php $values = [[1]]; if (PHP_OS_FAMILY === 'Windows') { return $values[0][false] = 2; }",
     ] {
         let error = crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
@@ -147,6 +149,7 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php $text = 'ab'; if (PHP_OS_FAMILY === 'Windows') { $text[true] = 'x'; }",
         "<?php class StringKeyWrites { public string $items = 'ab'; public static string $shared = 'ab'; } $value = new StringKeyWrites(); if (PHP_OS_FAMILY === 'Windows') { $value->items[1.5] = 'x'; StringKeyWrites::$shared[false] = 'y'; }",
         "<?php class KeyAccessWrite implements ArrayAccess { public function offsetExists(mixed $key): bool { return true; } public function offsetGet(mixed $key): mixed { return 1; } public function offsetSet(mixed $key, mixed $value): void {} public function offsetUnset(mixed $key): void {} } $value = new KeyAccessWrite(); if (PHP_OS_FAMILY === 'Windows') { $value[true] = 2; }",
+        "<?php class NestedKeyAccessWrite implements ArrayAccess { public function offsetExists(mixed $key): bool { return true; } public function offsetGet(mixed $key): mixed { return 1; } public function offsetSet(mixed $key, mixed $value): void {} public function offsetUnset(mixed $key): void {} } $values = [new NestedKeyAccessWrite()]; if (PHP_OS_FAMILY === 'Windows') { $values[0][true] = 2; }",
     ] {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));
