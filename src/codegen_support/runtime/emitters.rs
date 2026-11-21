@@ -136,6 +136,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_sha1(emitter);
     strings::emit_crc32(emitter);
     strings::ctype::emit_ctype(emitter);
+    // Always present: native UTF-8 `mb_check_encoding()` calls use it without the bridge.
+    strings::emit_mb_strlen_utf8(emitter);
     if features.mbstring || features.eval_bridge {
         strings::emit_mbstring(emitter, features.eval_bridge, features.mbregex);
     }

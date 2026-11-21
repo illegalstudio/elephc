@@ -47,11 +47,11 @@ fn prune_on_compiler_stack(
     check_result: &mut CheckResult,
     options: PruneOptions<'_>,
 ) -> Program {
-    let original_builtin_libraries = usage::scan_program(&program).required_libraries;
+    let original_builtin_libraries = reconcile::BuiltinLibraries::scan(&program);
     let reachability = graph::compute(&program, check_result, &options);
     let declaration_index = graph::DeclarationIndex::build(&program, check_result);
     let program = prune::program(program, &reachability);
-    let remaining_builtin_libraries = usage::scan_program(&program).required_libraries;
+    let remaining_builtin_libraries = reconcile::BuiltinLibraries::scan(&program);
     reconcile::check_result(
         check_result,
         &reachability,

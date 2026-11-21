@@ -115,6 +115,8 @@ impl Checker {
             declared_native_records: HashSet::new(),
             extern_globals: HashMap::new(),
             required_libraries: Vec::new(),
+            runtime_bridge_libraries: Vec::new(),
+            callable_builtin_libraries: Vec::new(),
             top_level_env: HashMap::new(),
             active_ref_params: HashSet::new(),
             active_external_ref_bindings: HashSet::new(),

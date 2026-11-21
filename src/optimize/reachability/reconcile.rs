@@ -9,6 +9,10 @@
 //! - Synthetic checker-only classes are preserved unless backed by a pruned source declaration.
 //! - Vtable survivor order is stable and slots are compacted from zero.
 //! - Shared virtual methods retain identical slots along every live inheritance lineage.
+//! - Bridge runtimes are recomputed apart from link identity, so a pruned call that needed a
+//!   bridge runtime stops enabling it even when a native call keeps the library linked.
+//! - Libraries a builtin callable reference requires are never dropped: the usage scan sees
+//!   only direct calls, so it cannot prove such a reference died with its declaration.
 
 use std::collections::{HashMap, HashSet};
 
@@ -17,13 +21,32 @@ use crate::types::{CheckResult, ClassInfo};
 
 use super::graph::{ClassKind, DeclarationIndex, Reachability};
 
+/// Link libraries the builtin calls of one program version contribute.
+pub(super) struct BuiltinLibraries {
+    /// Every library a builtin call links, identity-only requirements included.
+    required: HashSet<String>,
+    /// Libraries whose bridge runtime a builtin call reaches.
+    runtime_bridges: HashSet<String>,
+}
+
+impl BuiltinLibraries {
+    /// Collects the builtin link requirements of every call in `program`.
+    pub(super) fn scan(program: &[crate::parser::ast::Stmt]) -> Self {
+        let usage = super::usage::scan_program(program);
+        Self {
+            required: usage.required_libraries,
+            runtime_bridges: usage.runtime_bridge_libraries,
+        }
+    }
+}
+
 /// Mutates checker metadata so every declaration table agrees with the pruned AST.
 pub(super) fn check_result(
     check: &mut CheckResult,
     reachability: &Reachability,
     declarations: &DeclarationIndex,
-    original_builtin_libraries: &HashSet<String>,
-    remaining_builtin_libraries: &HashSet<String>,
+    original_builtin_libraries: &BuiltinLibraries,
+    remaining_builtin_libraries: &BuiltinLibraries,
 ) {
     let declared_extern_libraries: HashSet<String> = check
         .extern_functions
@@ -419,15 +442,25 @@ fn retain_callable_parameter_metadata(
 fn recompute_required_libraries(
     check: &mut CheckResult,
     declared_extern_libraries: &HashSet<String>,
-    original_builtin_libraries: &HashSet<String>,
-    remaining_builtin_libraries: &HashSet<String>,
+    original: &BuiltinLibraries,
+    remaining: &BuiltinLibraries,
 ) {
+    let original_builtin_libraries = &original.required;
+    let remaining_builtin_libraries = &remaining.required;
     let remaining_extern_libraries: HashSet<String> = check
         .extern_functions
         .values()
         .filter_map(|signature| signature.library.clone())
         .collect();
+    let callable_libraries: HashSet<&str> = check
+        .callable_builtin_libraries
+        .iter()
+        .map(String::as_str)
+        .collect();
     check.required_libraries.retain(|library| {
+        if callable_libraries.contains(library.as_str()) {
+            return true;
+        }
         let removed_builtin_requirement = original_builtin_libraries.contains(library)
             && !remaining_builtin_libraries.contains(library)
             && !remaining_extern_libraries.contains(library);
@@ -435,5 +468,14 @@ fn recompute_required_libraries(
             && !remaining_extern_libraries.contains(library)
             && !remaining_builtin_libraries.contains(library);
         !removed_builtin_requirement && !removed_extern_requirement
+    });
+    // A surviving identity-only call keeps the library linked, but must not keep the bridge
+    // runtime that only pruned calls reached.
+    let required = &check.required_libraries;
+    check.runtime_bridge_libraries.retain(|library| {
+        let removed_runtime_requirement = original.runtime_bridges.contains(library)
+            && !remaining.runtime_bridges.contains(library)
+            && !callable_libraries.contains(library.as_str());
+        required.contains(library) && !removed_runtime_requirement
     });
 }
