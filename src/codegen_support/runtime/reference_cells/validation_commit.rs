@@ -119,10 +119,12 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, retiremen
         abi::emit_load_int_immediate(emitter, result, 0);
     }
     abi::emit_jump(emitter, &done);
-    emitter.label(&pending);
-    emit_release_slot(emitter, 24);
-    abi::emit_load_int_immediate(emitter, result, 2);
-    abi::emit_jump(emitter, &done);
+    if !converted_argument {
+        emitter.label(&pending);
+        emit_release_slot(emitter, 24);
+        abi::emit_load_int_immediate(emitter, result, 2);
+        abi::emit_jump(emitter, &done);
+    }
     emitter.label(&invalid);
     emit_release_slot(emitter, 24);
     abi::emit_branch_if_int_result_nonzero(emitter, &done);

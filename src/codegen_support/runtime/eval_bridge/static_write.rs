@@ -28,7 +28,6 @@ const _: () = assert!(CLASS_CALL + 16 <= FRAME);
 pub(super) fn emit(emitter: &mut Emitter, native_validation: bool) {
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
-    let invalid = "__rt_eval_static_store_invalid";
     let done = "__rt_eval_static_store_done";
     label_c_global(emitter, "__elephc_eval_value_static_store_v1");
     abi::emit_frame_prologue(emitter, FRAME);
@@ -76,10 +75,10 @@ pub(super) fn emit(emitter: &mut Emitter, native_validation: bool) {
         emitter.label(completed);
         abi::store_at_offset(emitter, result, STATUS);
         abi::emit_jump(emitter, "__rt_eval_static_store_finish");
+    } else {
+        abi::emit_load_int_immediate(emitter, result, 1);
+        abi::store_at_offset(emitter, result, STATUS);
     }
-    emitter.label(invalid);
-    abi::emit_load_int_immediate(emitter, result, 1);
-    abi::store_at_offset(emitter, result, STATUS);
     emitter.label("__rt_eval_static_store_finish");
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), ARGUMENT_OWNER);
     abi::emit_store_zero_to_local_slot(emitter, ARGUMENT_OWNER);

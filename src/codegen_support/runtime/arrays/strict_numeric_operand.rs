@@ -70,11 +70,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => super::value_error::emit_throw_static_message_aarch64(
             emitter, "_spl_type_error_class_id", TYPE_LABEL, TYPE_MESSAGE.len()),
-        Arch::X86_64 => {
-            emitter.instruction("sub rsp, 8");                                  // adapt a jump-only failure to the shared throw helper's return-slot alignment
-            super::value_error::emit_throw_static_message_x86_64(
-                emitter, "_spl_type_error_class_id", TYPE_LABEL, TYPE_MESSAGE.len());
-        }
+        Arch::X86_64 => super::value_error::emit_throw_static_message_x86_64(
+            emitter, "_spl_type_error_class_id", TYPE_LABEL, TYPE_MESSAGE.len()),
     }
 }
 
