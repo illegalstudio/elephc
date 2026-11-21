@@ -157,6 +157,7 @@ const CURL_RELEASE_CHAIN: &[&str] = &[
 /// Global labels reached only by jumps, with their stack delta from an ordinary call entry.
 const JUMP_ONLY_ENTRY_OFFSETS: &[(&str, i64)] = &[
     (super::arrays::strict_numeric_operand::TYPE_FAIL, -8),
+    (super::strict_comparators::FAIL, -8),
 ];
 
 /// One emitted helper: its name and its (line number, text) instruction stream.
@@ -477,6 +478,23 @@ fn explicit_stack_alignment_preserves_subsequent_call_checks() {
         assert!(analysis.unanalyzable.is_none(), "{padding}: {:?}", analysis.unanalyzable);
         assert_eq!(analysis.misaligned.len(), 1, "{padding}: {:?}", analysis.misaligned);
         assert_eq!(analysis.misaligned[0].1, "misaligned");
+    }
+}
+
+/// Jump-only throw entries begin without a call return slot before adding their alignment pad.
+#[test]
+fn jump_only_throw_entries_use_branch_entry_alignment() {
+    for (name, _) in JUMP_ONLY_ENTRY_OFFSETS {
+        let function = Function {
+            name: (*name).into(),
+            body: [
+                format!("{name}:"), "sub rsp, 8".into(), "push rbp".into(),
+                "sub rsp, 16".into(), "call aligned".into(), "ud2".into(),
+            ].into_iter().enumerate().collect(),
+        };
+        let analysis = analyze(&function);
+        assert!(analysis.unanalyzable.is_none(), "{name}: {:?}", analysis.unanalyzable);
+        assert!(analysis.misaligned.is_empty(), "{name}: {:?}", analysis.misaligned);
     }
 }
 

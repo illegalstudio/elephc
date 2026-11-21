@@ -14,6 +14,8 @@ use elephc_semantics::{SemanticProfile, StrictFeature, comparisons::COMPARATOR_M
 const BORROWED_FRAME: usize = 32;
 const OWNED_FRAME: usize = 96;
 const OWNER_RECORD: usize = 80;
+/// Shared jump-only TypeError entry used by comparator result guards.
+pub(in crate::codegen_support::runtime) const FAIL: &str = "__rt_strict_comparator_fail";
 
 /// Adds the checked comparator diagnostic only to runtimes that can invoke the guard.
 pub(crate) fn data(profile: SemanticProfile) -> String {
@@ -27,10 +29,10 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     emitter.label_global("__rt_strict_comparator");
     abi::emit_frame_prologue(emitter, BORROWED_FRAME);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_strict_comparator_fail");
+    abi::emit_branch_if_int_result_zero(emitter, FAIL);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
     // The storage ABI tags integers with zero; reference wrappers are unboxed first.
-    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_strict_comparator_fail");
+    abi::emit_branch_if_int_result_nonzero(emitter, FAIL);
     let payload = match emitter.target.arch { Arch::AArch64 => "x1", Arch::X86_64 => "rdi" };
     abi::emit_reg_move(emitter, result, payload);
     abi::emit_frame_restore(emitter, BORROWED_FRAME);
@@ -51,12 +53,15 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     abi::emit_frame_restore(emitter, OWNED_FRAME);
     abi::emit_return(emitter);
 
-    emitter.label_global("__rt_strict_comparator_fail");
+    emitter.label_global(FAIL);
     match emitter.target.arch {
         Arch::AArch64 => super::arrays::value_error::emit_throw_static_message_aarch64(
             emitter, "_spl_type_error_class_id", "_strict_comparator_message", COMPARATOR_MESSAGE.len()),
-        Arch::X86_64 => super::arrays::value_error::emit_throw_static_message_x86_64(
-            emitter, "_spl_type_error_class_id", "_strict_comparator_message", COMPARATOR_MESSAGE.len()),
+        Arch::X86_64 => {
+            emitter.instruction("sub rsp, 8");                                  // adapt the jump-only entry to the throwing helper's return-slot alignment
+            super::arrays::value_error::emit_throw_static_message_x86_64(
+                emitter, "_spl_type_error_class_id", "_strict_comparator_message", COMPARATOR_MESSAGE.len());
+        }
     }
 }
 
@@ -87,6 +92,10 @@ mod tests {
             }
             assert!(!asm.contains("__rt_mixed_cast_int"), "{name}");
             assert!(data(profile).contains(COMPARATOR_MESSAGE), "{name}");
+            if target.arch == Arch::X86_64 {
+                let failure = asm.split(&format!(".globl {FAIL}\n")).nth(1).unwrap();
+                assert!(failure.lines().take(5).any(|line| line.trim() == "sub rsp, 8"), "{failure}");
+            }
         }
     }
 
