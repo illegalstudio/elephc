@@ -123554,6 +123554,81 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "pattern",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "subject",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Regex",
+    "canonical_name": "preg_replace_callback_array",
+    "description": "Applies each `pattern => callback` entry of `$pattern` to `$subject` in order, like chained `preg_replace_callback()` calls; returns `null` when an entry fails.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/pcre_prelude.rs",
+      "codegen_function": "preg_replace_callback_array",
+      "notes": [
+        "Implemented by the compiler-injected PCRE prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "pcre",
+    "name": "preg_replace_callback_array",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "pattern",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "subject",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "?string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "preg_replace_callback_array",
+    "sub_area": "Regex"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {

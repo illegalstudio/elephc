@@ -408,8 +408,9 @@ mod tests {
         // random prelude's `__elephc_call_strict_types` reader.
         assert_eq!(eval_internal, 143);
         // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
-        // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 381);
+        // and name-resolver-rewritten functions eval does not reach (see `eval_support`),
+        // plus `preg_replace_callback_array`, whose eval home is still to come.
+        assert_eq!(eval_pending, 382);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -426,9 +427,10 @@ mod tests {
         // `__elephc_set_memory_limit` setter.
         assert_eq!(aot_registry, 842);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
-        // `preg_grep`, `preg_quote` and `preg_filter`), and name-resolver rewrites remain outside
-        // the ordinary AOT registry. The two PHP-visible locale functions are prelude-provided.
-        assert_eq!(aot_external, 479 + curl_surface);
+        // `preg_grep`, `preg_quote`, `preg_filter` and `preg_replace_callback_array`), and
+        // name-resolver rewrites remain outside the ordinary AOT registry. The two PHP-visible
+        // locale functions are prelude-provided.
+        assert_eq!(aot_external, 480 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -480,15 +482,16 @@ mod tests {
         assert_eq!(hybrid_adapter, 4);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters, plus the GMP, SimpleXML, tidy, ctype, and locale
-        // forwarding homes, plus the `preg_grep` / `preg_quote` / `preg_filter` / `preg_last_error*` eval
-        // homes.
+        // forwarding homes, plus the `preg_grep` / `preg_quote` / `preg_filter` /
+        // `preg_last_error*` eval homes.
         assert_eq!(interpreter_adapter, 702 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
         // the internal nl_langinfo helper, the random prelude's
-        // `__elephc_call_strict_types` reader, and `__elephc_set_memory_limit`.
-        assert_eq!(unsupported, 524);
+        // `__elephc_call_strict_types` reader, and `__elephc_set_memory_limit`, plus
+        // `preg_replace_callback_array`, whose eval home is still to come.
+        assert_eq!(unsupported, 525);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

@@ -1,7 +1,8 @@
 //! Purpose:
 //! Injects `preg_grep()` as a declared PHP function built on `preg_split()` and `preg_match()`,
-//! `preg_quote()` as a byte loop over PHP's regex metacharacters, and `preg_filter()` over
-//! `preg_match()` and `preg_replace()`.
+//! `preg_quote()` as a byte loop over PHP's regex metacharacters, `preg_filter()` over
+//! `preg_match()` and `preg_replace()`, and `preg_replace_callback_array()` over
+//! `preg_replace_callback()`.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()`, next to the version prelude and before name resolution,
@@ -34,13 +35,14 @@
 
 use crate::parser::ast::{BinOp, CastType, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_array, e_binop, e_bool, e_call, e_cast, e_concat, e_const, e_index, e_int, e_null,
+    closure, e_array, e_binop, e_bool, e_call, e_cast, e_concat, e_const, e_index, e_int, e_null,
     e_post_inc, e_str, e_var, function, internal_declarations, s_array_assign, s_assign,
     s_break, s_else_if, s_expr, s_for, s_foreach, s_if, s_return, t_array, t_union,
 };
 
 /// The surface this prelude can inject, each guarded on its own.
-const SURFACE: &[&str] = &["preg_grep", "preg_quote", "preg_filter"];
+const SURFACE: &[&str] =
+    &["preg_grep", "preg_quote", "preg_filter", "preg_replace_callback_array"];
 
 /// The bytes `preg_quote()` escapes besides NUL and the delimiter (php-src `ext/pcre`, PHP 7.3+
 /// adds `#`).
@@ -235,6 +237,59 @@ fn preg_filter_decl() -> Stmt {
         .build()
 }
 
+/// `preg_replace_callback_array(array $pattern, string $subject): ?string`.
+///
+/// Applies each `pattern => callback` entry in order through `preg_replace_callback()`, over the
+/// same string-subject subset; a failing entry makes the whole call `null`, like php-src.
+fn preg_replace_callback_array_decl() -> Stmt {
+    function("preg_replace_callback_array")
+        .param("pattern", t_array())
+        .param("subject", TypeExpr::Str)
+        .returns(TypeExpr::Nullable(Box::new(TypeExpr::Str)))
+        .body(vec![
+            s_foreach(
+                e_var("pattern"),
+                Some("regex"),
+                "callback",
+                vec![
+                    // The backend needs a statically typed callback, so the mixed array value is
+                    // reached through `call_user_func()`. The closure is bound to a local first:
+                    // passed inline as a temporary, a capturing closure leaks one block per call.
+                    s_assign(
+                        "wrapped",
+                        closure()
+                            .param("m", t_array())
+                            .captures("callback")
+                            .body(vec![s_return(e_cast(
+                                CastType::String,
+                                e_call("call_user_func", vec![e_var("callback"), e_var("m")]),
+                            ))])
+                            .build(),
+                    ),
+                    s_assign(
+                        "subject",
+                        e_call(
+                            "preg_replace_callback",
+                            vec![
+                                e_cast(CastType::String, e_var("regex")),
+                                e_var("wrapped"),
+                                e_var("subject"),
+                            ],
+                        ),
+                    ),
+                    s_if(
+                        e_binop(e_var("subject"), BinOp::StrictEq, e_null()),
+                        vec![s_return(e_null())],
+                        vec![],
+                        None,
+                    ),
+                ],
+            ),
+            s_return(e_var("subject")),
+        ])
+        .build()
+}
+
 /// Whether `program` calls a function this prelude declares: the usage half of the test `inject_if_used` applies.
 ///
 /// Also run by `crate::autoload::prelude_probe` over the autoload closure, whose files are only
@@ -279,7 +334,12 @@ pub fn inject_if_used(
 
 /// Builds the injected PCRE declarations.
 pub(crate) fn pcre_declarations() -> Program {
-    internal_declarations(|| vec![preg_grep_decl(), preg_quote_decl(), preg_filter_decl()])
+    internal_declarations(|| vec![
+            preg_grep_decl(),
+            preg_quote_decl(),
+            preg_filter_decl(),
+            preg_replace_callback_array_decl(),
+        ])
 }
 
 /// The function name a prelude declaration declares.

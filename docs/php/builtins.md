@@ -878,6 +878,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`preg_quote()`](./builtins/regex/preg_quote.md) | `(string $str, ?string $delimiter = null): string` | `string` | ✓ | ✓ |
 | [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject): mixed` | `mixed` | ✓ | ✓ |
+| [`preg_replace_callback_array()`](./builtins/regex/preg_replace_callback_array.md) | `(array $pattern, string $subject): ?string` | `?string` | ✓ | - |
 | [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |
 | [`iterator_apply()`](./builtins/spl/iterator_apply.md) | `(traversable $iterator, callable $callback, array $args = null): int` | `int` | ✓ | ✓ |
 | [`iterator_count()`](./builtins/spl/iterator_count.md) | `(traversable $iterator): int` | `int` | ✓ | ✓ |

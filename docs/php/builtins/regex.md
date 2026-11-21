@@ -19,4 +19,5 @@ sidebar:
 | [`preg_quote()`](./regex/preg_quote.md) | `(string $str, ?string $delimiter = null): string` | `string` | ✓ | ✓ |
 | [`preg_replace()`](./regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_replace_callback()`](./regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject): mixed` | `mixed` | ✓ | ✓ |
+| [`preg_replace_callback_array()`](./regex/preg_replace_callback_array.md) | `(array $pattern, string $subject): ?string` | `?string` | ✓ | - |
 | [`preg_split()`](./regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |

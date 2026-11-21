@@ -315,6 +315,7 @@ REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
     "preg_match_all": ("Regex", "Regex"),
     "preg_quote": ("Regex", "Regex"),
     "preg_replace": ("Regex", "Regex"),
+    "preg_replace_callback_array": ("Regex", "Regex"),
     "preg_replace_callback": ("Regex", "Regex"),
     "preg_split": ("Regex", "Regex"),
     "property_exists": ("Class", "Class"),

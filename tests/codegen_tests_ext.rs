@@ -57,6 +57,7 @@ mod codegen {
     mod preg_errors_grep;
     mod preg_filter;
     mod preg_quote;
+    mod preg_replace_callback_array;
     mod uri_php_src;
     mod uri;
     mod serialize;

@@ -195,7 +195,7 @@
       "total": 3181
     },
     "functions": {
-      "have": 1116,
+      "have": 1117,
       "total": 2169
     }
   },
@@ -1116,7 +1116,7 @@
       "extension": "pcre",
       "functions": {
         "eval": 10,
-        "have": 10,
+        "have": 11,
         "total": 11
       },
       "name": "pcre",

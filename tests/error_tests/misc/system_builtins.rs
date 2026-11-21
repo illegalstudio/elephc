@@ -779,6 +779,17 @@ fn test_error_preg_filter_wrong_args() {
     }
 }
 
+/// `preg_replace_callback_array()` takes a pattern map and a subject.
+#[test]
+fn test_error_preg_replace_callback_array_wrong_args() {
+    for source in [
+        "<?php preg_replace_callback_array();",
+        r#"<?php preg_replace_callback_array(['/a/' => fn($m) => 'x']);"#,
+    ] {
+        expect_error(source, "Function 'preg_replace_callback_array' expects 2 arguments");
+    }
+}
+
 /// `preg_quote()` takes a string and an optional delimiter: no argument or more than two is
 /// rejected, as php's `ArgumentCountError` does at runtime.
 #[test]
