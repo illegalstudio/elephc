@@ -165,7 +165,7 @@ impl ArrayFact {
             return candidates
                 .into_iter()
                 .cloned()
-                .reduce(merge_value_facts)
+                .reduce(merge_write_parent_facts)
                 .unwrap_or(ValueFact::Unknown);
         }
         ValueFact::Unknown
@@ -1649,6 +1649,30 @@ fn merge_value_facts(left: ValueFact, right: ValueFact) -> ValueFact {
 
 /// Merges equal-key shapes recursively while retaining their common projection depth.
 fn merge_array_facts(left: &ArrayFact, right: &ArrayFact) -> Option<ArrayFact> {
+    merge_array_facts_with(left, right, merge_value_facts)
+}
+
+/// Merges facts that every candidate can autovivify into a nested array parent.
+fn merge_write_parent_facts(left: ValueFact, right: ValueFact) -> ValueFact {
+    if !left.is_write_array_parent() || !right.is_write_array_parent() {
+        return merge_value_facts(left, right);
+    }
+    let left = write_parent_fact(left, true);
+    let right = write_parent_fact(right, true);
+    let (ValueFact::Array(left), ValueFact::Array(right)) = (&left, &right) else {
+        return merge_value_facts(left, right);
+    };
+    merge_array_facts_with(left, right, merge_write_parent_facts)
+        .map(ValueFact::Array)
+        .unwrap_or_else(|| ValueFact::Known(PhpType::php_array()))
+}
+
+/// Merges equal-key shapes with the value policy required by their projection context.
+fn merge_array_facts_with(
+    left: &ArrayFact,
+    right: &ArrayFact,
+    merge: fn(ValueFact, ValueFact) -> ValueFact,
+) -> Option<ArrayFact> {
     if left.maximum_integer != right.maximum_integer || left.entries.len() != right.entries.len() {
         return None;
     }
@@ -1661,7 +1685,7 @@ fn merge_array_facts(left: &ArrayFact, right: &ArrayFact) -> Option<ArrayFact> {
         }
         entries.push((
             left_key.clone(),
-            merge_value_facts(left_value.clone(), right_value.clone()),
+            merge(left_value.clone(), right_value.clone()),
         ));
     }
     Some(ArrayFact {

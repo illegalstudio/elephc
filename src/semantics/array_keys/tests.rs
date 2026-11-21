@@ -143,12 +143,17 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php function guarded_dynamic_deep_key(int $key): void { $values = [[[1]], [[2]]]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][0][false] = 2; } }",
         "<?php $key = 0; $ignored = true && ($key = true); $values = []; $values[$key] = 1;",
         "<?php $inner = 'ab'; $values = [$inner, ($inner = [])]; $values[1][true] = 'x';",
+        "<?php function mixed_dynamic_parent(int $key): void { $values = [null, false]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][false] = 2; } }",
+        "<?php function array_or_null_dynamic_parent(int $key): void { $values = [[1], null]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][false] = 2; } }",
+        "<?php function deep_dynamic_parent(int $key): void { $values = [[[null]], [[false]]]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][0][0][false] = 2; } }",
     ] {
-        let error = crate::semantics::validate_source(
+        let error = match crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
             profile(),
-        )
-        .unwrap_err();
+        ) {
+            Err(error) => error,
+            Ok(()) => panic!("{source}: expected strict-array-keys rejection"),
+        };
         assert!(error.message.contains("strict-array-keys"), "{source}: {error:?}");
     }
 }
