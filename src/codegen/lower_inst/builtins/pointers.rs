@@ -222,11 +222,10 @@ pub(crate) fn lower_elephc_normalize_callable(
             if inst.immediate == Some(crate::ir::Immediate::DeclaredCallableNames) {
                 ctx.declared_callable_candidates = Some(declared_callable_runtime_names(ctx));
             }
-            let lowered = super::super::callables::emit_runtime_mixed_callable_descriptor_value(
+            let lowered = super::super::callables::emit_scoped_runtime_mixed_callable_descriptor_value(
                 ctx,
                 value,
                 "__elephc_normalize_callable",
-                true,
             );
             ctx.declared_callable_candidates = None;
             lowered?;

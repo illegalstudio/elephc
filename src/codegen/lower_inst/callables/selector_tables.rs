@@ -137,6 +137,32 @@ pub(super) fn emit_instance_target_table_lookup(
     selected_label: &str,
     miss_label: &str,
 ) -> Result<()> {
+    emit_instance_target_table_scan(ctx, targets, selector, selected_label, miss_label, true)
+}
+
+/// Reports whether a row of `targets` matches the saved selector block, without binding it.
+///
+/// Control reaches `matched_label` or `miss_label` with the selector block still on the
+/// temporary stack and no descriptor allocated (`is_callable()` only needs the verdict).
+pub(super) fn emit_instance_target_table_match(
+    ctx: &mut FunctionContext<'_>,
+    targets: &[RuntimeArrayInstanceMethodTarget],
+    selector: ReceiverSelector,
+    matched_label: &str,
+    miss_label: &str,
+) -> Result<()> {
+    emit_instance_target_table_scan(ctx, targets, selector, matched_label, miss_label, false)
+}
+
+/// Scans the receiver rows; a match binds the row's template only when `bind` is set.
+fn emit_instance_target_table_scan(
+    ctx: &mut FunctionContext<'_>,
+    targets: &[RuntimeArrayInstanceMethodTarget],
+    selector: ReceiverSelector,
+    selected_label: &str,
+    miss_label: &str,
+    bind: bool,
+) -> Result<()> {
     if targets.is_empty() {
         abi::emit_jump(ctx.emitter, miss_label);
         return Ok(());
@@ -230,8 +256,13 @@ pub(super) fn emit_instance_target_table_lookup(
     abi::emit_jump(ctx.emitter, &matched);
     emit_scan_advance(ctx, &scan, INSTANCE_ROW_BYTES, miss_label);
 
-    // -- bind the matched row's template to a retained receiver --
     ctx.emitter.label(&matched);
+    if !bind {
+        abi::emit_release_temporary_stack(ctx.emitter, SCAN_STATE_BYTES);
+        abi::emit_jump(ctx.emitter, selected_label);
+        return Ok(());
+    }
+    // -- bind the matched row's template to a retained receiver --
     let result_reg = abi::int_result_reg(ctx.emitter);
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
     let template_reg = abi::symbol_scratch_reg(ctx.emitter);

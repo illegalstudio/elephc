@@ -154,7 +154,7 @@ fn emit_callable_selector(
 }
 
 /// Returns whether two instance targets bind the same method body for the same receiver class.
-fn same_instance_target(
+pub(super) fn same_instance_target(
     left: &RuntimeArrayInstanceMethodTarget,
     right: &RuntimeArrayInstanceMethodTarget,
 ) -> bool {
@@ -164,7 +164,7 @@ fn same_instance_target(
 }
 
 /// Keeps the static cases only the lexical scope can bind.
-fn scope_only_static_cases(
+pub(super) fn scope_only_static_cases(
     ctx: &mut FunctionContext<'_>,
     candidate_names: Option<&[String]>,
 ) -> Vec<callable_dispatch::RuntimeStaticMethodCallableCase> {
@@ -177,19 +177,30 @@ fn scope_only_static_cases(
         .collect()
 }
 
+/// Returns the instance targets only the lexical scope can bind (non-public methods and the
+/// private shadows of child methods), leaving out every target the public inventory has.
+pub(super) fn scope_only_instance_targets(
+    ctx: &FunctionContext<'_>,
+) -> Vec<RuntimeArrayInstanceMethodTarget> {
+    let public_instance = runtime_array_instance_method_targets_with_scope(ctx, false);
+    runtime_array_instance_method_targets_with_scope(ctx, true)
+        .into_iter()
+        .filter(|target| !public_instance.iter().any(|public| same_instance_target(public, target)))
+        .collect()
+}
+
 /// Tries the methods only the lexical scope can bind, jumping to `done_label` on a match and
 /// falling through (stack balanced) to the public selector call on any miss.
-fn emit_scope_extras(
+pub(super) fn emit_scope_extras(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
     policy: SelectorPolicy<'_>,
     done_label: &str,
 ) -> Result<()> {
-    let public_instance = runtime_array_instance_method_targets_with_scope(ctx, false);
-    let instance_targets = runtime_array_instance_method_targets_with_scope(ctx, true)
-        .into_iter()
-        .filter(|target| !public_instance.iter().any(|public| same_instance_target(public, target)))
-        .collect::<Vec<_>>();
+    if ctx.lexical_class().is_none() {
+        return Ok(());
+    }
+    let instance_targets = scope_only_instance_targets(ctx);
     let invokable_targets = instance_targets
         .iter()
         .filter(|target| target.method_key == "__invoke")
