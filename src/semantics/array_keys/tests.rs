@@ -141,6 +141,7 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php $inner = [[1]]; $values = [...$inner]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $values = [[1]]; $writer = function() use ($values): void { if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; } };",
         "<?php function guarded_dynamic_deep_key(int $key): void { $values = [[[1]], [[2]]]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][0][false] = 2; } }",
+        "<?php $key = 0; $ignored = true && ($key = true); $values = []; $values[$key] = 1;",
     ] {
         let error = crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
@@ -186,6 +187,8 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php $values = [[1]]; do { $values[0] = 1; } while ($values[0][false] = false);",
         "<?php $values = [[1]]; $writer = function() use (&$values): void { if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; } };",
         "<?php function guarded_dynamic_mixed_depth(int $key): void { $values = [[[1]], 2]; if (PHP_OS_FAMILY === 'Windows') { $values[$key][0][false] = 2; } }",
+        "<?php $key = 0; $ignored = false && ($key = true); $values = []; $values[$key] = 1;",
+        "<?php $key = 0; $ignored = true || ($key = true); $values = []; $values[$key] = 1;",
     ] {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));

@@ -19,6 +19,10 @@ pub(super) fn walk_exprs(exprs: &[Expr], visitor: &mut impl AstVisitor) {
 /// Visits one expression, its call targets, and every nested operand.
 pub(super) fn walk_expr(expr: &Expr, visitor: &mut impl AstVisitor) {
     visitor.expression(expr);
+    if !visitor.descend_expression(expr) {
+        visitor.expression_end(expr);
+        return;
+    }
     let span = expr.span;
     match &expr.kind {
         ExprKind::Runtime(runtime) => {

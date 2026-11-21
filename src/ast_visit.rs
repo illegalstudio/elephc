@@ -19,6 +19,8 @@ use crate::span::Span;
 pub trait AstVisitor {
     /// Observes one expression in source traversal order.
     fn expression(&mut self, _expr: &Expr) {}
+    /// Selects whether traversal should enter this expression's nested syntax.
+    fn descend_expression(&mut self, _expr: &Expr) -> bool { true }
     /// Observes the end of an expression after its operands and nested statements.
     fn expression_end(&mut self, _expr: &Expr) {}
     /// Observes one statement, including generated nested statement lists.

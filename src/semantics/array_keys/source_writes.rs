@@ -475,6 +475,24 @@ struct ExpressionFactUpdater<'a> {
 }
 
 impl AstVisitor for ExpressionFactUpdater<'_> {
+    /// Applies lazy expression effects through independent branch states.
+    fn expression(&mut self, expr: &Expr) {
+        if is_lazy_flow_expression(expr) {
+            apply_lazy_expression_facts(
+                expr,
+                self.locals,
+                self.properties,
+                self.profile,
+                self.current_class,
+            );
+        }
+    }
+
+    /// Prevents the generic source walker from replaying conditionally evaluated operands.
+    fn descend_expression(&mut self, expr: &Expr) -> bool {
+        !is_lazy_flow_expression(expr)
+    }
+
     /// Closure and declaration bodies execute later and cannot mutate the current activation now.
     fn descend_statement(&mut self, _stmt: &Stmt) -> bool {
         false
@@ -506,6 +524,165 @@ impl AstVisitor for ExpressionFactUpdater<'_> {
             self.profile,
             self.current_class,
         );
+    }
+}
+
+/// Reports whether an expression contains operands that PHP may skip at runtime.
+fn is_lazy_flow_expression(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::BinaryOp {
+            op: crate::parser::ast::BinOp::And | crate::parser::ast::BinOp::Or,
+            ..
+        } | ExprKind::Ternary { .. }
+            | ExprKind::ShortTernary { .. }
+            | ExprKind::NullCoalesce { .. }
+    )
+}
+
+/// Applies side effects from one lazy expression without making a skipped branch definite.
+fn apply_lazy_expression_facts(
+    expr: &Expr,
+    locals: &mut LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) {
+    match &expr.kind {
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(
+                op,
+                crate::parser::ast::BinOp::And | crate::parser::ast::BinOp::Or
+            ) =>
+        {
+            apply_expression_facts(left, locals, properties, profile, current_class);
+            let truthiness = crate::types::deferred_defaults::literal_truthiness(left);
+            let right_runs = match op {
+                crate::parser::ast::BinOp::And => truthiness,
+                crate::parser::ast::BinOp::Or => truthiness.map(|value| !value),
+                _ => unreachable!("lazy binary operator was matched above"),
+            };
+            apply_optional_expression_facts(
+                right,
+                right_runs,
+                locals,
+                properties,
+                profile,
+                current_class,
+            );
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            apply_expression_facts(condition, locals, properties, profile, current_class);
+            match crate::types::deferred_defaults::literal_truthiness(condition) {
+                Some(true) => {
+                    apply_expression_facts(
+                        then_expr,
+                        locals,
+                        properties,
+                        profile,
+                        current_class,
+                    );
+                }
+                Some(false) => {
+                    apply_expression_facts(
+                        else_expr,
+                        locals,
+                        properties,
+                        profile,
+                        current_class,
+                    );
+                }
+                None => {
+                    let entry = locals.clone();
+                    let mut then_exit = entry.clone();
+                    let mut else_exit = entry;
+                    apply_expression_facts(
+                        then_expr,
+                        &mut then_exit,
+                        properties,
+                        profile,
+                        current_class,
+                    );
+                    apply_expression_facts(
+                        else_expr,
+                        &mut else_exit,
+                        properties,
+                        profile,
+                        current_class,
+                    );
+                    *locals = merge_exits(&[then_exit, else_exit]);
+                }
+            }
+        }
+        ExprKind::ShortTernary { value, default } => {
+            apply_expression_facts(value, locals, properties, profile, current_class);
+            let default_runs = crate::types::deferred_defaults::literal_truthiness(value)
+                .map(|truthy| !truthy);
+            apply_optional_expression_facts(
+                default,
+                default_runs,
+                locals,
+                properties,
+                profile,
+                current_class,
+            );
+        }
+        ExprKind::NullCoalesce { value, default } => {
+            apply_expression_facts(value, locals, properties, profile, current_class);
+            let default_runs = match &value.kind {
+                ExprKind::Null => Some(true),
+                ExprKind::BoolLiteral(_)
+                | ExprKind::IntLiteral(_)
+                | ExprKind::FloatLiteral(_)
+                | ExprKind::StringLiteral(_)
+                | ExprKind::ArrayLiteral(_)
+                | ExprKind::ArrayLiteralAssoc(_)
+                | ExprKind::ArrayLiteralMixed(_) => Some(false),
+                _ => None,
+            };
+            apply_optional_expression_facts(
+                default,
+                default_runs,
+                locals,
+                properties,
+                profile,
+                current_class,
+            );
+        }
+        _ => unreachable!("only lazy expressions reach the lazy fact updater"),
+    }
+}
+
+/// Applies an operand that runs always, never, or along one possible control-flow edge.
+fn apply_optional_expression_facts(
+    expr: &Expr,
+    runs: Option<bool>,
+    locals: &mut LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) {
+    match runs {
+        Some(true) => {
+            apply_expression_facts(expr, locals, properties, profile, current_class);
+        }
+        Some(false) => {}
+        None => {
+            let skipped = locals.clone();
+            let mut evaluated = skipped.clone();
+            apply_expression_facts(
+                expr,
+                &mut evaluated,
+                properties,
+                profile,
+                current_class,
+            );
+            *locals = merge_exits(&[skipped, evaluated]);
+        }
     }
 }
 
