@@ -1624,7 +1624,7 @@ fn validate_stmt(
             if let Some(body) = else_body {
                 exits.push(validate_branch(
                     body,
-                    &entry,
+                    &fallthrough,
                     properties,
                     profile,
                     current_class,
