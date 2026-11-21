@@ -313,6 +313,94 @@ echo B::relay();
     assert_eq!(out, "B");
 }
 
+/// Verifies `static::m()` on a private static `A::m()` looks `m` up in the late-bound class,
+/// from a static and an instance method: a class that does not redeclare `m` runs `A::m()`, a
+/// public or protected redeclaration (or one inherited from it) runs instead with `static` still
+/// bound to the called class, and a private one throws `Error`. `$this->own()` on a private
+/// instance method stays on `A::own()`.
+#[test]
+fn test_static_late_binding_private_scope_method_uses_called_class_lookup() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static function m(): string { return "A::m"; }
+    private function own(): string { return "A::own"; }
+    public static function run(): string {
+        try { return static::m(); } catch (Error $e) { return get_class($e) . ": " . $e->getMessage(); }
+    }
+    public function inst(): string {
+        try { $late = static::m(); } catch (Error $e) { $late = $e->getMessage(); }
+        return $late . " | " . $this->own();
+    }
+}
+class B extends A {}
+class C extends A { public static function m(): string { return "C::m@" . static::class; } }
+class D extends A {
+    private static function m(): string { return "D::m"; }
+    public function own(): string { return "D::own"; }
+}
+class E extends A { protected static function m(): string { return "E::m"; } }
+class C2 extends C {}
+class D2 extends D {}
+class E2 extends E { public static function m(): string { return "E2::m"; } }
+echo "A: ", A::run(), " / ", (new A())->inst(), "\n";
+echo "B: ", B::run(), " / ", (new B())->inst(), "\n";
+echo "C: ", C::run(), " / ", (new C())->inst(), "\n";
+echo "D: ", D::run(), " / ", (new D())->inst(), "\n";
+echo "E: ", E::run(), " / ", (new E())->inst(), "\n";
+echo "C2: ", C2::run(), " / ", (new C2())->inst(), "\n";
+echo "D2: ", D2::run(), " / ", (new D2())->inst(), "\n";
+echo "E2: ", E2::run(), " / ", (new E2())->inst(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "A: A::m / A::m | A::own\n\
+         B: A::m / A::m | A::own\n\
+         C: C::m@C / C::m@C | A::own\n\
+         D: Error: Call to private method D::m() from scope A / Call to private method D::m() from scope A | A::own\n\
+         E: E::m / E::m | A::own\n\
+         C2: C::m@C2 / C::m@C2 | A::own\n\
+         D2: Error: Call to private method D::m() from scope A / Call to private method D::m() from scope A | A::own\n\
+         E2: E2::m / E2::m | A::own\n"
+    );
+}
+
+/// Verifies a late-bound redeclaration of a private static method binds the call's arguments
+/// with its own signature (a nullable parameter keeps `null`, an added optional parameter takes
+/// its default), returns through its own return type, and works for `void` methods.
+#[test]
+fn test_static_late_binding_private_scope_method_binds_redeclared_signature() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static function m(string $s): string { return "A::m " . var_export($s, true); }
+    public static function run(mixed $v): string { return static::m($v); }
+    private static function log(string $s): void { echo "A::log $s\n"; }
+    public static function note(): void { static::log("n"); }
+}
+class C extends A {
+    public static function m(?string $x): string { return "C::m " . var_export($x, true); }
+    public static function log(string $s): void { echo "C::log $s\n"; }
+}
+class F extends A {
+    public static function m(string $x, int $n = 7): int { return strlen($x) + $n; }
+}
+echo A::run("x"), "\n";
+echo C::run(null), "\n";
+echo C::run("y"), "\n";
+var_dump(F::run("abc"));
+A::note();
+C::note();
+F::note();
+"#,
+    );
+    assert_eq!(
+        out,
+        "A::m 'x'\nC::m NULL\nC::m 'y'\nstring(2) \"10\"\nA::log n\nC::log n\nA::log n\n"
+    );
+}
+
 /// Verifies inherited properties (`$a`) and methods are accessible from child, and
 /// `parent::greet()` calls the parent's version, returning "42 hi!".
 #[test]

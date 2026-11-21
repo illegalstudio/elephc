@@ -16,8 +16,13 @@ use super::*;
 pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let raw_target = method_name_data(ctx, inst)?.to_string();
     let object_static = raw_target.starts_with("@object@");
+    // `@forward@Class::m` calls Class's method with `static` forwarded from this frame: the
+    // EIR dispatch for a late-bound call whose lexical method is private chose Class already
+    // (`ir_lower::expr::private_late_static_calls`).
+    let forwarded_static = raw_target.starts_with("@forward@");
     let target = raw_target
         .strip_prefix("@object@")
+        .or_else(|| raw_target.strip_prefix("@forward@"))
         .unwrap_or(&raw_target)
         .to_string();
     let adjusted;
@@ -47,6 +52,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     }
     let called_class_id = match object_value {
         Some(object) => CalledClassIdArg::Object(object),
+        None if forwarded_static => resolve_static_called_class_arg(ctx, "static", &receiver)?,
         None => resolve_static_called_class_arg(ctx, receiver_label, &receiver)?,
     };
     if let Some(intrinsic) = runtime_backed_static_intrinsic(receiver.as_str(), method_name) {
@@ -59,7 +65,9 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
             intrinsic,
         );
     }
-    let late_bound_static = object_value.is_some() || is_late_bound_static_receiver(receiver_label);
+    let late_bound_static = object_value.is_some()
+        || forwarded_static
+        || is_late_bound_static_receiver(receiver_label);
     let Some(receiver_info) = ctx.module.class_infos.get(receiver.as_str()) else {
         if builtins::has_eval_context(ctx) {
             return builtins::lower_eval_static_method_call(
@@ -115,7 +123,9 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
         .iter()
         .map(|(_, ty)| ty.codegen_repr())
         .collect::<Vec<_>>();
-    let dynamic_static_slot = if late_bound_static {
+    // A forwarded call names the class whose method every called class in its dispatch arm
+    // inherits, so it binds that implementation directly and only forwards `static`.
+    let dynamic_static_slot = if late_bound_static && !forwarded_static {
         receiver_info.static_vtable_slots.get(&method_key).copied()
     } else {
         None
@@ -151,6 +161,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     // even while an eval-declared Child override is active.
     let eval_done_label = if late_bound_static
         && object_value.is_none()
+        && !forwarded_static
         && ctx.module.required_runtime_features.eval_bridge
     {
         let no_override_label = ctx.next_label("eval_late_static_no_override");
