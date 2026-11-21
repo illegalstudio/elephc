@@ -54,9 +54,10 @@ class ContractPipelineTests(unittest.TestCase):
                     # extract.run_gen_builtins), the fifty-four xml_* / xmlwriter_*
                     # functions of the XML prelude, the SimpleXML, tokenizer and
                     # random and fileinfo surfaces, the twenty-four tidy_* functions
-                    # of the tidy prelude, the full mysqli procedural surface, `preg_grep`,
+                    # of the tidy prelude, the full mysqli procedural surface, `preg_grep`, `preg_quote`, `preg_filter`,
+                    # `preg_replace_callback_array`,
                     # and the remaining injected preludes.
-                    "prelude": 448,
+                    "prelude": 451,
                     # Calls rewritten from their enclosing lexical function frame.
                     "compiler-transform": 3,
                     # The date/calendar procedural families rewritten by the name resolver.

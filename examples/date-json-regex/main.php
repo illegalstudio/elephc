@@ -117,3 +117,16 @@ echo "Other files: " . implode(", ", preg_grep("/\\.txt$/", $files, PREG_GREP_IN
 if (preg_match("/./u", "\xff") === false) {
     echo "Regex error: " . preg_last_error_msg() . "\n";
 }
+
+// Escape user input for a pattern, keep only matching entries, and chain callbacks
+$domain = "example.com";
+$pattern = "/@" . preg_quote($domain, "/") . "$/";
+echo "Quoted pattern: " . $pattern . "\n";
+foreach (["ann@example.com", "bob@exampleXcom", "cy@example.com"] as $address) {
+    $masked = preg_filter($pattern, "@***", $address);
+    echo "  " . $address . " -> " . ($masked === null ? "(skipped)" : $masked) . "\n";
+}
+echo "Slug: " . preg_replace_callback_array([
+    "/[^a-z0-9]+/i" => fn($m) => "-",
+    "/[A-Z]/" => fn($m) => strtolower($m[0]),
+], "Hello World, PHP 8!") . "\n";

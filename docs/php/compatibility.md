@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3181 constants).
 
-Overall coverage: functions **1114 / 2169** (51%), classes **202 / 329** (61%), constants **1614 / 3181** (51%).
+Overall coverage: functions **1117 / 2169** (51%), classes **202 / 329** (61%), constants **1614 / 3181** (51%).
 
 ## Coverage by PHP module
 
@@ -47,7 +47,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `odbc` | 0 / 48 · 0% | 0 / 2 · 0% | 0 / 57 · 0% |
 | `openssl` | 4 / 64 · 6% | 0 / 3 · 0% | 3 / 70 · 4% |
 | [`pcntl`](./pcntl.md#functions) | 28 / 28 · 100% | 1 / 1 · 100% | 0 / 129 · 0% |
-| [`pcre`](./regex.md#functions) | 8 / 11 · 73% | - | 18 / 19 · 95% |
+| [`pcre`](./regex.md#functions) | 11 / 11 · 100% | - | 18 / 19 · 95% |
 | [`pdo`](./pdo.md#functions) | 1 / 1 · 100% | 4 / 4 · 100% | - |
 | [`pdo_dblib`](./pdo.md#functions) | - | 1 / 1 · 100% | - |
 | [`pdo_firebird`](./pdo.md#functions) | - | 1 / 1 · 100% | - |
@@ -95,13 +95,14 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `gmp` constants: 9 / 0
 - `mysqli` functions: 106 / 0
 - `mysqli` constants: 110 / 0
+- `pcre` functions: 11 / 10
 - `pdo` functions: 1 / 0
 - `random` functions: 9 / 3
 - `session` functions: 23 / 0
 - `standard` functions: 392 / 353
 - `standard` constants: 171 / 150
 
-Of those functions, 223 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
+Of those functions, 224 from `exif`, `gd`, `mysqli`, `pcre`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.
 
 The remaining 2 baseline extensions expose no functions, classes, or constants of their own, so they have no row above: `lexbor`, `mysqlnd`.
 

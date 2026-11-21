@@ -12,11 +12,13 @@
 
 mod captures;
 mod engine;
+mod preg_filter;
 mod preg_grep;
 mod preg_last_error;
 mod preg_last_error_msg;
 mod preg_match;
 mod preg_match_all;
+mod preg_quote;
 mod pattern;
 mod preg_replace;
 mod preg_replace_callback;
@@ -27,11 +29,13 @@ mod targets;
 
 pub(in crate::interpreter) use captures::*;
 pub(in crate::interpreter) use engine::*;
+pub(in crate::interpreter) use preg_filter::*;
 pub(in crate::interpreter) use preg_grep::*;
 pub(in crate::interpreter) use preg_last_error::*;
 pub(in crate::interpreter) use preg_last_error_msg::*;
 pub(in crate::interpreter) use preg_match::*;
 pub(in crate::interpreter) use preg_match_all::*;
+pub(in crate::interpreter) use preg_quote::*;
 pub(in crate::interpreter) use pattern::*;
 pub(in crate::interpreter) use preg_replace::*;
 pub(in crate::interpreter) use preg_replace_callback::*;
