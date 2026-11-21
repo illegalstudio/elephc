@@ -17,7 +17,7 @@ echo "Hello, World!\n";
 Compile it:
 
 ```bash
-elephc hello.php
+elephc build hello.php
 ```
 
 This produces a native binary called `hello` in the same directory. Run it:
@@ -50,7 +50,7 @@ echo "Hello, " . strtoupper($name) . "!\n";
 Compile and run:
 
 ```bash
-elephc greet.php
+elephc build greet.php
 ./greet elephc
 ```
 
@@ -80,13 +80,13 @@ for ($i = 1; $i <= 100; $i++) {
 ```
 
 ```bash
-elephc fizzbuzz.php
+elephc build fizzbuzz.php
 ./fizzbuzz
 ```
 
 ## What happens under the hood
 
-When you run `elephc hello.php`, the compiler:
+When you run `elephc build hello.php`, the compiler:
 
 1. **Lexes** the source into tokens
 2. **Parses** tokens into an AST (Abstract Syntax Tree)
@@ -111,10 +111,10 @@ If you want to inspect the compile more closely, these flags are a good starting
 
 ```bash
 # Print per-phase compiler timings to stderr
-elephc --timings hello.php
+elephc build --timings hello.php
 
 # Emit assembly only, plus a sidecar source-map file
-elephc --emit-asm --source-map hello.php
+elephc build --emit-asm --source-map hello.php
 ```
 
 `--timings` reports phases such as lexing, parsing, early optimization, type checking, constant propagation, post-check pruning, control-flow normalization, dead-code elimination, runtime-cache preparation, code generation, assembling, and linking.

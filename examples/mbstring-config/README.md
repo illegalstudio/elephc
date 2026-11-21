@@ -8,14 +8,14 @@ Run these commands from this example directory:
 
 ```sh
 elephc native add pcre2
-elephc --ini default_charset=8bit main.php
+elephc build --ini default_charset=8bit main.php
 ./main
 ```
 
 `library.php` exposes the same encoding and counting behavior to a C host:
 
 ```sh
-elephc --emit cdylib --ini default_charset=8bit library.php
+elephc build --emit cdylib --ini default_charset=8bit library.php
 ```
 
 Include the generated `liblibrary.h` and link `liblibrary.so` on Linux or

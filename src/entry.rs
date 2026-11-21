@@ -35,7 +35,7 @@ pub fn run() {
     }
     match cli::parse_args(&args) {
         cli::Command::Repl(command) => std::process::exit(repl::run(command)),
-        cli::Command::Compile(mut config) => {
+        cli::Command::Build(mut config) => {
             apply_project_ini(&mut config);
             emit_ini_override_warnings(&config);
             pipeline::compile(config);

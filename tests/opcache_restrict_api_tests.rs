@@ -102,6 +102,7 @@ fn compile(dir: &Path, stem: &str, ini: &[&str]) -> PathBuf {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, PROBE).unwrap();
     let mut cmd = Command::new(elephc_bin());
+    cmd.arg("build");
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
     cmd.current_dir(dir);
@@ -319,6 +320,7 @@ fn restriction_follows_the_entry_script_not_the_executing_file() {
         let php = entrydir.join(format!("{stem}.php"));
         fs::write(&php, &entry_src).unwrap();
         let mut cmd = Command::new(elephc_bin());
+        cmd.arg("build");
         cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
         cmd.env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir());
         cmd.current_dir(&entrydir);
@@ -368,7 +370,7 @@ fn a_runtime_eval_source_is_refused_as_native_calls_are() {
     assert!(!source.contains("opcache"), "PREMISE: nothing statically names the OPcache API");
     let build = |stem: &str, restrict: &str| -> PathBuf {
         fs::write(dir.join(format!("{stem}.php")), source).unwrap();
-        let output = Command::new(elephc_bin())
+        let output = Command::new(elephc_bin()).arg("build")
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
             .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
             .current_dir(&dir)
@@ -430,7 +432,7 @@ fn a_refused_eval_call_takes_byte_paths_and_checks_its_closure() {
     let source = "<?php\n$p = '/nonexistent' . chr(255);\n$code = getenv('REVIEW_CODE');\neval($code);\n";
     assert!(!source.contains("opcache"), "PREMISE: nothing statically names the OPcache API");
     fs::write(dir.join("main.php"), source).unwrap();
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)
@@ -478,7 +480,7 @@ fn a_refused_eval_call_still_evaluates_its_arguments_in_order() {
     let source = "<?php\n$code = getenv('REVIEW_CODE');\neval($code);\n";
     assert!(!source.contains("opcache"), "PREMISE: nothing statically names the OPcache API");
     fs::write(dir.join("main.php"), source).unwrap();
-    let output = Command::new(elephc_bin())
+    let output = Command::new(elephc_bin()).arg("build")
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_RUNTIME_CACHE_DIR", crate::shared_runtime_cache_dir())
         .current_dir(&dir)

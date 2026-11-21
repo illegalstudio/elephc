@@ -9,7 +9,7 @@ if [ ! -f "Cargo.toml" ]; then
     exit 1
 fi
 
-ELEPHC="cargo run --release --"
+ELEPHC="cargo run --release -- build"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PASS=0
 FAIL=0
@@ -41,7 +41,7 @@ for dir in "$SCRIPT_DIR"/*/; do
             example_args=(--web)
         fi
 
-        if $ELEPHC "${example_args[@]}" "$dir/main.php" >/dev/null 2>&1; then
+        if $ELEPHC build "${example_args[@]}" "$dir/main.php" >/dev/null 2>&1; then
             echo "ok"
             PASS=$((PASS + 1))
         else

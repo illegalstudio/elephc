@@ -103,9 +103,9 @@ RUN set -e; \
     exit "$status"
 
 # Compile and run a few programs so the log shows the image works, without letting a failure abort the build.
-RUN (./target/debug/elephc examples/fizzbuzz/main.php && ./examples/fizzbuzz/main | tail -n 3 \
-        && ./target/debug/elephc examples/hello-preg/main.php && ./examples/hello-preg/main \
-        && ./target/debug/elephc examples/xml/main.php && ./examples/xml/main | tail -n 3) \
+RUN (./target/debug/elephc build examples/fizzbuzz/main.php && ./examples/fizzbuzz/main | tail -n 3 \
+        && ./target/debug/elephc build examples/hello-preg/main.php && ./examples/hello-preg/main \
+        && ./target/debug/elephc build examples/xml/main.php && ./examples/xml/main | tail -n 3) \
     || echo "WARNING: an example failed to compile or run"
 
 # The cheap tests: the lexer, parser and error-reporting suites and the bridge crates' unit tests. The compiler's

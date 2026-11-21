@@ -98,11 +98,22 @@ build_compiler() {
   printf '%s\n' "$compiler"
 }
 
+# Prints `build` when the compiler requires the build command; older releases compile bare.
+build_word() {
+  # Capture first: with pipefail, `grep -q` closing the pipe early would fail the probe.
+  local help
+  help=$("$1" --help 2>/dev/null)
+  if [[ $help == *"build <source-file>"* ]]; then
+    printf build
+  fi
+}
+
 # Compiles the fixture with the selected isolation mode and returns the binary.
 compile_fixture() {
-  local compiler=$1 fixture=$2 work=$3 isolation=$4
+  local compiler=$1 fixture=$2 work=$3 isolation=$4 build
+  build=$(build_word "$compiler")
   cp "$fixture" "$work/app.php"
-  if ! (cd "$work" && "$compiler" --web --web-isolation "$isolation" --quiet app.php >compile.log 2>&1); then
+  if ! (cd "$work" && "$compiler" ${build:+"$build"} --web --web-isolation "$isolation" --quiet app.php >compile.log 2>&1); then
     cat "$work/compile.log" >&2
     die "compilation failed"
   fi
@@ -206,7 +217,7 @@ markdown_report() {
   local stats_dir=$8 k6_tsv=$9 php_tsv=${10}
   local index=0 file rps avg p99 p99_text cpu_text
   printf '# elephc web benchmark: %s\n\n' "$fixture"
-  printf -- '- Server: `elephc --web` (isolation=%s), workers=%s\n' "$isolation" "$workers"
+  printf -- '- Server: `elephc build --web` (isolation=%s), workers=%s\n' "$isolation" "$workers"
   printf -- '- Load: `wrk -t%s -c%s -d%s` x%s client(s)\n' "$threads" "$connections" "$duration" "$clients"
   printf -- '- Platform: %s (%s CPUs)\n\n' "$(uname -srm)" "$(cpu_count)"
   printf '| Repeat | Requests/sec | Avg latency | p99 latency |\n'

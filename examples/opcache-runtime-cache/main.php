@@ -7,7 +7,7 @@
 //
 // The CLI leaves OPcache off by default, as `php` does. Turn it on at compile time:
 //
-//   elephc --ini opcache.enable_cli=1 examples/opcache-runtime-cache/main.php
+//   elephc build --ini opcache.enable_cli=1 examples/opcache-runtime-cache/main.php
 //
 // Add `--ini opcache.file_cache=/tmp/rules-cache` to keep the parsed rules on disk, so
 // the next process starts warm.

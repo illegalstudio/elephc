@@ -2007,7 +2007,7 @@ jobs:
       - name: Run the native tokenizer example
         shell: elephc-ci-shell {0}
         run: |
-          target/debug/elephc --with-tokenizer examples/tokenizer/main.php
+          target/debug/elephc build --with-tokenizer examples/tokenizer/main.php
           trap 'rm -f "$RUNNER_TEMP/tokenizer-example.out"' EXIT
           examples/tokenizer/main > "$RUNNER_TEMP/tokenizer-example.out"
           grep -F 'Function declaration at line 1, byte ' "$RUNNER_TEMP/tokenizer-example.out"

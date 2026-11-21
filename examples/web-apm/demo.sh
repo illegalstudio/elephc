@@ -24,7 +24,7 @@ if [[ ! -x "$elephc" ]]; then
 fi
 
 echo "compiling the shop with --web --with-monitoring..."
-"$elephc" --web --with-monitoring "$here/main.php"
+"$elephc" build --web --with-monitoring "$here/main.php"
 
 pids=()
 cleanup() {

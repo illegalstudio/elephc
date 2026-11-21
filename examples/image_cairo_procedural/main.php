@@ -6,7 +6,7 @@
 // free-function layer (cairo_create, cairo_set_source_*, cairo_arc, ...) instead of
 // the CairoContext object. It writes a PNG, reads a pixel back through GD, and shows
 // the matrix helpers. Run:
-//   cargo run -- examples/image_cairo_procedural/main.php
+//   cargo run -- build examples/image_cairo_procedural/main.php
 //   ./examples/image_cairo_procedural/main
 
 $surface = cairo_image_surface_create(CairoFormat::ARGB32, 160, 120);

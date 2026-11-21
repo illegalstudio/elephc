@@ -1,7 +1,7 @@
 <?php
 // elephc-web: session.upload_progress — real streaming upload progress.
 //
-// Compile: cargo run -- --web examples/web-session-upload/main.php
+// Compile: cargo run -- build --web examples/web-session-upload/main.php
 // Run:     ./examples/web-session-upload/main --listen 127.0.0.1:8080
 // Try:     open http://127.0.0.1:8080/ in a browser, pick a file of a few MB,
 //          and watch the progress bar fill from the concurrent /progress poll.

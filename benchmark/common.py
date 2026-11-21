@@ -41,6 +41,15 @@ def command_output(command: list[str]) -> str | None:
     return lines[0] if result.returncode == 0 and lines else None
 
 
+def compile_command(compiler: str | Path) -> list[str]:
+    """Return the compile prefix for `compiler`: `elephc build` since the build command
+    became mandatory, the bare binary for older releases that predate it."""
+    result = subprocess.run([str(compiler), "--help"], capture_output=True, text=True, timeout=30)
+    if "build <source-file>" in result.stdout:
+        return [str(compiler), "build"]
+    return [str(compiler)]
+
+
 def run_process(command: list[str], cwd: Path, timeout: float = 120) -> str:
     """Run a command and retain its diagnostics when it fails."""
     result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=timeout)
@@ -141,7 +150,7 @@ def run_case(case: dict, compiler: Path, iterations: int, warmup: int,
                 run_process([cc, "-O2", source, "-o", str(binary)], cwd, timeout)
                 command = [str(binary)]
             else:
-                run_process([str(compiler), str(cwd / source)], cwd, timeout)
+                run_process([*compile_command(compiler), str(cwd / source)], cwd, timeout)
                 command = [str((cwd / source).with_suffix(""))]
             results[label] = measure(command, cwd, expected, iterations, warmup, timeout)
     return {"case": case["name"], "fixture_sha256": fixture_hash(directory),

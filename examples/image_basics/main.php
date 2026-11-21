@@ -7,7 +7,7 @@
 // imagecreatefromtga().
 //
 // Build & run:
-//   cargo run -- examples/image_basics/main.php
+//   cargo run -- build examples/image_basics/main.php
 //   ./examples/image_basics/main
 
 $width = 64;
