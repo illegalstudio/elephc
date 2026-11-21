@@ -197,6 +197,7 @@ impl Checker {
                 captures,
                 capture_refs,
                 by_ref_return: _,
+                ..
             } => {
                 if *is_static {
                     body_must_not_use_this(body, expr.span)?;

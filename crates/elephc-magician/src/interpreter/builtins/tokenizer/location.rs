@@ -18,7 +18,7 @@ eval_builtin! {
 
 /// Constructs a catchable ParseError and preserves the parser's source-buffer location.
 pub(super) fn throw_parse_error<T>(
-    error: &elephc_tokenizer_engine::ParseError,
+    error: &elephc_chopper::syntax::php_tokenizer::ParseError,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {

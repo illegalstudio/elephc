@@ -468,3 +468,27 @@ pub(super) fn injects_file_functions_per_function() {
             assert_eq!(injected.len(), program.len() + 1 + STATE_HELPER_DECLS);
         }
     }
+
+    /// Forcing the INI surface declares `ini_get` even when the program never mentions it.
+    #[test]
+    fn forced_ini_get_is_injected_for_the_tokenizer_memory_guard() {
+        let program = parse("<?php echo 1;");
+        let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+        let (program, _) = inject_if_used(
+            program,
+            PhpVersion::default(),
+            false,
+            None,
+            &[],
+            &[],
+            None,
+            false,
+            true,
+            &mut inventory,
+        );
+        assert!(program.iter().any(|stmt| matches!(
+            &stmt.kind,
+            crate::parser::ast::StmtKind::FunctionDecl { name, .. }
+                if name.eq_ignore_ascii_case("ini_get")
+        )));
+    }

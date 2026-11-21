@@ -48,6 +48,25 @@ fn parse_fragment_preserves_php_string_escape_semantics() {
         ])))]
     );
 }
+/// Rejects bare numeric postfixes before evaluation while allowing grouped numeric callees.
+#[test]
+fn parse_fragment_rejects_bare_numeric_postfixes() {
+    for expr in ["1()", "1.5()", "-1()", "1(...)", "1[0]"] {
+        let source = format!("echo 'ran'; {expr};");
+        assert!(
+            matches!(parse_fragment(source.as_bytes()), Err(EvalParseError::UnexpectedToken)),
+            "{source}",
+        );
+    }
+
+    let program = parse_fragment(b"echo 'ran'; (1)();").expect("parse grouped numeric callee");
+    assert!(matches!(
+        program.statements().last(),
+        Some(EvalStmt::Expr(EvalExpr::DynamicCall { callee, .. }))
+            if matches!(callee.as_ref(), EvalExpr::Const(EvalConst::Int(1)))
+    ));
+}
+
 /// Verifies call expressions preserve their callee name and source-order arguments.
 #[test]
 fn parse_fragment_accepts_call_expression_source() {

@@ -9,6 +9,31 @@
 
 use super::*;
 
+/// Keeps physical spans while projecting trivia gaps and returning from a decoded literal.
+#[test]
+fn test_shared_scanner_preserves_source_spans_after_interpolation() {
+    use elephc::lexer::tokenize_with_mode_and_source_id;
+    use elephc::source::SourceMode;
+
+    let tokens = tokenize_with_mode_and_source_id(
+        "\u{feff}/*é*/<?php\n/*é*/ $名 = \"{$x}\";\n/* note */\n",
+        SourceMode::Php,
+        17,
+    ).expect("the shared scanner should decode interpolation and resume after the quote");
+    let start = tokens[0].1.span;
+    let variable = tokens[1].1.span;
+    let (semicolon, semicolon_metadata) = &tokens[tokens.len() - 2];
+    let end = tokens.last().unwrap().1.span;
+
+    assert_eq!(tokens[1].0, Token::Variable("名".into()));
+    assert_eq!((start.line, start.col), (1, 6));
+    assert_eq!((variable.line, variable.col, variable.end_column()), (2, 7, 9));
+    assert_eq!(*semicolon, Token::Semicolon);
+    assert_eq!((semicolon_metadata.span.line, semicolon_metadata.span.col), (2, 18));
+    assert_eq!((end.line, end.col), (4, 1));
+    assert!(tokens.iter().all(|(_, metadata)| metadata.span.source_id() == 17));
+}
+
 /// Verifies `<?php` produces `OpenTag` and EOF, the bare minimum valid PHP script.
 #[test]
 fn test_open_tag() {

@@ -40,6 +40,7 @@ impl Checker {
     /// Visits remaining eager children once, before the parent performs its pure type validation.
     pub(super) fn infer_fallback_operand_effects(&mut self, expr: &Expr, env: &mut TypeEnv) -> Result<(), CompileError> {
         match &expr.kind {
+            ExprKind::Runtime(_) => return Err(CompileError::new(expr.span, "Runtime fragment syntax must be lowered by Magician")),
             ExprKind::InstanceOf { value, target } => {
                 self.infer_type_with_assignment_effects(value, env)?;
                 if let InstanceOfTarget::Expr(target) = target {

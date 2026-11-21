@@ -131,6 +131,8 @@ fn dummy_check_result() -> CheckResult {
         requested_method_instantiations: Vec::new(),
         generic_method_sites: std::collections::HashMap::new(),
         generic_new_sites: Default::default(),
+        program_contains_eval: false,
+        native_defined_constants: Default::default(),
         generic_call_sites: HashMap::new(),
         global_env: HashMap::new(),
         functions,
@@ -351,6 +353,7 @@ fn lowers_every_expr_variant_smoke() {
         expr(ExprKind::Cast { target: CastType::String, expr: Box::new(int(1)) }),
         expr(ExprKind::Closure {
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_by_ref: false,
             variadic_type: None,

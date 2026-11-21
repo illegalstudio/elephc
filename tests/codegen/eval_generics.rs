@@ -15,6 +15,21 @@ fn dynamic_eval(body: &str) -> String {
     format!("<?php\n$code = $argc > 1 ? $argv[1] : <<<'CODE'\n{body}\nCODE;\neval($code);\n")
 }
 
+/// Resolves written runtime type arguments while eval executes on a native Fiber stack.
+#[test]
+fn test_eval_generics_written_types_on_fiber() {
+    let source = r#"<?php
+$code = $argc > 1 ? $argv[1] : <<<'CODE'
+class FiberBox<T> { public function __construct(public T $value) {} }
+$box = new FiberBox<array<array<int>>>([[7]]);
+echo (int) ($box instanceof FiberBox<array<array<int>>>), ':', $box->value[0][0];
+CODE;
+$fiber = new Fiber(static function () use ($code): void { eval($code); });
+$fiber->start();
+"#;
+    assert_eq!(compile_and_run(source), "1:7");
+}
+
 /// PHP comparisons after instanceof coexist with fully written nested generic class targets.
 #[test]
 fn test_eval_generics_review_instanceof_comparisons() {

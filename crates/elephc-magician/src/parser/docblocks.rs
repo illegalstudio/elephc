@@ -2,7 +2,7 @@
 //! Adapts supported generic PHPDoc annotations into the existing native type grammar.
 //!
 //! Called from:
-//! - `Parser::new` before declaration parsing.
+//! - `FragmentInput::new` before declaration parsing.
 //!
 //! Key details:
 //! - Synthesized tokens retain PHPDoc provenance so strict PHP mode accepts annotations.
@@ -34,8 +34,10 @@ fn block(comment: &str) -> Block {
             let remaining = remaining.strip_prefix("of ").map_or(remaining.to_string(), |bound| format!(": {bound}"));
             let marker = if variance > 0 { "+" } else if variance < 0 { "-" } else { "" };
             let syntax = format!("{marker}{name} {remaining}");
-            let mut parser = super::state::Parser::new(annotation_tokens(&format!("<{syntax}>"), 1), 0);
-            if parser.parse_generic_parameters().is_ok() && !block.templates.iter().any(|(existing, _)| existing == name) {
+            let tokens = annotation_tokens(&format!("<{syntax}>"), 1);
+            if !tokens.is_empty() && crate::lower::type_parameter_names(tokens).is_some()
+                && !block.templates.iter().any(|(existing, _)| existing == name)
+            {
                 block.templates.push((name.into(), syntax));
             }
         } else if let Some(rest) = line.strip_prefix("@param ") {
@@ -172,8 +174,11 @@ pub(super) fn apply(tokens: Vec<Token>) -> Vec<Token> {
         if !matches!(tokens.get(header).map(Token::kind), Some(TokenKind::Less)) { continue; }
         let Some(body) = (header..tokens.len()).find(|index| matches!(tokens[*index].kind(), TokenKind::LBrace)) else { continue; };
         let Some(end) = matching(&tokens, body, TokenKind::LBrace, TokenKind::RBrace) else { continue; };
-        let mut parser = super::state::Parser::new(tokens[header..body].iter().filter(|token| !matches!(token.kind(), TokenKind::DocComment(_))).cloned().collect(), 0);
-        if let Ok(parameters) = parser.parse_generic_parameters() { scopes.push((body, end, parameters.into_iter().map(|param| param.name).collect())); }
+        let header_tokens = tokens[header..body].iter()
+            .filter(|token| !matches!(token.kind(), TokenKind::DocComment(_))).cloned();
+        if let Some(parameters) = crate::lower::type_parameter_names(header_tokens) {
+            scopes.push((body, end, parameters));
+        }
     }
     for (comment_index, token) in tokens.iter().enumerate() {
         let TokenKind::DocComment(comment) = token.kind() else { continue; };
