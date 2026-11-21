@@ -47,6 +47,11 @@ pub(crate) fn walk_statements(statements: &[Stmt], visitor: &mut impl AstVisitor
     walk_stmts(statements, visitor);
 }
 
+/// Visits one borrowed expression without wrapping it in a synthetic statement.
+pub(crate) fn walk_expression(expr: &Expr, visitor: &mut impl AstVisitor) {
+    walk_expr(expr, visitor);
+}
+
 /// Forwards one extension observation to the policy-specific visitor.
 fn extension(visitor: &mut impl AstVisitor, span: Span, description: &str) {
     visitor.extension(span, description);

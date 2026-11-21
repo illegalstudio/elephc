@@ -134,6 +134,8 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php $values = [-1 => [1]]; $values[] = []; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $values = [-1 => [1], ...[[2]]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $values = [9223372036854775807 => [1]]; $values[] = []; if (PHP_OS_FAMILY === 'Windows') { $values[9223372036854775807][false] = 2; }",
+        "<?php $values = [1]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = ($values = [[1]]); }",
+        "<?php $values = [1]; do { $values = [[1]]; } while ($values[0][false] = false);",
     ] {
         let error = crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
@@ -175,6 +177,8 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php class SpreadKeyAccessWrite implements ArrayAccess { public function offsetExists(mixed $key): bool { return true; } public function offsetGet(mixed $key): mixed { return 1; } public function offsetSet(mixed $key, mixed $value): void {} public function offsetUnset(mixed $key): void {} } $values = [...[new SpreadKeyAccessWrite()]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][true] = 2; }",
         "<?php $values = []; foreach ([10] as $key => $value) { $values[$key] = $value; }",
         "<?php $values = []; foreach ([10] as $value) { $values[$value] = 1; }",
+        "<?php $values = [[1]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = ($values[0] = 1); }",
+        "<?php $values = [[1]]; do { $values[0] = 1; } while ($values[0][false] = false);",
     ] {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));

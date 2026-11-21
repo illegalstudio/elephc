@@ -334,6 +334,27 @@ fn validate_expression_writes(
     visitor.error.map_or(Ok(()), Err)
 }
 
+/// Audits one expression against the facts established before its evaluation.
+fn validate_expression_value_writes(
+    expr: &Expr,
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> Result<(), CompileError> {
+    let mut visitor = ExpressionWriteValidator {
+        locals,
+        properties,
+        profile,
+        current_class,
+        source: SourcePolicy::default(),
+        statement_depth: 1,
+        error: None,
+    };
+    ast_visit::walk_expression(expr, &mut visitor);
+    visitor.error.map_or(Ok(()), Err)
+}
+
 /// Keeps nested statement bodies on their own flow-sensitive validation pass.
 struct ExpressionWriteValidator<'a> {
     locals: &'a LocalFacts,
@@ -373,27 +394,33 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
             return;
         }
         let ExprKind::Assignment {
-            target, prelude, ..
+            target,
+            value,
+            prelude,
+            ..
         } = &expr.kind
         else {
             return;
         };
-        let overlay = if prelude.is_empty() {
-            None
-        } else {
-            Some(locals_with_prelude(
-                self.locals,
-                prelude,
-                self.properties,
-                self.profile,
-                self.current_class,
-            ))
-        };
-        let locals = overlay.as_ref().unwrap_or(self.locals);
+        let mut locals = self.locals.clone();
+        apply_expression_facts(
+            value,
+            &mut locals,
+            self.properties,
+            self.profile,
+            self.current_class,
+        );
+        apply_prelude_facts(
+            prelude,
+            &mut locals,
+            self.properties,
+            self.profile,
+            self.current_class,
+        );
         self.error = validate_array_access_chain(
             self.profile,
             target,
-            locals,
+            &locals,
             self.properties,
             self.current_class,
         )
@@ -406,17 +433,92 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
     }
 }
 
-/// Applies parser-generated target stabilization facts in source evaluation order.
-fn locals_with_prelude(
-    entry: &LocalFacts,
-    statements: &[Stmt],
+/// Applies assignment side effects from one evaluated expression to a scratch flow state.
+fn apply_expression_facts(
+    expr: &Expr,
+    locals: &mut LocalFacts,
     properties: &PropertyFacts,
     profile: SemanticProfile,
     current_class: Option<&str>,
-) -> LocalFacts {
-    let mut locals = entry.clone();
-    apply_prelude_facts(statements, &mut locals, properties, profile, current_class);
-    locals
+) {
+    let mut visitor = ExpressionFactUpdater {
+        locals,
+        properties,
+        profile,
+        current_class,
+    };
+    ast_visit::walk_expression(expr, &mut visitor);
+}
+
+/// Records nested assignment results after their operands have produced their side effects.
+struct ExpressionFactUpdater<'a> {
+    locals: &'a mut LocalFacts,
+    properties: &'a PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&'a str>,
+}
+
+impl AstVisitor for ExpressionFactUpdater<'_> {
+    /// Closure and declaration bodies execute later and cannot mutate the current activation now.
+    fn descend_statement(&mut self, _stmt: &Stmt) -> bool {
+        false
+    }
+
+    /// Commits one assignment result after nested RHS assignments have updated the flow state.
+    fn expression_end(&mut self, expr: &Expr) {
+        let ExprKind::Assignment {
+            target,
+            value,
+            prelude,
+            ..
+        } = &expr.kind
+        else {
+            return;
+        };
+        apply_prelude_facts(
+            prelude,
+            self.locals,
+            self.properties,
+            self.profile,
+            self.current_class,
+        );
+        record_assignment_fact(
+            target,
+            value,
+            self.locals,
+            self.properties,
+            self.profile,
+            self.current_class,
+        );
+    }
+}
+
+/// Updates a plain local or a statically projected local array assignment target.
+fn record_assignment_fact(
+    target: &Expr,
+    value: &Expr,
+    locals: &mut LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) {
+    let value = infer_expr(value, locals, properties, profile, current_class);
+    if let ExprKind::Variable(name) = &target.kind {
+        locals.set(name, value);
+        return;
+    }
+    let mut indices = Vec::new();
+    let Some(array) = local_array_target(target, &mut indices) else {
+        return;
+    };
+    let indices = indices
+        .into_iter()
+        .map(|index| infer_expr(index, locals, properties, profile, current_class))
+        .collect::<Vec<_>>();
+    locals.set(
+        array,
+        nested_array_write_fact(locals.get(array), &indices, value),
+    );
 }
 
 /// Records only local facts needed to type stabilized assignment targets.
@@ -544,9 +646,12 @@ fn validate_stmt(
     if stmt.source_mode == crate::source::SourceMode::Internal {
         return Ok(());
     }
-    validate_expression_writes(stmt, locals, properties, profile, current_class)?;
+    if !matches!(&stmt.kind, StmtKind::DoWhile { .. }) {
+        validate_expression_writes(stmt, locals, properties, profile, current_class)?;
+    }
     match &stmt.kind {
         StmtKind::Assign { name, value } => {
+            apply_expression_facts(value, locals, properties, profile, current_class);
             locals.set(
                 name,
                 infer_expr(value, locals, properties, profile, current_class),
@@ -589,6 +694,7 @@ fn validate_stmt(
             index,
             value,
         } => {
+            apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = locals.get(array);
             validate_index(
                 profile,
@@ -603,11 +709,13 @@ fn validate_stmt(
             locals.set(array, array_write_fact(receiver, index, value));
         }
         StmtKind::ArrayPush { array, value } => {
+            apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = locals.get(array);
             let value = infer_expr(value, locals, properties, profile, current_class);
             locals.set(array, array_push_fact(receiver, value));
         }
         StmtKind::NestedArrayAssign { target, value } => {
+            apply_expression_facts(value, locals, properties, profile, current_class);
             validate_array_access_chain(
                 profile,
                 target,
@@ -632,8 +740,9 @@ fn validate_stmt(
             object,
             property,
             index,
-            ..
+            value,
         } => {
+            apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = property_fact(
                 infer_expr(object, locals, properties, profile, current_class),
                 property,
@@ -652,8 +761,9 @@ fn validate_stmt(
             receiver,
             property,
             index,
-            ..
+            value,
         } => {
+            apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = static_property_fact(receiver, property, properties, current_class);
             validate_index(
                 profile,
@@ -721,8 +831,16 @@ fn validate_stmt(
             validate_block(body, &mut iteration, properties, profile, current_class)?;
             *locals = merge_exits(&[entry, iteration]);
         }
-        StmtKind::DoWhile { body, .. } => {
+        StmtKind::DoWhile { body, condition } => {
             validate_block(body, locals, properties, profile, current_class)?;
+            validate_expression_value_writes(
+                condition,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            apply_expression_facts(condition, locals, properties, profile, current_class);
         }
         StmtKind::For {
             init,
@@ -985,6 +1103,9 @@ fn infer_expr(
             infer_expr(index, locals, properties, profile, current_class),
             false,
         ),
+        ExprKind::Assignment { value, .. } => {
+            infer_expr(value, locals, properties, profile, current_class)
+        }
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_fact(receiver, property, properties, current_class)
         }
