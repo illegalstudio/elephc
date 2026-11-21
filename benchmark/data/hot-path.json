@@ -3,7 +3,7 @@
   "suite": "hot-path",
   "branch": "main",
   "sampling": "latest-per-UTC-day-and-platform",
-  "points": 39,
+  "points": 40,
   "series": [
     {
       "date": "2026-10-13",
@@ -2422,6 +2422,68 @@
       "run_attempt": 1,
       "run_id": 44799296312,
       "timestamp": "2026-11-20T19:32:04Z"
+    },
+    {
+      "artifact_id": 14716696936,
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "assoc": {
+              "detail": "3 runs",
+              "median_ms": 28.06033400000274,
+              "samples_ms": [
+                28.080125000002454,
+                27.98445799999172,
+                28.06033400000274
+              ],
+              "skipped": false
+            },
+            "buffer": {
+              "detail": "3 runs",
+              "median_ms": 3.0443750000017644,
+              "samples_ms": [
+                3.2032500000127584,
+                3.0443750000017644,
+                2.9217919999950936
+              ],
+              "skipped": false
+            },
+            "indexed": {
+              "detail": "3 runs",
+              "median_ms": 30.101999999999407,
+              "samples_ms": [
+                30.101999999999407,
+                30.20999999998253,
+                30.093209000000343
+              ],
+              "skipped": false
+            }
+          }
+        }
+      ],
+      "commit": "9435998e5ab163659afefafbe525be882b13f76f",
+      "date": "2026-11-21",
+      "environment": {
+        "architecture": "arm64",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "iterations": 3,
+        "measurement": "process-wall",
+        "os": "Darwin",
+        "php": "PHP 8.5.13 (cli) (built: Nov 17 2026 14:30:51) (NTS)",
+        "php_mode": "CLI; OPcache and tracing JIT enabled",
+        "runner": "macos-15",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "warmup": 1
+      },
+      "measurement_timestamp": "2026-11-21T16:59:45Z",
+      "run_attempt": 1,
+      "run_id": 44925976837,
+      "timestamp": "2026-11-21T17:02:13Z"
     }
   ]
 }
