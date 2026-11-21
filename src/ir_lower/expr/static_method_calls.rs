@@ -578,7 +578,20 @@ pub(super) fn static_method_implementation_signature<'a>(
 }
 
 /// Returns the declared result type for a static method call before its arguments are lowered.
+///
+/// A `static::m()` that dispatches over redeclarations of a private method answers the joined
+/// type its dispatch stores (`private_late_static_calls`).
 pub(in crate::ir_lower) fn static_method_call_expr_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) -> Option<PhpType> {
+    super::private_late_static_calls::private_late_static_result_type(ctx, receiver, method)
+        .or_else(|| lexical_static_method_call_expr_type_for_ir(ctx, receiver, method))
+}
+
+/// Returns the result type of the static method `receiver` names, without late-bound dispatch.
+pub(super) fn lexical_static_method_call_expr_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     method: &str,
