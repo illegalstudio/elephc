@@ -72,7 +72,8 @@ fn producer_contract(expr: &EvalExpr, context: &ElephcEvalContext,
     let mixed = || EvalParameterType::new(vec![EvalParameterTypeVariant::Mixed], false);
     match expr {
         EvalExpr::LoadVar(name) => {
-            let kind = scope.local_type(name).or_else(|| scope.inferred_local_type(name))
+            let kind = scope.local_type(name).or_else(|| matches!(role, ProducerContractRole::Binding)
+                .then(|| scope.inferred_local_type(name)).flatten())
                 .or_else(|| scope.native_binding_type(name)).cloned()
                 .or_else(|| role.opens_unknown(context).then(mixed));
             let contents = if arrays { generic_local_contracts(scope, name, context).into_iter()
@@ -115,7 +116,8 @@ fn producer_contract(expr: &EvalExpr, context: &ElephcEvalContext,
                     for variant in second.variants() { if !variants.contains(variant) { variants.push(variant.clone()); } }
                     EvalParameterType::new(variants, nullable)
                 }
-                _ => mixed(),
+                (Some(first), None) | (None, Some(first)) => first,
+                (None, None) => return None,
             })
         }
         EvalExpr::Call { name, .. } => calls::producer(name, None, context, role),
@@ -231,6 +233,7 @@ fn store_local_with_roles(context: &mut ElephcEvalContext,
     producer: LocalAssignmentProducer, infer_kind: bool, values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<RuntimeCellHandle>,EvalStatus> {
     let LocalAssignmentProducer { binding: producer, source, arguments } = producer;
+    let array_source = source.clone();
     let source = if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
         && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
         match source.map(Ok).unwrap_or_else(|| value_contract(value, context, values)) {
@@ -242,9 +245,9 @@ fn store_local_with_roles(context: &mut ElephcEvalContext,
     let fresh = infer_kind && context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals)
         && visible_scope_cell(context, scope, &name).is_none()
         && scope.local_type(&name).is_none();
-    let array_producer = arguments.as_ref().map(|packet| &packet.ty).or(producer.as_ref()).or_else(|| {
-        context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed).then_some(source.as_ref()).flatten()
-    });
+    let binding_contents = producer.as_ref().filter(|ty| arrays::contains_contents(&generic_type(ty)));
+    let array_producer = arguments.as_ref().map(|packet| &packet.ty)
+        .or(array_source.as_ref()).or(binding_contents);
     let array_origin = match arrays::prepare(scope, &name, array_producer, value, context, values) {
         Ok(origin) => origin,
         Err(status) => { let _ = eval_release_value(context, values, value); return Err(status); }

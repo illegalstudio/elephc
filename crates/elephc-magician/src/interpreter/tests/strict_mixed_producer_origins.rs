@@ -27,6 +27,40 @@ fn strict_mixed_origins_unknown_and_explicit_mixed_remain_distinct() {
     }
 }
 
+/// Homogeneous literal arms retain their observed element contract through a runtime ternary.
+#[test]
+fn strict_mixed_origins_ternary_literals_retain_element_contracts() {
+    let source = "$flag=true;$items=$flag?[1,2]:[3]; \
+        try{$items[]='bad';}catch(TypeError $error){echo 'T';} \
+        $flag=false;$items=$flag?[1,2]:[3]; \
+        try{$items[]='bad';}catch(TypeError $error){echo 'F';}return count($items);";
+    for dispatch in [false, true] {
+        for features in [vec![StrictFeature::Locals, StrictFeature::ArrayTypes],
+            vec![StrictFeature::Locals, StrictFeature::ArrayTypes, StrictFeature::Mixed]] {
+            let (output, returned) = run_source(source, None, &features, dispatch);
+            assert_eq!(output, "TF"); assert_eq!(returned, FakeValue::Int(1));
+        }
+    }
+}
+
+/// Untyped array returns infer contents while an explicit mixed return remains open.
+#[test]
+fn strict_mixed_origins_direct_unknown_array_return_infers_contents() {
+    let source = "function origin_unknown_array(){return [1];} \
+        function origin_open_array():mixed{return [1];} \
+        $items=origin_unknown_array();$itemsCount=0; \
+        if(is_array($items)){try{$items[]='bad';}catch(TypeError $error){echo 'U';}$itemsCount=count($items);} \
+        $open=origin_open_array();$openCount=0; \
+        if(is_array($open)){$open[]='allowed';$openCount=count($open);}return $itemsCount+$openCount;";
+    for dispatch in [false, true] {
+        for features in [vec![StrictFeature::Locals, StrictFeature::ArrayTypes],
+            vec![StrictFeature::Locals, StrictFeature::ArrayTypes, StrictFeature::Mixed]] {
+            let (output, returned) = run_source(source, None, &features, dispatch);
+            assert_eq!(output, "U"); assert_eq!(returned, FakeValue::Int(3));
+        }
+    }
+}
+
 /// Conditional element constraints cannot erase an observed outer array predicate at a typed call.
 #[test]
 fn strict_mixed_origins_array_guard_composes_with_contents() {

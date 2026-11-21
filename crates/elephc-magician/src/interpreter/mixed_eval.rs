@@ -23,6 +23,10 @@ pub(super) fn evaluate(expr: &EvalExpr, context: &mut ElephcEvalContext,
             .map_or_else(||values.null().map(|value|(value,Some(Type::atom("null")))),Ok);
     }
     match expr {
+        EvalExpr::Array(elements) => {
+            let (value, source) = array_literals::evaluate_argument_array(elements, context, scope, values)?;
+            Ok((value, Some(generic_type(&source.ty))))
+        }
         EvalExpr::Binary { op, left, right } if !matches!(op, EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr) =>
             binary(*op, left, right, context, scope, values),
         EvalExpr::Call { name, args } if forwarded(name, None, context) =>
