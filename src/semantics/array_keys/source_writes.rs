@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use crate::ast_visit::{self, AstVisitor, SourcePolicy};
 use crate::errors::CompileError;
 use crate::parser::ast::{
     CastType, ClassMethod, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind, TypeExpr,
@@ -59,8 +60,80 @@ pub(crate) fn validate_source_writes(
 ) -> Result<(), CompileError> {
     let mut properties = PropertyFacts::default();
     collect_properties(program, &mut properties);
+    validate_nested_closures(program, &properties, profile)?;
     let mut locals = LocalFacts::default();
     validate_block(program, &mut locals, &properties, profile, None)
+}
+
+/// Audits closures in every expression position before the statement flow walk begins.
+fn validate_nested_closures(
+    program: &Program,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+) -> Result<(), CompileError> {
+    let mut visitor = ClosureWriteValidator {
+        properties,
+        profile,
+        source: SourcePolicy::default(),
+        classes: Vec::new(),
+        error: None,
+    };
+    ast_visit::walk_program(program, &mut visitor);
+    visitor.error.map_or(Ok(()), Err)
+}
+
+/// Retains source policy and lexical class context while visiting closure expressions.
+struct ClosureWriteValidator<'a> {
+    properties: &'a PropertyFacts,
+    profile: SemanticProfile,
+    source: SourcePolicy,
+    classes: Vec<String>,
+    error: Option<CompileError>,
+}
+
+impl AstVisitor for ClosureWriteValidator<'_> {
+    /// Enters the physical statement scope and records lexical class declarations.
+    fn statement(&mut self, stmt: &Stmt) {
+        self.source.enter_statement(stmt);
+        match &stmt.kind {
+            StmtKind::ClassDecl { name, .. }
+            | StmtKind::InterfaceDecl { name, .. }
+            | StmtKind::TraitDecl { name, .. }
+            | StmtKind::EnumDecl { name, .. } => self.classes.push(name.clone()),
+            _ => {}
+        }
+    }
+
+    /// Restores lexical class and physical source state after one statement subtree.
+    fn statement_end(&mut self, stmt: &Stmt) {
+        if matches!(&stmt.kind, StmtKind::ClassDecl { .. }
+            | StmtKind::InterfaceDecl { .. }
+            | StmtKind::TraitDecl { .. }
+            | StmtKind::EnumDecl { .. }) {
+            self.classes.pop().expect("balanced class source traversal");
+        }
+        self.source.leave_statement();
+    }
+
+    /// Validates every user-authored closure body with its own activation facts.
+    fn expression(&mut self, expr: &Expr) {
+        let source = self.source.enter_expression(expr);
+        if self.error.is_some() || source.mode == crate::source::SourceMode::Internal {
+            return;
+        }
+        self.error = validate_closure_value(
+            expr,
+            self.properties,
+            self.profile,
+            self.classes.last().map(String::as_str),
+        )
+        .err();
+    }
+
+    /// Restores the enclosing expression producer policy.
+    fn expression_end(&mut self, _expr: &Expr) {
+        self.source.leave_expression();
+    }
 }
 
 /// Collects declared property contracts independently of executable source order.
@@ -148,18 +221,16 @@ fn validate_stmt(
     match &stmt.kind {
         StmtKind::Assign { name, value } => {
             locals.set(name, infer_expr(value, locals, properties, current_class));
-            validate_closure_value(value, properties, profile, current_class)?;
         }
         StmtKind::TypedAssign {
             type_expr,
             name,
-            value,
+            value: _,
         } => {
             locals.set(
                 name,
                 ValueFact::Known(crate::types::constant_binding::declared_type(type_expr)),
             );
-            validate_closure_value(value, properties, profile, current_class)?;
         }
         StmtKind::RefAssign { target, source } => {
             locals.set(target, ValueFact::Unknown);

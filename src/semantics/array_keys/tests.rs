@@ -107,6 +107,7 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php class StaticKeyWrites { public static array $items = []; } if (PHP_OS_FAMILY === 'Windows') { StaticKeyWrites::$items[null] = 2; }",
         "<?php function guarded_keys(): void { $values = []; if (PHP_OS_FAMILY === 'Windows') { $values[false] = 2; } }",
         "<?php function guarded_typed_key(array $values, bool $key): void { if (PHP_OS_FAMILY === 'Windows') { $values[$key] = 2; } }",
+        "<?php accept_key_writer(function(array $values): void { if (PHP_OS_FAMILY === 'Windows') { $values[false] = 2; } });",
     ] {
         let error = crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
