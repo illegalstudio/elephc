@@ -1,5 +1,6 @@
 //! Purpose:
-//! Collects declared and referenced fully-qualified class-like names from the AST.
+//! Collects declared and referenced fully-qualified class-like names, plus declared function
+//! names, from the AST.
 //! Gives the autoload pass the missing symbols it can try to resolve from disk.
 //!
 //! Called from:
@@ -23,6 +24,31 @@ pub(super) fn collect_declared_fqns(program: &Program) -> HashSet<String> {
         collect_declared_in_stmt(stmt, &mut out);
     }
     out
+}
+
+/// Returns the canonical names of the functions `program` declares, at the top level or inside
+/// namespace blocks, so later-resolved autoloaded files can fall back to them.
+pub(super) fn collect_declared_functions(program: &Program) -> Vec<String> {
+    let mut out = Vec::new();
+    for stmt in program {
+        collect_functions_in_stmt(stmt, &mut out);
+    }
+    out
+}
+
+/// Recurse into a statement to collect declared function names.
+fn collect_functions_in_stmt(stmt: &Stmt, out: &mut Vec<String>) {
+    match &stmt.kind {
+        StmtKind::FunctionDecl { name, .. } | StmtKind::FunctionVariantGroup { name, .. } => {
+            out.push(name.trim_start_matches('\\').to_string());
+        }
+        StmtKind::NamespaceBlock { body, .. } => {
+            for inner in body {
+                collect_functions_in_stmt(inner, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Recurse into a statement to collect declared class names.
