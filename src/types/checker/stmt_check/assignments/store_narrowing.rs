@@ -11,6 +11,8 @@
 //! - Only stable locals qualify: by-reference parameters, reference-aliased or by-reference
 //!   captured locals, globals, statics, boxed `Mixed` frames and program globals keep their
 //!   declared view, since something outside this flow may write them.
+//! - The arithmetic `int|float` union is left alone: it models integer overflow, and the
+//!   loop-storage analysis reads a reset counter with that type.
 
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
@@ -31,6 +33,10 @@ pub(super) fn narrow_local_to_stored_value(
     env: &mut TypeEnv,
 ) {
     let Some(storage @ PhpType::Union(_)) = env.get(name).cloned() else { return; };
+    // `int|float` is what an incremented integer local carries: the checker's model of integer
+    // overflow, not a choice between two members. A loop counter reset by `$i = 0` keeps it,
+    // so the loop-storage analysis and the numeric slot decisions see the type they always did.
+    if storage.is_int_float_union() { return; }
     if checker.type_contains_values(stored, &storage)
         || !(stored_non_null || is_guarded_self_normalisation(checker, name, value, stored, env))
         || !type_is_definitely_non_null(stored)

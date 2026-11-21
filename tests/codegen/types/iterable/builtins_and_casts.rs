@@ -310,3 +310,20 @@ echo counted('s'), "|", counted([1, 2]), "|", counted(new ArrayIterator([1])), "
     );
     assert_eq!(out, "2003|p,q|string|r|1,2,3|null|k=v;|a=1;b=2;c=3;\n-1|2|1|3|-3|tt2\n");
 }
+
+/// A concrete array stored into a boxed nullable slot is read back with its own layout, so the
+/// SPL iterator functions take it without the iterable unbox: the element types stay raw.
+#[test]
+fn test_spl_iterator_functions_read_a_concrete_array_stored_in_a_boxed_slot() {
+    let out = compile_and_run(
+        r#"<?php
+function listed(?array $x): array { $x = explode(',', 'a,b'); return iterator_to_array($x, false); }
+function keyed(?array $x): array { $x = ['k' => 1, 'j' => 2]; return iterator_to_array($x, true); }
+function values(?array $x): array { $x = ['k' => 1, 'j' => 2]; return iterator_to_array($x, false); }
+function counted(?array $x): int { $x = [1, 2, 3]; return iterator_count($x); }
+echo implode('+', listed(null)), '|', json_encode(keyed(null)), '|', json_encode(values(null)), '|',
+    counted(null), "\n";
+"#,
+    );
+    assert_eq!(out, "a+b|{\"k\":1,\"j\":2}|[1,2]|3\n");
+}

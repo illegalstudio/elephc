@@ -367,3 +367,26 @@ echo flat(new A(), true), flat(new A(), false), flat('q', false), "|",
     );
     assert_eq!(out, "sobjectstring|sobjectq|sobjectstring\n");
 }
+
+/// A reset loop counter keeps the arithmetic `int|float` union an earlier `$i++` gave it: that
+/// union models integer overflow rather than a choice of members, and the loop-storage analysis
+/// of the second loop reads the counter with it.
+///
+/// A guard rather than a regression: it compiles on main and must keep doing so.
+#[test]
+fn test_store_narrowing_leaves_the_arithmetic_union_alone() {
+    let out = compile_and_run(
+        r#"<?php
+function widen(int|float $n, bool $reset): int|float { if ($reset) { $n = 5; } return $n; }
+function collect(int $n): string {
+    $out = '';
+    for ($i = 0; $i < $n; $i++) { $out .= $i; }
+    $acc = [];
+    for ($i = 0; $i < $n; $i++) { $acc = array_merge($acc, (array) $i); }
+    return $out . json_encode($acc);
+}
+echo widen(1.5, true), widen(1.5, false), "|", collect(3), "\n";
+"#,
+    );
+    assert_eq!(out, "51.5|012[0,1,2]\n");
+}
