@@ -216,13 +216,20 @@ fn ident_eq(actual: &str, expected: &str) -> bool {
     actual.eq_ignore_ascii_case(expected)
 }
 
-/// Converts radix digits to an integer, or to a float when they overflow `i64`.
+/// Converts integer digits to an integer, or to a float when they overflow `i64`.
 ///
-/// PHP promotes an over-large literal in any base to a float rather than rejecting it, so the
-/// accumulation mirrors the compiler's `radix_digits_to_float`.
+/// PHP parses over-large decimal literals through its decimal float conversion. Other bases
+/// mirror the compiler's `radix_digits_to_float` accumulation.
 fn eval_radix_int_or_float(digits: &str, radix: u32) -> TokenKind {
     if let Ok(value) = i64::from_str_radix(digits, radix) {
         return TokenKind::Int(value);
+    }
+    if radix == 10 {
+        return TokenKind::Float(
+            digits
+                .parse::<f64>()
+                .expect("scanner only passes valid decimal digits"),
+        );
     }
     let radix_float = f64::from(radix);
     let mut value = 0.0_f64;
