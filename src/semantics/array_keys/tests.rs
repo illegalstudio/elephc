@@ -128,6 +128,14 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));
     }
+    crate::semantics::validate_source(
+        &parse(
+            "<?php function internal_write(array $values): void { $values[false] = 1; }",
+            SourceMode::Internal,
+        ),
+        profile(),
+    )
+    .expect("compiler-owned helper writes retain internal semantics");
 }
 
 /// Typed selectors are checked on array places without normalizing away their original kinds.

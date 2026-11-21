@@ -138,6 +138,13 @@ fn validate_stmt(
     profile: SemanticProfile,
     current_class: Option<&str>,
 ) -> Result<(), CompileError> {
+    // Compiler-owned preludes keep their established PHP-compatible implementation details.
+    // This pass exists only to preserve user source that target pruning could otherwise erase;
+    // applying it to an internal declaration would make a strict caller revalidate injected
+    // helper bodies under a policy those bodies do not opt into.
+    if stmt.source_mode == crate::source::SourceMode::Internal {
+        return Ok(());
+    }
     match &stmt.kind {
         StmtKind::Assign { name, value } => {
             locals.set(name, infer_expr(value, locals, properties, current_class));
