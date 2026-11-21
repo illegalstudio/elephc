@@ -2954,7 +2954,11 @@ function demo_render(mixed $value, int $indent): string {
                                 e_call(
                                     "sprintf",
                                     vec![
-                                        e_concat_all(vec![e_str("%."), e_var("p"), e_str("e")]),
+                                        e_concat_all(vec![
+                                            e_str("%."),
+                                            e_cast(CastType::StringFormat, e_var("p")),
+                                            e_str("e"),
+                                        ]),
                                         e_var("value"),
                                     ],
                                 ),
