@@ -14,8 +14,10 @@ pub(super) fn parse_zip_entry_with_public_key(
     data: &[u8],
     entry: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
+    require_hash: bool,
 ) -> Option<Vec<u8>> {
-    verify_zip_phar_signature(data, public_key)?;
+    verify_zip_phar_signature(data, public_key, openssl_expected, require_hash)?;
     let (entry_count, central_dir_offset) = zip_eocd_info(data)?;
     let mut p = central_dir_offset;
     for _ in 0..entry_count {
@@ -67,15 +69,17 @@ pub(super) fn parse_zip_entry_with_public_key(
 /// hidden from the entry listing.
 #[cfg(test)]
 pub(super) fn parse_zip_archive(data: &[u8]) -> Option<Archive> {
-    parse_zip_archive_with_public_key(data, None)
+    parse_zip_archive_with_public_key(data, None, false, false)
 }
 
 /// Parses a zip-based PHAR and authenticates an OpenSSL signature with `public_key`.
 pub(super) fn parse_zip_archive_with_public_key(
     data: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
+    require_hash: bool,
 ) -> Option<Archive> {
-    verify_zip_phar_signature(data, public_key)?;
+    verify_zip_phar_signature(data, public_key, openssl_expected, require_hash)?;
     let eocd = find_zip_eocd(data)?;
     let (entry_count, central_dir_offset) = zip_eocd_info(data)?;
     let comment_len = le16(data, eocd + 20)? as usize;
@@ -145,6 +149,8 @@ pub(super) fn parse_zip_archive_with_public_key(
         format: ArchiveFormat::Zip,
         metadata,
         stub,
+        signature_flag: read_zip_signature(data)
+            .and_then(|payload| parse_signature_bin(&payload).map(|(flag, _)| flag)),
     })
 }
 

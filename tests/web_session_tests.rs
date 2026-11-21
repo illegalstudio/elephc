@@ -1590,6 +1590,201 @@ fn session_start_twice_warns_on_stderr() {
     );
 }
 
+/// Verifies PHP 8.5.13's new default: without an explicit
+/// `ELEPHC_SESSION_UPLOAD_PROGRESS_ENABLED` opt-in, a multipart POST carrying
+/// the progress trigger must not write a session progress entry.
+#[test]
+fn upload_progress_is_disabled_by_default() {
+    let dir = make_test_dir("sess_upload_default_off");
+    let session_store = dir.join("sessions");
+    fs::create_dir_all(&session_store).unwrap();
+    let session_store_env = session_store.to_string_lossy().into_owned();
+    let src = "<?php \
+        if ($_SERVER['REQUEST_URI'] === '/start') { session_start(); echo 'started'; } \
+        elseif ($_SERVER['REQUEST_URI'] === '/upload') { echo 'received'; } \
+        else { \
+            session_start(); \
+            echo isset($_SESSION['upload_progress_mykey']) ? 'PRESENT' : 'MISSING'; \
+        }";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server_with_env(
+        &bin,
+        &addr,
+        "1",
+        &[
+            ("ELEPHC_SESSION_UPLOAD_PROGRESS_CLEANUP", "0"),
+            ("ELEPHC_SESSION_NAME", "APPSESSID"),
+            ("ELEPHC_SESSION_SAVE_PATH", &session_store_env),
+        ],
+    );
+
+    let r1 = http_request(&addr, "GET", "/start", &[], "");
+    let cookie = extract_session_id(&r1, "APPSESSID")
+        .expect("first response should set the deployment-configured session cookie");
+    let cookie_hdr = format!("APPSESSID={}", cookie);
+
+    let boundary = "elephcDefaultOffBound";
+    let body = format!(
+        "--{b}\r\n\
+         Content-Disposition: form-data; name=\"PHP_SESSION_UPLOAD_PROGRESS\"\r\n\
+         \r\n\
+         mykey\r\n\
+         --{b}\r\n\
+         Content-Disposition: form-data; name=\"f\"; filename=\"x.bin\"\r\n\
+         Content-Type: application/octet-stream\r\n\
+         \r\n\
+         HELLO\r\n\
+         --{b}--\r\n",
+        b = boundary
+    );
+    let ctype = format!("multipart/form-data; boundary={}", boundary);
+    let r2 = http_request(
+        &addr,
+        "POST",
+        "/upload",
+        &[("Cookie", &cookie_hdr), ("Content-Type", &ctype)],
+        &body,
+    );
+    let r3 = http_request(&addr, "GET", "/read", &[("Cookie", &cookie_hdr)], "");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(r2.contains("received"), "upload endpoint should respond: {r2:?}");
+    assert!(
+        r3.contains("MISSING"),
+        "upload progress must be off unless explicitly enabled: {r3:?}"
+    );
+    let file = session_store.join(format!("sess_{cookie}"));
+    if let Ok(raw) = fs::read(&file) {
+        assert!(
+            !raw.windows(16).any(|w| w == b"upload_progress_"),
+            "no progress entry may be written by default: {:?}",
+            String::from_utf8_lossy(&raw)
+        );
+    }
+}
+
+/// Verifies PHP 8.5.13 rejects runtime session ini changes while
+/// `session.upload_progress.enabled` is on, for both `ini_set()` and
+/// `session_start()` options, and that the same calls work when it is off.
+#[test]
+fn session_ini_changes_are_rejected_while_upload_progress_is_enabled() {
+    let dir = make_test_dir("sess_upload_ini_guard");
+    let save_path = dir.to_string_lossy().replace('\\', "/");
+    let src = format!(
+        "<?php \
+         $mode = $_GET['mode'] ?? 'iniset'; \
+         try {{ \
+             if ($mode === 'options') {{ \
+                 session_start(['serialize_handler' => 'php', 'save_path' => '{save_path}', 'use_cookies' => false]); \
+                 echo 'options-ok'; \
+             }} else {{ \
+                 $old = ini_set('session.serialize_handler', 'php'); \
+                 echo 'iniset:' . var_export($old, true); \
+             }} \
+         }} catch (Error $e) {{ \
+             echo get_class($e) . ':' . $e->getMessage(); \
+         }}"
+    );
+    let bin = compile_web(&dir, &src, "app");
+    let message = "Session ini settings cannot be changed at runtime when session.upload_progress.enabled is On";
+
+    let enabled_port = free_port();
+    let enabled_addr = format!("127.0.0.1:{}", enabled_port);
+    let mut enabled = spawn_server_with_env(
+        &bin,
+        &enabled_addr,
+        "1",
+        &[("ELEPHC_SESSION_UPLOAD_PROGRESS_ENABLED", "1")],
+    );
+    let ini_set_response = http_get(&enabled_addr, "/");
+    let options_response = http_get(&enabled_addr, "/?mode=options");
+    let _ = enabled.kill();
+    let _ = enabled.wait();
+
+    assert!(
+        ini_set_response.ends_with(&format!("Error:{message}")),
+        "ini_set() must throw while upload progress is on: {ini_set_response:?}"
+    );
+    assert!(
+        options_response.ends_with(&format!("Error:{message}")),
+        "session_start() options must throw while upload progress is on: {options_response:?}"
+    );
+
+    let disabled_port = free_port();
+    let disabled_addr = format!("127.0.0.1:{}", disabled_port);
+    let mut disabled = spawn_server(&bin, &disabled_addr, "1");
+    let control = http_get(&disabled_addr, "/");
+    let _ = disabled.kill();
+    let _ = disabled.wait();
+
+    assert!(
+        !control.contains("Error:") && control.contains("iniset:'php'"),
+        "ini_set() must keep working once upload progress is off: {control:?}"
+    );
+}
+
+/// Verifies PHP 8.5.13's whole-ID validation: an embedded NUL can no longer
+/// truncate a client-supplied ID to an accepted prefix, through either the
+/// `$_GET` session-id path or `session_id()`.
+#[test]
+fn session_id_with_embedded_nul_is_rejected() {
+    let dir = make_test_dir("sess_id_nul");
+    let save_path = dir.to_string_lossy().replace('\\', "/");
+    let src = format!(
+        "<?php \
+         if (isset($_GET['id'])) {{ session_id((string) $_GET['id']); }} \
+         if (isset($_GET['prior'])) {{ session_id((string) $_GET['prior']); session_id(\"evil\\0tail\"); }} \
+         session_start(['save_path' => '{save_path}', 'use_cookies' => false, 'use_only_cookies' => false]); \
+         $id = session_id(); \
+         echo strlen($id) . ':' . $id; \
+         session_abort();"
+    );
+    let bin = compile_web(&dir, &src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut server = spawn_server(&bin, &addr, "1");
+
+    let get_path = http_get(&addr, "/?PHPSESSID=abc%00evil");
+    let setter_path = http_get(&addr, "/?id=abc%00evil");
+    let prior_path = http_get(&addr, "/?prior=trustedid");
+    let control = http_get(&addr, "/?PHPSESSID=abc");
+    let _ = server.kill();
+    let _ = server.wait();
+
+    // `http_get` returns status line, headers, and body; assert on the body.
+    let body = |response: &str| {
+        response
+            .rsplit("\r\n\r\n")
+            .next()
+            .unwrap_or(response)
+            .to_string()
+    };
+    let get_body = body(&get_path);
+    let setter_body = body(&setter_path);
+    let prior_body = body(&prior_path);
+    let control_body = body(&control);
+
+    assert!(
+        get_body.starts_with("32:") && !get_body.contains(":abc"),
+        "a NUL in the $_GET id must not truncate to 'abc': {get_body:?}"
+    );
+    assert!(
+        setter_body.starts_with("32:") && !setter_body.contains(":abc"),
+        "a NUL in session_id() must not truncate to 'abc': {setter_body:?}"
+    );
+    assert!(
+        prior_body.starts_with("32:") && !prior_body.contains(":trustedid"),
+        "a NUL must clear a previously set ID instead of reusing it: {prior_body:?}"
+    );
+    assert!(
+        control_body.ends_with(":abc"),
+        "a valid supplied ID must still be accepted unchanged: {control_body:?}"
+    );
+}
+
 /// End-to-end `session.upload_progress`: with `cleanup` OFF, a multipart POST
 /// carrying a `PHP_SESSION_UPLOAD_PROGRESS` field followed by a file part causes
 /// the prefork server's body-drain to write a progress entry into the session
@@ -1637,6 +1832,7 @@ fn upload_progress_end_state_persists_with_cleanup_off() {
         &addr,
         "1",
         &[
+            ("ELEPHC_SESSION_UPLOAD_PROGRESS_ENABLED", "1"),
             ("ELEPHC_SESSION_UPLOAD_PROGRESS_CLEANUP", "0"),
             ("ELEPHC_SESSION_NAME", "APPSESSID"),
             ("ELEPHC_SESSION_SAVE_PATH", &session_store_env),
@@ -1744,6 +1940,7 @@ fn upload_progress_key_cannot_inject_a_serialized_session_entry() {
         &addr,
         "1",
         &[
+            ("ELEPHC_SESSION_UPLOAD_PROGRESS_ENABLED", "1"),
             ("ELEPHC_SESSION_UPLOAD_PROGRESS_CLEANUP", "0"),
             ("ELEPHC_SESSION_NAME", "PHPSESSID"),
             ("ELEPHC_SESSION_SAVE_PATH", &session_store_env),
@@ -1861,6 +2058,7 @@ fn handler_mismatch_filename_cannot_inject_a_serialized_entry() {
         &addr_a,
         "1",
         &[
+            ("ELEPHC_SESSION_UPLOAD_PROGRESS_ENABLED", "1"),
             ("ELEPHC_SESSION_UPLOAD_PROGRESS_CLEANUP", "0"),
             ("ELEPHC_SESSION_NAME", "PHPSESSID"),
             ("ELEPHC_SESSION_SAVE_PATH", &session_store_env),

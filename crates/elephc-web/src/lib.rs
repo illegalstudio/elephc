@@ -86,7 +86,7 @@ pub use session::{
     elephc_web_session_get_upload_progress_prefix, elephc_web_session_get_use_cookies,
     elephc_web_session_get_use_only_cookies, elephc_web_session_get_use_trans_sid,
     elephc_web_session_last_read_ok, elephc_web_session_read, elephc_web_session_read_bytes,
-    elephc_web_session_reset,
+    elephc_web_session_clear_id, elephc_web_session_reset,
     elephc_web_session_set_auto_start, elephc_web_session_set_cache_expire,
     elephc_web_session_set_cache_limiter, elephc_web_session_set_cookie_params,
     elephc_web_session_set_gc_divisor, elephc_web_session_set_gc_maxlifetime,

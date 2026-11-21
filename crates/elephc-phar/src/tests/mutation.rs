@@ -45,6 +45,7 @@ pub(super) fn writes_and_updates_native_phar_entries() {
 /// Verifies native PHAR writes preserve gzip compression on replaced entries.
 #[test]
 pub(super) fn writes_preserve_gzip_native_phar_entries() {
+    let _policy = RequireHashGuard::relaxed();
     let path = std::env::temp_dir().join(format!(
         "elephc_phar_gzip_update_{}_{}.phar",
         std::process::id(),
@@ -74,6 +75,7 @@ pub(super) fn writes_preserve_gzip_native_phar_entries() {
 /// Verifies native PHAR writes preserve bzip2 compression on replaced entries.
 #[test]
 pub(super) fn writes_preserve_bzip2_native_phar_entries() {
+    let _policy = RequireHashGuard::relaxed();
     let path = std::env::temp_dir().join(format!(
         "elephc_phar_bzip2_update_{}_{}.phar",
         std::process::id(),

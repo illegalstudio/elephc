@@ -914,6 +914,52 @@ mod tests {
         }
     }
 
+    /// PHP 8.5.13 CVE-2026-126714: the in-place files handler truncates the
+    /// file to zero before writing, so a shorter replacement cannot leave an
+    /// old suffix that a later reader would interpret as more session data.
+    #[test]
+    fn session_write_in_place_removes_old_suffix() {
+        let _g = lock();
+        unsafe {
+            elephc_web_session_reset();
+            let sp = std::ffi::CString::new(std::env::temp_dir().to_string_lossy().into_owned())
+                .unwrap();
+            let sp_ptr = sp.as_ptr();
+            let id = format!("testinplacesuffix{}", std::process::id());
+            let id_c = std::ffi::CString::new(id).unwrap();
+            let id_ptr = id_c.as_ptr();
+
+            // Seed a long record, then read to acquire the held fd/lock.
+            let seed = std::ffi::CString::new(
+                b"stale|s:44:\"this suffix must not survive a short write\"".to_vec(),
+            )
+            .unwrap();
+            assert_eq!(elephc_web_session_write(id_ptr, sp_ptr, seed.as_ptr()), 1);
+            elephc_web_session_read(id_ptr, sp_ptr, 0);
+            assert!(
+                *core::ptr::addr_of!(SESSION_FD) >= 0,
+                "expected held fd after read"
+            );
+
+            // A shorter replacement must truncate the old tail.
+            let new_data = std::ffi::CString::new(b"x|i:1;".to_vec()).unwrap();
+            assert_eq!(elephc_web_session_write(id_ptr, sp_ptr, new_data.as_ptr()), 1);
+
+            let path = super::configured_session_file_path(
+                sp.to_str().unwrap(),
+                id_c.to_str().unwrap(),
+            )
+            .expect("session path");
+            let on_disk = fs::read(&path).expect("session file exists");
+            assert_eq!(on_disk, b"x|i:1;", "old session suffix must be truncated");
+
+            let raw = std::ffi::CStr::from_ptr(elephc_web_session_read(id_ptr, sp_ptr, 1));
+            assert_eq!(raw.to_str().unwrap(), "x|i:1;");
+
+            elephc_web_session_destroy(id_ptr, sp_ptr);
+        }
+    }
+
     /// BUG-1/2: `snapshot` returns the read-time content without re-opening
     /// or touching the held lock.
     #[test]

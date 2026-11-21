@@ -126,10 +126,11 @@ impl State {
     /// Returns the current output conversion setting.
     pub fn http_output(&self) -> OutputEncoding { self.output }
 
-    /// Resolves the output encoding, including PHP's case-sensitive abbreviated pass values.
+    /// Resolves the output encoding, accepting only the exact lowercase `pass`
+    /// token (PHP 8.5.13 rejects truncated names such as `pa`).
     pub fn set_http_output(&mut self, name: &[u8]) -> MbResult<()> {
         if name.contains(&0) { return Err(MbError::argument("mb_http_output", 1, "encoding", "must not contain any null bytes")); }
-        self.output = if b"pass".starts_with(name) { OutputEncoding::Pass }
+        self.output = if name == b"pass" { OutputEncoding::Pass }
             else { OutputEncoding::Convert(encoding_argument(name, "mb_http_output", 1, "encoding")?) };
         self.ini.explicit_output = true;
         Ok(())

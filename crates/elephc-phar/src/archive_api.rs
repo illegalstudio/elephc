@@ -21,8 +21,9 @@ pub fn extract_url_bytes(url: &[u8]) -> Option<Vec<u8>> {
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
     let data = std::fs::read(path).ok()?;
+    let openssl_expected = archive_public_key_path(path).exists();
     let public_key = read_archive_public_key(path);
-    extract_archive_entry(&data, entry, public_key.as_ref())
+    extract_archive_entry(&data, entry, public_key.as_ref(), openssl_expected, require_hash())
 }
 
 /// Extracts `entry` from already-loaded archive bytes.
@@ -32,7 +33,7 @@ pub fn extract_url_bytes(url: &[u8]) -> Option<Vec<u8>> {
 /// filesystem path from which to load `<archive>.pubkey`; use [`extract_url_bytes`]
 /// when signature authentication is required.
 pub fn extract_entry_bytes(archive: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
-    extract_archive_entry(archive, entry, None)
+    extract_archive_entry(archive, entry, None, false, false)
 }
 
 /// Extracts one entry after authenticating and dispatching the archive family.
@@ -43,20 +44,34 @@ fn extract_archive_entry(
     archive: &[u8],
     entry: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
+    openssl_expected: bool,
+    require_hash: bool,
 ) -> Option<Vec<u8>> {
     // Whole-archive gzip/bzip2 wrappers are decoded transparently before extraction.
     if archive.starts_with(b"\x1f\x8b") {
-        return extract_archive_entry(&decompress_gzip_stream(archive)?, entry, public_key);
+        return extract_archive_entry(
+            &decompress_gzip_stream(archive)?,
+            entry,
+            public_key,
+            openssl_expected,
+            require_hash,
+        );
     }
     if archive.starts_with(b"BZh") {
-        return extract_archive_entry(&decompress_bzip2_stream(archive)?, entry, public_key);
+        return extract_archive_entry(
+            &decompress_bzip2_stream(archive)?,
+            entry,
+            public_key,
+            openssl_expected,
+            require_hash,
+        );
     }
     if archive.starts_with(b"PK\x03\x04") || archive.starts_with(b"PK\x05\x06") {
-        parse_zip_entry_with_public_key(archive, entry, public_key)
+        parse_zip_entry_with_public_key(archive, entry, public_key, openssl_expected, require_hash)
     } else if archive.get(257..262) == Some(b"ustar") {
-        parse_tar_entry_with_public_key(archive, entry, public_key)
+        parse_tar_entry_with_public_key(archive, entry, public_key, openssl_expected, require_hash)
     } else {
-        parse_native_phar_entry_with_public_key(archive, entry, public_key)
+        parse_native_phar_entry_with_public_key(archive, entry, public_key, openssl_expected, require_hash)
     }
 }
 
@@ -92,15 +107,15 @@ pub fn put_entry_bytes(
     }
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
+    // A `.pubkey` sidecar expects an OpenSSL signature; this implicit rebuild
+    // would replace it with SHA1 and leave the sidecar in place.
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = if path.exists() {
         parse_archive_path(path)?
     } else {
-        Archive {
-            entries: Vec::new(),
-            format: format_for_new_archive_path(path),
-            metadata: Vec::new(),
-            stub: Vec::new(),
-        }
+        empty_archive_for_path(path)
     };
     upsert_entry(&mut archive.entries, entry_name, payload);
     let out = build_archive_value(&archive)?;
@@ -130,6 +145,9 @@ pub fn delete_entry_bytes(archive_path: &[u8], entry_name: &[u8]) -> Option<()> 
     }
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = parse_archive_path(path)?;
     remove_entry(&mut archive.entries, entry_name)?;
     let out = build_archive_value(&archive)?;
@@ -154,6 +172,9 @@ pub fn set_archive_compression(archive_path: &[u8], compression_code: usize) -> 
     let compression = compression_from_php_constant(compression_code)?;
     let archive_path = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(archive_path);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = parse_archive_path(path)?;
     if matches!(archive.format, ArchiveFormat::Tar) {
         return None;
@@ -189,6 +210,9 @@ pub(super) fn get_stub_bytes(archive_path: &[u8]) -> Option<Vec<u8>> {
 pub(super) fn set_metadata_bytes(archive_path: &[u8], metadata: &[u8]) -> Option<()> {
     let path_str = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(path_str);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = read_or_new_archive(path)?;
     archive.metadata = metadata.to_vec();
     std::fs::write(path, build_archive_value(&archive)?).ok()?;
@@ -205,6 +229,9 @@ pub(super) fn set_stub_bytes(archive_path: &[u8], stub: &[u8]) -> Option<()> {
     }
     let path_str = std::str::from_utf8(archive_path).ok()?;
     let path = std::path::Path::new(path_str);
+    if !implicit_rebuild_allowed(path) {
+        return None;
+    }
     let mut archive = read_or_new_archive(path)?;
     archive.stub = stub.to_vec();
     std::fs::write(path, build_archive_value(&archive)?).ok()?;
@@ -216,11 +243,22 @@ pub(super) fn read_or_new_archive(path: &std::path::Path) -> Option<Archive> {
     if path.exists() {
         parse_archive_path(path)
     } else {
-        Some(Archive {
-            entries: Vec::new(),
-            format: format_for_new_archive_path(path),
-            metadata: Vec::new(),
-            stub: Vec::new(),
-        })
+        Some(empty_archive_for_path(path))
+    }
+}
+
+/// Builds the empty archive a missing path would create.
+///
+/// New archives are SHA-256-signed in every family, matching PHP's default
+/// signature algorithm, so they remain readable while the default
+/// `phar.require_hash=1` policy is in effect. Unsigned legacy archives are
+/// accepted only when the policy is explicitly relaxed.
+pub(super) fn empty_archive_for_path(path: &std::path::Path) -> Archive {
+    Archive {
+        entries: Vec::new(),
+        format: format_for_new_archive_path(path),
+        metadata: Vec::new(),
+        stub: Vec::new(),
+        signature_flag: Some(PHAR_SHA256_SIGNATURE_TYPE),
     }
 }
