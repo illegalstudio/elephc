@@ -193,10 +193,12 @@ fn preg_quote_decl() -> Stmt {
                                     BinOp::Or,
                                     e_binop(c(), BinOp::StrictEq, e_var("d")),
                                 ),
-                                vec![s_assign(
-                                    "out",
-                                    e_concat(e_concat(e_var("out"), e_str("\\")), c()),
-                                )],
+                                // The escaped pair is built first so `$out = $out . $piece` stays
+                                // the same-local append, not a copy of the growing output.
+                                vec![
+                                    s_assign("piece", e_concat(e_str("\\"), c())),
+                                    s_assign("out", e_concat(e_var("out"), e_var("piece"))),
+                                ],
                             ),
                         ],
                         Some(vec![s_assign("out", e_concat(e_var("out"), c()))]),
