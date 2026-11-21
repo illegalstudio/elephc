@@ -99,6 +99,9 @@ fn requirement_json(requirement: BuiltinRequirement) -> Value {
     match requirement {
         BuiltinRequirement::PreludeHelper(name) => json!({"kind": "prelude_helper", "name": name}),
         BuiltinRequirement::Bridge(name) => json!({"kind": "bridge", "name": name}),
+        BuiltinRequirement::BridgeIdentity(name) => {
+            json!({"kind": "bridge_identity", "name": name})
+        }
         BuiltinRequirement::SystemLibrary(name) => {
             json!({"kind": "system_library", "name": name})
         }

@@ -42,6 +42,8 @@ php scripts/mbstring/capture_jis.php
 # -> crates/elephc-mbstring/src/encoding/data/{boundaries.json,*-boundaries.bin}
 php scripts/mbstring/capture_boundaries.php
 # -> crates/elephc-mbstring/src/encoding/catalog_data.rs
+#    (sorted indexes use index_table! and large dense arrays dense_table!; the crate's
+#    build.rs embeds compact copies, and the .bin files stay in their generated format)
 python3 scripts/mbstring/generate_encodings.py
 # -> crates/elephc-mbstring/src/encoding/transfer/html/{data.rs,manifest.json}
 python3 scripts/mbstring/capture_html.py

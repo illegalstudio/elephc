@@ -17,6 +17,7 @@ mod function;
 pub(crate) mod function_variants;
 mod instr;
 mod module;
+pub(crate) mod native_mbstring;
 mod pcntl_runtime;
 pub(crate) mod parameter_roots;
 mod print;

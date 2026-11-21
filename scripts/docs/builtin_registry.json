@@ -91287,13 +91287,7 @@
         "kind": "non_heap"
       },
       "requirements": {
-        "kind": "static",
-        "values": [
-          {
-            "kind": "bridge",
-            "name": "elephc_mbstring"
-          }
-        ]
+        "kind": "shared"
       },
       "result_type": "checked",
       "runtime_functions": [
