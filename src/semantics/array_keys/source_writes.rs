@@ -701,10 +701,25 @@ fn validate_stmt(
             }
             *locals = merge_exits(&exits);
         }
-        StmtKind::While { body, .. } | StmtKind::Foreach { body, .. } => {
+        StmtKind::While { body, .. } => {
             let entry = locals.clone();
             let exit = validate_branch(body, &entry, properties, profile, current_class)?;
             *locals = merge_exits(&[entry, exit]);
+        }
+        StmtKind::Foreach {
+            key_var,
+            value_var,
+            body,
+            ..
+        } => {
+            let entry = locals.clone();
+            let mut iteration = entry.clone();
+            if let Some(key) = key_var {
+                iteration.set(key, ValueFact::Unknown);
+            }
+            iteration.set(value_var, ValueFact::Unknown);
+            validate_block(body, &mut iteration, properties, profile, current_class)?;
+            *locals = merge_exits(&[entry, iteration]);
         }
         StmtKind::DoWhile { body, .. } => {
             validate_block(body, locals, properties, profile, current_class)?;

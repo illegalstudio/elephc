@@ -169,6 +169,8 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php $values = []; $values[0] = 1; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $values = [[]]; $values[0][0] = 1; if (PHP_OS_FAMILY === 'Windows') { $values[0][0][false] = 2; }",
         "<?php class SpreadKeyAccessWrite implements ArrayAccess { public function offsetExists(mixed $key): bool { return true; } public function offsetGet(mixed $key): mixed { return 1; } public function offsetSet(mixed $key, mixed $value): void {} public function offsetUnset(mixed $key): void {} } $values = [...[new SpreadKeyAccessWrite()]]; if (PHP_OS_FAMILY === 'Windows') { $values[0][true] = 2; }",
+        "<?php $values = []; foreach ([10] as $key => $value) { $values[$key] = $value; }",
+        "<?php $values = []; foreach ([10] as $value) { $values[$value] = 1; }",
     ] {
         crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
             .unwrap_or_else(|error| panic!("{source}: {error:?}"));
