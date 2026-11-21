@@ -21,6 +21,107 @@ pub(super) use incdec::native as lower_native_incdec;
 pub(crate) use incdec::step as with_dimension_incdec_value;
 use compound::{compound_source, with_compound_value, write_ordinary_compound};
 
+/// Dispatches a nested named-property root through its exact runtime storage protocol.
+///
+/// The caller has already captured receiver and dimension side effects. This helper keeps the
+/// receiver lease alive while every class arm hands the same attached container to `apply`.
+pub(super) fn lower_runtime_named_property_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    mode: PropertyDimensionFetchMode,
+    apply: &mut impl FnMut(&mut LoweringContext<'_, '_>, LoweredValue),
+) -> bool {
+    let Some((object, property)) = super::nested_property_updates::named_property_root(target)
+    else { return false; };
+    if !crate::ir_lower::expr::nested_property_requires_runtime_dispatch(ctx, object) {
+        return false;
+    }
+    let mut property_expr = target;
+    while let ExprKind::ArrayAccess { array, .. } = &property_expr.kind {
+        property_expr = array;
+    }
+    let object_value = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
+    let mut receiver = property_write_receiver::PropertyWriteReceiver::new(
+        ctx,
+        object_value,
+        property_expr.span,
+    );
+    receiver.narrow_for_array(ctx, property, &[], property_expr.span);
+    let ty = ctx.builder.value_php_type(receiver.value.value);
+    let borrowed = ctx.emit_value(
+        Op::Borrow,
+        vec![receiver.value.value],
+        None,
+        ty,
+        Op::Borrow.default_effects(),
+        Some(property_expr.span),
+    );
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    let handled = magic_index::lower_container(
+        ctx,
+        borrowed,
+        property,
+        property_expr.span,
+        apply,
+        |ctx, object_value, apply| {
+            lower_runtime_named_property_container_without_magic(
+                ctx,
+                object,
+                object_value,
+                property,
+                property_expr,
+                mode,
+                apply,
+            );
+        },
+    );
+    if !handled {
+        lower_runtime_named_property_container_without_magic(
+            ctx,
+            object,
+            borrowed,
+            property,
+            property_expr,
+            mode,
+            apply,
+        );
+    }
+    receiver.finish(ctx, property_expr.span);
+    true
+}
+
+/// Selects declared storage after dynamic and overloaded runtime names are excluded.
+fn lower_runtime_named_property_container_without_magic(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    object_value: LoweredValue,
+    property: &str,
+    property_expr: &Expr,
+    mode: PropertyDimensionFetchMode,
+    apply: &mut impl FnMut(&mut LoweringContext<'_, '_>, LoweredValue),
+) {
+    if runtime_receivers::lower_nested_container(
+        ctx,
+        object_value,
+        object,
+        property,
+        property_expr,
+        mode,
+        apply,
+    ) {
+        return;
+    }
+    let container = crate::ir_lower::expr::lower_nested_assignment_property_source_from_value(
+        ctx,
+        object,
+        object_value,
+        property,
+        property_expr,
+        mode,
+    );
+    apply(ctx, container);
+}
+
 /// Selects declaration initialization rules for a property used as a dimension container.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum PropertyDimensionFetchMode { Write, ReadWrite }

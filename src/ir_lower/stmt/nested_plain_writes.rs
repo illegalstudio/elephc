@@ -47,10 +47,37 @@ fn lower_store_selected(
 fn lower_captured_store(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: LoweredValue, span: Span,
 ) {
+    let mut apply = |ctx: &mut LoweringContext<'_, '_>, root: LoweredValue| {
+        lower_captured_store_with_root(ctx, target, value, span, Some(root));
+    };
+    if super::property_array_writes::lower_runtime_named_property_container(
+        ctx,
+        target,
+        PropertyDimensionFetchMode::Write,
+        &mut apply,
+    ) {
+        return;
+    }
+    lower_captured_store_with_root(ctx, target, value, span, None);
+}
+
+/// Writes through a property container selected before traversing deeper dimensions.
+fn lower_captured_store_with_root(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: LoweredValue,
+    span: Span,
+    property_root: Option<LoweredValue>,
+) {
     let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, target, target)
         .map_or_else(|| target.clone(), |(_, write)| write);
     let ExprKind::ArrayAccess { array, index } = &target.kind else { unreachable!() };
-    let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, array, span);
+    let parent = super::nested_array_writes::lower_nested_assign_parent_for_store_with_root(
+        ctx,
+        array,
+        span,
+        property_root,
+    );
     if ctx.builder.insertion_block_is_terminated() { return; }
     let parent = resolve_parent_for_write(ctx, parent, span);
     let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
@@ -100,10 +127,36 @@ fn lower_append_selected(
 fn lower_captured_append(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: LoweredValue, span: Span,
 ) {
+    let mut apply = |ctx: &mut LoweringContext<'_, '_>, root: LoweredValue| {
+        lower_captured_append_with_root(ctx, target, value, span, Some(root));
+    };
+    if super::property_array_writes::lower_runtime_named_property_container(
+        ctx,
+        target,
+        PropertyDimensionFetchMode::Write,
+        &mut apply,
+    ) {
+        return;
+    }
+    lower_captured_append_with_root(ctx, target, value, span, None);
+}
+
+/// Appends through a property container selected before traversing deeper dimensions.
+fn lower_captured_append_with_root(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: LoweredValue,
+    span: Span,
+    property_root: Option<LoweredValue>,
+) {
     let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, target, target)
         .map_or_else(|| target.clone(), |(_, write)| write);
-    let parent =
-        super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, &target, span);
+    let parent = super::nested_array_writes::lower_nested_assign_parent_for_store_with_root(
+        ctx,
+        &target,
+        span,
+        property_root,
+    );
     if ctx.builder.insertion_block_is_terminated() { return; }
     append_prepared(ctx, parent, value, span);
 }

@@ -332,8 +332,9 @@ pub(crate) use property_fetch_for_write::{
     is_static_property_write_chain, lower_static_property_write_chain,
     lower_static_property_write_chain_with_operands,
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
-    lower_nested_assignment_property_source, nested_property_has_boxed_root,
-    nested_property_has_static_boxed_root,
+    lower_nested_assignment_property_source, lower_nested_assignment_property_source_from_value,
+    nested_property_has_boxed_root, nested_property_has_static_boxed_root,
+    nested_property_requires_runtime_dispatch,
 };
 pub(crate) use string_concat::string_value_needs_persistence;
 pub(crate) use string_concat::persist_pending_string;

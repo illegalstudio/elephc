@@ -9,7 +9,9 @@
 //! - String parents preserve reference markers and publish their stored child before leaf writes.
 
 use super::*;
-use super::nested_property_updates::{attached_property_root, capture_compound_rhs};
+use super::nested_property_updates::{
+    attached_property_root, capture_compound_rhs, runtime_dispatched_property_root,
+};
 
 /// Writes an expression's captured nested update without repeating its key diagnoses.
 pub(crate) fn lower_nested_array_assign_after_read(
@@ -57,10 +59,13 @@ fn lower_nested_array_assign_dispatch(
     let static_update = matches!(&update,
         Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }));
     let runtime_property = super::nested_write_sources::scoped_runtime_property_root(target);
+    let runtime_named_property = runtime_dispatched_property_root(ctx, target);
     if static_update
         && (nested_target_has_static_array_root(ctx, target)
             || nested_target_has_local_array_root(ctx, target)
-            || attached_property_root(ctx, target) || runtime_property)
+            || attached_property_root(ctx, target)
+            || runtime_named_property
+            || runtime_property)
     {
         let mut sources = Vec::new();
         let mut value = value.clone();
@@ -146,6 +151,28 @@ fn lower_captured_update_selected(
         .expect("captured update retains its canonical self-read");
     let mut snapshots = Vec::new();
     let (read, write) = snapshot_nested_update_keys(ctx, target, &mut snapshots, true);
+    if runtime_dispatched_property_root(ctx, target) {
+        let mut apply = |ctx: &mut LoweringContext<'_, '_>, root: LoweredValue| {
+            lower_boxed_static_nested_update_with_root(
+                ctx,
+                root,
+                &read,
+                &write,
+                update,
+                value,
+                value.span,
+            );
+        };
+        if super::property_array_writes::lower_runtime_named_property_container(
+            ctx,
+            target,
+            PropertyDimensionFetchMode::ReadWrite,
+            &mut apply,
+        ) {
+            retire_update_keys(ctx, snapshots, span);
+            return;
+        }
+    }
     if ctx.classes.contains_key("SimpleXMLElement")
         && runtime_property_root(target).is_some()
         && matches!(update, ElementUpdate::IncDec { .. })
@@ -413,9 +440,49 @@ fn lower_boxed_static_nested_update(
     source_value: &Expr,
     span: Span,
 ) {
+    lower_boxed_static_nested_update_inner(ctx, None, read, write, update, source_value, span);
+}
+
+/// Updates a nested leaf after runtime dispatch has already selected its property root.
+fn lower_boxed_static_nested_update_with_root(
+    ctx: &mut LoweringContext<'_, '_>,
+    root: LoweredValue,
+    read: &Expr,
+    write: &Expr,
+    update: ElementUpdate<'_>,
+    source_value: &Expr,
+    span: Span,
+) {
+    lower_boxed_static_nested_update_inner(
+        ctx,
+        Some(root),
+        read,
+        write,
+        update,
+        source_value,
+        span,
+    );
+}
+
+/// Shares the retained-parent update kernel with static and runtime-selected roots.
+fn lower_boxed_static_nested_update_inner(
+    ctx: &mut LoweringContext<'_, '_>,
+    property_root: Option<LoweredValue>,
+    read: &Expr,
+    write: &Expr,
+    update: ElementUpdate<'_>,
+    source_value: &Expr,
+    span: Span,
+) {
     let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else { unreachable!() };
     let ExprKind::ArrayAccess { array: write_array, .. } = &write.kind else { unreachable!() };
-    let parent = lower_static_update_parent(ctx, read_array, write_array, span);
+    let parent = lower_static_update_parent_inner(
+        ctx,
+        read_array,
+        write_array,
+        span,
+        property_root,
+    );
     let (pinned, owner) = root_static_update_receiver(ctx, parent, span);
     if let ElementUpdate::IncDec { increment } = &update {
         if super::native_dimension_incdec::lower(ctx, pinned, read_key, *increment, value_incdec_locals(source_value), span,
@@ -507,14 +574,18 @@ fn lower_boxed_nested_update_from_parent(
     ctx.unset_local(&temp, null, Some(span));
 }
 
-/// Reads an object offset once while retaining array diagnostics and autovivification.
-fn lower_static_update_parent(
+/// Traverses dimensions above an optional property root selected by runtime class dispatch.
+fn lower_static_update_parent_inner(
     ctx: &mut LoweringContext<'_, '_>,
     read: &Expr,
     write: &Expr,
     span: Span,
+    property_root: Option<LoweredValue>,
 ) -> LoweredValue {
     let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else {
+        if let (Some(root), ExprKind::PropertyAccess { .. }) = (property_root, &read.kind) {
+            return root;
+        }
         if let ExprKind::Variable(name) = &read.kind {
             if ctx.live_native_mutation_locals.contains_key(name)
                 && matches!(ctx.local_mutation_type(name).codegen_repr(),
@@ -531,7 +602,13 @@ fn lower_static_update_parent(
         return lower_expr(ctx, read);
     };
     let ExprKind::ArrayAccess { array: write_array, index: write_key } = &write.kind else { unreachable!() };
-    let receiver = lower_static_update_parent(ctx, read_array, write_array, span);
+    let receiver = lower_static_update_parent_inner(
+        ctx,
+        read_array,
+        write_array,
+        span,
+        property_root,
+    );
     let (pinned, owner) = root_static_update_receiver(ctx, receiver, span);
     lower_static_update_key_and_guard(ctx, pinned, read_key,
         "Cannot use string offset as an array", span);
@@ -855,14 +932,24 @@ pub(crate) fn lower_nested_assign_parent(
     expr: &Expr,
     span: Span,
 ) -> LoweredValue {
-    lower_nested_assign_parent_with_diagnosed_key_inner(ctx, expr, span, false, false)
+    lower_nested_assign_parent_with_diagnosed_key_inner(ctx, expr, span, false, false, None)
 }
 
-/// Defers false conversion until a plain store or append has finished evaluating its RHS.
-pub(super) fn lower_nested_assign_parent_for_store(
-    ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span,
+/// Traverses a plain store from an optional property root selected by runtime class dispatch.
+pub(super) fn lower_nested_assign_parent_for_store_with_root(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+    span: Span,
+    property_root: Option<LoweredValue>,
 ) -> LoweredValue {
-    lower_nested_assign_parent_with_diagnosed_key_inner(ctx, expr, span, false, true)
+    lower_nested_assign_parent_with_diagnosed_key_inner(
+        ctx,
+        expr,
+        span,
+        false,
+        true,
+        property_root,
+    )
 }
 
 /// Reuses key diagnoses when the same parent chain was already read by a captured update.
@@ -872,15 +959,26 @@ fn lower_nested_assign_parent_with_diagnosed_key(
     span: Span,
     key_already_diagnosed: bool,
 ) -> LoweredValue {
-    lower_nested_assign_parent_with_diagnosed_key_inner(ctx, expr, span, key_already_diagnosed, false)
+    lower_nested_assign_parent_with_diagnosed_key_inner(
+        ctx,
+        expr,
+        span,
+        key_already_diagnosed,
+        false,
+        None,
+    )
 }
 
 /// Traverses an attached parent with the caller's key-diagnostic and conversion timing.
 fn lower_nested_assign_parent_with_diagnosed_key_inner(
     ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span,
     key_already_diagnosed: bool, convert_false: bool,
+    property_root: Option<LoweredValue>,
 ) -> LoweredValue {
     let ExprKind::ArrayAccess { array, index } = &expr.kind else {
+        if let (Some(root), ExprKind::PropertyAccess { .. }) = (property_root, &expr.kind) {
+            return root;
+        }
         if let ExprKind::Variable(name) = &expr.kind {
             if ctx.local_mutation_type(name).codegen_repr() == PhpType::Mixed {
                 return load_array_local_for_write(ctx, name, span);
@@ -909,7 +1007,7 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
     // Boxed Mixed receivers: chains recurse with for-write semantics; other
     // receiver shapes evaluate once as plain reads of the receiver cell.
     let receiver = lower_nested_assign_parent_with_diagnosed_key_inner(
-        ctx, array, span, key_already_diagnosed, convert_false,
+        ctx, array, span, key_already_diagnosed, convert_false, property_root,
     );
     if let Some(parent) = super::native_dimension_incdec::select_parent(ctx, receiver, index, expr,
         |ctx, receiver| lower_nested_parent_from_receiver(ctx, receiver, array, index, expr,
