@@ -68,7 +68,10 @@ pub(super) fn filter_eval_sync_locals_by_name(
 
 /// Returns true when a local name is backed by program-global storage during eval.
 pub(super) fn local_uses_eval_global_sync(ctx: &FunctionContext<'_>, name: Option<&str>) -> bool {
-    name.is_some_and(|name| main_name_uses_eval_global_scope(ctx, name))
+    name.is_some_and(|name| {
+        main_name_uses_eval_global_scope(ctx, name)
+            || eval_global_alias_names(ctx).contains(name)
+    })
 }
 
 /// Returns true when a main-scope name has actual EIR global storage to synchronize.
@@ -78,18 +81,29 @@ pub(super) fn main_name_uses_eval_global_scope(ctx: &FunctionContext<'_>, name: 
 
 /// Collects caller-scope `global` aliases that eval fragments inherit by name.
 pub(super) fn eval_global_aliases(ctx: &FunctionContext<'_>) -> Vec<EvalGlobalAlias> {
-    ctx.function
+    eval_global_alias_names(ctx)
+        .into_iter()
+        .map(|name| EvalGlobalAlias {
+            global_name: name.clone(),
+            name,
+        })
+        .collect()
+}
+
+/// Collects direct aliases and activation leases that bind a PHP name to global storage.
+fn eval_global_alias_names(ctx: &FunctionContext<'_>) -> BTreeSet<String> {
+    let mut names = ctx.function
         .locals
         .iter()
         .filter(|local| local.kind == LocalKind::GlobalAlias)
-        .filter_map(|local| {
-            let name = local.name.clone()?;
-            Some(EvalGlobalAlias {
-                global_name: name.clone(),
-                name,
-            })
-        })
-        .collect()
+        .filter_map(|local| local.name.clone())
+        .collect::<BTreeSet<_>>();
+    names.extend(ctx.function.instructions.iter().filter_map(|inst| {
+        (inst.op == Op::LoadGlobalRefCell)
+            .then(|| global_instruction_name(ctx, inst).map(str::to_owned))
+            .flatten()
+    }));
+    names
 }
 
 /// Collects program globals that can be boxed into the eval global scope.
