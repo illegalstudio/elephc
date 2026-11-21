@@ -99,7 +99,7 @@ fn entry(emitter: &mut Emitter, target: NumericCastTarget) {
         if emitter.target.arch == Arch::X86_64 {
             abi::emit_reg_move(emitter, result, low);
         }
-        abi::emit_call_label(emitter, "__rt_str_to_number");
+        abi::emit_call_label(emitter, "__rt_str_looks_like_int_for_coercion");
         abi::emit_branch_if_int_result_zero(emitter, STRING);
     } else {
         abi::emit_store_to_sp(emitter, low, 0); abi::emit_store_to_sp(emitter, high, 8);

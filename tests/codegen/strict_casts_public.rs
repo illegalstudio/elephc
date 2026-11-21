@@ -61,6 +61,30 @@ gc_collect_cycles();
     }
 }
 
+/// Runtime string-to-float casts reject bytes after an embedded NUL instead of truncating them.
+#[test]
+fn test_strict_casts_public_runtime_string_float_rejects_embedded_nul() {
+    let source = r#"<?php
+function checkedRuntimeFloatWithNul(mixed $value): float { return (float)$value; }
+$value = $argc > 0 ? "12\0junk" : '0';
+try {
+    echo checkedRuntimeFloatWithNul($value);
+} catch (ValueError $error) {
+    echo 'V';
+}
+gc_collect_cycles();
+"#;
+    for optimization in ["--ir-opt=off", "--ir-opt=on"] {
+        let output = StrictFixture::new(source).capture(&[
+            "--strict-casts", optimization, "--heap-debug",
+        ]);
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "V", "{optimization}: {}",
+            String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+            "{optimization}: {}", String::from_utf8_lossy(&output.stderr));
+    }
+}
+
 /// Public checked casts reach descriptors, Reflection, callback arrays and native/eval re-entry.
 #[test]
 fn test_strict_casts_public_callable_hosts_bundle() {
