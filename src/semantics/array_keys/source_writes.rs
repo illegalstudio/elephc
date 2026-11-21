@@ -340,17 +340,6 @@ fn validate_expression_writes(
     visitor.error.map_or(Ok(()), Err)
 }
 
-/// Audits one expression against the facts established before its evaluation.
-fn validate_expression_value_writes(
-    expr: &Expr,
-    locals: &LocalFacts,
-    properties: &PropertyFacts,
-    profile: SemanticProfile,
-    current_class: Option<&str>,
-) -> Result<(), CompileError> {
-    validate_expression_flow(expr, locals, properties, profile, current_class).map(|_| ())
-}
-
 /// Audits one expression and returns facts after its source-order evaluation.
 fn validate_expression_flow(
     expr: &Expr,
@@ -373,6 +362,134 @@ fn validate_expression_flow(
     match visitor.error {
         Some(error) => Err(error),
         None => Ok(visitor.locals),
+    }
+}
+
+/// Returns facts on the path where one condition admits its controlled body.
+fn validate_true_condition_flow(
+    expr: &Expr,
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> Result<LocalFacts, CompileError> {
+    match &expr.kind {
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, crate::parser::ast::BinOp::And) =>
+        {
+            let left = validate_true_condition_flow(
+                left,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            validate_true_condition_flow(
+                right,
+                &left,
+                properties,
+                profile,
+                current_class,
+            )
+        }
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, crate::parser::ast::BinOp::Or) =>
+        {
+            let left_true = validate_true_condition_flow(
+                left,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let left_false = validate_false_condition_flow(
+                left,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let right_true = validate_true_condition_flow(
+                right,
+                &left_false,
+                properties,
+                profile,
+                current_class,
+            )?;
+            Ok(merge_exits(&[left_true, right_true]))
+        }
+        ExprKind::Not(inner) => validate_false_condition_flow(
+            inner,
+            locals,
+            properties,
+            profile,
+            current_class,
+        ),
+        _ => validate_expression_flow(expr, locals, properties, profile, current_class),
+    }
+}
+
+/// Returns facts on the path where one condition falls through to its alternative.
+fn validate_false_condition_flow(
+    expr: &Expr,
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> Result<LocalFacts, CompileError> {
+    match &expr.kind {
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, crate::parser::ast::BinOp::Or) =>
+        {
+            let left = validate_false_condition_flow(
+                left,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            validate_false_condition_flow(
+                right,
+                &left,
+                properties,
+                profile,
+                current_class,
+            )
+        }
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(op, crate::parser::ast::BinOp::And) =>
+        {
+            let left_false = validate_false_condition_flow(
+                left,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let left_true = validate_true_condition_flow(
+                left,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let right_false = validate_false_condition_flow(
+                right,
+                &left_true,
+                properties,
+                profile,
+                current_class,
+            )?;
+            Ok(merge_exits(&[left_false, right_false]))
+        }
+        ExprKind::Not(inner) => validate_true_condition_flow(
+            inner,
+            locals,
+            properties,
+            profile,
+            current_class,
+        ),
+        _ => validate_expression_flow(expr, locals, properties, profile, current_class),
     }
 }
 
@@ -1423,28 +1540,55 @@ fn validate_stmt(
             )?;
         }
         StmtKind::If {
+            condition,
             then_body,
             elseif_clauses,
             else_body,
-            ..
         } => {
-            let entry = locals.clone();
+            let then_entry = validate_true_condition_flow(
+                condition,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let mut fallthrough = validate_false_condition_flow(
+                condition,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
             let mut exits = Vec::with_capacity(elseif_clauses.len() + 2);
             exits.push(validate_branch(
                 then_body,
-                &entry,
+                &then_entry,
                 properties,
                 profile,
                 current_class,
             )?);
-            for (_, body) in elseif_clauses {
+            for (condition, body) in elseif_clauses {
+                let body_entry = validate_true_condition_flow(
+                    condition,
+                    &fallthrough,
+                    properties,
+                    profile,
+                    current_class,
+                )?;
                 exits.push(validate_branch(
                     body,
-                    &entry,
+                    &body_entry,
                     properties,
                     profile,
                     current_class,
                 )?);
+                fallthrough = validate_false_condition_flow(
+                    condition,
+                    &fallthrough,
+                    properties,
+                    profile,
+                    current_class,
+                )?;
             }
             if let Some(body) = else_body {
                 exits.push(validate_branch(
@@ -1455,14 +1599,49 @@ fn validate_stmt(
                     current_class,
                 )?);
             } else {
-                exits.push(entry);
+                exits.push(fallthrough);
             }
             *locals = merge_exits(&exits);
         }
-        StmtKind::While { body, .. } => {
-            let entry = locals.clone();
-            let exit = validate_branch(body, &entry, properties, profile, current_class)?;
-            *locals = merge_exits(&[entry, exit]);
+        StmtKind::While { condition, body } => {
+            let first_body_entry = validate_true_condition_flow(
+                condition,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let first_exit = validate_false_condition_flow(
+                condition,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let first_body =
+                validate_branch(body, &first_body_entry, properties, profile, current_class)?;
+            let repeated_body_entry = validate_true_condition_flow(
+                condition,
+                &first_body,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let repeated_exit = validate_false_condition_flow(
+                condition,
+                &first_body,
+                properties,
+                profile,
+                current_class,
+            )?;
+            validate_branch(
+                body,
+                &repeated_body_entry,
+                properties,
+                profile,
+                current_class,
+            )?;
+            *locals = merge_exits(&[first_exit, repeated_exit]);
         }
         StmtKind::Foreach {
             key_var,
@@ -1481,30 +1660,104 @@ fn validate_stmt(
         }
         StmtKind::DoWhile { body, condition } => {
             validate_block(body, locals, properties, profile, current_class)?;
-            validate_expression_value_writes(
+            let first_exit = validate_false_condition_flow(
                 condition,
                 locals,
                 properties,
                 profile,
                 current_class,
             )?;
-            apply_expression_facts(condition, locals, properties, profile, current_class);
+            let mut repeated_body = validate_true_condition_flow(
+                condition,
+                locals,
+                properties,
+                profile,
+                current_class,
+            )?;
+            validate_block(
+                body,
+                &mut repeated_body,
+                properties,
+                profile,
+                current_class,
+            )?;
+            let repeated_exit = validate_false_condition_flow(
+                condition,
+                &repeated_body,
+                properties,
+                profile,
+                current_class,
+            )?;
+            *locals = merge_exits(&[first_exit, repeated_exit]);
         }
         StmtKind::For {
             init,
+            condition,
             update,
             body,
-            ..
         } => {
             if let Some(init) = init {
                 validate_stmt(init, locals, properties, profile, current_class)?;
             }
-            let entry = locals.clone();
-            let mut exit = validate_branch(body, &entry, properties, profile, current_class)?;
+            let first_body_entry = match condition {
+                Some(condition) => validate_true_condition_flow(
+                    condition,
+                    locals,
+                    properties,
+                    profile,
+                    current_class,
+                )?,
+                None => locals.clone(),
+            };
+            let first_exit = match condition {
+                Some(condition) => validate_false_condition_flow(
+                    condition,
+                    locals,
+                    properties,
+                    profile,
+                    current_class,
+                )?,
+                None => locals.clone(),
+            };
+            let mut first_body =
+                validate_branch(body, &first_body_entry, properties, profile, current_class)?;
             if let Some(update) = update {
-                validate_stmt(update, &mut exit, properties, profile, current_class)?;
+                validate_stmt(
+                    update,
+                    &mut first_body,
+                    properties,
+                    profile,
+                    current_class,
+                )?;
             }
-            *locals = merge_exits(&[entry, exit]);
+            let repeated_body_entry = match condition {
+                Some(condition) => validate_true_condition_flow(
+                    condition,
+                    &first_body,
+                    properties,
+                    profile,
+                    current_class,
+                )?,
+                None => first_body.clone(),
+            };
+            let repeated_exit = match condition {
+                Some(condition) => validate_false_condition_flow(
+                    condition,
+                    &first_body,
+                    properties,
+                    profile,
+                    current_class,
+                )?,
+                None => first_body,
+            };
+            validate_branch(
+                body,
+                &repeated_body_entry,
+                properties,
+                profile,
+                current_class,
+            )?;
+            *locals = merge_exits(&[first_exit, repeated_exit]);
         }
         StmtKind::Switch { cases, default, .. } => {
             let entry = locals.clone();
