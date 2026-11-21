@@ -59,6 +59,94 @@ impl Storage<'_> {
         }
     }
 
+    /// Stages the logical count and the bounded occupied prefix before allocating the snapshot.
+    /// A shared registry uses the legacy sentinel and needs no copied slots.
+    pub fn emit_prepare_prefix(
+        &self, emitter: &mut impl Emitter, capacity: usize, legacy: &str, done: &str,
+    ) {
+        match emitter.arch() {
+            Arch::AArch64 => {
+                emitter.emit_symbol_address("x9", self.count);
+                emitter.instruction("ldr x10, [x9]");                           // load the outer registry's logical value count
+                emitter.instruction("str x10, [sp]");                           // preserve the logical count across context allocation
+                emitter.instruction(&format!("mov x11, #{capacity}"));          // materialize the fixed registry capacity
+                emitter.instruction("cmp x10, x11");                            // does the logical count exceed the physical registry?
+                emitter.instruction("csel x11, x10, x11, lo");                  // copy only the populated in-bounds registry prefix
+                emitter.emit_load_symbol_to_reg("x12", legacy, 0);
+                emitter.instruction(&format!("cbz x12, {done}"));               // ordinary nested hydration snapshots its own registry
+                emitter.instruction("mov x10, #-1");                            // mark a shared legacy registry in the saved count slot
+                emitter.instruction("str x10, [sp]");                           // retain the sharing marker across allocation
+                emitter.instruction("mov x11, #0");                             // a shared registry needs no copied prefix
+            }
+            Arch::X86_64 => {
+                let count = self.count;
+                emitter.instruction(&format!("mov r10, QWORD PTR [rip + {count}]"));             // load the outer registry's logical value count
+                emitter.instruction("mov QWORD PTR [rbp - 8], r10");            // preserve the logical count across context allocation
+                emitter.instruction(&format!("mov r11, {capacity}"));           // materialize the fixed registry capacity
+                emitter.instruction("cmp r10, r11");                            // does the logical count exceed the physical registry?
+                emitter.instruction("cmovb r11, r10");                          // copy only the populated in-bounds registry prefix
+                emitter.instruction(&format!("cmp QWORD PTR [rip + {legacy}], 0"));       // distinguish shared legacy payloads from ordinary nesting
+                emitter.instruction(&format!("je {done}"));                     // ordinary calls preserve their registry prefix
+                emitter.instruction("mov QWORD PTR [rbp - 8], -1");             // mark a shared registry in the saved count slot
+                emitter.instruction("xor r11d, r11d");                          // shared references remain in the live table
+            }
+        }
+        emitter.label(done);
+    }
+
+    /// Branches when the active snapshot does not share its reference registry.
+    pub fn emit_branch_unless_shared(&self, emitter: &mut impl Emitter, done: &str) {
+        let result = emitter.int_result_reg();
+        emitter.emit_load_symbol_to_reg(result, self.head, 0);
+        emitter.emit_branch_if_int_result_zero(done);
+        emitter.emit_load_from_address(result, result, COUNT);
+        match emitter.arch() {
+            Arch::AArch64 => {
+                emitter.instruction("cmn x0, #1");                              // distinguish the shared registry marker
+                emitter.instruction(&format!("b.ne {done}"));                   // leave isolated nested calls alone
+            }
+            Arch::X86_64 => {
+                emitter.instruction("cmp rax, -1");                             // distinguish the shared registry marker
+                emitter.instruction(&format!("jne {done}"));                    // leave isolated nested calls alone
+            }
+        }
+    }
+
+    /// Publishes the outer policy and retains its list when the registry is shared.
+    pub fn emit_inherit_shared_owner(&self, emitter: &mut impl Emitter, done: &str) {
+        let result = emitter.int_result_reg();
+        let scratch = emitter.secondary_scratch_reg();
+        self.emit_branch_unless_shared(emitter, done);
+        emitter.emit_load_symbol_to_reg(scratch, self.head, 0);
+        for (offset, symbol) in [(MODE, self.mode), (OWNER_REPR, self.owner_repr), (OWNER, self.owner)] {
+            emitter.emit_load_from_address(result, scratch, offset);
+            emitter.emit_store_reg_to_symbol(result, symbol, 0);
+        }
+        emitter.emit_branch_if_int_result_zero(done);
+        emitter.emit_call_label("__rt_incref");
+    }
+
+    /// Detaches the current allow-list before releasing its independent owner.
+    pub fn emit_retire_current_owner(&self, emitter: &mut impl Emitter, done: &str) {
+        match emitter.arch() {
+            Arch::AArch64 => {
+                emitter.emit_symbol_address("x9", self.owner);
+                emitter.instruction("ldr x0, [x9]");                            // take the published list owner
+                emitter.instruction("str xzr, [x9]");                           // unpublish before retiring the owner
+                emitter.instruction(&format!("cbz x0, {done}"));                // a null slot owns no list
+                emitter.instruction("bl __rt_decref_array");                    // release the detached owner
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov rax, QWORD PTR [rip + {}]", self.owner)); // take the published list owner
+                emitter.instruction(&format!("mov QWORD PTR [rip + {}], 0", self.owner)); // unpublish before retiring the owner
+                emitter.instruction("test rax, rax");                           // inspect the detached pointer
+                emitter.instruction(&format!("jz {done}"));                     // a null slot owns no list
+                emitter.instruction("call __rt_decref_array");                  // release the detached owner
+            }
+        }
+        emitter.label(done);
+    }
+
     /// Allocates the header and copies the populated registry before linking it.
     fn emit_push_aarch64(&self, emitter: &mut impl Emitter) {
         emitter.instruction("str x11, [sp, #8]");                               // preserve the copy count across allocation

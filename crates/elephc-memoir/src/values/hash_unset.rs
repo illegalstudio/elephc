@@ -152,29 +152,7 @@ pub fn emit_hash_unset(emitter: &mut impl Emitter) {
     emitter.instruction("ldr x5, [sp, #0]");                                    // reload the table pointer
     emitter.instruction("ldr x6, [x12, #48]");                                  // x6 = prev slot index (-1 when first)
     emitter.instruction("ldr x7, [x12, #56]");                                  // x7 = next slot index (-1 when last)
-    emitter.instruction("cmn x6, #1");                                          // does this entry have no predecessor (prev == -1)?
-    emitter.instruction("b.ne __rt_hash_unset_prev_entry");                     // patch the predecessor's forward link instead
-    emitter.instruction("str x7, [x5, #24]");                                   // head = next: new first entry in iteration order
-    emitter.instruction("b __rt_hash_unset_fix_next");                          // continue to fix the successor's back link
-
-    emitter.label("__rt_hash_unset_prev_entry");
-    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes per slot
-    hash_layout::emit_entry_address(emitter, "x9", "x5", "x6");
-    emitter.instruction("str x7, [x9, #56]");                                   // predecessor.next = our next, skipping us
-
-    emitter.label("__rt_hash_unset_fix_next");
-    emitter.instruction("cmn x7, #1");                                          // does this entry have no successor (next == -1)?
-    emitter.instruction("b.ne __rt_hash_unset_next_entry");                     // patch the successor's back link instead
-    emitter.instruction("str x6, [x5, #32]");                                   // tail = prev: new last entry in iteration order
-    emitter.instruction("b __rt_hash_unset_tombstone");                         // continue to tombstone the slot
-
-    emitter.label("__rt_hash_unset_next_entry");
-    emitter.instruction("mov x11, #64");                                        // entry size = 64 bytes per slot
-    hash_layout::emit_entry_address(emitter, "x9", "x5", "x7");
-    emitter.instruction("str x6, [x9, #48]");                                   // successor.prev = our prev, skipping us
-
-    // -- tombstone the slot and decrement the live count --
-    emitter.label("__rt_hash_unset_tombstone");
+    emit_unlink_order(emitter, UnlinkSites::ordinary(), "x5", "x6", "x7", "x9", true);
     emitter.instruction("ldr x12, [sp, #40]");                                  // reload the matched entry address
     emitter.instruction("mov x13, #2");                                         // tombstone marker keeps probe chains intact
     emitter.instruction("str x13, [x12]");                                      // mark the slot as a tombstone
@@ -360,27 +338,7 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the table pointer
     emitter.instruction("mov rsi, QWORD PTR [r8 + 48]");                        // rsi = prev slot index (-1 when first)
     emitter.instruction("mov rdi, QWORD PTR [r8 + 56]");                        // rdi = next slot index (-1 when last)
-    emitter.instruction("cmp rsi, -1");                                         // does this entry have no predecessor?
-    emitter.instruction("jne __rt_hash_unset_prev_entry");                      // patch the predecessor's forward link
-    emitter.instruction("mov QWORD PTR [r10 + 24], rdi");                       // head = next: new first entry in order
-    emitter.instruction("jmp __rt_hash_unset_fix_next");                        // continue to fix the successor's back link
-
-    emitter.label("__rt_hash_unset_prev_entry");
-    hash_layout::emit_entry_address(emitter, "rcx", "r10", "rsi");
-    emitter.instruction("mov QWORD PTR [rcx + 56], rdi");                       // predecessor.next = our next, skipping us
-
-    emitter.label("__rt_hash_unset_fix_next");
-    emitter.instruction("cmp rdi, -1");                                         // does this entry have no successor?
-    emitter.instruction("jne __rt_hash_unset_next_entry");                      // patch the successor's back link
-    emitter.instruction("mov QWORD PTR [r10 + 32], rsi");                       // tail = prev: new last entry in order
-    emitter.instruction("jmp __rt_hash_unset_tombstone");                       // continue to tombstone the slot
-
-    emitter.label("__rt_hash_unset_next_entry");
-    hash_layout::emit_entry_address(emitter, "rcx", "r10", "rdi");
-    emitter.instruction("mov QWORD PTR [rcx + 48], rsi");                       // successor.prev = our prev, skipping us
-
-    // -- tombstone the slot and decrement the live count --
-    emitter.label("__rt_hash_unset_tombstone");
+    emit_unlink_order(emitter, UnlinkSites::ordinary(), "r10", "rsi", "rdi", "rcx", false);
     emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // reload the matched entry address
     emitter.instruction("mov QWORD PTR [r8], 2");                               // tombstone marker keeps probe chains intact
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the table pointer
@@ -444,4 +402,85 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("add rsp, 64");                                         // release the spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
+}
+
+/// Branch labels around the two insertion-order repairs and final tombstone.
+struct UnlinkSites<'a> {
+    previous: &'a str,
+    fix_next: &'a str,
+    following: &'a str,
+    tombstone: &'a str,
+}
+
+impl UnlinkSites<'_> {
+    /// Keeps the ordinary unset helper's existing branch layout.
+    fn ordinary() -> Self {
+        Self {
+            previous: "__rt_hash_unset_prev_entry",
+            fix_next: "__rt_hash_unset_fix_next",
+            following: "__rt_hash_unset_next_entry",
+            tombstone: "__rt_hash_unset_tombstone",
+        }
+    }
+}
+
+/// Removes an entry from insertion order without touching its detached owners.
+fn emit_unlink_order(
+    emitter: &mut impl Emitter, sites: UnlinkSites<'_>, hash: &str, prev: &str,
+    next: &str, scratch: &str, preserve_arm_slot_size_load: bool,
+) {
+    let arm = emitter.arch() == Arch::AArch64;
+    for (index, value, header_offset, link_offset, neighbour, continuation) in [
+        (prev, next, 24, 56, sites.previous, sites.fix_next),
+        (next, prev, 32, 48, sites.following, sites.tombstone),
+    ] {
+        let (not_equal, jump) = if arm {
+            emitter.instruction(&format!("cmn {index}, #1"));                   // identify an insertion-order endpoint
+            ("b.ne", "b")
+        } else {
+            emitter.instruction(&format!("cmp {index}, -1"));                   // identify an insertion-order endpoint
+            ("jne", "jmp")
+        };
+        emitter.instruction(&format!("{not_equal} {neighbour}"));               // repair the neighboring entry when present
+        emitter.emit_store_to_address(value, hash, header_offset);
+        emitter.instruction(&format!("{jump} {continuation}"));                 // finish this half of the unlink
+        emitter.label(neighbour);
+        if preserve_arm_slot_size_load {
+            emitter.instruction("mov x11, #64");                                // preserve the ordinary unset helper's register sequence
+        }
+        hash_layout::emit_entry_address(emitter, scratch, hash, index);
+        emitter.emit_store_to_address(value, scratch, link_offset);
+        emitter.label(continuation);
+    }
+}
+
+/// Unlinks a pinned entry and publishes its tombstone and updated count.
+/// The caller has staged its owners and will retire them after the mutation.
+pub fn emit_unlink_pinned_entry(emitter: &mut impl Emitter, prefix: &str) {
+    let arm = emitter.arch() == Arch::AArch64;
+    emitter.instruction(if arm { "ldr x5, [sp]" } else { "mov r10, QWORD PTR [rsp]" }); // recover the selected stable hash header
+    emitter.instruction(if arm { "ldp x6, x7, [x4, #48]" } else { "mov r9, QWORD PTR [r8 + 48]" }); // recover insertion-order predecessor and successor
+    if !arm { emitter.instruction("mov rdx, QWORD PTR [r8 + 56]"); }            // preserve the successor while fixing both links
+
+    let (hash, prev, next, scratch) = if arm {
+        ("x5", "x6", "x7", "x9")
+    } else {
+        ("r10", "r9", "rdx", "r11")
+    };
+    emit_unlink_order(emitter, UnlinkSites {
+        previous: &format!("{prefix}_previous"),
+        fix_next: &format!("{prefix}_next"),
+        following: &format!("{prefix}_following"),
+        tombstone: &format!("{prefix}_tombstone"),
+    }, hash, prev, next, scratch, false);
+    if arm {
+        emitter.instruction("mov x9, #2");                                      // preserve probe chains with a tombstone
+        emitter.instruction("str x9, [x4]");                                    // make the removed key absent before callbacks
+        emitter.instruction("ldr x9, [x5]");                                    // recover the current number of live entries
+        emitter.instruction("sub x9, x9, #1");                                  // account for the completed deletion
+        emitter.instruction("str x9, [x5]");                                    // publish count while leaving automatic-key history unchanged
+    } else {
+        emitter.instruction("mov QWORD PTR [r8], 2");                           // make the removed key absent while preserving probe chains
+        emitter.instruction("sub QWORD PTR [r10], 1");                          // publish live count without rewinding automatic-key history
+    }
 }

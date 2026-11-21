@@ -37,6 +37,7 @@ fn memoir_residual_storage_preserves_native_assembly() {
             arrays::emit_hash_insert_owned(&mut emitter);
             handler_state::emit_handler_state(&mut emitter);
             system::emit_unserialize(&mut emitter);
+            // The standalone UTF-8 validator is emitted separately from the mbstring bridge.
             strings::emit_mbstring(&mut emitter, true, false);
             io::emit_stream_get_contents(&mut emitter);
             let mut labels = emitter.take_internal_labels().into_iter().collect::<Vec<_>>();

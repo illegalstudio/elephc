@@ -8,16 +8,16 @@
 //! Key details:
 //! - Runtime labels, registers, and data symbols here are ABI shared with generated assembly call sites.
 
+use elephc_memoir::coroutine_storage;
+
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 
 use super::common::emit_box_null_mixed;
 use super::super::switch::{fiber_initial_entry_offset, fiber_initial_stack_frame_bytes};
 use super::super::{
-    FIBER_CALLER_OFFSET, FIBER_DEFAULT_STACK_SIZE, FIBER_PENDING_THROW_OFFSET,
-    FIBER_STATE_NOT_STARTED, FIBER_STATE_OFFSET, FIBER_STATE_RUNNING, FIBER_STATE_SUSPENDED,
-    FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
-};
+    FIBER_CALLER_OFFSET, FIBER_DEFAULT_STACK_SIZE, FIBER_STATE_NOT_STARTED, FIBER_STATE_OFFSET, FIBER_STATE_RUNNING, FIBER_STATE_SUSPENDED,
+    FIBER_STATE_TERMINATED, };
 
 /// __rt_fiber_throw_state_error: allocate a `FiberError`, set its message, and
 /// raise it through the standard exception runtime. Never returns.
@@ -130,9 +130,7 @@ pub(super) fn emit_start(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = current fiber state
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_TERMINATED));       // is the fiber terminated?
     emitter.instruction("b.ne __rt_fiber_start_no_escape");                     // skip the re-raise path when the fiber is still alive
-    emitter.instruction(&format!("ldr x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // x10 = parked Throwable (NULL when termination was clean)
-    emitter.instruction("cbz x10, __rt_fiber_start_no_escape");                 // skip the re-raise path when no exception escaped
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // clear pending_throw so subsequent inspections see the clean terminated state
+    coroutine_storage::emit_take_pending_throw(emitter, "x19", "x10", "__rt_fiber_start_no_escape");
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_value", 0);             // _exc_value = the escaped Throwable, ready for __rt_throw_current
     emitter.instruction("bl __rt_throw_current");                               // re-raise on the caller's stack chain (no return)
     emitter.instruction("brk #0xfffe");                                         // defensive trap if __rt_throw_current ever returns
@@ -145,9 +143,7 @@ pub(super) fn emit_start(emitter: &mut Emitter) {
     emit_box_null_mixed(emitter);
     emitter.instruction("b __rt_fiber_start_return_ready");                     // skip the yielded-value load after boxing PHP null
     emitter.label("__rt_fiber_start_return_yield");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (suspend yield value)
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
+    coroutine_storage::emit_take_transfer(emitter, "x19", "x0");
     emitter.label("__rt_fiber_start_return_ready");
 
     // -- epilogue --
@@ -189,7 +185,7 @@ pub(super) fn emit_resume(emitter: &mut Emitter) {
     emitter.instruction("ldp x20, x21, [sp], #16");                             // restore caller's x20/x21 now that the state check is done
 
     // -- deliver the new value into the fiber's transfer slot --
-    emitter.instruction(&format!("str x1, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // fiber->transfer_value.lo = $value passed to resume
+    coroutine_storage::emit_publish_transfer(emitter, "x19", "x1");
 
     // -- record the resumer as the fiber's caller, then switch in --
     abi::emit_load_symbol_to_reg(emitter, "x9", "_fiber_current", 0);           // x9 = current execution context to remember as the caller
@@ -201,9 +197,7 @@ pub(super) fn emit_resume(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = current fiber state
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_TERMINATED));       // is the fiber terminated?
     emitter.instruction("b.ne __rt_fiber_resume_no_escape");                    // skip the re-raise path when the fiber is still alive
-    emitter.instruction(&format!("ldr x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // x10 = parked Throwable (NULL when termination was clean)
-    emitter.instruction("cbz x10, __rt_fiber_resume_no_escape");                // skip the re-raise path when no exception escaped
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // clear pending_throw so subsequent inspections see the clean terminated state
+    coroutine_storage::emit_take_pending_throw(emitter, "x19", "x10", "__rt_fiber_resume_no_escape");
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_value", 0);             // _exc_value = the escaped Throwable, ready for __rt_throw_current
     emitter.instruction("bl __rt_throw_current");                               // re-raise on the caller's stack chain (no return)
     emitter.instruction("brk #0xfffe");                                         // defensive trap if __rt_throw_current ever returns
@@ -216,9 +210,7 @@ pub(super) fn emit_resume(emitter: &mut Emitter) {
     emit_box_null_mixed(emitter);
     emitter.instruction("b __rt_fiber_resume_return_ready");                    // skip the yielded-value load after boxing PHP null
     emitter.label("__rt_fiber_resume_return_yield");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (next yield value)
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
+    coroutine_storage::emit_take_transfer(emitter, "x19", "x0");
     emitter.label("__rt_fiber_resume_return_ready");
 
     emitter.instruction("ldr x19, [sp]");                                       // restore caller's x19
@@ -271,7 +263,7 @@ pub(super) fn emit_suspend(emitter: &mut Emitter) {
     emitter.instruction("ldp x20, x21, [sp], #16");                             // restore caller's x20/x21 now that the state check is done
 
     // -- store the value being yielded and mark the fiber Suspended --
-    emitter.instruction(&format!("str x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // fiber->transfer_value.lo = the yielded value
+    coroutine_storage::emit_publish_transfer(emitter, "x19", "x0");
     emitter.instruction(&format!("mov x9, #{}", FIBER_STATE_SUSPENDED));        // FIBER_STATE_SUSPENDED constant
     emitter.instruction(&format!("str x9, [x19, #{}]", FIBER_STATE_OFFSET));    // fiber->state = Suspended
 
@@ -287,9 +279,7 @@ pub(super) fn emit_suspend(emitter: &mut Emitter) {
     // Important: hold the Throwable in x10 (caller-saved scratch). Cannot use x9
     // because emit_store_reg_to_symbol uses x9 internally to materialise the
     // symbol address, which would clobber the value we want to write.
-    emitter.instruction(&format!("ldr x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // x10 = pending Throwable* (NULL if no throw was scheduled)
-    emitter.instruction("cbz x10, __rt_fiber_suspend_no_throw");                // skip the raise path when no exception is pending
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // clear pending_throw before re-raising so resume() can fire again
+    coroutine_storage::emit_take_pending_throw(emitter, "x19", "x10", "__rt_fiber_suspend_no_throw");
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_value", 0);             // _exc_value = the Throwable to raise; matches normal `throw` runtime contract
     // We are back on this fiber's stack and about to unwind into ITS handlers,
     // so the activation has to be live again first — the resume half of the
@@ -298,9 +288,7 @@ pub(super) fn emit_suspend(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_throw_current");                               // unwind into the active try/catch on the fiber's stack (no return)
 
     emitter.label("__rt_fiber_suspend_no_throw");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (the value the resumer passed)
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because the fiber body now owns the resume value
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale resume payload
+    coroutine_storage::emit_take_transfer(emitter, "x19", "x0");
 
     emitter.label("__rt_fiber_suspend_done");
     emitter.instruction("ldr x19, [sp]");                                       // restore caller's x19
@@ -345,7 +333,7 @@ pub(super) fn emit_throw(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // restore the retained Throwable into the second argument register
     emitter.instruction("ldp x20, x21, [sp], #16");                             // restore caller's x20/x21 now that the state check is done
 
-    emitter.instruction(&format!("str x1, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // fiber->pending_throw = Throwable* to raise on resume
+    coroutine_storage::emit_publish_pending_throw(emitter, "x19", "x1");
     abi::emit_load_symbol_to_reg(emitter, "x9", "_fiber_current", 0);           // x9 = current execution context
     emitter.instruction(&format!("str x9, [x19, #{}]", FIBER_CALLER_OFFSET));   // fiber->caller = current context
 
@@ -356,9 +344,7 @@ pub(super) fn emit_throw(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = current fiber state
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_TERMINATED));       // is the fiber terminated?
     emitter.instruction("b.ne __rt_fiber_throw_no_escape");                     // skip the re-raise path when the fiber is still alive
-    emitter.instruction(&format!("ldr x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // x10 = parked Throwable (NULL when termination was clean)
-    emitter.instruction("cbz x10, __rt_fiber_throw_no_escape");                 // skip the re-raise path when no exception escaped
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // clear pending_throw so subsequent inspections see the clean terminated state
+    coroutine_storage::emit_take_pending_throw(emitter, "x19", "x10", "__rt_fiber_throw_no_escape");
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_value", 0);             // _exc_value = the escaped Throwable, ready for __rt_throw_current
     emitter.instruction("bl __rt_throw_current");                               // re-raise on the caller's stack chain (no return)
     emitter.instruction("brk #0xfffe");                                         // defensive trap if __rt_throw_current ever returns
@@ -371,9 +357,7 @@ pub(super) fn emit_throw(emitter: &mut Emitter) {
     emit_box_null_mixed(emitter);
     emitter.instruction("b __rt_fiber_throw_return_ready");                     // skip the yielded-value load after boxing PHP null
     emitter.label("__rt_fiber_throw_return_yield");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (next yield value)
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo because ownership moves to the caller
-    emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to leave no stale yielded payload
+    coroutine_storage::emit_take_transfer(emitter, "x19", "x0");
     emitter.label("__rt_fiber_throw_return_ready");
 
     emitter.instruction("ldr x19, [sp]");                                       // restore caller's x19
@@ -428,7 +412,7 @@ pub(super) fn emit_get_return(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_fiber_throw_state_error");                     // raise FiberError; this call does not return
 
     emitter.label("__rt_fiber_get_return_state_ok");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // x0 = fiber->transfer_value.lo (the closure's return value)
+    coroutine_storage::emit_borrow_transfer(emitter, "x19", "x0");
     emitter.instruction("bl __rt_incref");                                      // retain the return Mixed so the caller owns it independently of the Fiber
     emitter.instruction("b __rt_fiber_get_return_done");                        // skip the NULL-receiver fallback once the return value is loaded
 

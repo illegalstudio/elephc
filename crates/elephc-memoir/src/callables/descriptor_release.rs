@@ -10,6 +10,12 @@
 //! - Dynamic descriptors use the uniform heap header refcount, then deep-release
 //!   owned capture slots before returning the descriptor block to the allocator.
 
+use super::layout::{
+    BINDING_BYTES, BINDING_REF_OFFSET, BINDING_SHIFT, BINDING_TAG_OFFSET, CAPTURE_COUNT_OFFSET,
+    CAPTURE_TABLE_OFFSET, ENVIRONMENT_OFFSET, HEADER_BYTES,
+};
+use super::storage::{CAPTURE_BYTES, CAPTURE_SHIFT};
+
 use crate::Emitter;
 use crate::Arch;
 
@@ -70,12 +76,12 @@ pub fn emit_callable_descriptor_release(emitter: &mut impl Emitter) {
     emitter.instruction("str xzr, [sp, #24]");                                  // initialize capture index to zero
 
     // -- load environment metadata --
-    emitter.instruction("ldr x9, [x0, #40]");                                   // x9 = descriptor environment record pointer
+    emitter.instruction(&format!("ldr x9, [x0, #{ENVIRONMENT_OFFSET}]"));       // x9 = descriptor environment record pointer
     emitter.instruction("cbz x9, __rt_callable_descriptor_release_free");       // descriptors without captures skip straight to block free
-    emitter.instruction("ldr x10, [x9]");                                       // x10 = capture count
+    emitter.emit_load_from_address("x10", "x9", CAPTURE_COUNT_OFFSET);
     emitter.instruction("str x10, [sp, #8]");                                   // save capture count for the cleanup loop
     emitter.instruction("cbz x10, __rt_callable_descriptor_release_free");      // no capture slots need release work
-    emitter.instruction("ldr x11, [x9, #16]");                                  // x11 = capture binding metadata table
+    emitter.instruction(&format!("ldr x11, [x9, #{CAPTURE_TABLE_OFFSET}]"));    // x11 = capture binding metadata table
     emitter.instruction("str x11, [sp, #16]");                                  // save capture table pointer for the cleanup loop
     emitter.instruction("cbz x11, __rt_callable_descriptor_release_free");      // missing metadata means there are no typed owned captures to release
 
@@ -86,15 +92,15 @@ pub fn emit_callable_descriptor_release(emitter: &mut impl Emitter) {
     emitter.instruction("cmp x12, x13");                                        // have all capture slots been processed?
     emitter.instruction("b.hs __rt_callable_descriptor_release_free");          // yes, free the descriptor allocation
     emitter.instruction("ldr x14, [sp, #16]");                                  // reload capture binding table pointer
-    emitter.instruction("mov x15, #32");                                        // each capture binding entry is four 8-byte words
+    emitter.instruction(&format!("mov x15, #{BINDING_BYTES}"));                 // each capture binding entry is four 8-byte words
     emitter.instruction("mul x15, x12, x15");                                   // compute byte offset for this capture metadata entry
     emitter.instruction("add x14, x14, x15");                                   // x14 = capture metadata entry pointer
-    emitter.instruction("ldr x16, [x14, #24]");                                 // preserve the reference flag while loading the capture payload
-    emitter.instruction("ldr x15, [x14, #16]");                                 // load descriptor type tag for the by-value capture
+    emitter.instruction(&format!("ldr x16, [x14, #{BINDING_REF_OFFSET}]"));     // preserve the reference flag while loading the capture payload
+    emitter.instruction(&format!("ldr x15, [x14, #{BINDING_TAG_OFFSET}]"));     // load descriptor type tag for the by-value capture
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload descriptor pointer before reading the capture slot
-    emitter.instruction("mov x10, #16");                                        // each runtime capture slot is 16 bytes
+    emitter.instruction(&format!("mov x10, #{CAPTURE_BYTES}"));                 // each runtime capture slot is 16 bytes
     emitter.instruction("mul x10, x12, x10");                                   // compute capture slot offset after the descriptor header
-    emitter.instruction("add x10, x10, #64");                                   // skip the 64-byte static descriptor header
+    emitter.instruction(&format!("add x10, x10, #{HEADER_BYTES}"));             // skip the 64-byte static descriptor header
     emitter.instruction("ldr x0, [x9, x10]");                                   // x0 = capture slot low word, usually a heap pointer
     emitter.instruction("cbnz x16, __rt_callable_descriptor_release_reference"); // managed reference captures own their cell instead of its payload
     emitter.instruction("cmp x15, #1");                                         // is this a string capture?
@@ -197,14 +203,14 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // recover capture metadata after observer callbacks
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize capture index to zero
 
-    emitter.instruction("mov r10, QWORD PTR [rax + 40]");                       // r10 = descriptor environment record pointer
+    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {ENVIRONMENT_OFFSET}]"));                       // r10 = descriptor environment record pointer
     emitter.instruction("test r10, r10");                                       // does the descriptor carry capture metadata?
     emitter.instruction("jz __rt_callable_descriptor_release_free");            // descriptors without captures skip straight to block free
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // r11 = capture count
+    emitter.emit_load_from_address("r11", "r10", CAPTURE_COUNT_OFFSET);
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save capture count for the cleanup loop
     emitter.instruction("test r11, r11");                                       // are there any capture slots to release?
     emitter.instruction("jz __rt_callable_descriptor_release_free");            // no capture slots need release work
-    emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // r11 = capture binding metadata table
+    emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {CAPTURE_TABLE_OFFSET}]"));                       // r11 = capture binding metadata table
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save capture table pointer for the cleanup loop
     emitter.instruction("test r11, r11");                                       // is typed capture metadata available?
     emitter.instruction("jz __rt_callable_descriptor_release_free");            // missing metadata means there are no owned typed captures
@@ -215,14 +221,14 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("jae __rt_callable_descriptor_release_free");           // yes, free the descriptor allocation
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload capture binding table pointer
     emitter.instruction("mov rcx, r10");                                        // copy index before scaling metadata offset
-    emitter.instruction("shl rcx, 5");                                          // each capture binding entry is 32 bytes
+    emitter.instruction(&format!("shl rcx, {BINDING_SHIFT}"));                  // each capture binding entry is 32 bytes
     emitter.instruction("add r11, rcx");                                        // r11 = capture metadata entry pointer
-    emitter.instruction("mov r8, QWORD PTR [r11 + 24]");                        // preserve the reference flag while loading the capture payload
-    emitter.instruction("mov rdx, QWORD PTR [r11 + 16]");                       // load descriptor type tag for the by-value capture
+    emitter.instruction(&format!("mov r8, QWORD PTR [r11 + {BINDING_REF_OFFSET}]"));                        // preserve the reference flag while loading the capture payload
+    emitter.instruction(&format!("mov rdx, QWORD PTR [r11 + {BINDING_TAG_OFFSET}]"));                       // load descriptor type tag for the by-value capture
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload descriptor pointer before reading the capture slot
     emitter.instruction("mov rcx, r10");                                        // copy index before scaling capture slot offset
-    emitter.instruction("shl rcx, 4");                                          // each runtime capture slot is 16 bytes
-    emitter.instruction("mov rax, QWORD PTR [rax + rcx + 64]");                 // rax = capture slot low word, usually a heap pointer
+    emitter.instruction(&format!("shl rcx, {CAPTURE_SHIFT}"));                  // each runtime capture slot is 16 bytes
+    emitter.instruction(&format!("mov rax, QWORD PTR [rax + rcx + {HEADER_BYTES}]"));                 // rax = capture slot low word, usually a heap pointer
     emitter.instruction("test r8, r8");                                         // distinguish a cell address from an ordinary captured value
     emitter.instruction("jnz __rt_callable_descriptor_release_reference");      // managed reference captures own their cell instead of its payload
     emitter.instruction("cmp rdx, 1");                                          // is this a string capture?

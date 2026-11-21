@@ -9,6 +9,42 @@
 
 use crate::{Arch, Emitter};
 
+/// Finds the payload and original-cell words of one 32-byte eval staging slot.
+pub const fn argument_slot_offsets(reverse_index: usize) -> (usize, usize) {
+    let payload = reverse_index * 32;
+    (payload, payload + 16)
+}
+
+/// Compares a staged heap pointer to the original Mixed cell's current payload.
+pub fn emit_branch_on_argument_change(
+    emitter: &mut impl Emitter, raw: usize, original: usize, changed: &str, unchanged: &str,
+) {
+    let (cell, candidate, previous, compare, difference, jump) = match emitter.arch() {
+        Arch::AArch64 => ("x9", "x10", "x11", "cmp x10, x11", "b.ne", "b"),
+        Arch::X86_64 => ("r10", "r11", "r9", "cmp r11, r9", "jne", "jmp"),
+    };
+    emitter.emit_load_temporary_stack_slot(cell, original);
+    emitter.emit_load_temporary_stack_slot(candidate, raw);
+    emitter.emit_load_from_address(previous, cell, 8);
+    emitter.instruction(compare);                                               // compare native storage to the cell's current payload
+    emitter.instruction(&format!("{difference} {changed}"));                    // the raw slot owns a different pointer
+    emitter.instruction(&format!("{jump} {unchanged}"));                        // an unchanged slot still has the original pointer
+}
+
+/// Retires a raw argument after failure, releasing an unchanged value only if independently owned.
+pub fn emit_retire_argument_value<E: Emitter>(
+    emitter: &mut E, raw: usize, original: usize, owned: bool, release: &str, done: &str,
+    emit_release: impl FnOnce(&mut E),
+) {
+    if !owned {
+        emit_branch_on_argument_change(emitter, raw, original, release, done);
+    }
+    emitter.label(release);
+    emitter.emit_load_temporary_stack_slot(emitter.int_result_reg(), raw);
+    emit_release(emitter);
+    emitter.label(done);
+}
+
 /// Moves the new payload and retires the previous owner of a known destination.
 pub fn emit_replace(
     emitter: &mut impl Emitter,

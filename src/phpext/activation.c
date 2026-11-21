@@ -6,8 +6,7 @@ extern unsigned char elephc_state_begin[], elephc_state_end[];
 extern unsigned char elephc_state_zero_begin[], elephc_state_zero_end[];
 extern const uintptr_t ep_class_name_count __asm__("_class_name_count");
 extern const uintptr_t ep_class_name_entries[] __asm__("_class_name_entries");
-extern uintptr_t ep_native_stack_limit __asm__("_stack_limit");
-extern uintptr_t ep_native_stack_limit_main __asm__("_stack_limit_main");
+extern void elephc_phpext_native_set_stack_floor(uintptr_t floor);
 extern uintptr_t ep_boundary_status __asm__("_elephc_boundary_status");
 extern uint32_t elephc_phpext_native_owner_count(const uintptr_t *object);
 extern size_t elephc_phpext_native_replacement_pin_count(const uintptr_t *object);
@@ -691,7 +690,7 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     /* The module-local normal mutex remains initialized for every active request. */
     pthread_mutex_lock(&ep_native_lock);
     ep_state_restore(call->snapshot);
-    ep_native_stack_limit = ep_native_stack_limit_main = call->stack_floor;
+    elephc_phpext_native_set_stack_floor(call->stack_floor);
     ep_current = call;
 #ifdef ELEPHC_PHPEXT_OBJECTS
     if (!call->host_bailout && !call->error && !EP_GLOBAL(broken)) {

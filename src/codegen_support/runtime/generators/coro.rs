@@ -31,6 +31,8 @@
 // the layout they describe.
 #![allow(dead_code)]
 
+use elephc_memoir::coroutine_storage::GeneratorOwner;
+
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::fibers::{
@@ -42,7 +44,7 @@ const INT_TAG: i64 = 0;
 
 // ── Generator-specific field offsets (within the reused Fiber object) ──────
 pub(crate) use elephc_memoir::coroutine_storage::{
-    GEN_AUTO_KEY_OFFSET, GEN_LAST_KEY_OFFSET, GEN_LAST_VALUE_OFFSET, GEN_RETURN_VALUE_OFFSET,
+    GEN_AUTO_KEY_OFFSET,
 };
 
 /// Emits the ARM64 auto-key bookkeeping that fronts `__rt_gen_suspend`.
@@ -124,17 +126,11 @@ pub(crate) fn emit_gen_suspend(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x19", "_fiber_current", 0); // x19 = the generator coroutine currently running
 
     // -- record the yielded value into gen_last_value (refcount-replace) --
-    emitter.instruction(&format!("ldr x9, [x19, #{}]", GEN_LAST_VALUE_OFFSET)); // x9 = previous last_value occupant
-    emitter.instruction(&format!("str x20, [x19, #{}]", GEN_LAST_VALUE_OFFSET)); // store the freshly yielded value
-    emitter.instruction("mov x0, x9");                                          // pass the previous occupant to the releaser
-    emitter.instruction("bl __rt_decref_mixed");                                // release the previous last_value (NULL is safe)
+    GeneratorOwner::Value.emit_replace(emitter, "x19", "x20", "x9");
 
     // -- record the key: explicit cell, or a boxed auto-increment integer --
     emitter.instruction("cbz x21, __rt_gen_suspend_auto_key");                  // branch to the auto-key path when no explicit key was supplied
-    emitter.instruction(&format!("ldr x9, [x19, #{}]", GEN_LAST_KEY_OFFSET));   // x9 = previous last_key occupant
-    emitter.instruction(&format!("str x21, [x19, #{}]", GEN_LAST_KEY_OFFSET));  // store the explicit yielded key
-    emitter.instruction("mov x0, x9");                                          // pass the previous key occupant to the releaser
-    emitter.instruction("bl __rt_decref_mixed");                                // release the previous last_key (NULL is safe)
+    GeneratorOwner::Key.emit_replace(emitter, "x19", "x21", "x9");
     emitter.instruction("b __rt_gen_suspend_yield");                            // skip the auto-key path
 
     emitter.label("__rt_gen_suspend_auto_key");
@@ -142,10 +138,7 @@ pub(crate) fn emit_gen_suspend(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x0, #{}", INT_TAG));                      // runtime tag 0 = integer
     emitter.instruction("mov x2, #0");                                          // integer payload has no high word
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = boxed integer key cell (owned)
-    emitter.instruction(&format!("ldr x9, [x19, #{}]", GEN_LAST_KEY_OFFSET));   // x9 = previous last_key occupant
-    emitter.instruction(&format!("str x0, [x19, #{}]", GEN_LAST_KEY_OFFSET));   // store the freshly boxed auto key
-    emitter.instruction("mov x0, x9");                                          // pass the previous key occupant to the releaser
-    emitter.instruction("bl __rt_decref_mixed");                                // release the previous last_key (NULL is safe)
+    GeneratorOwner::Key.emit_replace(emitter, "x19", "x0", "x9");
     emitter.instruction(&format!("ldr x9, [x19, #{}]", GEN_AUTO_KEY_OFFSET));   // x9 = current auto-increment counter
     emitter.instruction("add x9, x9, #1");                                      // advance the auto-increment counter
     emitter.instruction(&format!("str x9, [x19, #{}]", GEN_AUTO_KEY_OFFSET));   // persist the advanced counter for the next bare yield
@@ -215,16 +208,12 @@ fn emit_gen_suspend_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r12", "_fiber_current", 0); // r12 = the generator coroutine currently running
 
     // -- record the yielded value into gen_last_value (refcount-replace) --
-    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_LAST_VALUE_OFFSET)); // rax = previous last_value occupant
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r13", GEN_LAST_VALUE_OFFSET)); // store the freshly yielded value
-    emitter.instruction("call __rt_decref_mixed");                              // release the previous last_value (NULL is safe)
+    GeneratorOwner::Value.emit_replace(emitter, "r12", "r13", "rax");
 
     // -- record the key: explicit cell, or a boxed auto-increment integer --
     emitter.instruction("test r14, r14");                                       // was an explicit key supplied?
     emitter.instruction("jz __rt_gen_suspend_auto_key");                        // branch to the auto-key path when no explicit key was supplied
-    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_LAST_KEY_OFFSET)); // rax = previous last_key occupant
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r14", GEN_LAST_KEY_OFFSET)); // store the explicit yielded key
-    emitter.instruction("call __rt_decref_mixed");                              // release the previous last_key (NULL is safe)
+    GeneratorOwner::Key.emit_replace(emitter, "r12", "r14", "rax");
     emitter.instruction("jmp __rt_gen_suspend_yield");                          // skip the auto-key path
 
     emitter.label("__rt_gen_suspend_auto_key");
@@ -232,10 +221,7 @@ fn emit_gen_suspend_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rax, {}", INT_TAG));                      // runtime tag 0 = integer
     emitter.instruction("xor esi, esi");                                        // integer payload has no high word
     emitter.instruction("call __rt_mixed_from_value");                          // rax = boxed integer key cell (owned)
-    emitter.instruction(&format!("mov rcx, QWORD PTR [r12 + {}]", GEN_LAST_KEY_OFFSET)); // rcx = previous last_key occupant
-    emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rax", GEN_LAST_KEY_OFFSET)); // store the freshly boxed auto key
-    emitter.instruction("mov rax, rcx");                                        // move the previous key occupant into the decref argument register
-    emitter.instruction("call __rt_decref_mixed");                              // release the previous last_key (NULL is safe)
+    GeneratorOwner::Key.emit_replace(emitter, "r12", "rax", "rcx");
     emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_AUTO_KEY_OFFSET)); // rax = current auto-increment counter
     emitter.instruction("add rax, 1");                                          // advance the auto-increment counter
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], rax", GEN_AUTO_KEY_OFFSET)); // persist the advanced counter for the next bare yield
@@ -342,7 +328,7 @@ fn emit_gen_current_arm64(emitter: &mut Emitter) {
     emitter.label_global("__rt_gen_current");
     arm64_acc_prologue1(emitter);
     arm64_ensure_started(emitter, "current");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", GEN_LAST_VALUE_OFFSET)); // load the boxed most-recent yield value
+    GeneratorOwner::Value.emit_borrow(emitter, "x19", "x0");
     emitter.instruction("bl __rt_incref");                                      // hand the caller an owned reference
     arm64_acc_epilogue1(emitter);
 }
@@ -355,7 +341,7 @@ fn emit_gen_key_arm64(emitter: &mut Emitter) {
     emitter.label_global("__rt_gen_key");
     arm64_acc_prologue1(emitter);
     arm64_ensure_started(emitter, "key");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", GEN_LAST_KEY_OFFSET));   // load the boxed most-recent yield key
+    GeneratorOwner::Key.emit_borrow(emitter, "x19", "x0");
     emitter.instruction("bl __rt_incref");                                      // hand the caller an owned reference
     arm64_acc_epilogue1(emitter);
 }
@@ -423,7 +409,7 @@ fn emit_gen_send_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = state after the resume
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_TERMINATED));       // did the generator finish?
     emitter.instruction("b.eq __rt_gen_send_null");                             // finished generators yield no further value
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", GEN_LAST_VALUE_OFFSET)); // load the freshly yielded value
+    GeneratorOwner::Value.emit_borrow(emitter, "x19", "x0");
     emitter.instruction("bl __rt_incref");                                      // hand the caller an owned reference
     emitter.instruction("b __rt_gen_send_done");                                // skip the null fallback
     emitter.label("__rt_gen_send_null");
@@ -458,7 +444,7 @@ fn emit_gen_throw_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = state after the injected exception was handled
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_TERMINATED));       // did the generator finish after catching?
     emitter.instruction("b.eq __rt_gen_throw_null");                            // a generator that caught and finished yields nothing more
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", GEN_LAST_VALUE_OFFSET)); // load the value yielded after the catch
+    GeneratorOwner::Value.emit_borrow(emitter, "x19", "x0");
     emitter.instruction("bl __rt_incref");                                      // hand the caller an owned reference
     emitter.instruction("b __rt_gen_throw_done");                               // skip the null fallback
     emitter.label("__rt_gen_throw_null");
@@ -483,7 +469,7 @@ fn emit_gen_get_return_arm64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_get_return ---");
     emitter.label_global("__rt_gen_get_return");
-    emitter.instruction(&format!("ldr x0, [x0, #{}]", GEN_RETURN_VALUE_OFFSET)); // load the boxed body return value
+    GeneratorOwner::Return.emit_borrow(emitter, "x0", "x0");
     emitter.instruction("b __rt_incref");                                       // tail-call incref so the caller owns a fresh reference
 }
 
@@ -546,7 +532,7 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_gen_current");
     x86_acc_prologue1(emitter);
     x86_ensure_started(emitter, "current");
-    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_LAST_VALUE_OFFSET)); // load the boxed most-recent yield value
+    GeneratorOwner::Value.emit_borrow(emitter, "r12", "rax");
     emitter.instruction("call __rt_incref");                                    // hand the caller an owned reference
     x86_acc_epilogue1(emitter);
 
@@ -556,7 +542,7 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_gen_key");
     x86_acc_prologue1(emitter);
     x86_ensure_started(emitter, "key");
-    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_LAST_KEY_OFFSET)); // load the boxed most-recent yield key
+    GeneratorOwner::Key.emit_borrow(emitter, "r12", "rax");
     emitter.instruction("call __rt_incref");                                    // hand the caller an owned reference
     x86_acc_epilogue1(emitter);
 
@@ -616,7 +602,7 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = state after the resume
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_TERMINATED));       // did the generator finish?
     emitter.instruction("je __rt_gen_send_null");                               // finished generators yield no further value
-    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_LAST_VALUE_OFFSET)); // load the freshly yielded value
+    GeneratorOwner::Value.emit_borrow(emitter, "r12", "rax");
     emitter.instruction("call __rt_incref");                                    // hand the caller an owned reference
     emitter.instruction("jmp __rt_gen_send_done");                              // skip the null fallback
     emitter.label("__rt_gen_send_null");
@@ -646,7 +632,7 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = state after the injected exception was handled
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_TERMINATED));       // did the generator finish after catching?
     emitter.instruction("je __rt_gen_throw_null");                              // a generator that caught and finished yields nothing more
-    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_LAST_VALUE_OFFSET)); // load the value yielded after the catch
+    GeneratorOwner::Value.emit_borrow(emitter, "r12", "rax");
     emitter.instruction("call __rt_incref");                                    // hand the caller an owned reference
     emitter.instruction("jmp __rt_gen_throw_done");                             // skip the null fallback
     emitter.label("__rt_gen_throw_null");
@@ -666,7 +652,7 @@ fn emit_gen_accessors_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: __rt_gen_get_return ---");
     emitter.label_global("__rt_gen_get_return");
-    emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", GEN_RETURN_VALUE_OFFSET)); // load the boxed body return value
+    GeneratorOwner::Return.emit_borrow(emitter, "rdi", "rax");
     emitter.instruction("jmp __rt_incref");                                     // tail-call incref so the caller owns a fresh reference
 }
 
@@ -703,10 +689,10 @@ fn emit_gen_delegate_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_TERMINATED));       // has the inner generator finished?
     emitter.instruction("b.eq __rt_gen_delegate_done");                         // stop delegating once the inner generator is exhausted
     // -- yield the inner key/value out through the outer suspend boundary --
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", GEN_LAST_KEY_OFFSET));   // x0 = inner generator's current key cell
+    GeneratorOwner::Key.emit_borrow(emitter, "x19", "x0");
     emitter.instruction("bl __rt_incref");                                      // own a key reference for the outer suspend (it consumes one)
     emitter.instruction("mov x20, x0");                                         // stash the owned key while boxing the value
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", GEN_LAST_VALUE_OFFSET)); // x0 = inner generator's current value cell
+    GeneratorOwner::Value.emit_borrow(emitter, "x19", "x0");
     emitter.instruction("bl __rt_incref");                                      // own a value reference for the outer suspend (it consumes one)
     emitter.instruction("mov x1, x0");                                          // value -> suspend argument 1
     emitter.instruction("mov x0, x20");                                         // key -> suspend argument 0
@@ -727,7 +713,7 @@ fn emit_gen_delegate_arm64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_gen_delegate_loop");                            // re-check the inner state and finish delegating
 
     emitter.label("__rt_gen_delegate_done");
-    emitter.instruction(&format!("ldr x0, [x19, #{}]", GEN_RETURN_VALUE_OFFSET)); // x0 = inner generator's return value cell
+    GeneratorOwner::Return.emit_borrow(emitter, "x19", "x0");
     emitter.instruction("bl __rt_incref");                                      // hand the caller an owned reference to the delegated return value
     emitter.instruction("ldp x19, x20, [sp, #16]");                             // restore callee-saved x19/x20
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
@@ -758,10 +744,10 @@ fn emit_gen_delegate_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {}]", FIBER_STATE_OFFSET)); // r10 = inner generator state
     emitter.instruction(&format!("cmp r10, {}", FIBER_STATE_TERMINATED));       // has the inner generator finished?
     emitter.instruction("je __rt_gen_delegate_done");                           // stop delegating once the inner generator is exhausted
-    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_LAST_KEY_OFFSET)); // rax = inner generator's current key cell
+    GeneratorOwner::Key.emit_borrow(emitter, "r12", "rax");
     emitter.instruction("call __rt_incref");                                    // own a key reference for the outer suspend
     emitter.instruction("mov r13, rax");                                        // stash the owned key while fetching the value
-    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_LAST_VALUE_OFFSET)); // rax = inner generator's current value cell
+    GeneratorOwner::Value.emit_borrow(emitter, "r12", "rax");
     emitter.instruction("call __rt_incref");                                    // own a value reference for the outer suspend
     emitter.instruction("mov rsi, rax");                                        // value -> suspend argument 1
     emitter.instruction("mov rdi, r13");                                        // key -> suspend argument 0
@@ -781,7 +767,7 @@ fn emit_gen_delegate_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_gen_delegate_loop");                          // re-check the inner state and finish delegating
 
     emitter.label("__rt_gen_delegate_done");
-    emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", GEN_RETURN_VALUE_OFFSET)); // rax = inner generator's return value cell
+    GeneratorOwner::Return.emit_borrow(emitter, "r12", "rax");
     emitter.instruction("call __rt_incref");                                    // hand the caller an owned reference to the delegated return value
     emitter.instruction("pop r13");                                             // restore callee-saved r13
     emitter.instruction("pop r12");                                             // restore callee-saved r12

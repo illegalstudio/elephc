@@ -103,7 +103,7 @@ pub(crate) use json_pretty::emit_json_pretty_helpers;
 pub(crate) use json_throw_error::emit_json_throw_error;
 pub(crate) use match_unhandled::emit_match_unhandled;
 pub(crate) use stack_guard::{
-    emit_stack_limit_init, emit_stack_overflow, STACK_GUARD_RESERVE_BYTES,
+    emit_stack_limit_init, emit_stack_overflow,
     STACK_LIMIT_SYMBOL,
 };
 pub(crate) use microtime::emit_microtime;

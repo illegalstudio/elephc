@@ -13,6 +13,9 @@ use super::externs::*;
 use super::tags::{bitwise_op_tag, compare_op_tag};
 use super::ElephcRuntimeOps;
 use elephc_builtin_contract::{RuntimeBuiltinId, RuntimeBuiltinStatus};
+use elephc_builtin_contract::callable_abi::{
+    CallableParameterViewV1, CallableSignatureViewV1, NO_VARIADIC_PARAMETER,
+};
 use elephc_builtin_contract::output_abi::OutputAction;
 use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;

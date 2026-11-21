@@ -288,6 +288,7 @@ pub mod mixed_symbol;
 
 pub mod validated_commit;
 
+pub mod capture_publish;
 pub mod eval_writeback;
 
 pub mod staged_pin;

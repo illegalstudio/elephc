@@ -173,3 +173,42 @@ pub fn emit_str_dup_owned(emitter: &mut (impl AssemblyEmitter + TargetAbi)) {
     emitter.instruction("add sp, sp, #48");                                     // release the copy frame
     emitter.instruction("ret");                                                 // transfer the owned copy to the caller
 }
+
+/// Slides a checked byte window toward the allocation base, preserving the base and length.
+/// The forward copy is overlap-safe because the source starts at or after the destination.
+/// AArch64 uses x1/x9/x10 for base/start/length, and x86_64 uses rax/r8/r10.
+pub fn emit_compact_owned_window(emitter: &mut impl crate::Emitter, move_next: &str, done: &str) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            // -- slide the kept bytes to the front of the owned buffer --
+            emitter.instruction(&format!("cbz x9, {done}"));                    // a zero start position already has the bytes in place
+            emitter.instruction(&format!("cbz x10, {done}"));                   // an empty window has nothing to move
+            emitter.instruction("add x12, x1, x9");                             // x12 = read cursor at the first kept byte
+            emitter.instruction("mov x13, x1");                                 // x13 = write cursor at the front of the buffer
+            emitter.instruction("mov x14, x10");                                // x14 = number of bytes still to move
+            emitter.label(move_next);
+            emitter.instruction("ldrb w15, [x12], #1");                         // load the next kept byte and advance the read cursor
+            emitter.instruction("strb w15, [x13], #1");                         // store it at the front and advance the write cursor
+            emitter.instruction("subs x14, x14, #1");                           // one fewer byte left to move
+            emitter.instruction(&format!("b.ne {move_next}"));                  // keep moving until the whole window has slid forward
+        }
+        Arch::X86_64 => {
+            // -- slide the kept bytes to the front of the owned buffer --
+            emitter.instruction("test r8, r8");                                 // is the window already at the front of the buffer?
+            emitter.instruction(&format!("jz {done}"));                         // a zero start position already has the bytes in place
+            emitter.instruction("test r10, r10");                               // does the window keep any bytes at all?
+            emitter.instruction(&format!("jz {done}"));                         // an empty window has nothing to move
+            emitter.instruction("mov rsi, rax");                                // seed the read cursor from the owned buffer base
+            emitter.instruction("add rsi, r8");                                 // advance the read cursor to the first kept byte
+            emitter.instruction("mov rdi, rax");                                // seed the write cursor at the front of the owned buffer
+            emitter.instruction("mov rcx, r10");                                // seed the move counter from the kept byte count
+            emitter.label(move_next);
+            emitter.instruction("mov r11b, BYTE PTR [rsi]");                    // load the next kept byte from the read cursor
+            emitter.instruction("mov BYTE PTR [rdi], r11b");                    // store it at the write cursor near the front of the buffer
+            emitter.instruction("add rsi, 1");                                  // advance the read cursor past the copied byte
+            emitter.instruction("add rdi, 1");                                  // advance the write cursor past the copied byte
+            emitter.instruction("sub rcx, 1");                                  // one fewer byte left to move
+            emitter.instruction(&format!("jnz {move_next}"));                   // keep moving until the whole window has slid forward
+        }
+    }
+}

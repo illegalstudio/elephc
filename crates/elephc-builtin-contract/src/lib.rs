@@ -50,6 +50,7 @@ mod spec;
 mod type_spec;
 pub mod mbstring_abi;
 pub mod output_abi;
+pub mod callable_abi;
 pub mod pcre_errors;
 pub mod string_literal;
 pub mod reflection_format;

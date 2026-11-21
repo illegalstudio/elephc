@@ -9,6 +9,12 @@
 //! - Reference captures normalize their storage address to the owning managed cell.
 //! - Capture proofs save logical indexes and revalidate typed ownership on each pass.
 
+use crate::callables::layout::{
+    BINDING_REF_OFFSET, BINDING_SHIFT, CAPTURE_COUNT_OFFSET, CAPTURE_TABLE_OFFSET,
+    BINDING_TAG_OFFSET, ENVIRONMENT_OFFSET, HEADER_BYTES,
+};
+use crate::callables::storage::CAPTURE_SHIFT;
+
 use super::gc_candidates::{op, proofs, restore, save};
 use crate::{abi, Emitter, Arch};
 
@@ -26,12 +32,16 @@ pub fn emit_gc_callable_children(e: &mut impl Emitter) {
     save(e, 48);
     save(e, 40);
     restore(e, 0);
-    op(e, "ldr x9, [x0, #40]", "mov r10, QWORD PTR [rax + 40]", "read the immutable environment metadata, not captured PHP values");
+    op(e, &format!("ldr x9, [x0, #{ENVIRONMENT_OFFSET}]"), &format!("mov r10, QWORD PTR [rax + {ENVIRONMENT_OFFSET}]"), "read the immutable environment metadata, not captured PHP values");
     op(e, "cbz x9, __rt_gc_callable_done", "test r10, r10", "descriptors without an environment have no capture slots");
     if e.arch() == Arch::X86_64 { op(e, "", "jz __rt_gc_callable_done", "finish without dereferencing missing environment metadata"); }
-    op(e, "ldr x0, [x9]", "mov rax, QWORD PTR [r10]", "count every capture slot, including scalar and string slots");
+    let (count, environment) = match e.arch() {
+        Arch::AArch64 => ("x0", "x9"),
+        Arch::X86_64 => ("rax", "r10"),
+    };
+    e.emit_load_from_address(count, environment, CAPTURE_COUNT_OFFSET);
     save(e, 24);
-    op(e, "ldr x9, [x9, #16]", "mov r10, QWORD PTR [r10 + 16]", "read the immutable typed binding table");
+    op(e, &format!("ldr x9, [x9, #{CAPTURE_TABLE_OFFSET}]"), &format!("mov r10, QWORD PTR [r10 + {CAPTURE_TABLE_OFFSET}]"), "read the immutable typed binding table");
     op(e, "str x9, [sp, #32]", "mov QWORD PTR [rsp + 32], r10", "preserve the binding table across recursive child marking");
     op(e, "ldr x9, [sp, #16]", "mov r10, QWORD PTR [rsp + 16]", "pure scan accounting needs the slot count without tracing values");
     op(e, "cmp x9, #3", "cmp r10, 3", "distinguish work estimation from actual graph edge processing");
@@ -45,18 +55,18 @@ pub fn emit_gc_callable_children(e: &mut impl Emitter) {
     op(e, "ldr x10, [sp, #32]", "mov r11, QWORD PTR [rsp + 32]", "recover the immutable typed binding table");
     op(e, "cbz x10, __rt_gc_callable_done", "test r11, r11", "missing typed bindings have no known owned capture edges");
     if e.arch() == Arch::X86_64 { op(e, "", "jz __rt_gc_callable_done", "avoid interpreting untyped foreign capture storage"); }
-    op(e, "add x10, x10, x0, lsl #5", "mov r10, rax", "locate this capture's four-word binding metadata");
+    op(e, &format!("add x10, x10, x0, lsl #{BINDING_SHIFT}"), "mov r10, rax", "locate this capture's four-word binding metadata");
     if e.arch() == Arch::X86_64 {
-        op(e, "", "shl r10, 5", "scale the binding index by its exact record width");
+        op(e, "", &format!("shl r10, {BINDING_SHIFT}"), "scale the binding index by its exact record width");
         op(e, "", "add r11, r10", "address the selected capture binding");
     }
-    op(e, "ldr x11, [x10, #24]", "mov rcx, QWORD PTR [r11 + 24]", "identify captures that own a reference cell rather than its current payload");
-    op(e, "ldr x10, [x10, #16]", "mov r11, QWORD PTR [r11 + 16]", "read the by-value capture representation");
+    op(e, &format!("ldr x11, [x10, #{BINDING_REF_OFFSET}]"), &format!("mov rcx, QWORD PTR [r11 + {BINDING_REF_OFFSET}]"), "identify captures that own a reference cell rather than its current payload");
+    op(e, &format!("ldr x10, [x10, #{BINDING_TAG_OFFSET}]"), &format!("mov r11, QWORD PTR [r11 + {BINDING_TAG_OFFSET}]"), "read the by-value capture representation");
     op(e, "mov x9, x0", "mov r10, rax", "preserve the capture index while recovering its descriptor");
     restore(e, 0);
-    if e.arch() == Arch::X86_64 { op(e, "", "shl r10, 4", "scale to the two-word runtime capture slot"); }
-    op(e, "add x0, x0, x9, lsl #4", "lea rax, [rax + r10]", "locate the runtime capture relative to the fixed header");
-    op(e, "ldr x0, [x0, #64]", "mov rax, QWORD PTR [rax + 64]", "borrow the capture payload without acquiring an owner");
+    if e.arch() == Arch::X86_64 { op(e, "", &format!("shl r10, {CAPTURE_SHIFT}"), "scale to the two-word runtime capture slot"); }
+    op(e, &format!("add x0, x0, x9, lsl #{CAPTURE_SHIFT}"), "lea rax, [rax + r10]", "locate the runtime capture relative to the fixed header");
+    op(e, &format!("ldr x0, [x0, #{HEADER_BYTES}]"), &format!("mov rax, QWORD PTR [rax + {HEADER_BYTES}]"), "borrow the capture payload without acquiring an owner");
     op(e, "cbnz x11, __rt_gc_callable_reference", "test rcx, rcx", "reference bindings own a normalized cell, independent of its changing contents");
     if e.arch() == Arch::X86_64 { op(e, "", "jnz __rt_gc_callable_reference", "normalize reference storage before counting its ownership"); }
     for tag in [4, 5, 6, 7, 10, 12] {

@@ -64,6 +64,127 @@ pub const GEN_AUTO_KEY_OFFSET: i32 = 208;
 /// Byte offset of `gen_delegated_iter`: inner iterator for `yield from`.
 pub const GEN_DELEGATED_ITER_OFFSET: i32 = 216;
 
+/// Borrowed force-close marker in the zeroed legacy argument area.
+pub const FORCE_CLOSE_OFFSET: i32 = FIBER_FLOAT_ARGS_OFFSET + (FIBER_FLOAT_ARGS_MAX - 1) * 8;
+
+/// Loads the coroutine transfer value without changing its owner.
+pub fn emit_borrow_transfer(emitter: &mut impl crate::Emitter, fiber: &str, destination: &str) {
+    emitter.emit_load_from_address(destination, fiber, FIBER_TRANSFER_VALUE_OFFSET as usize);
+}
+
+/// Publishes a prepared value into the transfer slot. The caller supplies its owner.
+pub fn emit_publish_transfer(emitter: &mut impl crate::Emitter, fiber: &str, value: &str) {
+    emitter.emit_store_to_address(value, fiber, FIBER_TRANSFER_VALUE_OFFSET as usize);
+}
+
+/// Clears the unused high word of the transfer slot after a terminal publication.
+pub fn emit_clear_transfer_high(emitter: &mut impl crate::Emitter, fiber: &str) {
+    emitter.emit_store_zero_to_address(fiber, FIBER_TRANSFER_VALUE_OFFSET as usize + 8);
+}
+
+/// Clears both words after the transfer owner leaves the coroutine.
+pub fn emit_clear_transfer(emitter: &mut impl crate::Emitter, fiber: &str) {
+    emitter.emit_store_zero_to_address(fiber, FIBER_TRANSFER_VALUE_OFFSET as usize);
+    emit_clear_transfer_high(emitter, fiber);
+}
+
+/// Moves the transfer owner out of the coroutine and leaves the slot empty.
+pub fn emit_take_transfer(emitter: &mut impl crate::Emitter, fiber: &str, destination: &str) {
+    emit_borrow_transfer(emitter, fiber, destination);
+    emit_clear_transfer(emitter, fiber);
+}
+
+/// Parks an independently owned exception in the coroutine.
+pub fn emit_publish_pending_throw(emitter: &mut impl crate::Emitter, fiber: &str, value: &str) {
+    emitter.emit_store_to_address(value, fiber, FIBER_PENDING_THROW_OFFSET as usize);
+}
+
+/// Moves a parked exception to the caller, branching away when no owner was parked.
+pub fn emit_take_pending_throw(
+    emitter: &mut impl crate::Emitter, fiber: &str, destination: &str, absent: &str,
+) {
+    emitter.emit_load_from_address(destination, fiber, FIBER_PENDING_THROW_OFFSET as usize);
+    match emitter.arch() {
+        crate::Arch::AArch64 => emitter.instruction(&format!("cbz {destination}, {absent}")), // a null slot has no exception owner
+        crate::Arch::X86_64 => {
+            emitter.instruction(&format!("test {destination}, {destination}")); // inspect the loaded exception pointer
+            emitter.instruction(&format!("je {absent}"));                       // a null slot has no exception owner
+        }
+    }
+    emitter.emit_store_zero_to_address(fiber, FIBER_PENDING_THROW_OFFSET as usize);
+}
+
+/// Publishes the borrowed marker while the force-close caller holds its owner.
+pub fn emit_publish_force_close(emitter: &mut impl crate::Emitter, fiber: &str, marker: &str) {
+    emitter.emit_store_to_address(marker, fiber, FORCE_CLOSE_OFFSET as usize);
+}
+
+/// Unpublishes the marker before the force-close caller releases its owner.
+pub fn emit_clear_force_close(emitter: &mut impl crate::Emitter, fiber: &str) {
+    emitter.emit_store_zero_to_address(fiber, FORCE_CLOSE_OFFSET as usize);
+}
+
+/// Borrows the marker while preparing the coroutine's independent pending-throw owner.
+pub fn emit_borrow_force_close(emitter: &mut impl crate::Emitter, fiber: &str, destination: &str) {
+    emitter.emit_load_from_address(destination, fiber, FORCE_CLOSE_OFFSET as usize);
+}
+
+/// Branches when the borrowed force-close marker is absent.
+pub fn emit_branch_without_force_close(emitter: &mut impl crate::Emitter, fiber: &str, done: &str) {
+    match emitter.arch() {
+        crate::Arch::AArch64 => {
+            emit_borrow_force_close(emitter, fiber, "x9");
+            emitter.instruction(&format!("cbz x9, {done}"));                    // continue when no cancellation marker is installed
+        }
+        crate::Arch::X86_64 => {
+            emitter.instruction(&format!("cmp QWORD PTR [{fiber} + {FORCE_CLOSE_OFFSET}], 0")); // inspect the borrowed marker
+            emitter.instruction(&format!("je {done}"));                         // continue when no cancellation marker is installed
+        }
+    }
+}
+
+/// An owned boxed value stored in a Generator coroutine.
+#[derive(Clone, Copy)]
+pub enum GeneratorOwner {
+    /// Last yielded key.
+    Key,
+    /// Last yielded value.
+    Value,
+    /// Value returned by the body.
+    Return,
+}
+
+impl GeneratorOwner {
+    /// Resolves the storage slot inside the native Generator payload.
+    fn offset(self) -> usize {
+        match self {
+            Self::Key => GEN_LAST_KEY_OFFSET as usize,
+            Self::Value => GEN_LAST_VALUE_OFFSET as usize,
+            Self::Return => GEN_RETURN_VALUE_OFFSET as usize,
+        }
+    }
+
+    /// Reads the boxed owner without changing the Generator.
+    pub fn emit_borrow(self, emitter: &mut impl crate::Emitter, generator: &str, destination: &str) {
+        emitter.emit_load_from_address(destination, generator, self.offset());
+    }
+
+    /// Publishes an owner into a fresh Generator slot.
+    pub fn emit_publish(self, emitter: &mut impl crate::Emitter, generator: &str, value: &str) {
+        emitter.emit_store_to_address(value, generator, self.offset());
+    }
+
+    /// Publishes the new owner before retiring the old one, which can run PHP.
+    pub fn emit_replace(
+        self, emitter: &mut impl crate::Emitter, generator: &str, value: &str, previous: &str,
+    ) {
+        self.emit_borrow(emitter, generator, previous);
+        self.emit_publish(emitter, generator, value);
+        emitter.emit_reg_move(emitter.int_result_reg(), previous);
+        emitter.emit_call_label("__rt_decref_mixed");
+    }
+}
+
 /// Allocates and initializes the coroutine payload and the first frame of its native stack.
 /// The compiler supplies the stack capacity, frame offsets and failure handling.
 pub fn emit_payload_and_stack(

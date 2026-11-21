@@ -21,6 +21,7 @@ pub(crate) fn emit_phpext_exports(
     elephc_memoir::values::throwable_storage::emit_c_projection(emitter);
     elephc_memoir::values::object_storage::emit_c_class_id(emitter);
     REPLACEMENT_OWNER_STORAGE.emit_c_pin_count(emitter, emit_replacement_owners_address);
+    elephc_memoir::stacks::emit_phpext_stack_floor_setter(emitter);
     reserve_boundary_data(data);
     data.add_comm("_elephc_phpext_pack_depth".into(), 8);
     data.add_comm("_elephc_phpext_root_scan".into(), 8);

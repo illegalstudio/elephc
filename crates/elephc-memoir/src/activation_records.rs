@@ -33,17 +33,104 @@ pub const OWNER_VISITOR: usize = PREFIX_BYTES + 16;
 /// Size of an ordinary frame or another extended owner activation.
 pub const EXTENDED_BYTES: usize = OWNER_VISITOR + 8;
 
+/// A saved runtime word in the common native exception record.
+#[derive(Clone, Copy)]
+pub enum RewindField {
+    /// Previous exception handler chain head.
+    Handler,
+    /// Surviving native activation.
+    CallFrame,
+    /// Diagnostic suppression depth at entry.
+    DiagnosticDepth,
+}
+
+impl RewindField {
+    /// Resolves the saved stack slot and the corresponding runtime global.
+    fn location(self) -> (&'static str, usize) {
+        match self {
+            Self::Handler => ("_exc_handler_top", 0),
+            Self::CallFrame => ("_exc_call_frame_top", 8),
+            Self::DiagnosticDepth => ("_rt_diag_suppression", crate::layout::TRY_HANDLER_DIAG_DEPTH_OFFSET),
+        }
+    }
+}
+
+/// The complete rewind prefix in the order it is saved and restored.
+pub const REWIND_FIELDS: [RewindField; 3] = [
+    RewindField::Handler, RewindField::CallFrame, RewindField::DiagnosticDepth,
+];
+
+/// Restores the selected fields in caller-supplied order from the given frame representation.
+pub fn emit_restore_try_fields<E: TargetAbi>(
+    emitter: &mut E, scratch: &str, fields: &[RewindField],
+    mut load: impl FnMut(&mut E, &str, usize),
+) {
+    for field in fields {
+        let (symbol, offset) = field.location();
+        load(emitter, scratch, offset);
+        emitter.emit_store_reg_to_symbol(scratch, symbol, 0);
+    }
+}
+
+/// Restores the full rewind record at the bottom of a protected callback frame.
+pub fn emit_restore_runtime_try_prefix(emitter: &mut impl crate::Emitter, scratch: &str) {
+    emit_restore_try_fields(emitter, scratch, &REWIND_FIELDS, |emitter, register, offset| {
+        match emitter.arch() {
+            crate::Arch::AArch64 => emitter.instruction(&format!("ldr {register}, [sp, #{offset}]")), // restore the saved AArch64 rewind word
+            crate::Arch::X86_64 => emitter.instruction(&format!("mov {register}, QWORD PTR [rsp + {offset}]")), // restore the saved SysV rewind word
+        }
+    });
+}
+
+/// Saves the full rewind record at the bottom of a protected callback frame.
+pub fn emit_save_runtime_try_prefix(emitter: &mut impl crate::Emitter, scratch: &str) {
+    emit_save_try_prefix(emitter, scratch, |emitter, register, offset| {
+        match emitter.arch() {
+            crate::Arch::AArch64 => emitter.instruction(&format!("str {register}, [sp, #{offset}]")), // save the AArch64 rewind word
+            crate::Arch::X86_64 => emitter.instruction(&format!("mov QWORD PTR [rsp + {offset}], {register}")), // save the SysV rewind word
+        }
+    });
+}
+
+/// Installs the sentinel prefix used when an exception escapes a fresh coroutine.
+pub fn emit_save_fiber_entry_prefix(emitter: &mut impl crate::Emitter, scratch: &str) {
+    for field in REWIND_FIELDS {
+        let (symbol, offset) = field.location();
+        let base = if emitter.arch() == crate::Arch::AArch64 { "sp" } else { "rsp" };
+        if matches!(field, RewindField::CallFrame) {
+            emitter.emit_store_zero_to_address(base, offset);
+        } else {
+            emitter.emit_load_symbol_to_reg(scratch, symbol, 0);
+            if emitter.arch() == crate::Arch::AArch64 {
+                emitter.instruction(&format!("str {scratch}, [sp, #{offset}]")); // save the handler head or diagnostic depth
+            } else {
+                emitter.emit_store_to_address(scratch, base, offset);
+            }
+        }
+    }
+}
+
+/// Restores the coroutine-entry handler and, on escape, its diagnostic depth.
+pub fn emit_restore_fiber_entry_prefix(emitter: &mut impl crate::Emitter, scratch: &str, escaped: bool) {
+    let fields = [RewindField::Handler, RewindField::DiagnosticDepth];
+    let count = if escaped { 2 } else { 1 };
+    emit_restore_try_fields(emitter, scratch, &fields[..count], |emitter, register, offset| {
+        if emitter.arch() == crate::Arch::AArch64 {
+            emitter.instruction(&format!("ldr {register}, [sp, #{offset}]"));   // reload the saved coroutine rewind word
+        } else {
+            emitter.emit_load_from_address(register, "rsp", offset);
+        }
+    });
+}
+
 /// Saves the three values that a native exception rewind record must restore.
 pub fn emit_save_try_prefix<E: TargetAbi>(
     emitter: &mut E,
     scratch: &str,
     mut store: impl FnMut(&mut E, &str, usize),
 ) {
-    for (symbol, offset) in [
-        ("_exc_handler_top", 0),
-        ("_exc_call_frame_top", 8),
-        ("_rt_diag_suppression", crate::layout::TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
+    for field in REWIND_FIELDS {
+        let (symbol, offset) = field.location();
         emitter.emit_load_symbol_to_reg(scratch, symbol, 0);
         store(emitter, scratch, offset);
     }

@@ -82,18 +82,7 @@ pub fn emit_file_get_contents_range(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, #0");                                         // could the bounded count still be negative?
     emitter.instruction("csel x10, x10, xzr, gt");                              // never keep a negative number of bytes
 
-    // -- slide the kept bytes to the front of the owned buffer --
-    emitter.instruction("cbz x9, __rt_fgc_range_trim");                         // a zero start position already has the bytes in place
-    emitter.instruction("cbz x10, __rt_fgc_range_trim");                        // an empty window has nothing to move
-    emitter.instruction("add x12, x1, x9");                                     // x12 = read cursor at the first kept byte
-    emitter.instruction("mov x13, x1");                                         // x13 = write cursor at the front of the buffer
-    emitter.instruction("mov x14, x10");                                        // x14 = number of bytes still to move
-    emitter.label("__rt_fgc_range_move");
-    emitter.instruction("ldrb w15, [x12], #1");                                 // load the next kept byte and advance the read cursor
-    emitter.instruction("strb w15, [x13], #1");                                 // store it at the front and advance the write cursor
-    emitter.instruction("subs x14, x14, #1");                                   // one fewer byte left to move
-    emitter.instruction("b.ne __rt_fgc_range_move");                            // keep moving until the whole window has slid forward
-
+    elephc_memoir::strings::strcopy::emit_compact_owned_window(emitter, "__rt_fgc_range_move", "__rt_fgc_range_trim");
     emitter.label("__rt_fgc_range_trim");
     emitter.instruction("mov x2, x10");                                         // publish the kept byte count as the string length
     emitter.instruction("b __rt_fgc_range_return");                             // the trimmed buffer is the result
@@ -162,23 +151,7 @@ fn emit_file_get_contents_range_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 0");                                          // could the bounded count still be negative?
     emitter.instruction("cmovl r10, r11");                                      // never keep a negative number of bytes
 
-    // -- slide the kept bytes to the front of the owned buffer --
-    emitter.instruction("test r8, r8");                                         // is the window already at the front of the buffer?
-    emitter.instruction("jz __rt_fgc_range_trim_x86");                          // a zero start position already has the bytes in place
-    emitter.instruction("test r10, r10");                                       // does the window keep any bytes at all?
-    emitter.instruction("jz __rt_fgc_range_trim_x86");                          // an empty window has nothing to move
-    emitter.instruction("mov rsi, rax");                                        // seed the read cursor from the owned buffer base
-    emitter.instruction("add rsi, r8");                                         // advance the read cursor to the first kept byte
-    emitter.instruction("mov rdi, rax");                                        // seed the write cursor at the front of the owned buffer
-    emitter.instruction("mov rcx, r10");                                        // seed the move counter from the kept byte count
-    emitter.label("__rt_fgc_range_move_x86");
-    emitter.instruction("mov r11b, BYTE PTR [rsi]");                            // load the next kept byte from the read cursor
-    emitter.instruction("mov BYTE PTR [rdi], r11b");                            // store it at the write cursor near the front of the buffer
-    emitter.instruction("add rsi, 1");                                          // advance the read cursor past the copied byte
-    emitter.instruction("add rdi, 1");                                          // advance the write cursor past the copied byte
-    emitter.instruction("sub rcx, 1");                                          // one fewer byte left to move
-    emitter.instruction("jnz __rt_fgc_range_move_x86");                         // keep moving until the whole window has slid forward
-
+    elephc_memoir::strings::strcopy::emit_compact_owned_window(emitter, "__rt_fgc_range_move_x86", "__rt_fgc_range_trim_x86");
     emitter.label("__rt_fgc_range_trim_x86");
     emitter.instruction("mov rdx, r10");                                        // publish the kept byte count as the string length
     emitter.instruction("jmp __rt_fgc_range_return_x86");                       // the trimmed buffer is the result

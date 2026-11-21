@@ -51,20 +51,19 @@ pub(crate) const CALLABLE_DESC_ORIGIN_STRING: u64 = 1 << 8;
 /// Kind-word flag: this implicit callable stands for a PHP array (`[$obj, 'm']`, `['Cls', 'm']`).
 pub(crate) const CALLABLE_DESC_ORIGIN_ARRAY: u64 = 1 << 9;
 
-pub(crate) const CALLABLE_DESC_ENTRY_OFFSET: usize = 8;
-pub(crate) const CALLABLE_DESC_NAME_OFFSET: usize = 16;
-pub(crate) const CALLABLE_DESC_NAME_LENGTH_OFFSET: usize = 24;
-#[allow(dead_code)]
-pub(crate) const CALLABLE_DESC_SIGNATURE_OFFSET: usize = 32;
-#[allow(dead_code)]
-pub(crate) const CALLABLE_DESC_ENVIRONMENT_OFFSET: usize = 40;
-#[allow(dead_code)]
-pub(crate) const CALLABLE_DESC_INVOCATION_OFFSET: usize = 48;
-#[allow(dead_code)]
-pub(crate) const CALLABLE_DESC_INVOKER_OFFSET: usize = 56;
-pub(crate) const CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET: usize = CALLABLE_DESC_STATIC_SIZE;
+pub(crate) use elephc_memoir::callables::layout::{
+    ENTRY_OFFSET as CALLABLE_DESC_ENTRY_OFFSET,
+    ENVIRONMENT_OFFSET as CALLABLE_DESC_ENVIRONMENT_OFFSET,
+    INVOKER_OFFSET as CALLABLE_DESC_INVOKER_OFFSET,
+    NAME_LENGTH_OFFSET as CALLABLE_DESC_NAME_LENGTH_OFFSET,
+    NAME_OFFSET as CALLABLE_DESC_NAME_OFFSET,
+};
+use elephc_memoir::callables::layout::{
+    DescriptorBinding, DescriptorEnvironment, DescriptorHeader, DescriptorSignature,
+    BINDING_WORDS, NO_VARIADIC_PARAMETER, PARAM_NAME_WORDS, PARAM_TYPE_WORDS,
+};
 
-const CALLABLE_DESC_VARIADIC_NONE: u64 = u64::MAX;
+pub(crate) const CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET: usize = CALLABLE_DESC_STATIC_SIZE;
 
 /// Inline scalar pairs own no heap child, unlike the boxed Mixed binding tag 7.
 const CALLABLE_BINDING_TAG_TAGGED_SCALAR: u64 = 16;
@@ -268,16 +267,17 @@ fn static_descriptor_from_spec(
         .map(|label| DataWord::Symbol(label.to_string()))
         .unwrap_or(DataWord::U64(0));
 
-    data.add_words(vec![
-        DataWord::U64(spec.kind),
-        entry_word,
-        name_word,
-        DataWord::U64(name_len),
-        signature_word,
-        environment_word,
-        invocation_word,
-        invoker_word,
-    ])
+    let header = DescriptorHeader {
+        kind: DataWord::U64(spec.kind),
+        entry: entry_word,
+        name: name_word,
+        name_len: DataWord::U64(name_len),
+        signature: signature_word,
+        environment: environment_word,
+        invocation: invocation_word,
+        invoker: invoker_word,
+    };
+    data.add_words(header.into_words().into())
 }
 
 /// Emits assembly for loading the ABI entry slot from a descriptor.
@@ -443,7 +443,7 @@ fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
     let required_count = crate::types::call_args::required_param_count(sig);
     let variadic_index = source_variadic_index
         .map(|_| regular_param_count as u64)
-        .unwrap_or(CALLABLE_DESC_VARIADIC_NONE);
+        .unwrap_or(NO_VARIADIC_PARAMETER);
     let flags = u64::from(sig.declared_return);
     let param_names = optional_symbol(param_name_table(data, &public_params));
     let param_types = optional_symbol(param_type_table(data, &public_params));
@@ -451,20 +451,21 @@ fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
     let ref_flags = optional_symbol(flag_table(data, &public_ref_flags));
     let declared_flags = optional_symbol(flag_table(data, &public_declared_flags));
 
-    data.add_words(vec![
-        DataWord::U64(visible_param_count as u64),
-        DataWord::U64(required_count as u64),
-        DataWord::U64(regular_param_count as u64),
-        DataWord::U64(variadic_index),
-        DataWord::U64(type_tag(&sig.return_type)),
-        DataWord::U64(sig.return_type.codegen_repr().register_count() as u64),
-        DataWord::U64(flags),
+    let signature = DescriptorSignature {
+        param_count: DataWord::U64(visible_param_count as u64),
+        required_count: DataWord::U64(required_count as u64),
+        regular_count: DataWord::U64(regular_param_count as u64),
+        variadic_index: DataWord::U64(variadic_index),
+        return_tag: DataWord::U64(type_tag(&sig.return_type)),
+        return_words: DataWord::U64(sig.return_type.codegen_repr().register_count() as u64),
+        return_flags: DataWord::U64(flags),
         param_names,
         param_types,
         defaults,
         ref_flags,
         declared_flags,
-    ])
+    };
+    data.add_words(signature.into_words().into())
 }
 
 /// Builds the descriptor environment record for captures and hidden wrapper params.
@@ -475,12 +476,13 @@ fn environment_record(
 ) -> String {
     let capture_table = optional_symbol(binding_table(data, captures));
     let hidden_table = optional_symbol(binding_table(data, hidden_params));
-    data.add_words(vec![
-        DataWord::U64(captures.len() as u64),
-        DataWord::U64(hidden_params.len() as u64),
-        capture_table,
-        hidden_table,
-    ])
+    let environment = DescriptorEnvironment {
+        capture_count: DataWord::U64(captures.len() as u64),
+        hidden_count: DataWord::U64(hidden_params.len() as u64),
+        captures: capture_table,
+        hidden: hidden_table,
+    };
+    data.add_words(environment.into_words().into())
 }
 
 /// Builds the descriptor invocation record for target-shape metadata.
@@ -507,7 +509,7 @@ fn param_name_table(data: &mut DataSection, params: &[(String, PhpType)]) -> Opt
     if params.is_empty() {
         return None;
     }
-    let mut words = Vec::with_capacity(params.len() * 2);
+    let mut words = Vec::with_capacity(params.len() * PARAM_NAME_WORDS);
     for (name, _) in params {
         let (name_word, name_len) = optional_string_word(data, Some(name));
         words.push(name_word);
@@ -521,7 +523,7 @@ fn param_type_table(data: &mut DataSection, params: &[(String, PhpType)]) -> Opt
     if params.is_empty() {
         return None;
     }
-    let mut words = Vec::with_capacity(params.len() * 3);
+    let mut words = Vec::with_capacity(params.len() * PARAM_TYPE_WORDS);
     for (_, ty) in params {
         let repr = ty.codegen_repr();
         words.push(DataWord::U64(type_tag(&repr)));
@@ -567,16 +569,19 @@ fn binding_table(
     if bindings.is_empty() {
         return None;
     }
-    let mut words = Vec::with_capacity(bindings.len() * 4);
+    let mut words = Vec::with_capacity(bindings.len() * BINDING_WORDS);
     for (name, ty, by_ref) in bindings {
         let (name_word, name_len) = optional_string_word(data, Some(name));
-        words.push(name_word);
-        words.push(DataWord::U64(name_len));
         let tag = if ty.codegen_repr() == PhpType::TaggedScalar {
             CALLABLE_BINDING_TAG_TAGGED_SCALAR
         } else { type_tag(&ty.codegen_repr()) };
-        words.push(DataWord::U64(tag));
-        words.push(DataWord::U64(u64::from(*by_ref)));
+        let binding = DescriptorBinding {
+            name: name_word,
+            name_len: DataWord::U64(name_len),
+            tag: DataWord::U64(tag),
+            by_ref: DataWord::U64(u64::from(*by_ref)),
+        };
+        words.extend(binding.into_words());
     }
     Some(data.add_words(words))
 }
