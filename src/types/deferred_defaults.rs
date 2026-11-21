@@ -164,9 +164,8 @@ pub(crate) fn literal_truthiness(value: &Expr) -> Option<bool> {
         ExprKind::IntLiteral(value) => Some(*value != 0),
         ExprKind::FloatLiteral(value) => Some(*value != 0.0),
         ExprKind::StringLiteral(value) => Some(!value.is_empty() && value != "0"),
-        ExprKind::ArrayLiteral(items) => Some(!items.is_empty()),
-        ExprKind::ArrayLiteralAssoc(items) => Some(!items.is_empty()),
-        ExprKind::ArrayLiteralMixed(items) => Some(!items.is_empty()),
+        ExprKind::ArrayLiteral(items) if items.iter().all(|item| literal_truthiness(item).is_some()) =>
+            Some(!items.is_empty()),
         _ => None,
     }
 }

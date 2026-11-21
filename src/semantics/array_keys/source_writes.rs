@@ -365,6 +365,54 @@ fn validate_expression_flow(
     }
 }
 
+/// Resolves literal truthiness after source-order effects without pruning evaluated entries.
+fn source_literal_truthiness(expr: &Expr) -> Option<bool> {
+    match &expr.kind {
+        ExprKind::ArrayLiteral(values) => source_indexed_array_nonempty(values),
+        ExprKind::ArrayLiteralAssoc(entries) => Some(!entries.is_empty()),
+        ExprKind::ArrayLiteralMixed(entries) => source_mixed_array_nonempty(entries),
+        _ => crate::types::deferred_defaults::literal_truthiness(expr),
+    }
+}
+
+/// Proves whether an indexed literal contributes an element after expanding its spreads.
+fn source_indexed_array_nonempty(values: &[Expr]) -> Option<bool> {
+    let mut unknown_spread = false;
+    for value in values {
+        let ExprKind::Spread(source) = &value.kind else { return Some(true); };
+        match source_array_literal_nonempty(source) {
+            Some(true) => return Some(true),
+            Some(false) => {}
+            None => unknown_spread = true,
+        }
+    }
+    (!unknown_spread).then_some(false)
+}
+
+/// Proves whether an ordered mixed literal contributes an element after expanding its spreads.
+fn source_mixed_array_nonempty(entries: &[ArrayEntry]) -> Option<bool> {
+    let mut unknown_spread = false;
+    for entry in entries {
+        let ArrayEntry::Spread(source) = entry else { return Some(true); };
+        match source_array_literal_nonempty(source) {
+            Some(true) => return Some(true),
+            Some(false) => {}
+            None => unknown_spread = true,
+        }
+    }
+    (!unknown_spread).then_some(false)
+}
+
+/// Restricts spread cardinality proofs to literal arrays.
+fn source_array_literal_nonempty(expr: &Expr) -> Option<bool> {
+    match &expr.kind {
+        ExprKind::ArrayLiteral(values) => source_indexed_array_nonempty(values),
+        ExprKind::ArrayLiteralAssoc(entries) => Some(!entries.is_empty()),
+        ExprKind::ArrayLiteralMixed(entries) => source_mixed_array_nonempty(entries),
+        _ => None,
+    }
+}
+
 /// Returns facts on the path where one condition admits its controlled body.
 fn validate_true_condition_flow(
     expr: &Expr,
@@ -398,7 +446,7 @@ fn validate_true_condition_flow(
                 profile,
                 current_class,
             )?;
-            Ok(match crate::types::deferred_defaults::literal_truthiness(left) {
+            Ok(match source_literal_truthiness(left) {
                 Some(true) | None => right_true,
                 Some(false) => left_false,
             })
@@ -427,7 +475,7 @@ fn validate_true_condition_flow(
                 profile,
                 current_class,
             )?;
-            Ok(match crate::types::deferred_defaults::literal_truthiness(left) {
+            Ok(match source_literal_truthiness(left) {
                 Some(true) => left_true,
                 Some(false) => right_true,
                 None => merge_exits(&[left_true, right_true]),
@@ -477,7 +525,7 @@ fn validate_false_condition_flow(
                 profile,
                 current_class,
             )?;
-            Ok(match crate::types::deferred_defaults::literal_truthiness(left) {
+            Ok(match source_literal_truthiness(left) {
                 Some(true) => left_true,
                 Some(false) | None => right_false,
             })
@@ -506,7 +554,7 @@ fn validate_false_condition_flow(
                 profile,
                 current_class,
             )?;
-            Ok(match crate::types::deferred_defaults::literal_truthiness(left) {
+            Ok(match source_literal_truthiness(left) {
                 Some(false) => left_false,
                 Some(true) => right_false,
                 None => merge_exits(&[left_false, right_false]),
@@ -695,7 +743,7 @@ fn validate_lazy_expression_writes(
                 validate_expression_flow(left, locals, properties, profile, current_class)?;
             let right_exit =
                 validate_expression_flow(right, &left_exit, properties, profile, current_class)?;
-            let truthiness = crate::types::deferred_defaults::literal_truthiness(left);
+            let truthiness = source_literal_truthiness(left);
             let right_runs = match op {
                 crate::parser::ast::BinOp::And => truthiness,
                 crate::parser::ast::BinOp::Or => truthiness.map(|value| !value),
@@ -729,7 +777,7 @@ fn validate_lazy_expression_writes(
                 current_class,
             )?;
             Ok(
-                match crate::types::deferred_defaults::literal_truthiness(condition) {
+                match source_literal_truthiness(condition) {
                     Some(true) => then_exit,
                     Some(false) => else_exit,
                     None => merge_exits(&[then_exit, else_exit]),
@@ -747,7 +795,7 @@ fn validate_lazy_expression_writes(
                 current_class,
             )?;
             Ok(
-                match crate::types::deferred_defaults::literal_truthiness(value) {
+                match source_literal_truthiness(value) {
                     Some(true) => value_exit,
                     Some(false) => default_exit,
                     None => merge_exits(&[value_exit, default_exit]),
@@ -1055,7 +1103,7 @@ fn apply_lazy_expression_facts(
             ) =>
         {
             apply_expression_facts(left, locals, properties, profile, current_class);
-            let truthiness = crate::types::deferred_defaults::literal_truthiness(left);
+            let truthiness = source_literal_truthiness(left);
             let right_runs = match op {
                 crate::parser::ast::BinOp::And => truthiness,
                 crate::parser::ast::BinOp::Or => truthiness.map(|value| !value),
@@ -1077,7 +1125,7 @@ fn apply_lazy_expression_facts(
             else_expr,
         } => {
             apply_expression_facts(condition, locals, properties, profile, current_class);
-            match crate::types::deferred_defaults::literal_truthiness(condition) {
+            match source_literal_truthiness(condition) {
                 Some(true) => apply_expression_facts(
                     then_expr,
                     locals,
@@ -1118,7 +1166,7 @@ fn apply_lazy_expression_facts(
         ExprKind::ShortTernary { value, default } => {
             let value_fact =
                 apply_expression_facts(value, locals, properties, profile, current_class);
-            let default_runs = crate::types::deferred_defaults::literal_truthiness(value)
+            let default_runs = source_literal_truthiness(value)
                 .map(|truthy| !truthy);
             match apply_optional_expression_facts(
                 default,

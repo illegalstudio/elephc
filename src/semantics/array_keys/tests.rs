@@ -210,6 +210,7 @@ fn strict_array_key_source_validation_keeps_non_array_target_writes() {
         "<?php $key = 0; $ignored = false && ($key = true); $values = []; $values[$key] = 1;",
         "<?php $key = 0; $ignored = true || ($key = true); $values = []; $values[$key] = 1;",
         "<?php $key = 0; $ignored = [] && ($key = true); $values = []; $values[$key] = 1;",
+        "<?php $key = 0; $ignored = [...[]] && ($key = true); $values = []; $values[$key] = 1;",
         "<?php $values = [[1]]; $ignored = match (1) { 1 => ($values = [1]), default => ($values = [[1]]) }; if (PHP_OS_FAMILY === 'Windows') { $values[0][false] = 2; }",
         "<?php $values = [[1]]; if ($values = [1]) { $values[0][false] = 2; }",
         "<?php $values = [[1]]; if (true && ($values = [1])) { $values[0][false] = 2; }",
