@@ -20,7 +20,7 @@ pub(super) fn eir_construct_call_is_safe<S>(
 where
     S: EirStaticCallSupport,
 {
-    if has_named_args(args)
+    if has_named_args(args, support.semantic_profile())
         || args
             .iter()
             .any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
@@ -82,13 +82,13 @@ where
     S: EirStaticCallSupport,
 {
     let short_name = php_symbol_key(name.trim_start_matches('\\'));
-    if crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+    if crate::types::checker::builtins::catalog::php_only_hidden_builtin_for_profile(
         &short_name,
-        support.strict_php(),
+        support.php_only(),
     ) {
         return false;
     }
-    let Some(args) = normalize_eir_runtime_builtin_args(&short_name, args) else {
+    let Some(args) = normalize_eir_runtime_builtin_args(&short_name, args, support.semantic_profile()) else {
         return false;
     };
     match short_name.as_str() {
@@ -146,16 +146,16 @@ where
 ///
 /// Static spread arrays are expanded through the shared call planner; dynamic
 /// spreads that remain after planning stay on the eval bridge fallback.
-pub(super) fn normalize_eir_runtime_builtin_args(short_name: &str, args: &[Expr]) -> Option<Vec<Expr>> {
+pub(super) fn normalize_eir_runtime_builtin_args(short_name: &str, args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Option<Vec<Expr>> {
     let has_spread = args
         .iter()
         .any(|arg| matches!(arg.kind, ExprKind::Spread(_)));
-    if !has_named_args(args) && !has_spread {
+    if !has_named_args(args, profile) && !has_spread {
         return Some(args.to_vec());
     }
     let sig = builtin_call_sig(short_name)?;
     let call_span = args.first().map(|arg| arg.span).unwrap_or_else(Span::dummy);
-    let plan = plan_call_args(&sig, args, call_span, false, false).ok()?;
+    let plan = plan_call_args(&sig, args, call_span, false, false, profile).ok()?;
     if plan.has_spread_args() {
         return None;
     }
@@ -200,6 +200,8 @@ pub(super) fn eir_array_key_exists_static_key_is_safe(key: &Expr) -> bool {
         | ExprKind::StringLiteral(_)
         | ExprKind::Null => true,
         ExprKind::FloatLiteral(_) => static_integral_float_array_key_value(key).is_some(),
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .is_some_and(|number| eir_array_key_exists_static_key_is_safe(&number)),
         ExprKind::Negate(inner) => {
             matches!(inner.kind, ExprKind::IntLiteral(_))
                 || static_integral_float_array_key_value(key).is_some()
@@ -351,7 +353,7 @@ where
                 || facts.is_int_local(name)
                 || facts.is_float_local(name)
         }
-        ExprKind::Negate(inner) | ExprKind::ErrorSuppress(inner) => {
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::ErrorSuppress(inner) => {
             eir_float_predicate_arg_is_safe(inner, support, facts, scope_reads)
         }
         ExprKind::Cast { target, expr }
@@ -396,13 +398,13 @@ where
             scope_reads.is_some_and(|reads| reads.contains(name))
                 || (facts.is_assigned(name) && !facts.is_array_local(name))
         }
-        ExprKind::Negate(inner) | ExprKind::ErrorSuppress(inner) => {
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::ErrorSuppress(inner) => {
             eir_scalar_cast_arg_is_safe(inner, support, facts, scope_reads)
         }
         ExprKind::Cast { target, expr }
             if matches!(
                 target,
-                CastType::Int | CastType::Float | CastType::String | CastType::Bool
+                CastType::Int | CastType::Float | CastType::String | CastType::StringFormat | CastType::Bool
             ) =>
         {
             expr_is_eir_function_safe(expr, support, facts, scope_reads)
@@ -419,7 +421,7 @@ where
                     facts,
                     scope_reads,
                 )
-                || fold_static_builtin_int_call(name.as_str().trim_start_matches('\\'), args, support.strict_php())
+                || fold_static_builtin_int_call(name.as_str().trim_start_matches('\\'), args, EvalSourceProfile::new(support.php_only(), support.semantic_profile()))
                     .is_some()
                 || support.function_supported(name.as_str(), args)
         }

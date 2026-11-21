@@ -121,7 +121,7 @@ final class DocblockTest extends TestCase {
 }
 "#).unwrap();
     let output = elephc_cli_command(&dir)
-        .args(["test", "DocblockTest.php", "--strict-php"])
+        .args(["test", "DocblockTest.php", "--php-only"])
         .output().unwrap();
     fs::remove_dir_all(&dir).unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -251,7 +251,7 @@ function identity($value) { return $value; }
     ] {
         fs::write(dir.join(name), source).unwrap();
     }
-    let compiled = elephc_cli_command(&dir).args(["main.php", "--strict-php"]).output().unwrap();
+    let compiled = elephc_cli_command(&dir).args(["main.php", "--php-only"]).output().unwrap();
     let mut outputs = Vec::new();
     if compiled.status.success() {
         for args in [&[][..], &["include"][..]] {

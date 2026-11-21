@@ -254,6 +254,20 @@ pub fn emit_branch_if_not_equal_wide(emitter: &mut Emitter, label: &str) {
     }
 }
 
+/// Transfers signed arithmetic overflow without the short AArch64 conditional branch range.
+pub fn emit_branch_if_overflow_wide(emitter: &mut Emitter, label: &str) {
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction("b.vc 1f");                                     // skip the wide transfer when signed arithmetic stayed in range
+            emitter.instruction(&format!("b {label}"));                         // reach the overflow handler with the wider unconditional range
+            emitter.label("1");
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("jo {label}"));                        // transfer directly when signed arithmetic overflowed
+        }
+    }
+}
+
 /// Branches to `label` when the integer result register is non-zero (coerced truthiness).
 ///
 /// AArch64: inverse `cbz` over an unconditional `b`; x86_64: `test` + `jne`.

@@ -32,6 +32,15 @@ pub(in crate::optimize) fn numeric_literal(expr: &Expr) -> Option<f64> {
 
 /// Extracts a ScalarValue from a scalar literal expression (Null, Bool, Int, Float, String).
 pub(in crate::optimize) fn scalar_value(expr: &Expr) -> Option<ScalarValue> {
+    let value = unbound_scalar_value(expr)?;
+    Some(match (expr.producer_binding, value) {
+        (Some(crate::parser::ast::ProducerBinding::IntegerToFloat), ScalarValue::Int(value)) => ScalarValue::Float(value as f64),
+        (_, value) => value,
+    })
+}
+
+/// Reads the underlying literal before a prepared declaration widens its integer value.
+fn unbound_scalar_value(expr: &Expr) -> Option<ScalarValue> {
     match &expr.kind {
         ExprKind::Null => Some(ScalarValue::Null),
         ExprKind::BoolLiteral(value) => Some(ScalarValue::Bool(*value)),
@@ -40,6 +49,14 @@ pub(in crate::optimize) fn scalar_value(expr: &Expr) -> Option<ScalarValue> {
         ExprKind::StringLiteral(value) => Some(ScalarValue::String(value.clone())),
         _ => None,
     }
+}
+
+/// Extracts a condition only when replacing its boolean guard preserves semantic checks.
+pub(in crate::optimize) fn condition_scalar_value(expr: &Expr) -> Option<ScalarValue> {
+    let value = scalar_value(expr)?;
+    if super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Bools)
+        && !matches!(value, ScalarValue::Bool(_)) { return None; }
+    Some(value)
 }
 
 /// Extracts a ScalarValue from an expression, unwrapping ternary/match branches when both arms yield the same value.
@@ -147,56 +164,17 @@ pub(in crate::optimize) fn spaceship_scalar(left: &Expr, right: &Expr) -> Option
     })
 }
 
-/// Represents a scalar value extracted from a literal expression.
-/// Used during constant folding to compare, coerce, and reconstruct literal expressions.
-#[derive(Debug, Clone, PartialEq)]
-pub(in crate::optimize) enum ScalarValue {
-    Null,
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    String(String),
+pub(in crate::optimize) use elephc_semantics::scalar_value::ScalarValue;
+
+/// Reconstructs compiler literal syntax from a dependency-neutral scalar fact.
+pub(in crate::optimize) trait ScalarValueExpr {
+    /// Preserves the scalar kind and floating bits while rebuilding its AST literal.
+    fn into_expr_kind(self) -> ExprKind;
 }
 
-impl ScalarValue {
-    /// Returns whether this scalar value is truthy per PHP rules.
-    pub(in crate::optimize) fn truthy(&self) -> bool {
-        match self {
-            ScalarValue::Null => false,
-            ScalarValue::Bool(value) => *value,
-            ScalarValue::Int(value) => *value != 0,
-            ScalarValue::Float(value) => *value != 0.0,
-            ScalarValue::String(value) => !value.is_empty() && value != "0",
-        }
-    }
-
-    /// Returns whether two scalar values denote the *same constant*, i.e. whether one can be
-    /// substituted for the other without changing any observable byte of the program.
-    ///
-    /// This is deliberately stricter than `PartialEq`: floats are compared by bit pattern, so
-    /// `0.0` and `-0.0` stay distinct (`echo -0.0` prints `-0`) and two NANs with the same
-    /// payload merge. Use it for constant identity — merging ternary/match arms into one
-    /// propagated fact — never for PHP's `==` or `===`, which are value comparisons.
-    pub(in crate::optimize) fn same_constant(&self, other: &Self) -> bool {
-        match (self, other) {
-            (ScalarValue::Float(left), ScalarValue::Float(right)) => {
-                left.to_bits() == right.to_bits()
-            }
-            (left, right) => left == right,
-        }
-    }
-
-    /// Returns whether this scalar value is a floating-point NAN.
-    ///
-    /// Folding a NAN to bool is value-correct (`truthy()` already answers `true`, since
-    /// `NAN != 0.0`) but WARNING-incorrect under PHP 8.5, which reports every NAN-to-bool
-    /// coercion. `try_fold_cast` uses this to keep such a cast on the runtime path.
-    pub(in crate::optimize) fn is_nan_float(&self) -> bool {
-        matches!(self, ScalarValue::Float(value) if value.is_nan())
-    }
-
+impl ScalarValueExpr for ScalarValue {
     /// Converts this scalar value back into the equivalent `ExprKind` literal node.
-    pub(in crate::optimize) fn into_expr_kind(self) -> ExprKind {
+    fn into_expr_kind(self) -> ExprKind {
         match self {
             ScalarValue::Null => ExprKind::Null,
             ScalarValue::Bool(value) => ExprKind::BoolLiteral(value),

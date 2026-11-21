@@ -7,6 +7,30 @@
 //! Key details:
 //! - Exercises the shared lowering and assembly generation for every supported target.
 
+/// Returns whether a borrowed byte view is materialized before a later effect can retire its
+/// source string. Ownership refactors may preserve the producer through an explicit `Borrow`.
+fn string_byte_view_is_stabilized(
+    function: &crate::ir::Function,
+    read_index: usize,
+    byte: crate::ir::ValueId,
+) -> bool {
+    let mut views = vec![byte];
+    for instruction in &function.instructions[read_index + 1..] {
+        if !instruction.operands.iter().any(|operand| views.contains(operand)) {
+            continue;
+        }
+        if matches!(instruction.op, crate::ir::Op::Acquire | crate::ir::Op::MixedBox
+            | crate::ir::Op::StrPersist)
+        {
+            return true;
+        }
+        if instruction.op == crate::ir::Op::Borrow {
+            if let Some(result) = instruction.result { views.push(result); }
+        }
+    }
+    false
+}
+
 /// Review regressions preserve transient receiver releases and retire keys before suspension.
 #[test]
 fn string_offset_review_boundaries_on_all_targets() {
@@ -342,10 +366,11 @@ offsetBoundaries("\x07aaaaaaaZ");
                     function.name.as_str(),
                     "offsetAcrossEffects" | "offsetAliasReturns" | "offsetBoundaries"
                 ) {
-                    assert!(function.instructions[index + 1..].iter().any(|inst| {
-                        matches!(inst.op, Op::Acquire | Op::MixedBox)
-                            && inst.operands.contains(&read.result.unwrap())
-                    }), "{target}: {} byte at {:?} must survive the following effect", function.name, read.span);
+                    assert!(string_byte_view_is_stabilized(
+                        function,
+                        index,
+                        read.result.unwrap(),
+                    ), "{target}: {} byte at {:?} must survive the following effect", function.name, read.span);
                     persisted_reads += 1;
                     continue;
                 }

@@ -53,6 +53,8 @@ pub(crate) fn recover_to_statement_boundary(tokens: &[SpannedToken], pos: &mut u
             | Token::Print
             | Token::Variable(_)
             | Token::This
+            | Token::Plus
+            | Token::Minus
             | Token::PlusPlus
             | Token::MinusMinus
             | Token::Class

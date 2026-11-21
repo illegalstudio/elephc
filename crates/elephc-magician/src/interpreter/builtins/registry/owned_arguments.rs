@@ -28,6 +28,14 @@ pub(in crate::interpreter) fn eval_owned_builtin_call(
     name: &str, args: &[EvalCallArg], callback_by_value: bool, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_owned_builtin_call_with_source(name, args, callback_by_value, context, scope, values).map(|result| result.0)
+}
+
+/// Preserves forwarded return declarations through source-order argument ownership and cleanup.
+pub(in crate::interpreter) fn eval_owned_builtin_call_with_source(
+    name: &str, args: &[EvalCallArg], callback_by_value: bool, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<elephc_generics::Type>), EvalStatus> {
     with_owned_builtin_arguments(name, callback_by_value, Some(scope), context, values,
         |contract, lexical_scope, context, values, owners, evaluated| {
             let lexical_scope = lexical_scope.ok_or(EvalStatus::RuntimeFatal)?;
@@ -47,7 +55,7 @@ pub(in crate::interpreter) fn eval_builtin_call_array_expr(
             let array = eval_owned_expr(array, context, lexical_scope, values)?;
             owners.push(array);
             capture_array(contract, array, context, values, owners, evaluated)
-        })
+        }).map(|result| result.0)
 }
 
 /// Copies already evaluated callback inputs, optionally preserving explicit persistent output references.
@@ -55,6 +63,15 @@ pub(in crate::interpreter) fn eval_builtin_callback_with_arguments(
     name: &str, arguments: Vec<EvaluatedCallArg>, preserve_references: bool,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_builtin_callback_with_arguments_and_source(name, arguments, preserve_references, context, values)
+        .map(|result| result.0)
+}
+
+/// Copies evaluated callback inputs and carries the actual forwarded return declaration with the result.
+pub(in crate::interpreter) fn eval_builtin_callback_with_arguments_and_source(
+    name: &str, arguments: Vec<EvaluatedCallArg>, preserve_references: bool,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<elephc_generics::Type>), EvalStatus> {
     with_owned_builtin_arguments(name, true, None, context, values,
         |contract, _, context, values, owners, evaluated| {
             for (index, argument) in arguments.into_iter().enumerate() {
@@ -123,7 +140,7 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
     context: &mut ElephcEvalContext, values: &mut V,
     evaluate: impl FnOnce(&BuiltinContract, Option<&mut ElephcEvalScope>, &mut ElephcEvalContext, &mut V,
         &mut Vec<RuntimeCellHandle>, &mut Vec<EvaluatedCallArg>) -> Result<(), EvalStatus>,
-) -> Result<RuntimeCellHandle, EvalStatus> {
+) -> Result<(RuntimeCellHandle, Option<elephc_generics::Type>), EvalStatus> {
     let mut owners = Vec::new();
     let mut evaluated = Vec::new();
     let mut ordered = Vec::new();
@@ -140,7 +157,7 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
         )?;
         // call_user_func forwards variadic names to its target, rather than binding them to
         // its own `args` parameter. Keep the same owner lease around that named dispatch.
-        if name == "call_user_func" && evaluated.iter().any(|argument| argument.name.is_some()) {
+        if name == "call_user_func" {
             ordered.extend(evaluated.iter().map(|argument| argument.value));
             let borrowed = evaluated.iter().cloned().map(|mut argument| {
                 argument.value = argument.value.borrowed();
@@ -149,9 +166,21 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
             return with_runtime_owners(&owners, || {
                 eval_call_user_func_with_call_args_from_scope(
                     borrowed, lexical_scope.as_deref(), context, values,
-                ).and_then(|result| promote_borrowed_result(result, values))
+                ).and_then(|(result, source)| promote_borrowed_result(result, values).map(|value| (value, source)))
             });
         }
+        if name == "call_user_func_array"
+            && context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+            validate_builtin_call_arguments(name, &evaluated, context, values)?;
+            let (bound, _) = bind_evaluated_ref_builtin_args(&["callback", "args"], &evaluated, false)?;
+            let callback = required_evaluated_ref_arg(&bound, 0)?;
+            let array = required_evaluated_ref_arg(&bound, 1)?;
+            ordered.extend(evaluated.iter().map(|argument| argument.value));
+            return with_runtime_owners(&owners, || eval_call_user_func_array_with_source(
+                callback.value, array.value, array.source_type.as_ref(), lexical_scope.as_deref(), context, values))
+                .and_then(|(result, source)| promote_borrowed_result(result, values).map(|value| (value, source)));
+        }
+        validate_builtin_call_arguments(name, &evaluated, context, values)?;
         ordered = bind_builtin_arguments(name, evaluated.clone(), values, Some(&mut owners))?;
         if callback {
             adapt_callback_references(
@@ -176,10 +205,10 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
                 context,
                 values,
             )?.ok_or(EvalStatus::UnsupportedConstruct)?;
-            promote_borrowed_result(result, values)
+            promote_borrowed_result(result, values).map(|value| (value, Some(local_binding_origins::builtin_producer_type(contract.returns))))
         })
     })();
-    let preserved = result.as_ref().ok().copied();
+    let preserved = result.as_ref().ok().map(|result| result.0);
     for reference in callback_reference_metadata {
         if preserved.map_or(true, |value| value.as_ptr() != reference.as_ptr()) {
             context.clear_array_metadata(reference);
@@ -207,7 +236,7 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
     match (result, cleanup) {
         (Ok(value), Ok(())) => Ok(value),
         (Err(status), _) => Err(status),
-        (Ok(value), Err(status)) => {
+        (Ok((value, _)), Err(status)) => {
             let _ = eval_release_value(context, values, value);
             Err(status)
         }

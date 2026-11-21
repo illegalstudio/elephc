@@ -51,7 +51,7 @@ pub(super) fn collect_property_initialization(
         let value = if let Some(value) = resolved {
             crate::codegen::literal_defaults::enum_case_default_value(&context, php_type, value, inst.op.name())
         } else {
-            literal_default_value(&context, php_type, &default_expr.kind, inst.op.name())
+            literal_default_value(&context, php_type, &default_expr.kind, inst.op.name(), module.semantic_profile)
         };
         let Ok(value) = value else {
             // The class initializer is ordinary EIR and can preserve lazy branches in constant
@@ -394,12 +394,11 @@ pub(super) fn emit_constructor_call(
     ref_params.push(false);
     ref_params.extend_from_slice(constructor_ref_params);
     let lifetime = super::super::constructor_ref_cell_lifetime(ctx, class_name);
-    let call_args = super::super::materialize_direct_call_args_with_refs_and_options(
+    let call_args = super::super::materialize_constructor_call_args_with_refs(
         ctx,
         &args,
         &param_types,
         &ref_params,
-        true,
         lifetime,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);

@@ -94,7 +94,7 @@ fn native_same_cell_reference_writeback_marks_the_owning_snapshot_dirty() {
             if through_method {
                 write_back_method_ref_target(&target, value, &mut context, &mut values).unwrap();
             } else {
-                let argument = BoundMethodArg {
+                let argument = BoundMethodArg { source_type: None,
                     value, ref_target: Some(target), variadic_ref_targets: Vec::new(),
                 };
                 write_back_native_callable_ref_args(&[argument], &mut context, &mut values).unwrap();

@@ -37,7 +37,7 @@ fn forward(name: &str, args: Vec<EvaluatedCallArg>, context: &mut ElephcEvalCont
 
 /// Keeps named arguments intact when forwarding an eval source call.
 pub(in crate::interpreter) fn eval_builtin_fileinfo_call(name: &str, args: &[EvalCallArg], context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, scope, values, |args, context, _, values| forward(name, args, context, values))
+    with_eval_builtin_call_arguments(name, args, context, scope, values, |args, context, _, values| forward(name, args, context, values))
 }
 
 /// Adapts positional expression hooks to the shared source-call path.
@@ -48,6 +48,6 @@ pub(in crate::interpreter) fn eval_builtin_fileinfo_expr_call(name: &str, args: 
 
 /// Forwards dynamic callable invocations after their arguments have been evaluated.
 pub(in crate::interpreter) fn eval_fileinfo_values_result(name: &str, args: &[RuntimeCellHandle], context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
-    let args = args.iter().map(|value| EvaluatedCallArg { evaluation_owner: None, name: None, value: *value, ref_target: None }).collect();
+    let args = args.iter().map(|value| EvaluatedCallArg { source_type: None, evaluation_owner: None, name: None, value: *value, ref_target: None }).collect();
     forward(name, args, context, values)
 }

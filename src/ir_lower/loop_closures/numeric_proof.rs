@@ -247,6 +247,7 @@ fn eval_expr(
             let right = eval_expr(ctx, closure_local, function, capture_domains, state, spans, right)?;
             arithmetic(op, left, right)
         }
+        ExprKind::UnaryPlus(value) => eval_expr(ctx, closure_local, function, capture_domains, state, spans, value),
         ExprKind::Negate(value) => {
             let domain = eval_expr(ctx, closure_local, function, capture_domains, state, spans, value)?;
             Ok(match domain {
@@ -505,7 +506,7 @@ fn expr_has_sealed_call(sites: &HashSet<Span>, local: &str, expr: &Expr) -> bool
         ExprKind::BinaryOp { left, right, .. } => {
             expr_has_sealed_call(sites, local, left) || expr_has_sealed_call(sites, local, right)
         }
-        ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
         | ExprKind::Cast { expr: value, .. } => expr_has_sealed_call(sites, local, value),
         ExprKind::Assignment { target, value, result_target, prelude, .. } => {
             expr_has_sealed_call(sites, local, target)

@@ -47,7 +47,7 @@ pub(super) fn lower_key_sort_ref_place_call(
         "krsort" => ArrayKeySort::Descending,
         _ => return None,
     };
-    let plan = plan_key_sort_args(sig, args)?;
+    let plan = plan_key_sort_args(sig, args, ctx.semantic_profile)?;
     let mut receiver = None;
     let mut flags = None;
     for (slot, arg) in &plan {

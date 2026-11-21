@@ -39,6 +39,13 @@ impl Checker {
         }
         let lt = self.infer_type(left, env)?;
         let rt = self.infer_type(right, env)?;
+        validate_mixed_binary_operands(self, op, &lt, &rt, expr.span)?;
+        if *op == BinOp::Xor {
+            self.require_boolean_type(&lt, left.span)?;
+            self.require_boolean_type(&rt, right.span)?;
+        }
+        crate::semantics::comparisons::validate(self.semantic_profile, self.semantic_source_mode,
+            op, &lt, &rt, expr.span)?;
         if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(op, &lt, &rt, &self.classes) {
             return Ok(plan.result_type(op));
         }
@@ -50,6 +57,12 @@ impl Checker {
             && self.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some()))
         {
             return Ok(PhpType::Mixed);
+        }
+        if *op == BinOp::Add && (is_array_like_type(&lt) || is_array_like_type(&rt)) {
+            return self.infer_array_union_type(&lt, &rt, left, right, expr);
+        }
+        if let Some(rule) = crate::semantics::numeric::operand_rule(self.semantic_profile, self.semantic_source_mode, op) {
+            crate::semantics::numeric::validate_binary_types(rule, &lt, &rt, expr.span)?;
         }
         match op {
             BinOp::Pow => {
@@ -72,7 +85,7 @@ impl Checker {
                     || lt == PhpType::Str
                     || rt == PhpType::Str
                 {
-                    Ok(PhpType::Mixed)
+                    Ok(crate::semantics::mixed::numeric_result(self.semantic_profile, self.semantic_source_mode))
                 } else if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
                 } else if let Some(literal_ty) =
@@ -80,13 +93,10 @@ impl Checker {
                 {
                     Ok(literal_ty)
                 } else {
-                    Ok(PhpType::Mixed)
+                    Ok(crate::semantics::mixed::power_result(self.semantic_profile, self.semantic_source_mode))
                 }
             }
             BinOp::Add => {
-                if is_array_like_type(&lt) || is_array_like_type(&rt) {
-                    return self.infer_array_union_type(&lt, &rt, left, right, expr);
-                }
                 let lt_ok = is_arithmetic_operand_type(self, &lt);
                 let rt_ok = is_arithmetic_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
@@ -101,7 +111,7 @@ impl Checker {
                     || lt == PhpType::Str
                     || rt == PhpType::Str
                 {
-                    Ok(PhpType::Mixed)
+                    Ok(crate::semantics::mixed::numeric_result(self.semantic_profile, self.semantic_source_mode))
                 } else if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
                 } else if let Some(literal_ty) =
@@ -111,7 +121,7 @@ impl Checker {
                 } else if int_arithmetic_identity_is_always_int(op, left, right) {
                     Ok(PhpType::Int)
                 } else {
-                    Ok(PhpType::Mixed)
+                    Ok(crate::semantics::mixed::integer_result(self.semantic_profile, self.semantic_source_mode))
                 }
             }
             BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
@@ -126,7 +136,9 @@ impl Checker {
                 self.check_arithmetic_string_operands(left, &lt, right, &rt, expr)?;
                 // Division always returns float (PHP compat: 10/3 → 3.333...); keep that
                 // policy even when an operand is a numeric string.
-                if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
+                if *op == BinOp::Mod {
+                    Ok(PhpType::Int)
+                } else if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
                 } else if matches!(op, BinOp::Sub | BinOp::Mul) {
                     if uses_mixed_numeric_dispatch(&lt)
@@ -134,7 +146,7 @@ impl Checker {
                         || lt == PhpType::Str
                         || rt == PhpType::Str
                     {
-                        Ok(PhpType::Mixed)
+                        Ok(crate::semantics::mixed::numeric_result(self.semantic_profile, self.semantic_source_mode))
                     } else if let Some(literal_ty) =
                         checked_literal_int_arithmetic_type(op, left, right)
                     {
@@ -142,7 +154,7 @@ impl Checker {
                     } else if int_arithmetic_identity_is_always_int(op, left, right) {
                         Ok(PhpType::Int)
                     } else {
-                        Ok(PhpType::Mixed)
+                        Ok(crate::semantics::mixed::integer_result(self.semantic_profile, self.semantic_source_mode))
                     }
                 } else {
                     Ok(PhpType::Int)
@@ -182,7 +194,13 @@ impl Checker {
                 // Strict comparison accepts any types — compares both type and value
                 Ok(PhpType::Bool)
             }
-            BinOp::Concat => Ok(PhpType::Str),
+            BinOp::Concat => {
+                for (value, ty) in [(left, &lt), (right, &rt)] {
+                    crate::semantics::strings::validate_concatenation(self.semantic_profile,
+                        self.semantic_source_mode, ty, value.span)?;
+                }
+                Ok(PhpType::Str)
+            }
             BinOp::And | BinOp::Or | BinOp::Xor => Ok(PhpType::Bool),
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight => {
                 let lt_ok = is_integer_operand_type(self, &lt);
@@ -247,7 +265,7 @@ impl Checker {
     }
 
     /// Classifies one arithmetic string-literal operand (see `check_arithmetic_string_operands`).
-    fn check_arithmetic_string_operand(
+    pub(super) fn check_arithmetic_string_operand(
         &mut self,
         operand: &Expr,
         ty: &PhpType,
@@ -489,6 +507,10 @@ impl Checker {
         env: &TypeEnv,
         param_hints: &[PhpType],
     ) -> Result<PhpType, CompileError> {
+        // Save producer contracts while the enclosing frame's origins are still installed.
+        let capture_contracts: std::collections::HashMap<_, _> = captures.iter()
+            .filter_map(|name| env.get(name).map(|ty|
+                (name.clone(), (self.local_binding_origin(name, ty), self.runtime_local_binding_origin(name))))).collect();
         let mut capture_storage = Vec::new();
         for capture in captures {
             let read = env.get(capture).map(|ty| self.binding_read_type(capture, ty, env));
@@ -585,13 +607,17 @@ impl Checker {
         // `closure_sig.env`, which `prepare_closure_signature_context_with_param_hints` builds by
         // cloning the whole enclosing scope — keying on that made every enclosing local look
         // pre-bound, and silenced a FRESH closure local whose name merely collided with one.
-        // Parameters are added too, so the map means "the frame's own pre-bound storage"; the
-        // marking excludes them anyway.
-        let pre_bound_own_storage: std::collections::HashMap<String, PhpType> = captures
-            .iter()
-            .chain(params.iter().map(|(name, _, _, _)| name))
-            .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))
-            .collect();
+        // Parameters use the resolved closure environment, where their own hints override any
+        // same-named outer variable. Their entry contracts can request an owning recreation slot.
+        let mut pre_bound_own_storage: crate::types::checker::PreBoundLocals = captures.iter()
+            .filter_map(|name| env.get(name).map(|ty| {
+                let (contract, runtime) = capture_contracts.get(name).cloned().unwrap_or_else(|| (ty.clone(), false));
+                (name.clone(), crate::types::checker::PreBoundLocal::capture(ty, contract, runtime))
+            })).collect();
+        pre_bound_own_storage.extend(params.iter().map(|(name, hint, ..)| (name, hint.is_some()))
+            .chain(variadic.iter().map(|name| (name, true))).filter_map(|(name, declared)|
+                closure_sig.env.get(name).map(|ty|
+                    (name.clone(), crate::types::checker::PreBoundLocal::parameter(ty, declared)))));
         let return_facts = crate::optimize::ReturnBoundaryFacts::new(return_type.as_ref(),
             params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
         let body_result = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
@@ -639,13 +665,14 @@ impl Checker {
         let var_ty = env.get(var).cloned().ok_or_else(|| {
             CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
         })?;
+        self.require_mixed_callable_type(&var_ty, expr.span)?;
         if !var_ty.is_callable_like() {
             if matches!(var_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
                 // A boxed array read can carry any runtime callable shape.
                 // The callee is only known at runtime, but PHP rejects
                 // unpacking after named arguments while compiling the call.
                 self.require_valid_unresolved_call_argument_order(args, &format!("callable ${}", var))?;
-                self.record_unresolved_callee_argument_aliases(args);
+                self.record_unresolved_callee_argument_aliases(args, env);
                 for arg in args {
                     self.infer_descriptor_call_arg_type(arg, env)?;
                 }
@@ -751,7 +778,7 @@ impl Checker {
         // No signature is known for this callable, so the planner never runs;
         // still apply PHP's syntactic unpack-after-named rule.
         self.require_valid_unresolved_call_argument_order(args, &format!("callable ${}", var))?;
-        self.record_unresolved_callee_argument_aliases(args);
+        self.record_unresolved_callee_argument_aliases(args, env);
         for arg in args {
             self.infer_descriptor_call_arg_type(arg, env)?;
         }
@@ -836,6 +863,7 @@ impl Checker {
             return Ok(ret_ty);
         }
         let callee_ty = self.infer_type(callee, env)?;
+        self.require_mixed_callable_type(&self.mixed_selection_receiver_view(callee, &callee_ty), expr.span)?;
         if matches!(callee_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
             // String and boxed callables resolve at runtime; PHP still rejects unpacking
             // after named arguments while compiling the call expression.
@@ -844,7 +872,7 @@ impl Checker {
                 _ => "callable expression".to_string(),
             };
             self.require_valid_unresolved_call_argument_order(args, &callee_desc)?;
-            self.record_unresolved_callee_argument_aliases(args);
+            self.record_unresolved_callee_argument_aliases(args, env);
             for arg in args {
                 self.infer_descriptor_call_arg_type(arg, env)?;
             }
@@ -1023,7 +1051,7 @@ impl Checker {
         // Everything below this point failed to produce a signature: the return type may still be
         // recoverable from a recorded closure shape, but the PARAMETER binding modes are not.
         self.require_valid_unresolved_call_argument_order(args, "callable expression")?;
-        self.record_unresolved_callee_argument_aliases(args);
+        self.record_unresolved_callee_argument_aliases(args, env);
         for arg in args {
             self.infer_descriptor_call_arg_type(arg, env)?;
         }
@@ -1042,7 +1070,7 @@ impl Checker {
                 }
             }
             ExprKind::Closure { body, .. } => {
-                let ret_ty = infer_return_type_syntactic(body);
+                let ret_ty = infer_return_type_syntactic(body, self.semantic_profile);
                 return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
             }
             _ => {}
@@ -1060,7 +1088,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         self.require_valid_unresolved_call_argument_order(args, "callable array")?;
-        self.record_unresolved_callee_argument_aliases(args);
+        self.record_unresolved_callee_argument_aliases(args, env);
         for arg in args {
             self.infer_descriptor_call_arg_type(arg, env)?;
         }
@@ -1197,14 +1225,16 @@ impl Checker {
         }
         // Ask the builtin contract at this first-class call site so argument-dependent results
         // such as array_slice preserve their checked storage layout.
-        let result = match self.check_builtin(name.as_str(), args, span, env) {
+        let result = match self.check_builtin_callable(name.as_str(), args, span, env) {
             Ok(Some(result)) => result,
             Ok(None) => return Ok(None),
             // An argument the backend needs as a compile-time literal (a `preserve_keys` flag,
             // a constant name) is needed by every lowering of this callee: the direct call
             // refuses it in codegen and the callable wrapper drops or misreads it. Report it
             // here, with the diagnostic the direct call already gives.
-            Err(error) if error.kind == CompileErrorKind::AotLiteralRequired => {
+            // A semantic guarantee applies to the operation through every call spelling.
+            Err(error) if error.kind == CompileErrorKind::AotLiteralRequired
+                || matches!(error.kind, CompileErrorKind::SemanticViolation(_)) => {
                 return Err(error);
             }
             // Any other rejection is the direct call's own view of its arguments, which can be
@@ -1503,10 +1533,10 @@ impl Checker {
         // conservative; that residual asymmetry only ever withholds a mark, never a kill/retype
         // the pre-scan would have allowed. The KNOWN-signature paths above need nothing:
         // `check_pipe_known_callable_call` rejects a by-reference parameter outright per the RFC.
-        self.record_unresolved_callee_argument_aliases(&synth_args);
+        self.record_unresolved_callee_argument_aliases(&synth_args, env);
         match &callable.kind {
             ExprKind::Closure { body, .. } => {
-                return Ok(infer_return_type_syntactic(body));
+                return Ok(infer_return_type_syntactic(body, self.semantic_profile));
             }
             ExprKind::Variable(var_name) => {
                 if let Some(ret_ty) = self.closure_return_types.get(var_name) {
@@ -1867,4 +1897,35 @@ fn is_one_int_literal(expr: &Expr) -> bool {
 /// Returns `true` if `expr` is an empty array literal (`[]`).
 fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::ArrayLiteral(elems) if elems.is_empty())
+}
+
+/// Requires every logical operand pair to support a kind-dependent numeric operation.
+fn validate_mixed_binary_operands(checker: &Checker, op: &BinOp, left: &PhpType,
+    right: &PhpType, span: crate::span::Span) -> Result<(), CompileError> {
+    if *op == BinOp::Concat {
+        for ty in [left, right] {
+            crate::semantics::mixed::validate_use(checker.semantic_profile, checker.semantic_source_mode,
+                ty, span, "concatenation", |member| matches!(member, PhpType::Resource(_))
+                    || checker.valid_dynamic_property_name_type(member))?;
+        }
+        return Ok(());
+    }
+    if crate::semantics::numeric::operator(op).is_none() { return Ok(()); }
+    let supports = |left: &PhpType, right: &PhpType| {
+        if crate::types::object_operators::binary_plan_with_classes(op, left, right, &checker.classes).is_some() {
+            return true;
+        }
+        if *op == BinOp::Add && is_array_like_type(left) && is_array_like_type(right) { return true; }
+        if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight) {
+            return (is_integer_operand_type(checker, left) || *left == PhpType::Float)
+                && (is_integer_operand_type(checker, right) || *right == PhpType::Float);
+        }
+        is_arithmetic_operand_type(checker, left) && is_arithmetic_operand_type(checker, right)
+    };
+    crate::semantics::mixed::validate_use(checker.semantic_profile, checker.semantic_source_mode,
+        left, span, "numeric operations", |left| crate::semantics::mixed::every_alternative(
+            right, &mut |right| supports(left, right)))?;
+    crate::semantics::mixed::validate_use(checker.semantic_profile, checker.semantic_source_mode,
+        right, span, "numeric operations", |right| crate::semantics::mixed::every_alternative(
+            left, &mut |left| supports(left, right)))
 }

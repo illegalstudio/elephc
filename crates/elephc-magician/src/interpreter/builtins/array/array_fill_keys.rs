@@ -28,11 +28,11 @@ pub(in crate::interpreter) fn eval_array_fill_keys_declared_call(
 /// Dispatches evaluated-argument eval calls for the `array_fill_keys` array builtin.
 pub(in crate::interpreter) fn eval_array_fill_keys_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [keys, value] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
-    eval_array_fill_keys_result(*keys, *value, values)
+    eval_array_fill_keys_result(*keys, *value, context, values)
 }
 
 /// Evaluates PHP `array_fill_keys()` over key-array and value expressions.
@@ -47,21 +47,21 @@ pub(in crate::interpreter) fn eval_builtin_array_fill_keys(
     };
     let keys = eval_expr(keys, context, scope, values)?;
     let value = eval_expr(value, context, scope, values)?;
-    eval_array_fill_keys_result(keys, value, values)
+    eval_array_fill_keys_result(keys, value, context, values)
 }
 
 /// Builds an `array_fill_keys()` result preserving the source key iteration order.
 pub(in crate::interpreter) fn eval_array_fill_keys_result(
     keys: RuntimeCellHandle,
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(keys)?;
-    let mut result = values.assoc_new(len)?;
+    let mut result = super::super::collection_builder::EvalArrayBuilder::assoc(values, len)?;
     for position in 0..len {
-        let source_key = values.array_iter_key(keys, position)?;
-        let target_key = values.array_get(keys, source_key)?;
-        result = values.array_set(result, target_key, value)?;
+        result.entry_key_first(|values| super::key_inputs::key_at(keys, position, false, context, values),
+            |values, _| values.retain(value))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

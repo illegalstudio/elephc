@@ -446,25 +446,25 @@ fn eval_user_wrapper_stream_open_args(
     let options = values.int(0)?;
     let opened_path = values.null()?;
     Ok(vec![
-        EvaluatedCallArg {
+        EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value: path,
             ref_target: None,
         },
-        EvaluatedCallArg {
+        EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value: mode,
             ref_target: None,
         },
-        EvaluatedCallArg {
+        EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value: options,
             ref_target: None,
         },
-        EvaluatedCallArg {
+        EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value: opened_path,

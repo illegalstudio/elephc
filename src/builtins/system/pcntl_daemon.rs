@@ -5,7 +5,7 @@
 //! - `crate::builtins::registry` while collecting AOT builtin homes.
 //!
 //! Key details:
-//! - The shared contract hides this non-PHP convenience API under `--strict-php`.
+//! - The shared contract hides this non-PHP convenience API under `--php-only`.
 
 builtin! {
     contract: "pcntl_daemon",

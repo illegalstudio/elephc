@@ -50,6 +50,7 @@ Things that have a value:
 | `Variable(String)` | `$x` | Name without `$` |
 | `BinaryOp { left, op, right }` | `$a + $b` | See operator table below |
 | `InstanceOf { value, target }` | `$obj instanceof User`, `$obj instanceof $className` | Class/interface runtime type check. The target is either a named class/interface target or a dynamic target expression. |
+| `UnaryPlus(Expr)` | `+$x` | Numeric unary plus with its own operand and source span |
 | `Negate(Expr)` | `-$x` | Unary minus |
 | `Not(Expr)` | `!$x` | Logical NOT |
 | `BitNot(Expr)` | `~$x` | Bitwise NOT (complement) |

@@ -40,11 +40,48 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
         Arch::X86_64 => emitter.instruction("ud2"),                             // abort never returns; avoid a backedge with a different stack offset
     }
     emit_bind_object(emitter);
+    emit_bind_local(emitter);
+    emitter.label_global("__rt_reference_sources_unbind_local");
+    abi::emit_frame_prologue(emitter, 16);
+    let entry = emitter.target.extern_symbol("__elephc_reference_sources_unbind_v1");
+    abi::emit_call_label(emitter, &entry);
+    require_success(emitter);
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
+}
+
+/// Associates a live hidden local owner with its immutable exact-value validator.
+fn emit_bind_local(emitter: &mut Emitter) {
+    let result = abi::int_result_reg(emitter);
+    emitter.label_global("__rt_reference_sources_bind_local");
+    abi::emit_frame_prologue(emitter, 48);
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
+    abi::emit_reg_move(emitter, result, abi::int_arg_reg_name(emitter.target, 0));
+    abi::emit_load_from_address(emitter, result, result, 0);
+    abi::emit_branch_if_int_result_zero(emitter, FAILURE);
+    abi::emit_call_label(emitter, "__rt_reference_cell_promote_mixed");
+    abi::store_at_offset(emitter, result, 24);
+    for (index, offset) in [(0, 8), (1, 24), (2, 16)] {
+        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+    }
+    let entry = emitter.target.extern_symbol("__elephc_reference_sources_bind_v1");
+    abi::emit_call_label(emitter, &entry);
+    require_binding_token(emitter);
+    abi::load_at_offset(emitter, result, 24);
+    associate_result(emitter);
+    abi::emit_frame_restore(emitter, 48);
+    abi::emit_return(emitter);
 }
 
 /// Rejects a failed registry mutation before another instruction can expose stale weak metadata.
 pub(in crate::codegen_support::runtime) fn require_success(emitter: &mut Emitter) {
     abi::emit_branch_if_int_result_nonzero(emitter, FAILURE);
+}
+
+/// Rejects a failed binding allocation before a reference can escape without its declaration.
+pub(in crate::codegen_support::runtime) fn require_binding_token(emitter: &mut Emitter) {
+    abi::emit_branch_if_int_result_zero(emitter, FAILURE);
 }
 
 /// Registers initialized owned cells from immutable physical rows before exposing a new object.
@@ -103,7 +140,7 @@ fn emit_bind_object(emitter: &mut Emitter) {
     }
     let entry = emitter.target.extern_symbol("__elephc_reference_sources_bind_v1");
     abi::emit_call_label(emitter, &entry);
-    abi::emit_branch_if_int_result_zero(emitter, FAILURE);
+    require_binding_token(emitter);
     abi::load_at_offset(emitter, result, 48);
     associate_result(emitter);
     emitter.label(advance);

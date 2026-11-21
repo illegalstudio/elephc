@@ -35,6 +35,8 @@ pub struct Usage {
     pub(crate) instantiated_classes: HashSet<String>,
     pub(crate) instantiated_subclass_roots: HashSet<String>,
     pub(crate) required_libraries: HashSet<String>,
+    /// Compiler-owned helper dependencies, distinct from explicit calls to the same name.
+    pub(crate) required_prelude_helpers: HashSet<String>,
     /// Libraries whose bridge runtime a builtin call reaches; a subset of
     /// `required_libraries` that excludes identity-only requirements.
     pub(crate) runtime_bridge_libraries: HashSet<String>,
@@ -61,6 +63,15 @@ pub struct Hazards {
     pub literal_eval: bool,
 }
 
+impl Hazards {
+    /// Retains every declaration family that an unknown callable value can select.
+    pub(crate) fn include_unknown_callable(&mut self) {
+        self.dynamic_function = true;
+        self.dynamic_method = true;
+        self.dynamic_class = true;
+    }
+}
+
 impl Usage {
     /// Unions another subtree summary into this one.
     pub(crate) fn merge(&mut self, other: Self) {
@@ -74,6 +85,7 @@ impl Usage {
         self.instantiated_subclass_roots
             .extend(other.instantiated_subclass_roots);
         self.required_libraries.extend(other.required_libraries);
+        self.required_prelude_helpers.extend(other.required_prelude_helpers);
         self.runtime_bridge_libraries.extend(other.runtime_bridge_libraries);
         self.global_aliases.extend(other.global_aliases);
         self.dynamic_global_alias |= other.dynamic_global_alias;
@@ -276,6 +288,7 @@ struct Scanner<'a> {
 /// Checker-validated signatures used to recognize callable and by-reference arguments.
 #[derive(Debug, Default)]
 pub(super) struct CallSignatureIndex {
+    semantic_profile: elephc_semantics::SemanticProfile,
     functions: HashMap<String, FunctionSig>,
     methods: HashMap<(String, String, bool), FunctionSig>,
     class_parents: HashMap<String, Option<String>>,
@@ -343,6 +356,7 @@ impl CallSignatureIndex {
             })
             .collect();
         Self {
+            semantic_profile: check_result.semantic_profile,
             functions,
             methods,
             class_parents,
@@ -404,6 +418,12 @@ impl CallSignatureIndex {
 }
 
 impl Scanner<'_> {
+    /// Uses checker policy for typed reachability and permissive parsing before typed signatures exist.
+    fn semantic_profile(&self) -> elephc_semantics::SemanticProfile {
+        self.call_signatures.map(|index| index.semantic_profile)
+            .unwrap_or(elephc_semantics::SemanticProfile::PERMISSIVE)
+    }
+
     /// Scans a statement list, optionally descending into declaration bodies.
     fn scan_program(mut self, program: &[Stmt], declarations: bool) -> Usage {
         for stmt in program {

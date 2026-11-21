@@ -19,7 +19,7 @@ pub(super) fn lower_static_array_map(
     if php_symbol_key(name.trim_start_matches('\\')) != "array_map" || args.len() != 2 {
         return None;
     }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile) || args.iter().any(is_spread_arg) {
         return None;
     }
     if matches!(args[0].kind, ExprKind::Variable(_)) {
@@ -92,7 +92,7 @@ pub(super) fn lower_static_array_walk(
     if php_symbol_key(name.trim_start_matches('\\')) != "array_walk" || args.len() != 2 {
         return None;
     }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile) || args.iter().any(is_spread_arg) {
         return None;
     }
     if matches!(args[1].kind, ExprKind::Variable(_)) {
@@ -242,7 +242,7 @@ pub(super) fn lower_static_callable_value_call(
             let result_type = sig
                 .as_ref()
                 .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
-                .unwrap_or_else(|| fallback_expr_type(expr));
+                .unwrap_or_else(|| fallback_expr_type(expr, ctx.semantic_profile));
             let name = format!("{}::{}", receiver_name(&receiver), method);
             let data = ctx.intern_string(&name);
             let call = ctx.emit_value(
@@ -313,6 +313,11 @@ pub(super) fn instance_callable_signature(target: &StaticCallableBinding) -> Opt
     }
 }
 
+/// Admits PHP-promoting fused kernels only when no checked numeric operation contract is selected.
+fn allows_promoting_numeric_fusion(ctx: &LoweringContext<'_, '_>) -> bool {
+    crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode).is_permissive()
+}
+
 /// Lowers `array_reduce($ints, fn($carry, $item) => $carry + $item, 0)` to the typed int sum.
 ///
 /// The closure is an untyped pure addition of its two parameters and the initial value is the
@@ -325,11 +330,12 @@ pub(super) fn lower_reduce_sum(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    if !allows_promoting_numeric_fusion(ctx) { return None; }
     if php_symbol_key(name.trim_start_matches('\\')) != "array_reduce" || args.len() != 3 {
         return None;
     }
     if ctx.functions.contains_key(name.trim_start_matches('\\'))
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -408,7 +414,7 @@ pub(super) fn lower_count_explode(
         return None;
     }
     if ctx.functions.contains_key(name.trim_start_matches('\\'))
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -423,7 +429,7 @@ pub(super) fn lower_count_explode(
     if php_symbol_key(explode_name.as_str().trim_start_matches('\\')) != "explode"
         || ctx.functions.contains_key(explode_name.as_str().trim_start_matches('\\'))
         || explode_args.len() != 2
-        || crate::types::call_args::has_named_args(explode_args)
+        || crate::types::call_args::has_named_args(explode_args, ctx.semantic_profile)
         || explode_args.iter().any(is_spread_arg)
     {
         return None;
@@ -493,11 +499,12 @@ pub(super) fn lower_map_sum_add(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    if !allows_promoting_numeric_fusion(ctx) { return None; }
     if php_symbol_key(name.trim_start_matches('\\')) != "array_sum" || args.len() != 1 {
         return None;
     }
     if ctx.functions.contains_key(name.trim_start_matches('\\'))
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -512,7 +519,7 @@ pub(super) fn lower_map_sum_add(
     if php_symbol_key(map_name.as_str().trim_start_matches('\\')) != "array_map"
         || ctx.functions.contains_key(map_name.as_str().trim_start_matches('\\'))
         || map_args.len() != 2
-        || crate::types::call_args::has_named_args(map_args)
+        || crate::types::call_args::has_named_args(map_args, ctx.semantic_profile)
         || map_args.iter().any(is_spread_arg)
     {
         return None;
@@ -568,7 +575,7 @@ pub(super) fn lower_filter_count_mod(
         return None;
     }
     if ctx.functions.contains_key(name.trim_start_matches('\\'))
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -583,7 +590,7 @@ pub(super) fn lower_filter_count_mod(
     if php_symbol_key(filter_name.as_str().trim_start_matches('\\')) != "array_filter"
         || ctx.functions.contains_key(filter_name.as_str().trim_start_matches('\\'))
         || filter_args.len() != 2
-        || crate::types::call_args::has_named_args(filter_args)
+        || crate::types::call_args::has_named_args(filter_args, ctx.semantic_profile)
         || filter_args.iter().any(is_spread_arg)
     {
         return None;
@@ -705,7 +712,7 @@ pub(super) fn lower_array_element_type_check(
     let mask = element_type_predicate_mask(&canonical)?;
     if ctx.functions.contains_key(name.trim_start_matches('\\'))
         || args.len() != 1
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -724,25 +731,23 @@ pub(super) fn lower_array_element_type_check(
         return None;
     }
     let array = lower_expr(ctx, array);
-    let index = lower_expr(ctx, index);
-    let mask = ctx.emit_value(
-        Op::ConstI64,
-        Vec::new(),
-        Some(Immediate::I64(mask)),
-        PhpType::Int,
-        Op::ConstI64.default_effects(),
-        Some(expr.span),
-    );
-    Some(ctx.emit_value(
-        Op::RuntimeCall,
-        vec![array.value, index.value, mask.value],
-        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-            crate::ir::RuntimeFnId::ArrayElementTypeCheck,
-        ))),
-        PhpType::Bool,
-        crate::ir::RuntimeFnId::ArrayElementTypeCheck.intrinsic_effects(),
-        Some(expr.span),
-    ))
+    let mut pending = [array];
+    let (result, pins) = lower_with_pending_owners(ctx, &mut pending, expr.span, |ctx| {
+        let index = lower_expr(ctx, index);
+        let mask = ctx.emit_value(
+            Op::ConstI64, Vec::new(), Some(Immediate::I64(mask)), PhpType::Int,
+            Op::ConstI64.default_effects(), Some(expr.span),
+        );
+        ctx.emit_value(
+            Op::RuntimeCall, vec![array.value, index.value, mask.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::ArrayElementTypeCheck,
+            ))), PhpType::Bool,
+            crate::ir::RuntimeFnId::ArrayElementTypeCheck.intrinsic_effects(), Some(expr.span),
+        )
+    });
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    Some(stabilize_borrowed_result_and_release_receiver(ctx, pending[0], result, expr.span))
 }
 
 /// Returns the runtime-tag mask for one fused element predicate.
@@ -764,7 +769,7 @@ fn statically_int_expr(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::IntLiteral(_) => true,
         ExprKind::Variable(name) => ctx.local_type(name).codegen_repr() == PhpType::Int,
-        ExprKind::Negate(inner) | ExprKind::BitNot(inner) => statically_int_expr(ctx, inner),
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => statically_int_expr(ctx, inner),
         ExprKind::Cast { target: CastType::Int, .. } => true,
         ExprKind::BinaryOp { left, op, right } => {
             matches!(
@@ -798,11 +803,12 @@ pub(super) fn lower_map_sum_add_declared_int(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    if !allows_promoting_numeric_fusion(ctx) { return None; }
     if php_symbol_key(name.trim_start_matches('\\')) != "array_sum" || args.len() != 1 {
         return None;
     }
     if ctx.functions.contains_key(name.trim_start_matches('\\'))
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -817,7 +823,7 @@ pub(super) fn lower_map_sum_add_declared_int(
     if php_symbol_key(map_name.as_str().trim_start_matches('\\')) != "array_map"
         || ctx.functions.contains_key(map_name.as_str().trim_start_matches('\\'))
         || map_args.len() != 2
-        || crate::types::call_args::has_named_args(map_args)
+        || crate::types::call_args::has_named_args(map_args, ctx.semantic_profile)
         || map_args.iter().any(is_spread_arg)
     {
         return None;

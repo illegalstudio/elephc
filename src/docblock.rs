@@ -10,7 +10,7 @@
 //! - This is the portable surface. `@template T`, `@param array<T> $a` and `@return T` mean
 //!   exactly what `function f<T>(array<T> $a): T` means, and lower to the same monomorphic
 //!   instantiations — the difference is that the annotated file still parses on php-src and
-//!   still passes `--strict-php`.
+//!   still passes `--php-only`.
 //! - A class says the same four things: `@template` its parameters, `@var`/`@param`/`@return`
 //!   its members' types, and `@extends`/`@implements` the instantiation it inherits. Inside one,
 //!   an ordinary member annotation must mention a class type parameter to be honoured.

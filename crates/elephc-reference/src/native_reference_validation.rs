@@ -40,6 +40,21 @@ pub struct NativeReferenceValidationOps {
     pub release: Option<unsafe extern "C" fn(*mut c_void, usize) -> i32>,
 }
 
+/// Versioned extension for copied proposed sources and independently coerced external declarations.
+pub const VALIDATION_ABI_VERSION_V2: u64 = 2;
+
+/// Optional protected source provider, called after native physical sources have been snapshotted.
+/// A nonzero output transfers a candidate owner; zero means no external declaration applies.
+pub type ExternalReferenceCoercer = unsafe extern "C" fn(*mut c_void, usize, usize, *mut usize) -> i32;
+
+/// Extends the unchanged version-one callback layout without changing its exported entry point.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NativeReferenceValidationOpsV2 {
+    pub native: NativeReferenceValidationOps,
+    pub external_coerce: Option<ExternalReferenceCoercer>,
+}
+
 /// Success transfers `candidate` when nonzero; zero leaves the caller's original RHS authoritative.
 /// A conflict reports copied source metadata so the publisher can raise its property diagnostic.
 #[repr(C)]
@@ -124,56 +139,105 @@ pub unsafe extern "C" fn __elephc_reference_validate_v1(
         if ops.abi_version != VALIDATION_ABI_VERSION
             || ops.struct_size != std::mem::size_of::<NativeReferenceValidationOps>() as u64
         { return FAILURE; }
-        let (Some(is_current), Some(coerce), Some(identical), Some(release)) =
-            (ops.is_current, ops.coerce, ops.identical, ops.release) else { return FAILURE; };
-        let mut candidates = Candidates { values: BTreeMap::new(), context, release };
-        let mut matched = Vec::new();
-        for source in snapshot_reference_sources(reference) {
-            match unsafe { is_current(context, &source, reference) } {
-                0 => continue,
-                1 => matched.push(source),
-                _ => return FAILURE,
-            }
-        }
-        // PHP keeps the current assignment's coercion even when __toString unsets its source.
-        // Validate the initial source set once. No receiver or cell address is read after PHP;
-        // subsequent assignments observe the registry's new bindings and wrapper associations.
-        let selected = matched.first().map(|source| source.token);
-        for source in &matched {
-            let mut value = 0;
-            let status = unsafe { coerce(context, source.validator, original, &mut value) };
-            if status != SUCCESS { return callback_status(status); }
-            if value == 0 { return FAILURE; }
-            candidates.values.insert(source.token, Candidate { source: *source, value });
-            let first = &candidates.values[&selected.unwrap()];
-            let second = &candidates.values[&source.token];
-            // Unchanged input acceptance must not compare NaN against itself or walk an
-            // accepted recursive array. Both owners already name the same PHP value.
-            if first.value == second.value { continue; }
-            let mut same = 0;
-            let status = unsafe { identical(context, first.value, second.value, &mut same) };
-            if status != SUCCESS { return callback_status(status); }
-            if same == 0 {
-                let first = first.source;
-                let second = second.source;
-                if let Err(status) = candidates.finish(None) { return status; }
-                unsafe { output.write(NativeReferenceValidationOutcome {
-                    candidate: 0, first, second,
-                }); }
-                return CONFLICT;
-            }
-            if same != 1 { return FAILURE; }
-        }
-        match candidates.finish(selected) {
-            Ok(candidate) => {
-                unsafe { output.write(NativeReferenceValidationOutcome { candidate,
-                    ..NativeReferenceValidationOutcome::default() }); }
-                SUCCESS
-            }
-            Err(status) => status,
-        }
-
+        unsafe { validate_sources(reference, original, context, ops, None, None, output) }
     })).unwrap_or(FAILURE)
+}
+
+/// Validates copied proposed storage without making its declaration visible to reentrant writes.
+///
+/// # Safety
+/// The version-one callback safety requirements also apply here. `ops` points to a complete v2
+/// record. A non-null `proposed` points to a readable immutable source snapshot whose physical
+/// binding/cell remain live until the initial shape probe finishes; its validator outlives PHP.
+/// External providers contain every PHP exit and snapshot their declarations before coercion.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_reference_validate_v2(
+    reference: usize, original: usize, context: *mut c_void,
+    ops: *const NativeReferenceValidationOpsV2, output: *mut NativeReferenceValidationOutcome,
+    proposed: *const NativeReferenceTypeSource,
+) -> i32 {
+    if ops.is_null() || output.is_null() || reference == 0 || original == 0 { return FAILURE; }
+    unsafe { output.write(NativeReferenceValidationOutcome::default()); }
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let ops = unsafe { ops.read() };
+        if ops.native.abi_version != VALIDATION_ABI_VERSION_V2
+            || ops.native.struct_size != std::mem::size_of::<NativeReferenceValidationOpsV2>() as u64
+        { return FAILURE; }
+        let proposed = if proposed.is_null() { None } else { Some(unsafe { proposed.read() }) };
+        unsafe { validate_sources(reference, original, context, ops.native, ops.external_coerce, proposed, output) }
+    })).unwrap_or(FAILURE)
+}
+
+/// Shares source snapshots, independent candidates and protected cleanup across both ABI versions.
+unsafe fn validate_sources(
+    reference: usize, original: usize, context: *mut c_void, ops: NativeReferenceValidationOps,
+    external: Option<ExternalReferenceCoercer>, proposed: Option<NativeReferenceTypeSource>,
+    output: *mut NativeReferenceValidationOutcome,
+) -> i32 {
+    let (Some(is_current), Some(coerce), Some(identical), Some(release)) =
+        (ops.is_current, ops.coerce, ops.identical, ops.release) else { return FAILURE; };
+    let mut candidates = Candidates { values: BTreeMap::new(), context, release };
+    let mut matched = Vec::new();
+    let mut sources = snapshot_reference_sources(reference);
+    if let Some(mut source) = proposed {
+        // Registered generations never reach MAX: allocating one would overflow next_token.
+        source.token = u64::MAX;
+        sources.push(source);
+    }
+    for source in sources {
+        match unsafe { is_current(context, &source, reference) } {
+            0 if source.token != u64::MAX => continue,
+            0 => return FAILURE,
+            1 => matched.push(source),
+            _ => return FAILURE,
+        }
+    }
+    // PHP keeps the current assignment's coercion even when __toString unsets its source.
+    // Validate the initial source set once. No receiver or cell address is read after PHP;
+    // subsequent assignments observe the registry's new bindings and wrapper associations.
+    let mut selected = matched.first().map(|source| source.token);
+    if let Some(external) = external {
+        let mut value = 0;
+        let status = unsafe { external(context, reference, original, &mut value) };
+        if status != SUCCESS { return callback_status(status); }
+        if value != 0 {
+            selected = Some(0);
+            candidates.values.insert(0, Candidate { source: NativeReferenceTypeSource::default(), value });
+        }
+    }
+    for source in &matched {
+        let mut value = 0;
+        let status = unsafe { coerce(context, source.validator, original, &mut value) };
+        if status != SUCCESS { return callback_status(status); }
+        if value == 0 { return FAILURE; }
+        candidates.values.insert(source.token, Candidate { source: *source, value });
+        let first = &candidates.values[&selected.unwrap()];
+        let second = &candidates.values[&source.token];
+        // Unchanged input acceptance must not compare NaN against itself or walk an
+        // accepted recursive array. Both owners already name the same PHP value.
+        if first.value == second.value { continue; }
+        let mut same = 0;
+        let status = unsafe { identical(context, first.value, second.value, &mut same) };
+        if status != SUCCESS { return callback_status(status); }
+        if same == 0 {
+            let first = first.source;
+            let second = second.source;
+            if let Err(status) = candidates.finish(None) { return status; }
+            unsafe { output.write(NativeReferenceValidationOutcome {
+                candidate: 0, first, second,
+            }); }
+            return CONFLICT;
+        }
+        if same != 1 { return FAILURE; }
+    }
+    match candidates.finish(selected) {
+        Ok(candidate) => {
+            unsafe { output.write(NativeReferenceValidationOutcome { candidate,
+                ..NativeReferenceValidationOutcome::default() }); }
+            SUCCESS
+        }
+        Err(status) => status,
+    }
 }
 
 #[cfg(test)]

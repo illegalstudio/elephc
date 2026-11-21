@@ -128,6 +128,8 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     let binding_result = bind_method_scope_args(
         &mut method_scope,
         &binding_params,
+        method.parameter_types(),
+        method.parameter_is_variadic(),
         &scope_parameter_is_by_ref,
         &evaluated_args,
         context,
@@ -147,7 +149,9 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.set_strict_types(method.strict_types());
     let result = with_runtime_owners(&evaluated_args, || {
         with_runtime_scope_owners(&mut method_scope, |scope| {
-            binding_result.and_then(|()| execute_statements(method.body(), context, scope, values))
+            binding_result.and_then(|()| with_source_return_contract(method.return_type(),
+                Some(class_name), Some(called_class_name), context, |context|
+                    execute_statements(method.body(), context, scope, values)))
         })
     });
     let persist_result = persist_static_locals(
@@ -289,6 +293,8 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     let binding_result = bind_method_scope_args(
         &mut method_scope,
         &binding_params,
+        method.parameter_types(),
+        method.parameter_is_variadic(),
         &scope_parameter_is_by_ref,
         &evaluated_args,
         context,
@@ -308,7 +314,9 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context.set_strict_types(method.strict_types());
     let result = with_runtime_owners(&evaluated_args, || {
         with_runtime_scope_owners(&mut method_scope, |scope| {
-            binding_result.and_then(|()| execute_statements(method.body(), context, scope, values))
+            binding_result.and_then(|()| with_source_return_contract(method.return_type(),
+                Some(class_name), Some(called_class_name), context, |context|
+                    execute_statements(method.body(), context, scope, values)))
         })
     });
     let persist_result = persist_static_locals(
@@ -359,7 +367,7 @@ pub(in crate::interpreter) fn positional_args(
     args: Vec<RuntimeCellHandle>,
 ) -> Vec<EvaluatedCallArg> {
     args.into_iter()
-        .map(|value| EvaluatedCallArg {
+        .map(|value| EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value,

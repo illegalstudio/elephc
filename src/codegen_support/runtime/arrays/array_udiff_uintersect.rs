@@ -7,6 +7,7 @@
 //! Key details:
 //! - Consumes a descriptor and borrows two validated array triples.
 //! - The fifth ABI argument carries the invocation-site lexical class id to nested callbacks.
+//! - The sixth ABI argument retains the original source comparison policy.
 //! - Independent payload snapshots preserve iteration across callback mutation.
 //! - The O(n*m) scan preserves first-array keys, duplicate values and value ownership.
 //! - A resumable native exception boundary owns all intermediate cells.
@@ -17,7 +18,7 @@ use crate::codegen_support::try_handlers::{
 };
 use crate::types::PhpType;
 
-const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 224;
+const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 240;
 const HANDLER: usize = FRAME - 16;
 const CALLBACK: usize = 8;
 const BORROWED_FIRST: usize = 16;
@@ -42,6 +43,10 @@ const PREVIOUS: usize = 176;
 const PENDING: usize = 184;
 const OTHER: usize = 192;
 const INVOCATION_SCOPE: usize = 200;
+const CHECKED_COMPARISON: usize = 208;
+
+/// Keeps the invocation policy outside the complete native handler and jump buffer.
+const _: () = assert!(CHECKED_COMPARISON <= HANDLER - TRY_HANDLER_SLOT_SIZE);
 
 /// Takes descriptor/first/second/mode in C arguments and returns an owned boxed keyed array.
 /// Mode zero keeps unmatched entries; mode one keeps entries with any comparator-equal value.
@@ -58,6 +63,7 @@ pub fn emit_array_udiff_uintersect(emitter: &mut Emitter) {
         abi::int_arg_reg_name(emitter.target, 4),
         INVOCATION_SCOPE,
     );
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 5), CHECKED_COMPARISON);
     for offset in [FIRST, SECOND, INPUT, OTHER, KEY, ARGUMENTS, NEXT, ANSWER, FIRST_CURSOR, PENDING] {
         clear_slot(emitter, offset);
     }
@@ -100,7 +106,19 @@ pub fn emit_array_udiff_uintersect(emitter: &mut Emitter) {
     clear_slot(emitter, ARGUMENTS);
     abi::emit_call_label(emitter, "__rt_callable_invoke_owned_args");
     abi::store_at_offset(emitter, result, NEXT);
+    if emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Comparisons) {
+        abi::load_at_offset(emitter, result, CHECKED_COMPARISON);
+        abi::emit_branch_if_int_result_zero(emitter, "__rt_array_udiff_uintersect_cast_result");
+        abi::load_at_offset(emitter, result, NEXT);
+        abi::emit_call_label(emitter, "__rt_strict_comparator");
+        abi::emit_jump(emitter, "__rt_array_udiff_uintersect_have_result");
+        emitter.label("__rt_array_udiff_uintersect_cast_result");
+        abi::load_at_offset(emitter, result, NEXT);
+    }
     abi::emit_call_label(emitter, "__rt_mixed_cast_int");
+    if emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Comparisons) {
+        emitter.label("__rt_array_udiff_uintersect_have_result");
+    }
     abi::store_at_offset(emitter, result, COMPARISON);
     release_slot(emitter, NEXT, "__rt_decref_mixed");
     abi::load_at_offset(emitter, result, COMPARISON);

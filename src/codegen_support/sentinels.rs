@@ -31,6 +31,11 @@ use std::cell::Cell;
 use super::emit::Emitter;
 use super::platform::Arch;
 
+mod string_null;
+pub(crate) use string_null::{
+    emit_branch_if_null_string, emit_compare_null_string, emit_normalize_boxed_string_tag,
+};
+
 /// Selects how codegen represents PHP `null` in scalar slots.
 ///
 /// `Tagged` (default) gives null-capable scalar slots the inline two-word
@@ -137,6 +142,9 @@ pub(crate) fn emit_normalize_pointer_word_tag(
 /// carries it: there a tagged slot is `0`, since it owns no heap reference.
 pub(crate) const TAGGED_SCALAR_PROPERTY_TAG: u64 = 12;
 
+/// Property metadata marker for a raw array/hash/Traversable pointer, resolved before value dispatch.
+pub(crate) const ITERABLE_PROPERTY_TAG: u64 = 13;
+
 /// Accepted-tag mask bit that admits a `false` member's boxed tag-3 payload only when it is zero.
 ///
 /// `true` and `false` share runtime value tag 3, so a declared `false` (or `int|false`) member
@@ -165,8 +173,8 @@ pub(crate) const REFERENCE_CELL_HEAP_KIND: u32 = 8;
 pub(crate) const SERPROP_REFERENCE_PROPERTY_FLAG: u64 = 1 << 8;
 /// Serialization rows mark unconstrained Mixed cells that can share a canonical PHP wrapper.
 pub(crate) const SERPROP_MIXED_REFERENCE_PROPERTY_FLAG: u64 = 1 << 9;
-/// Property metadata authenticates an owned scalar cell that may adopt a canonical PHP wrapper.
-pub(crate) const CANONICAL_SCALAR_PROPERTY_FLAG: u64 = 1 << 10;
+/// Property metadata authenticates an owned property cell that may adopt a canonical PHP wrapper.
+pub(crate) const CANONICAL_PROPERTY_PAYLOAD_FLAG: u64 = 1 << 10;
 
 /// JSON property descriptors preserve the payload tag and mark an indirect reference cell.
 pub(crate) const JSON_REFERENCE_PROPERTY_FLAG: u64 = 1 << 8;

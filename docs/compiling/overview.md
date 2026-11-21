@@ -36,7 +36,7 @@ name without its extension (`hello.php` or `hello.lfc` → `hello`). Nothing els
 is produced by default — no intermediate object files are left behind, no cache
 pollution in your project directory. See
 [LFC source files](../beyond-php/lfc-source-files.md) for tags, mixed-project
-includes/autoloading, and `--strict-php`.
+includes/autoloading, and `--php-only`.
 
 ```bash
 elephc src/app.php     # produces ./src/app

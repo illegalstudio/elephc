@@ -15,7 +15,7 @@ use crate::types::PhpType;
 builtin! {
     contract: "array_sum",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
+    semantics: super::numeric_aggregate::semantics(
         crate::ir::RuntimeFnId::ArraySum,
     ),
 }
@@ -23,10 +23,11 @@ builtin! {
 /// Accepts concrete or dynamic arrays and returns boxed numeric storage for scalar coercion boundaries.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    super::numeric_aggregate::validate_elements(cx, &ty)?;
     if ty.is_php_array() || matches!(ty.codegen_repr(),
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
     ) {
-        Ok(PhpType::Mixed)
+        Ok(super::numeric_aggregate::result_type(cx.checker.semantic_profile, cx.source_mode))
     } else {
         Err(CompileError::new(cx.span, "array_sum() argument must be array"))
     }

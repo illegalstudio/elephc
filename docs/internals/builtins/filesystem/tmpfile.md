@@ -37,7 +37,7 @@ description: "Compiler internals for tmpfile(): lowering path, type checks, and 
 ## Signature summary
 
 ```php
-function tmpfile(): mixed
+function tmpfile(): resource|false
 ```
 
 ## What the type checker enforces

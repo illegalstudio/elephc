@@ -21,7 +21,7 @@ description: "Compiler internals for get_resource_id(): lowering path, type chec
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `signature`
+- **Validation**: `mixed_inputs`
 - **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (0 declared effects)`

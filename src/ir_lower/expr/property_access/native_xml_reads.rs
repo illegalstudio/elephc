@@ -78,7 +78,9 @@ pub(super) fn dynamic(
     mode: PropertyFetchMode, known_native: bool,
     selection: Option<elephc_builtin_contract::ObjectProperty>, expr: &Expr,
 ) -> LoweredValue {
-    dynamic_with_result(ctx, object, property, mode, known_native, selection, expr, |_, value| value)
+    dynamic_with_result(ctx, object, property, mode, known_native, selection, expr, |_, value| value,
+        |ctx, receiver, property| lower_dynamic_property_fetch_without_native(
+            ctx, receiver, property, PhpType::Mixed, mode, expr))
 }
 
 /// Keeps an erased non-XML receiver on its ordinary argument path while XML gets a reference marker.
@@ -88,7 +90,13 @@ pub(super) fn dynamic_reference_argument(
 ) -> LoweredValue {
     dynamic_with_result(ctx, object, property, PropertyFetchMode::Read, false,
         Some(elephc_builtin_contract::ObjectProperty::ReferenceSelect), expr,
-        |ctx, value| reference_arguments::marker(ctx, alias, value, expr.span))
+        |ctx, value| reference_arguments::marker(ctx, alias, value, expr.span),
+        |ctx, receiver, property| {
+            if crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode) {
+                reference_place_dispatch::dynamic(ctx, receiver, property, alias, expr)
+            } else { lower_dynamic_property_fetch_without_native(
+                ctx, receiver, property, PhpType::Mixed, PropertyFetchMode::Read, expr) }
+        })
 }
 
 /// Shares name and receiver owners while optionally transforming the selected native result.
@@ -97,6 +105,7 @@ fn dynamic_with_result(
     mode: PropertyFetchMode, known_native: bool,
     selection: Option<elephc_builtin_contract::ObjectProperty>, expr: &Expr,
     native_result: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue) -> LoweredValue,
+    ordinary_result: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue, LoweredValue) -> LoweredValue,
 ) -> LoweredValue {
     let literal_name = ctx.builder.value_defining_instruction(property.value)
         .is_some_and(|instruction| instruction.op == Op::ConstStr).then_some(property);
@@ -120,9 +129,7 @@ fn dynamic_with_result(
         },
         |ctx, receiver| {
             let property = literal_name.unwrap_or_else(|| borrow_owned_name(ctx, &temp, expr.span));
-            lower_dynamic_property_fetch_without_native(
-                ctx, receiver, property, PhpType::Mixed, mode, expr,
-            )
+            ordinary_result(ctx, receiver, property)
         },
     );
     unregister_owned_call_operand(ctx, slot, expr.span);

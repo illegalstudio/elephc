@@ -41,6 +41,11 @@ impl<'a, V: RuntimeValueOps> EvalArrayBuilder<'a, V> {
         self.values
     }
 
+    /// Lends the current result to lookups without transferring its owner.
+    pub(in crate::interpreter) fn borrowed_cell(&self) -> RuntimeCellHandle {
+        self.cell.unwrap().borrowed()
+    }
+
     /// Inserts a freshly materialized value under a freshly boxed string key.
     pub(in crate::interpreter) fn string(
         &mut self,
@@ -76,6 +81,24 @@ impl<'a, V: RuntimeValueOps> EvalArrayBuilder<'a, V> {
                 return Err(status);
             }
         };
+        self.insert_owned(key, value)
+    }
+
+    /// Preserves a producer's key conversion before reading its corresponding value.
+    pub(in crate::interpreter) fn entry_key_first(
+        &mut self, key: impl FnOnce(&mut V) -> Result<RuntimeCellHandle, EvalStatus>,
+        value: impl FnOnce(&mut V, RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>,
+    ) -> Result<(), EvalStatus> {
+        let key = key(self.values)?;
+        let value = match value(self.values, key) {
+            Ok(value) => value,
+            Err(status) => { let _ = self.values.release(key); return Err(status); }
+        };
+        self.insert_owned(key, value)
+    }
+
+    /// Borrows independent insertion operands and retires both leases on every result.
+    fn insert_owned(&mut self, key: RuntimeCellHandle, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         let inserted = self.values.array_set(self.cell.unwrap(), key, value);
         let key_released = self.values.release(key);
         let value_released = self.values.release(value);

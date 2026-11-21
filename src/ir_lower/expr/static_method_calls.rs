@@ -102,7 +102,7 @@ fn lower_static_method_call_impl(
             if ctx.has_eval_barrier() && matches!(receiver, StaticReceiver::Named(_)) {
                 PhpType::Mixed
             } else {
-                fallback_expr_type(expr)
+                fallback_expr_type(expr, ctx.semantic_profile)
             }
         });
     let late_static_receiver_type = static_late_binding_receiver_type_for_ir(ctx, receiver);
@@ -397,7 +397,7 @@ pub(super) fn lower_static_method_descriptor_call(
     let result_type = sig
         .as_ref()
         .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
-        .unwrap_or_else(|| fallback_expr_type(expr));
+        .unwrap_or_else(|| fallback_expr_type(expr, ctx.semantic_profile));
     let target = CallableTarget::StaticMethod {
         receiver: receiver.clone(),
         method: method.to_string(),
@@ -445,7 +445,7 @@ pub(super) fn lower_static_method_descriptor_value_call(
     let result_type = sig
         .as_ref()
         .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
-        .unwrap_or_else(|| fallback_expr_type(expr));
+        .unwrap_or_else(|| fallback_expr_type(expr, ctx.semantic_profile));
     let target = CallableTarget::StaticMethod {
         receiver: receiver.clone(),
         method: method.to_string(),

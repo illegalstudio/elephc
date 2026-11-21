@@ -205,6 +205,7 @@ impl ReceiverPlace {
             }
             Self::Opaque | Self::Property { .. } => return Ok(()),
         };
+        self.retire_detached_local_receiver(ctx, slot, value)?;
         let source_ty = ctx.load_local_to_result(slot)?;
         let result_ty = ctx.value_php_type(value)?;
         if ctx.needs_borrowed_container_lease(slot, value)? {
@@ -213,6 +214,31 @@ impl ReceiverPlace {
             super::coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
         }
         ctx.store_result_value(value)
+    }
+
+    /// Retires the concrete lease a boxed local load created before refreshing that snapshot.
+    ///
+    /// Borrowed ref-cell reads have no separate lease. A consuming helper's published result
+    /// must also bypass this reload: its former SSA owner already belongs to the local box.
+    fn retire_detached_local_receiver(
+        &self,
+        ctx: &mut FunctionContext<'_>,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        let loaded = ctx.function.value(value).and_then(|value| match value.def {
+            ValueDef::Instruction { inst, .. } => ctx.function.instruction(inst),
+            _ => None,
+        }).is_some_and(|inst| inst.op == Op::LoadLocal);
+        let result_ty = ctx.value_php_type(value)?.codegen_repr();
+        if loaded
+            && ctx.local_php_type(slot)?.codegen_repr() == PhpType::Mixed
+            && matches!(result_ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable)
+        {
+            ctx.load_value_to_result(value)?;
+            abi::emit_decref_if_refcounted(ctx.emitter, &result_ty);
+        }
+        Ok(())
     }
 
     /// Publishes the receiver's current pointer back into the place it was read from.

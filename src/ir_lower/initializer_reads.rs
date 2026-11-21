@@ -370,7 +370,7 @@ fn constant_is_refcounted(ctx: &LoweringContext<'_, '_>, scope: Option<&str>, ex
                 return false;
             }
             match ctx.constant_value(name.as_str()) {
-                Some((value, _)) => (Expr::new(value, expr.span), None),
+                Some((value, _)) => (value, None),
                 None => return false,
             }
         }
@@ -1259,7 +1259,7 @@ fn substitute_constants(
             Some(elephc_builtin_contract::ConstValue::Bool(value)) => ExprKind::BoolLiteral(*value),
             Some(elephc_builtin_contract::ConstValue::Null) => ExprKind::Null,
             _ => match ctx.constant_value(name.as_str()) {
-                Some((value, _)) => value,
+                Some((value, _)) => return value,
                 None => return expr.clone(),
             },
         },

@@ -93,9 +93,13 @@ pub(super) fn eval_named_callable_with_call_user_func_args(
             name, parameters, &evaluated_args, None, context, values,
         );
     }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed)
+        && eval_php_visible_builtin_exists(name) {
+        return eval_builtin_callback_with_arguments(name, evaluated_args, false, context, values);
+    }
     if evaluated_args
         .iter()
-        .all(|arg| arg.name.is_none() && arg.ref_target.is_none())
+        .all(|arg| arg.name.is_none() && arg.ref_target.is_none() && arg.source_type.is_none())
     {
         let evaluated_values = evaluated_args.into_iter().map(|arg| arg.value).collect();
         return eval_named_callable_with_call_user_func_values(

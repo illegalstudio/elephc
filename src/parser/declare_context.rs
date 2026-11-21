@@ -164,7 +164,7 @@ fn mark_main_expr_strict_types(expr: &mut Expr) {
             mark_main_expr_strict_types(then_expr);
             mark_main_expr_strict_types(else_expr);
         }
-        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner) | ExprKind::ErrorSuppress(inner) | ExprKind::Print(inner)
         | ExprKind::Spread(inner) | ExprKind::Clone(inner) | ExprKind::YieldFrom(inner)
         | ExprKind::Cast { expr: inner, .. } | ExprKind::NamedArg { value: inner, .. }

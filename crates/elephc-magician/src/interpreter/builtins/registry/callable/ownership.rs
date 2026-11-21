@@ -36,6 +36,18 @@ impl ResolvedEvalCallable {
         finish_eval_argument_values(result, self.receiver_owner, context, values)
     }
 
+    /// Returns invocation-local source metadata through the same receiver cleanup boundary.
+    pub(in crate::interpreter) fn with_source_result<V: RuntimeValueOps>(self,
+        context: &mut ElephcEvalContext, values: &mut V,
+        invoke: impl FnOnce(&EvaluatedCallable, &mut ElephcEvalContext, &mut V)
+            -> Result<(RuntimeCellHandle, Option<elephc_generics::Type>), EvalStatus>,
+    ) -> Result<(RuntimeCellHandle, Option<elephc_generics::Type>), EvalStatus> {
+        let mut source = None;
+        self.with_values(context, values, |callback, context, values| {
+            invoke(callback, context, values).map(|(value, evidence)| { source = evidence; value })
+        }).map(|value| (value, source))
+    }
+
     /// Ends a normalization-only probe without transferring its temporary receiver.
     pub(in crate::interpreter) fn release(
         self, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,

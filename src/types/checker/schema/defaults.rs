@@ -394,7 +394,7 @@ fn validate_object_default(
     context: &str,
     errors: &mut Vec<CompileError>,
 ) {
-    let default_ty = infer_expr_type_syntactic(default);
+    let default_ty = infer_expr_type_syntactic(default, checker.semantic_profile);
     if !matches!(expected_ty, PhpType::Object(_)) || !matches!(default_ty, PhpType::Object(_)) {
         return;
     }

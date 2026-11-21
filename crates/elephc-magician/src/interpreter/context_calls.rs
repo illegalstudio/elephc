@@ -43,7 +43,7 @@ pub fn execute_context_function_outcome(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
     let result = (|| {
-        let arguments = args.into_iter().map(|value| EvaluatedCallArg { evaluation_owner: None, name: None, value, ref_target: None }).collect::<Vec<_>>();
+        let arguments = args.into_iter().map(|value| EvaluatedCallArg { source_type: None, evaluation_owner: None, name: None, value, ref_target: None }).collect::<Vec<_>>();
         let function = match context.function(name).cloned() {
             Some(function) => function,
             None => generic_function_for_call(name, &arguments, context, values)?.ok_or(EvalStatus::UnsupportedConstruct)?,
@@ -164,7 +164,7 @@ pub fn execute_context_try_new_object_outcome(
 ) -> Result<Option<EvalOutcome>, EvalStatus> {
     let evaluated_args = args
         .into_iter()
-        .map(|value| EvaluatedCallArg {
+        .map(|value| EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value,
@@ -326,7 +326,7 @@ pub fn execute_context_static_method_call_outcome(
 ) -> Result<EvalOutcome, EvalStatus> {
     let evaluated_args = args
         .into_iter()
-        .map(|value| EvaluatedCallArg {
+        .map(|value| EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value,

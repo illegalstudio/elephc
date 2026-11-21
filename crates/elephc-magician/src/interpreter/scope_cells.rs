@@ -111,9 +111,9 @@ pub(in crate::interpreter) fn set_scope_cell(
         if ownership == ScopeCellOwnership::Owned { let _ = eval_release_value(context, values, cell); }
         return Err(status);
     }
-    let result = set_scope_cell_unchecked(context, scope, name, cell, ownership, values);
+    let result = set_scope_cell_unchecked(context, scope, name.clone(), cell, ownership, values);
     if result.is_err() && ownership == ScopeCellOwnership::Owned { let _ = eval_release_value(context, values, cell); }
-    result
+    finish_scope_source_publication(result, scope, &name, context, values)
 }
 
 /// Marks an in-place write in the scope that actually owns the visible binding.
@@ -146,7 +146,7 @@ fn set_scope_cell_unchecked(
                 mark_scope_binding_changed(context, scope, &name)?;
                 return Ok(Vec::new());
             }
-            let previous = values.reference_replace(reference, cell)?;
+            let previous = eval_replace_reference_value(reference, cell, context, values)?;
             context.copy_array_metadata(cell, reference);
             mark_scope_binding_changed(context, scope, &name)?;
             let mut released = vec![previous];
@@ -175,17 +175,28 @@ pub(in crate::interpreter) fn set_owned_scope_cell(
         if let Some(reference) = visible_scope_cell(context, scope, &name) {
             if values.is_reference(reference)? {
                 let same_owner = reference == cell;
-                let mut replaced = set_scope_cell_unchecked(context, scope, name, cell, ScopeCellOwnership::Owned, values)?;
+                let mut replaced = set_scope_cell_unchecked(context, scope, name.clone(), cell, ScopeCellOwnership::Owned, values)?;
                 if same_owner { replaced.push(cell); }
                 return Ok(replaced);
             }
         }
-        update_scope_cell(context, scope, name, |scope, name| {
+        update_scope_cell(context, scope, name.clone(), |scope, name| {
             scope.set_owned_respecting_references(name, cell)
         })
     })();
     if result.is_err() { let _ = eval_release_value(context, values, cell); }
-    result
+    finish_scope_source_publication(result, scope, &name, context, values)
+}
+
+/// Refreshes successful array source metadata and balances displaced owners if a host check fails.
+fn finish_scope_source_publication(result: Result<Vec<RuntimeCellHandle>, EvalStatus>,
+    scope: &ElephcEvalScope, name: &str, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    let replaced = result?;
+    if let Err(status) = local_binding_origins::refresh_reference_sources(scope, name, context, values) {
+        return finish_eval_void_arguments(Err(status), replaced, context, values).map(|()| Vec::new());
+    }
+    Ok(replaced)
 }
 
 /// Applies a storage mutation to the actual scope behind a local or global alias.
@@ -230,6 +241,11 @@ pub(in crate::interpreter) fn set_reference_alias(
         if current.is_none() { let released = eval_release_value(context, values, value); checked.and(released)?; }
         else { checked?; }
     }
+    if target != source && (scope.is_static_binding(target) || scope.is_global_alias(target)) {
+        if let Some(old) = unset_scope_cell(context, scope, target)? { eval_release_value(context, values, old)?; }
+    }
+    let source_view = scope.local_source_view(source, context).cloned();
+    let guarded = scope.local_guard_source_view(source, context).is_some();
     let mut types = generic_local_contracts(scope, source, context);
     if let Some(declared) = scope.local_type(target).filter(|ty| !types.contains(ty)) { types.push(declared.clone()); }
     if !types.is_empty() {
@@ -252,7 +268,17 @@ pub(in crate::interpreter) fn set_reference_alias(
             |entry| Ok((entry.cell(), entry.flags().ownership)),
         )?;
     if values.is_reference(cell)? { context.bind_local_reference_types(cell, &types); }
-    Ok(scope.set_reference(target.to_string(), source.to_string(), cell, ownership))
+    let replaced = scope.set_reference(target.to_string(), source.to_string(), cell, ownership);
+    if let Some(view) = source_view {
+        if guarded {
+            scope.record_local_guard_source_view(source.to_string(), view.clone(), context.source_view_epoch());
+            scope.record_local_guard_source_view(target.to_string(), view, context.source_view_epoch());
+        } else {
+            scope.record_local_source_view(source.to_string(), view.clone(), context.source_view_epoch());
+            scope.record_local_source_view(target.to_string(), view, context.source_view_epoch());
+        }
+    }
+    Ok(replaced)
 }
 
 /// Unsets a variable, removing only the local alias when the name is a `global` alias.
@@ -261,35 +287,48 @@ pub(in crate::interpreter) fn set_reference_alias(
 /// the same global scope its reads and writes resolve through, and recorded so that no later
 /// fragment re-creates it. The released cell, if this scope owned one, goes to the caller.
 pub(in crate::interpreter) fn unset_scope_cell(
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     name: impl Into<String>,
-) -> Option<RuntimeCellHandle> {
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let name = name.into();
     if scope.is_global_alias(&name) {
+        retire_scope_origin(scope, &name, context)?;
         scope.clear_global_alias(&name);
-        return scope.unset_respecting_references(name);
+        return Ok(scope.unset_respecting_references(name));
     }
     note_superglobal_unset(&name);
     if let Some(global) = eval_superglobal_scope(context, scope, &name) {
-        return unsafe { global.as_mut() }?.unset_respecting_references(name);
+        let global = unsafe { global.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
+        retire_scope_origin(global, &name, context)?;
+        return Ok(global.unset_respecting_references(name));
     }
-    scope.unset_respecting_references(name)
+    retire_scope_origin(scope, &name, context)?;
+    Ok(scope.unset_respecting_references(name))
+}
+
+/// Finishes native source retirement before unset may release its last scope value owner.
+fn retire_scope_origin(scope: &mut ElephcEvalScope, name: &str,
+    context: &mut ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    #[cfg(not(test))]
+    if let Some(thrown) = crate::runtime_hooks::scope_assignment::release_origins(scope, Some(name)) {
+        context.set_pending_throw(thrown);
+        return Err(EvalStatus::UncaughtThrowable);
+    }
+    #[cfg(test)]
+    let _ = (scope, name, context);
+    Ok(())
 }
 
 /// Marks variables as aliases to the context global scope for later reads/writes.
 pub(in crate::interpreter) fn execute_global_stmt(
     vars: &[String],
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if context.global_scope_ptr().is_none() {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    for name in vars {
-        scope.mark_global_alias(name.clone());
-    }
-    Ok(())
+    super::global_bindings::bind(vars, context, scope, values)
 }
 
 /// Releases activation-owned cells after return, throw, static, and by-reference values escape.
@@ -313,4 +352,20 @@ pub(in crate::interpreter) fn finish_activation_scope(
         (Err(status), _) => Err(status),
         (Ok(value), Ok(())) => Ok(value),
     }
+}
+
+/// Retires every displaced/source lease even when an earlier destructor throws.
+pub(in crate::interpreter) fn retire_scope_replacements(
+    cells: Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+    let owners = cells.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    with_runtime_owners(&owners, || {
+        let mut result = Ok(());
+        for owner in &owners {
+            let released = eval_release_value(context, values, owner.take());
+            if result.is_ok() { result = released; }
+        }
+        result
+    })
 }

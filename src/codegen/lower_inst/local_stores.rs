@@ -12,9 +12,13 @@ use crate::ir::RuntimeCallTarget;
 
 mod owned_output;
 mod native_reference_store;
+mod promoted_null;
 #[cfg(test)]
 mod tests;
 pub(super) use native_reference_store::emit_static_if_managed;
+pub(super) use promoted_null::canonicalize_missing_mixed_slot;
+pub(super) use native_reference_store::lower_bind_local_ref_contract;
+pub(in crate::codegen) use native_reference_store::unbind_local_contract;
 pub(in crate::codegen) use owned_output::publish_current_owned_output;
 
 /// Lowers an addressable local store from one SSA operand.
@@ -116,7 +120,10 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
             RefCellStorePrevious::Retire
         }
     };
-    store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type, previous)?;
+    // Rebinding can replace a boxed alias with a concrete cell after this slot's layout widened.
+    // Keep the lowering's ABI fallback when a current binding proof is unavailable.
+    let payload = ctx.proven_ref_cell_payload_type(slot).unwrap_or_else(|| inst.result_php_type.clone());
+    store_value_through_ref_cell_slot(ctx, slot, value, &payload, previous)?;
     if let Some(done) = canonical_done { ctx.emitter.label(&done); }
     Ok(())
 }
@@ -515,6 +522,7 @@ pub(super) fn release_local_ref_cell_owner(
     value_ty: &PhpType,
 ) -> Result<()> {
     let owner_offset = ctx.local_offset(owner_slot)?;
+    unbind_local_contract(ctx, owner_offset);
     let done = ctx.next_label("release_ref_cell_owner_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -815,7 +823,18 @@ pub(in crate::codegen) fn store_value_to_ref_cell_as(
     target_ty: &PhpType,
     previous: RefCellStorePrevious,
 ) -> Result<()> {
-    store_value_to_raw_ref_cell_as(ctx, slot, value, target_ty, previous)
+    let raw = ctx.next_label("reference_store_legacy");
+    let done = ctx.next_label("reference_store_complete");
+    abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), ctx.local_offset(slot)?);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_canonical");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &raw);
+    // Canonical cells preserve the actual PHP tag even when the legacy alias has a scalar ABI.
+    store_value_to_raw_ref_cell_as(ctx, slot, value, &PhpType::Mixed, previous)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&raw);
+    store_value_to_raw_ref_cell_as(ctx, slot, value, target_ty, previous)?;
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Returns whether `value` is an owned in-place `++`/`--` result.

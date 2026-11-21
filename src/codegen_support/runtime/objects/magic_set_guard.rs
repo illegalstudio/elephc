@@ -16,6 +16,12 @@ use crate::codegen_support::platform::Arch;
 
 /// Emits guard insertion and removal helpers for dynamic-name magic property writes.
 pub(crate) fn emit_magic_set_guard(emitter: &mut Emitter) {
+    emitter.label_global("__rt_magic_get_guard_push");
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("orr x0, x0, #1"),                 // distinguish getters from aligned setter identities
+        Arch::X86_64 => emitter.instruction("or rdi, 1"),                       // distinguish getters from aligned setter identities
+    }
+    crate::codegen_support::abi::emit_jump(emitter, "__rt_magic_set_guard_push");
     match emitter.target.arch {
         Arch::AArch64 => emit_aarch64(emitter),
         Arch::X86_64 => emit_x86_64(emitter),

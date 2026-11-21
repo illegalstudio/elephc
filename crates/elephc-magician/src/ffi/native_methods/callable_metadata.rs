@@ -185,6 +185,23 @@ fn native_callable_type_from_spec(
     if type_spec.is_empty() {
         return None;
     }
+    if let Some(encoded) = type_spec.strip_prefix(elephc_semantics::native_callable_sources::TYPE_SPEC_PREFIX) {
+        let ty: elephc_generics::Type = serde_json::from_str(encoded).ok()?;
+        if !matches!(position, NativeCallableTypePosition::LocalBinding)
+            && crate::eval_ir::array_contents_schema(&ty).is_some() { return None; }
+        return Some(crate::eval_ir::parameter_type(&ty));
+    }
+    if type_spec == elephc_semantics::native_local_contract::PENDING_ARRAY_CONTENTS_TYPE_NAME {
+        return matches!(position, NativeCallableTypePosition::LocalBinding)
+            .then(|| crate::eval_ir::parameter_type(&crate::eval_ir::pending_array_contents_type()));
+    }
+    if let Some(schema) = type_spec.strip_prefix(
+        elephc_semantics::native_local_contract::ARRAY_CONTENTS_TYPE_SPEC_PREFIX) {
+        if !matches!(position, NativeCallableTypePosition::LocalBinding) { return None; }
+        let schema = crate::parser::generics::parse_type_string(schema).ok()?;
+        let contract = crate::eval_ir::array_contents_type(schema)?;
+        return Some(crate::eval_ir::parameter_type(&contract));
+    }
     let nullable_shorthand = type_spec.strip_prefix('?');
     let (type_spec, mut allows_null) = match nullable_shorthand {
         Some(inner) => (inner, true),
@@ -212,7 +229,7 @@ fn native_callable_type_from_spec(
             None => allows_null = true,
         }
     }
-    if variants.is_empty() {
+    if variants.is_empty() && !allows_null {
         return None;
     }
     Some(EvalParameterType::new(variants, allows_null))
@@ -232,6 +249,8 @@ fn native_callable_type_variant(
         "array" => EvalParameterTypeVariant::Array,
         "bool" => EvalParameterTypeVariant::Bool,
         "callable" => EvalParameterTypeVariant::Callable,
+        elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC if !matches!(position, NativeCallableTypePosition::Parameter) => EvalParameterTypeVariant::Resource,
+        elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC => return None,
         "false" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("false")),
         "true" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("true")),
         "float" => EvalParameterTypeVariant::Float,
@@ -249,6 +268,7 @@ fn native_callable_type_variant(
         }
         "void" | "never" => return None,
         "self" | "parent" | "static" => EvalParameterTypeVariant::Class(lower),
+        _ if member.starts_with('@') => return None,
         _ => EvalParameterTypeVariant::Class(member.trim_start_matches('\\').to_string()),
     };
     Some(Some(variant))
@@ -287,6 +307,39 @@ fn native_callable_take_string_bytes(bytes: &[u8], offset: &mut usize) -> Option
 mod tests {
     use super::*;
 
+    /// Conditional array metadata is confined to generated local bindings and retains unions.
+    #[test]
+    fn native_array_contents_metadata_keeps_binding_only_contracts() {
+        let prefix = elephc_semantics::native_local_contract::ARRAY_CONTENTS_TYPE_SPEC_PREFIX;
+        for schema in ["array<int>", "array<int|string>", "array<string,int>", "array<int>|array<string>"] {
+            let spelling = format!("{prefix}{schema}");
+            let ty = native_callable_type_from_spec(&spelling, NativeCallableTypePosition::LocalBinding).unwrap();
+            assert!(crate::eval_ir::array_contents_schema(&crate::eval_ir::generic_type(&ty)).is_some());
+            for position in [NativeCallableTypePosition::Parameter, NativeCallableTypePosition::Return] {
+                assert!(native_callable_type_from_spec(&spelling, position).is_none());
+            }
+        }
+        for schema in ["int", "array<>", "array<int,int,int>", "array<int>|int"] {
+            assert!(native_callable_type_from_spec(&format!("{prefix}{schema}"),
+                NativeCallableTypePosition::LocalBinding).is_none(), "{schema}");
+        }
+    }
+
+    /// A pending origin has an explicit reserved role and cannot be inferred from a closed bottom shape.
+    #[test]
+    fn native_array_contents_metadata_distinguishes_pending_and_closed_bottom() {
+        use elephc_generics::Type;
+        let bottom=Type::Apply("array".into(),vec![Type::atom("never"),Type::atom("never")]);
+        let closed=crate::eval_ir::array_contents_type(bottom).unwrap();
+        assert!(!crate::eval_ir::pending_array_contents(&closed));
+        let spelling=elephc_semantics::native_local_contract::PENDING_ARRAY_CONTENTS_TYPE_NAME;
+        let pending=native_callable_type_from_spec(spelling,NativeCallableTypePosition::LocalBinding).unwrap();
+        assert!(crate::eval_ir::pending_array_contents(&crate::eval_ir::generic_type(&pending)));
+        for position in [NativeCallableTypePosition::Parameter,NativeCallableTypePosition::Return] {
+            assert!(native_callable_type_from_spec(spelling,position).is_none());
+        }
+    }
+
     /// Verifies the native ABI type grammar keeps `false` as its literal generic atom rather
     /// than treating it as a class name. This is what makes `GMP|false` return values accept
     /// `gmp_invert()`'s no-inverse answer.
@@ -300,5 +353,75 @@ mod tests {
             EvalParameterTypeVariant::Generic(atom)
                 if atom == &elephc_generics::Type::atom("false")
         ));
+    }
+
+    /// Native source contracts retain standalone null without changing void parameter eligibility.
+    #[test]
+    fn native_type_specs_preserve_standalone_null_and_nullable_contracts() {
+        for position in [NativeCallableTypePosition::Parameter, NativeCallableTypePosition::Return] {
+            let null = native_callable_type_from_spec("null", position).expect("standalone null is a value contract");
+            assert!(null.allows_null());
+            assert!(null.variants().is_empty());
+            for source in ["?int", "int|null"] {
+                let nullable = native_callable_type_from_spec(source, position).unwrap();
+                assert!(nullable.allows_null());
+                assert_eq!(nullable.variants(), &[EvalParameterTypeVariant::Int]);
+            }
+        }
+        assert!(native_callable_type_from_spec("void", NativeCallableTypePosition::Parameter).is_none());
+        assert!(native_callable_type_from_spec("", NativeCallableTypePosition::Parameter).is_none());
+        assert_eq!(native_callable_type_from_spec("void", NativeCallableTypePosition::Return).unwrap().variants(),
+            &[EvalParameterTypeVariant::Void]);
+    }
+
+
+    /// Resource value metadata cannot turn PHP's ordinary resource class name into a builtin hint.
+    #[test]
+    fn native_resource_contract_distinguishes_class_names_and_parameter_positions() {
+        use crate::eval_ir::{generic_type, parameter_type, php_type_label};
+        use elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC;
+        for position in [NativeCallableTypePosition::LocalBinding, NativeCallableTypePosition::Return] {
+            let resource = native_callable_type_from_spec(RESOURCE_TYPE_SPEC, position).unwrap();
+            assert_eq!(resource.variants(), &[EvalParameterTypeVariant::Resource]);
+            assert_eq!(parameter_type(&generic_type(&resource)), resource);
+            assert_eq!(php_type_label(&resource), "resource");
+            let nullable = native_callable_type_from_spec(&format!("{RESOURCE_TYPE_SPEC}|false|null"), position).unwrap();
+            assert!(nullable.allows_null());
+            assert!(nullable.variants().contains(&EvalParameterTypeVariant::Resource));
+        }
+        assert!(native_callable_type_from_spec(RESOURCE_TYPE_SPEC, NativeCallableTypePosition::Parameter).is_none());
+        assert!(native_callable_type_from_spec("@unknown", NativeCallableTypePosition::LocalBinding).is_none());
+        for position in [NativeCallableTypePosition::Parameter, NativeCallableTypePosition::LocalBinding,
+            NativeCallableTypePosition::Return] {
+            let class = native_callable_type_from_spec("resource", position).unwrap();
+            assert_eq!(class.variants(), &[EvalParameterTypeVariant::Class("resource".into())]);
+            assert_eq!(parameter_type(&generic_type(&class)), class);
+        }
+    }
+
+}
+
+#[cfg(test)]
+mod logical_registration_tests {
+    use super::*;
+
+    /// Trusted structural terms round-trip without exposing conditional local origins as parameter declarations.
+    #[test]
+    fn strict_native_registration_decodes_full_terms_and_preserves_local_roles() {
+        use elephc_generics::Type;
+        let ty = Type::Apply("array".into(), vec![Type::atom("string"),
+            Type::Union(vec![Type::atom("int"), Type::atom("null")])]);
+        let spec = format!("{}{}", elephc_semantics::native_callable_sources::TYPE_SPEC_PREFIX,
+            serde_json::to_string(&ty).unwrap());
+        for position in [NativeCallableTypePosition::Parameter, NativeCallableTypePosition::Return,
+            NativeCallableTypePosition::LocalBinding] {
+            let parsed = native_callable_type_from_spec(&spec, position).unwrap();
+            assert_eq!(crate::eval_ir::generic_type(&parsed), ty);
+        }
+        let pending = crate::eval_ir::pending_array_contents_type();
+        let spec = format!("{}{}", elephc_semantics::native_callable_sources::TYPE_SPEC_PREFIX,
+            serde_json::to_string(&pending).unwrap());
+        assert!(native_callable_type_from_spec(&spec, NativeCallableTypePosition::Parameter).is_none());
+        assert!(native_callable_type_from_spec(&spec, NativeCallableTypePosition::LocalBinding).is_some());
     }
 }

@@ -14097,7 +14097,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Union(&[TypeSpec::Resource, TypeSpec::False]),
         by_ref_return: false,
         summary: "Opens file or URL.",
         examples: &[
@@ -14429,7 +14429,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Union(&[TypeSpec::Resource, TypeSpec::False]),
         by_ref_return: false,
         summary: "Open Internet or Unix domain socket connection.",
         examples: &[
@@ -28446,7 +28446,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Union(&[TypeSpec::Resource, TypeSpec::False]),
         by_ref_return: false,
         summary: "Open directory handle.",
         examples: &[
@@ -28895,7 +28895,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Union(&[TypeSpec::Resource, TypeSpec::False]),
         by_ref_return: false,
         summary: "Open persistent Internet or Unix domain socket connection.",
         examples: &[
@@ -29044,7 +29044,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Union(&[TypeSpec::Resource, TypeSpec::False]),
         by_ref_return: false,
         summary: "Opens process file pointer.",
         examples: &[
@@ -33297,7 +33297,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Resource,
         by_ref_return: false,
         summary: "Creates a stream context.",
         examples: &[
@@ -33328,7 +33328,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Resource,
         by_ref_return: false,
         summary: "Retrieves the default stream context.",
         examples: &[
@@ -33421,7 +33421,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Resource,
         by_ref_return: false,
         summary: "Sets the default stream context.",
         examples: &[
@@ -33605,7 +33605,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Union(&[TypeSpec::Resource, TypeSpec::False]),
         by_ref_return: false,
         summary: "Attaches a filter to a stream.",
         examples: &[
@@ -33654,7 +33654,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Union(&[TypeSpec::Resource, TypeSpec::False]),
         by_ref_return: false,
         summary: "Attaches a filter to a stream (prepend).",
         examples: &[
@@ -34296,7 +34296,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Union(&[TypeSpec::Resource, TypeSpec::False]),
         by_ref_return: false,
         summary: "Accept a connection on a socket created by stream_socket_server().",
         examples: &[
@@ -34327,7 +34327,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Union(&[TypeSpec::Resource, TypeSpec::False]),
         by_ref_return: false,
         summary: "Open Internet or Unix domain socket connection.",
         examples: &[
@@ -34585,7 +34585,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Union(&[TypeSpec::Resource, TypeSpec::False]),
         by_ref_return: false,
         summary: "Create an Internet or Unix domain server socket.",
         examples: &[
@@ -36125,7 +36125,7 @@ echo memory_get_peak_usage();
         min_args: None,
         max_args: Some(1),
         arity_error: Some("tmpfile() takes no arguments"),
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Union(&[TypeSpec::Resource, TypeSpec::False]),
         by_ref_return: false,
         summary: "Creates a temporary file.",
         examples: &[

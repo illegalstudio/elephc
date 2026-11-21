@@ -24,6 +24,9 @@ use crate::codegen_support::RuntimeFeatures;
 /// Each category is emitted before any code that depends on it, ensuring labels
 /// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
+    super::semantic_guards::emit(emitter);
+    super::strict_comparators::emit(emitter);
+    super::strict_numeric::emit(emitter);
     diagnostics::emit_diagnostics(emitter, features);
 
     // Shared numeric coercions. Emitted first because string, array, and cast helpers all

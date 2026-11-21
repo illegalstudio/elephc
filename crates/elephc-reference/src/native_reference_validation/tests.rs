@@ -321,3 +321,75 @@ fn native_reference_validation_keeps_retired_source_coercions_and_stops_on_confl
     assert_eq!(native.values, BTreeMap::from([(1, Value::Stringable)]));
     assert_eq!(native.released.len(), 2);
 }
+
+/// Extends the unchanged callback prefix with the version-two source provider slot.
+fn operations_v2(external: Option<ExternalReferenceCoercer>) -> NativeReferenceValidationOpsV2 {
+    let mut native = operations();
+    native.abi_version = VALIDATION_ABI_VERSION_V2;
+    native.struct_size = std::mem::size_of::<NativeReferenceValidationOpsV2>() as u64;
+    NativeReferenceValidationOpsV2 { native, external_coerce: external }
+}
+
+/// A proposed declaration must remain absent from the live weak index through its coercion.
+#[test]
+fn native_reference_validation_proposed_source_is_not_registered_during_coercion() {
+    let mut native = Native::new();
+    native.bindings.insert(30, (300, 500));
+    native.action = Some(|_, _| assert!(snapshot_reference_sources(500).is_empty()));
+    let proposed = NativeReferenceTypeSource { token: 0, binding: 30, cell: 300, validator: 1 };
+    let mut outcome = NativeReferenceValidationOutcome::default();
+    let status = unsafe { __elephc_reference_validate_v2(500, 1,
+        (&mut native as *mut Native).cast(), &operations_v2(None), &mut outcome, &proposed) };
+    assert_eq!(status, SUCCESS);
+    assert_eq!(native.values[&outcome.candidate], Value::Text("2".into()));
+    assert!(snapshot_reference_sources(500).is_empty());
+    assert_eq!(native.calls, [1]);
+    assert_eq!(unsafe { release((&mut native as *mut Native).cast(), outcome.candidate) }, SUCCESS);
+    assert_eq!(native.owners, BTreeMap::from([(1, 1)]));
+}
+
+/// Existing declarations and a proposed declaration independently inspect the original RHS.
+#[test]
+fn native_reference_validation_proposed_source_preserves_existing_constraints() {
+    let mut native = Native::new();
+    let token = native.bind(10, 100, 2, 500);
+    native.bindings.insert(30, (300, 500));
+    let proposed = NativeReferenceTypeSource { token: 0, binding: 30, cell: 300, validator: 1 };
+    let mut outcome = NativeReferenceValidationOutcome::default();
+    let status = unsafe { __elephc_reference_validate_v2(500, 1,
+        (&mut native as *mut Native).cast(), &operations_v2(None), &mut outcome, &proposed) };
+    assert_eq!(status, CONFLICT);
+    assert_eq!((outcome.first.token, outcome.second.token), (token, u64::MAX));
+    assert_eq!(native.calls, [2, 1]);
+    assert_eq!(snapshot_reference_sources(500).len(), 1);
+    assert_eq!(native.owners, BTreeMap::from([(1, 1)]));
+}
+
+/// Models an external int|string source without reusing another declaration's normalized result.
+unsafe extern "C" fn external_union_candidate(
+    context: *mut c_void, reference: usize, original: usize, output: *mut usize,
+) -> i32 {
+    if reference != 500 { return FAILURE; }
+    unsafe { coerce(context, 2, original, output) }
+}
+
+/// Native bindings are snapshotted before an external coercion can retire them through PHP.
+#[test]
+fn native_reference_validation_external_candidate_preserves_native_snapshot() {
+    let mut native = Native::new();
+    native.bind(10, 100, 1, 500);
+    native.action = Some(|native, validator| {
+        if validator == 2 {
+            assert_eq!(__elephc_reference_sources_unbind_v1(10), SUCCESS);
+            native.bindings.remove(&10);
+        }
+    });
+    let mut outcome = NativeReferenceValidationOutcome::default();
+    let status = unsafe { __elephc_reference_validate_v2(500, 1,
+        (&mut native as *mut Native).cast(), &operations_v2(Some(external_union_candidate)),
+        &mut outcome, std::ptr::null()) };
+    assert_eq!(status, CONFLICT);
+    assert_eq!(native.calls, [2, 1]);
+    assert_eq!(outcome.first.token, 0);
+    assert_eq!(native.owners, BTreeMap::from([(1, 1)]));
+}

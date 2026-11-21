@@ -51,7 +51,15 @@ pub(crate) fn lower_with_pending_owners<'m, 'f, T>(
 fn protect_pending_operands(
     ctx: &mut LoweringContext<'_, '_>, operands: &[LoweredValue], span: Span,
 ) -> Vec<PinnedInFlightOwner> {
-    let mut seen = Vec::new();
+    protect_additional_pending_operands(ctx, operands, &[], span)
+}
+
+/// Protects a new throwing window while leaving earlier guards responsible for their leases.
+pub(crate) fn protect_additional_pending_operands(
+    ctx: &mut LoweringContext<'_, '_>, operands: &[LoweredValue],
+    previous: &[PinnedInFlightOwner], span: Span,
+) -> Vec<PinnedInFlightOwner> {
+    let mut seen: Vec<_> = previous.iter().map(PinnedInFlightOwner::value).collect();
     let mut records = Vec::new();
     for operand in operands {
         if seen.contains(&operand.value) { continue; }

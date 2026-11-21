@@ -37,7 +37,7 @@ description: "Compiler internals for stream_context_create(): lowering path, typ
 ## Signature summary
 
 ```php
-function stream_context_create(array $options = null, array $params = null): mixed
+function stream_context_create(array $options = null, array $params = null): resource
 ```
 
 ## What the type checker enforces

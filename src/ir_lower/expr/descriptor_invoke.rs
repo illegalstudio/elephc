@@ -151,7 +151,7 @@ pub(super) fn lower_call_user_func_from_lowered_callback(
     ) {
         return lower_call_user_func_descriptor_invoke_from_value(ctx, callback, args, sig, expr);
     }
-    if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
+    if !crate::types::call_args::has_named_args(args, ctx.semantic_profile) && !args.iter().any(is_spread_arg) {
         return emit_rooted_expr_call(ctx, callback, None, args, PhpType::Mixed, expr.span);
     }
     let callback = coerce_descriptor_invoker_mixed_value(ctx, callback, expr.span);
@@ -171,7 +171,7 @@ pub(super) fn lower_dynamic_call_user_func_array(
     let [callback_expr, arg_array_expr] = args else {
         return None;
     };
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile) || args.iter().any(is_spread_arg) {
         return None;
     }
     let signature = callable_descriptor_signature_for_expr(ctx, callback_expr);
@@ -260,7 +260,14 @@ pub(super) fn signature_for_static_callable_binding(
             .extern_functions
             .get(&name)
             .map(function_sig_from_extern_for_descriptor),
-        StaticCallableBinding::Builtin(_) => None,
+        StaticCallableBinding::Builtin(name) => {
+            let prepared_reference = crate::builtins::registry::lookup(&name).is_some_and(|def|
+                def.ref_params.iter().any(|is_ref| *is_ref)
+                    && matches!(def.spec.semantics.callable, crate::builtins::semantics::BuiltinCallablePolicy::Prepared(_)));
+            if prepared_reference && crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode) {
+                crate::types::first_class_callable_builtin_sig_with_semantics(&name, ctx.semantic_profile)
+            } else { None }
+        }
         StaticCallableBinding::Closure { signature, .. } => Some(signature),
         StaticCallableBinding::StaticMethod { receiver, method }
         | StaticCallableBinding::StaticMethodDescriptor { receiver, method } => {
@@ -340,7 +347,7 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
     for (index, item) in items.iter().enumerate() {
         let value = lower_signature_invoker_ref_arg_marker(ctx, sig, index, item, false)
             .unwrap_or_else(|| {
-                let value = lower_expr(ctx, item);
+                let value = lower_value_invoker_argument(ctx, item, false);
                 coerce_variadic_tail_value(ctx, value, &array_ty, item.span)
             });
         let array = load_published_container(ctx, owner, array_ty.clone(), item.span);
@@ -398,8 +405,12 @@ pub(super) fn call_user_func_should_use_descriptor(
     sig: Option<&FunctionSig>,
 ) -> bool {
     let has_named_or_spread =
-        crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg);
+        crate::types::call_args::has_named_args(args, ctx.semantic_profile) || args.iter().any(is_spread_arg);
     if has_named_or_spread {
+        return true;
+    }
+    if crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode)
+        && sig.is_some_and(|sig| sig.ref_params.iter().any(|is_ref| *is_ref)) {
         return true;
     }
     if call_user_func_has_incompatible_ref_marker_arg(ctx, args, sig) {
@@ -517,7 +528,7 @@ pub(super) struct RootedDescriptorCallback {
     /// Staging holding the owned result while the callback and container records retire.
     result: Option<PrepublishedCallResult>,
     /// Selection cells published outside the argument container and retired after dispatch.
-    pub(super) selection_aliases: Vec<(String, Span)>,
+    pub(super) argument_aliases: Vec<(String, Span)>,
 }
 
 /// Publishes a descriptor invocation's result staging and then its callback.
@@ -534,7 +545,7 @@ pub(super) fn root_descriptor_callback(
 ) -> RootedDescriptorCallback {
     let result = prepublish_call_result(ctx, &result_type, span);
     let (value, owner) = root_owned_call_operand(ctx, callback, span);
-    RootedDescriptorCallback { value, owner, result_type, result, selection_aliases: Vec::new() }
+    RootedDescriptorCallback { value, owner, result_type, result, argument_aliases: Vec::new() }
 }
 
 /// Roots the temporary container owner across a descriptor call and retires every owner on return.
@@ -553,7 +564,7 @@ pub(super) fn emit_callable_descriptor_invoke(
         owner: callback_owner,
         result_type,
         result: result_staging,
-        selection_aliases,
+        argument_aliases,
     } = callback;
     // The backend borrows this container and owns either its normalized copy
     // or a separate retain of a prebuilt Mixed box. Root both raw and boxed
@@ -580,7 +591,7 @@ pub(super) fn emit_callable_descriptor_invoke(
     } else if ctx.value_is_owning_temporary(arg_container) {
         crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(span));
     }
-    for (alias, alias_span) in selection_aliases.into_iter().rev() {
+    for (alias, alias_span) in argument_aliases.into_iter().rev() {
         let slot = ctx.ref_cell_owner_slot(&alias).expect("published selection cell");
         unregister_owned_call_operand(ctx, slot, alias_span);
         ctx.release_ref_cell_owner(&alias, Some(alias_span));

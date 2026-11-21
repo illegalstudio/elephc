@@ -105,7 +105,7 @@ impl Checker {
                 // named argument binds by name, and inference pairs by index. The variadic's
                 // declared element type joins the fixed positions past the declared ones.
                 let ordered_args =
-                    generics::arguments_in_declaration_order(&template.param_names, args);
+                    generics::arguments_in_declaration_order(&template.param_names, args, self.semantic_profile);
                 let mut declared_params: Vec<Option<crate::parser::ast::TypeExpr>> = Vec::new();
                 let mut actual_types: Vec<PhpType> = Vec::new();
                 let mut inference_args: Vec<Expr> = Vec::new();

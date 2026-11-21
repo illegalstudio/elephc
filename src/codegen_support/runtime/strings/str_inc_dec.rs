@@ -52,7 +52,7 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: str_inc_dec (PHP ++/-- on a string) ---");
-    emitter.label_global("__rt_str_inc_dec");
+    super::strict_inc_dec::string_entries(emitter);
 
     // -- frame: [sp+0] ptr, [sp+8] len, [sp+16] delta, [sp+24] numeric run, [sp+32] carry prefix --
     emitter.instruction("sub sp, sp, #64");                                     // reserve the helper frame for the operand, the clipped numeric run, and saved linkage
@@ -61,6 +61,7 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #0]");                                    // save the operand string pointer for the carry and unchanged paths
     emitter.instruction("str x2, [sp, #8]");                                    // save the operand string length for the carry and unchanged paths
     emitter.instruction("str x3, [sp, #16]");                                   // save the +1/-1 delta for every result path
+    super::strict_inc_dec::save_string_policy(emitter);
     emitter.instruction("cbz x2, __rt_sid_empty");                              // the empty string has its own PHP rules and never reaches the scanner
 
     // -- classify the operand under PHP's numeric-string grammar --
@@ -131,7 +132,8 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.label("__rt_sid_int_value");
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the +1/-1 delta for the integer increment
     emitter.instruction("adds x15, x15, x3");                                   // apply the increment and record signed overflow
-    emitter.instruction("b.vs __rt_sid_float");                                 // PHP promotes an overflowing integer increment to a float
+    let overflow = super::strict_inc_dec::string_overflow_target(emitter);
+    emitter.instruction(&format!("b.vs {overflow}"));                           // apply this entry's policy when the signed integer step overflows
     emitter.instruction("mov x1, x15");                                         // pass the new integer as the boxing helper's low payload word
     emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a second word
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = int
@@ -139,6 +141,7 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("b __rt_sid_return");                                   // share the epilogue with every other result path
 
     // -- float-shaped (or out-of-range) numeric string: reparse and add the delta as a double --
+    super::strict_inc_dec::string_overflow_dispatch(emitter);
     emitter.label("__rt_sid_float");
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the clipped numeric run for the libc parser
     emitter.instruction("mov x1, #0");                                          // strtod endptr = NULL: the run is already clipped
@@ -287,7 +290,7 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
 fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_inc_dec (PHP ++/-- on a string) ---");
-    emitter.label_global("__rt_str_inc_dec");
+    super::strict_inc_dec::string_entries(emitter);
 
     // -- frame: [rbp-8] ptr, [rbp-16] len, [rbp-24] delta, [rbp-32] numeric run, [rbp-40] carry prefix --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before nested runtime and libc calls
@@ -296,6 +299,7 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the operand string pointer for the carry and unchanged paths
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the operand string length for the carry and unchanged paths
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the +1/-1 delta for every result path
+    super::strict_inc_dec::save_string_policy(emitter);
     emitter.instruction("test rdx, rdx");                                       // does the operand hold any byte at all?
     emitter.instruction("jz __rt_sid_empty_x86");                               // the empty string has its own PHP rules and never reaches the scanner
 
@@ -372,7 +376,8 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_sid_int_value_x86");
     emitter.instruction("add rax, QWORD PTR [rbp - 24]");                       // apply the +1/-1 delta and record signed overflow
-    emitter.instruction("jo __rt_sid_float_x86");                               // PHP promotes an overflowing integer increment to a float
+    let overflow = super::strict_inc_dec::string_overflow_target(emitter);
+    emitter.instruction(&format!("jo {overflow}"));                             // apply this entry's policy when the signed integer step overflows
     emitter.instruction("mov rdi, rax");                                        // pass the new integer as the boxing helper's low payload word
     emitter.instruction("xor esi, esi");                                        // integer payloads do not use a second word
     emitter.instruction("xor eax, eax");                                        // runtime tag 0 = int
@@ -380,6 +385,7 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_sid_return_x86");                             // share the epilogue with every other result path
 
     // -- float-shaped (or out-of-range) numeric string: reparse and add the delta as a double --
+    super::strict_inc_dec::string_overflow_dispatch(emitter);
     emitter.label("__rt_sid_float_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the clipped numeric run for the libc parser
     emitter.instruction("xor esi, esi");                                        // strtod endptr = NULL: the run is already clipped
@@ -526,6 +532,7 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
 /// - **AArch64**: `x0` = borrowed boxed Mixed cell, `x1` = delta → `x0` = owned Mixed cell.
 /// - **x86_64**: `rax` = borrowed boxed Mixed cell, `rdi` = delta → `rax` = owned Mixed cell.
 pub fn emit_mixed_inc_dec(emitter: &mut Emitter) {
+    super::strict_inc_dec::mixed_entry(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_inc_dec_linux_x86_64(emitter);
         return;

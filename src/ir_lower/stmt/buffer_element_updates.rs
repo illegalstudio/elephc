@@ -88,6 +88,7 @@ impl BufferIncDec<'_> {
         if self.published.is_some() {
             let next = match self.element {
                 ScalarBufferElement::Float => stored,
+                ScalarBufferElement::Int if crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode).checked_overflow() => stored,
                 ScalarBufferElement::Int => {
                     let one = lower_int_one(ctx, span);
                     let op = if self.increment { Op::ICheckedAdd } else { Op::ICheckedSub };
@@ -224,6 +225,10 @@ fn lower_step(
     match element {
         ScalarBufferElement::Int => {
             let one = lower_int_one(ctx, span);
+            if crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode).checked_overflow() {
+                let operation = if increment { crate::ir::MixedNumericOp::Add } else { crate::ir::MixedNumericOp::Sub };
+                return crate::ir_lower::checked_arithmetic::binary(ctx, old, operation, one, span);
+            }
             let op = if increment { Op::ICheckedAddToInt } else { Op::ICheckedSubToInt };
             ctx.emit_value(
                 op,

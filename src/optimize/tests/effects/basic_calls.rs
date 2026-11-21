@@ -415,3 +415,56 @@ fn test_function_effects_keep_declared_int_return_verification() {
     assert_eq!(effects["relay"], Effect::PURE);
     assert!(effects["shadowed"].may_throw);
 }
+
+/// Static publication preserves cleanup callbacks even when its initializer is a pure scalar.
+#[test]
+fn test_effect_analysis_preserves_static_binding_exception_boundaries() {
+    let source = "<?php class StaticEffectOwner { public function __destruct() { \
+        throw new RuntimeException('retired'); } } $value=new StaticEffectOwner(); \
+        try { static $value=1; } catch (Throwable $error) { echo 'caught'; } finally { echo 'done'; }";
+    let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+    let StmtKind::Try { try_body, .. } = &program.last().unwrap().kind else { panic!("static try fixture"); };
+    let effect = stmt_effect(&try_body[0]);
+    assert!(effect.may_throw && effect.has_side_effects && effect.writes_globals);
+    for optimized in [prune_constant_control_flow(program.clone()), eliminate_dead_code(program)] {
+        assert!(optimized.iter().any(|statement| matches!(&statement.kind,
+            StmtKind::Try { catches, finally_body: Some(_), .. } if !catches.is_empty())),
+            "{optimized:?}");
+    }
+}
+
+/// Reference formation survives DCE, while deferred body effects remain separate from creation.
+#[test]
+fn test_reference_capture_creation_survives_dead_expression_elimination() {
+    for (capture, observable) in [("&$missing", true), ("$existing", false)] {
+        let source = format!("<?php (function() use ({capture}) {{ echo 'deferred'; throw new Exception(); }});");
+        let program = crate::parser::parse(&crate::lexer::tokenize(&source).unwrap()).unwrap();
+        let StmtKind::ExprStmt(expr) = &program[0].kind else { panic!("expected closure creation") };
+        let effect = expr_effect(expr);
+        assert_eq!(effect.has_side_effects, observable);
+        assert!(!effect.may_throw, "a deferred body cannot throw at creation");
+        let optimized = eliminate_dead_code(program);
+        assert_eq!(optimized.iter().any(|statement| matches!(statement.kind, StmtKind::ExprStmt(_))), observable);
+    }
+}
+
+/// Caller reference formation stays observable even when a declared callable body does nothing.
+#[test]
+fn test_reference_parameter_bindings_are_observable_for_empty_bodies() {
+    let source = "<?php function refEmpty(mixed &$value):void {} function valueEmpty(mixed $value):void {} class RefEffectHost {public static function stat(mixed &$value):void {} public function inst(mixed &$value):void {}}";
+    let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+    let (functions, statics, methods) = compute_program_callable_effects(&program);
+    assert!(functions["refEmpty"].has_side_effects);
+    assert!(!functions["refEmpty"].may_throw);
+    assert_eq!(functions["valueEmpty"], Effect::PURE);
+    assert!(statics["RefEffectHost::stat"].has_side_effects);
+    assert!(methods["RefEffectHost::inst"].has_side_effects);
+    for (signature, observable) in [("mixed &$value", true), ("mixed $value", false)] {
+        let source = format!("<?php $callback=function({signature}):void {{}};");
+        let program = crate::parser::parse(&crate::lexer::tokenize(&source).unwrap()).unwrap();
+        let StmtKind::Assign { value, .. } = &program[0].kind else { panic!("expected closure assignment") };
+        let effect = crate::optimize::effects::expr_call_effect(value);
+        assert_eq!(effect.has_side_effects, observable);
+        assert!(!effect.may_throw);
+    }
+}

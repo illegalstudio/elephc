@@ -33,6 +33,8 @@ pub enum CompileErrorKind {
     /// The backend reads such an argument while lowering the call (a result-shape flag, a
     /// constant or class name), so no spelling of the call can defer it to run time.
     AotLiteralRequired,
+    /// A selected semantic guarantee rejects this operation through every invocation spelling.
+    SemanticViolation(elephc_semantics::StrictFeature),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -71,6 +73,11 @@ impl CompileError {
             kind: CompileErrorKind::AotLiteralRequired,
             ..Self::new(span, message)
         }
+    }
+
+    /// Retains the owning guarantee so fallback dispatch cannot erase a semantic rejection.
+    pub fn semantic_violation(span: Span, feature: elephc_semantics::StrictFeature, message: &str) -> Self {
+        Self { kind: CompileErrorKind::SemanticViolation(feature), ..Self::new(span, message) }
     }
 
     /// Sets the file name and returns self for chaining.

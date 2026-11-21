@@ -23,9 +23,8 @@
 //!   reads stay on the nominal path. Only a `mixed`/union source needs the `: mixed`
 //!   `__elephc_cast_object_dynamic`, because the object it returns unchanged may be of any
 //!   class.
-//! - Pay-for-use: injected only when the program spells an object cast anywhere, detected
-//!   through the shared exhaustive walk in `opcache_prelude::detect` rather than a second
-//!   traversal of its own.
+//! - Pay-for-use: injected for object casts or builtin/helper and dynamic callable dependencies, detected
+//!   through the shared exhaustive syntax and declaration-usage walkers.
 //! - Injection runs LATE, past the pipeline's own name-resolution pass, because the cast is
 //!   detected syntactically and an autoloaded class file is not part of the AST before
 //!   `autoload::run`. The declarations are name-resolved on the way in, the way `autoload::run`
@@ -130,10 +129,10 @@ pub(crate) fn object_cast_declarations() -> Program {
     internal_declarations(|| vec![cast_object_decl(), cast_object_dynamic_decl()])
 }
 
-/// Returns whether the program spells a `(object)` cast anywhere.
+/// Returns whether explicit casts or reachable builtin catalogs require object conversion.
 ///
-/// Rides on `opcache_prelude::detect`'s single exhaustive walk (see
-/// [`SymbolKind::ObjectCast`]) so no second traversal can drift out of step with the AST.
+/// Uses the shared exhaustive syntax and declaration-usage walkers so no private
+/// traversal can drift out of step with the AST.
 ///
 /// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): the scan walks the whole
 /// program, so an embedder calling it without the CLI driver's wrapper gets the same stack budget.
@@ -145,7 +144,14 @@ pub fn program_uses_object_cast(program: &[crate::parser::ast::Stmt]) -> bool {
 
 /// The body of [`program_uses_object_cast`], run on the stack `with_compiler_stack` sized.
 fn program_uses_object_cast_on_compiler_stack(program: &[crate::parser::ast::Stmt]) -> bool {
-    detect::first_reference(program, Symbol::syntactic(SymbolKind::ObjectCast)).is_some()
+    if detect::first_reference(program, Symbol::syntactic(SymbolKind::ObjectCast)).is_some() {
+        return true;
+    }
+    // Prepared builtin bodies can contain implicit object conversion even without cast syntax.
+    // The ordinary usage walk also covers runtime-selected callables and opaque eval catalogs.
+    let usage = crate::optimize::reachability::usage::scan_program(program);
+    usage.hazards.dynamic_function || usage.required_prelude_helpers.contains(DYNAMIC_CAST_HELPER)
+        || usage.required_prelude_helpers.contains(CAST_HELPER)
 }
 
 /// Returns the span of a user declaration of either helper name, if the program has one.
@@ -158,7 +164,7 @@ fn declared_helper(program: &[crate::parser::ast::Stmt]) -> Option<(&'static str
     None
 }
 
-/// Prepends the object-cast helpers when the program contains an object cast; otherwise
+/// Prepends object-cast helpers for explicit casts and implicit builtin dependencies; otherwise
 /// returns the program unchanged so unrelated binaries pay nothing. The prelude is hoisted
 /// function declarations only, so prepending does not change top-level execution order.
 ///
@@ -176,21 +182,33 @@ fn declared_helper(program: &[crate::parser::ast::Stmt]) -> Option<(&'static str
 /// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
 /// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
 /// budget.
+#[allow(dead_code)] // Library compatibility entry; the compiler passes an explicit profile.
 pub fn inject_if_used(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Result<Program, CompileError> {
+    inject_with_semantics(program, inventory, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Reserves conversion dependencies for checked callable catalogs materialized after frontend scans.
+pub fn inject_with_semantics(
+    program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<Program, CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
-        inject_if_used_on_compiler_stack(program, inventory)
+        inject_if_used_on_compiler_stack(program, inventory,
+            crate::semantics::conversions::checked_references(profile, crate::source::SourceMode::Php))
     })
 }
 
-/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+/// Shares explicit usage and checked late-callable dependencies on a compiler-sized stack.
 fn inject_if_used_on_compiler_stack(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
+    checked_callables: bool,
 ) -> Result<Program, CompileError> {
-    if !program_uses_object_cast(&program) {
+    if !checked_callables && !program_uses_object_cast(&program) {
         return Ok(program);
     }
     if let Some((helper, span)) = declared_helper(&program) {
@@ -230,6 +248,7 @@ mod tests {
     #[test]
     fn a_program_without_an_object_cast_carries_nothing() {
         assert!(!program_uses_object_cast(&parsed("<?php $a = (array) 1;")));
+        assert!(!program_uses_object_cast(&parsed("<?php function __elephc_cast_object(mixed $v): int { return 1; } echo __elephc_cast_object(2);")));
     }
 
     /// The cast is detected inside a function body, not only at top level.
@@ -238,6 +257,30 @@ mod tests {
         assert!(program_uses_object_cast(&parsed(
             "<?php function f($v) { return (object) $v; }"
         )));
+    }
+
+    /// Late checked builtin wrappers retain object conversion without a source-level cast or call.
+    #[test]
+    fn checked_callable_catalogs_reserve_object_cast_dependencies() {
+        use elephc_semantics::{SemanticProfile, StrictFeature};
+        for feature in [None, Some(StrictFeature::Casts), Some(StrictFeature::Coercions), Some(StrictFeature::Locals)] {
+            let profile = feature.map_or(SemanticProfile::PERMISSIVE,
+                |feature| SemanticProfile::PERMISSIVE.with(feature, true));
+            let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+            let program = inject_with_semantics(parsed("<?php echo 1;"), &mut inventory, profile).unwrap();
+            let helpers = program.iter().filter(|stmt| matches!(&stmt.kind,
+                StmtKind::FunctionDecl { name, .. } if name.as_str() == DYNAMIC_CAST_HELPER)).count();
+            assert_eq!(helpers, usize::from(feature.is_some()), "{feature:?}");
+        }
+    }
+
+    /// Prepared settype and runtime catalogs require conversion even without cast syntax.
+    #[test]
+    fn object_cast_dependencies_include_prepared_builtins_and_runtime_catalogs() {
+        for source in ["<?php $cast = settype(...);", "<?php $value = 1; settype($value, 'object');",
+            "<?php $name = $argv[1]; $name($value, 'object');", "<?php eval($argv[1]);"] {
+            assert!(program_uses_object_cast(&parsed(source)), "{source}");
+        }
     }
 
     /// `__elephc_cast_object` is declared `: stdClass`, which is what keeps

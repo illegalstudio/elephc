@@ -39,7 +39,7 @@ pub(in crate::interpreter) fn eval_builtin_curl_multi_info_read_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+    with_eval_builtin_call_arguments("curl_multi_info_read", args, context, scope, values, |evaluated_args, context, _, values| {
         let (bound, _) = bind_evaluated_ref_builtin_args(
             &["multi_handle", "queued_messages"],
             &evaluated_args,

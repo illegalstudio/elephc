@@ -9,6 +9,32 @@
 //!   so surrounding try/catch execution can consume it.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+
+/// Consumes a previous Throwable while reporting a declaration's failed weak conversion.
+pub(in crate::interpreter) fn eval_throw_type_error_with_previous(
+    message: &str, previous: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let empty = RuntimeCellHandle::from_raw(std::ptr::null_mut()).borrowed();
+    let previous = RuntimeOwnerSlot::new(previous);
+    let exception = RuntimeOwnerSlot::new(empty);
+    let text = RuntimeOwnerSlot::new(empty);
+    let code = RuntimeOwnerSlot::new(empty);
+    with_runtime_owners(&(&previous, &(&exception, &(&text, &code))), || {
+        let result = (|| {
+            exception.initialize(values.new_object("TypeError")?);
+            text.initialize(values.string(message)?);
+            code.initialize(values.int(0)?);
+            values.construct_object(exception.borrowed(),
+                vec![text.borrowed(), code.borrowed(), previous.borrowed()])?;
+            context.set_pending_throw(exception.take());
+            Err(EvalStatus::UncaughtThrowable)
+        })();
+        finish_synthesized_method_arguments(result,
+            [previous.take(), exception.take(), text.take(), code.take()], context, values).map(|_| ())
+    })
+}
 
 /// Constructs a builtin exception, releasing borrowed constructor operands before publishing its owner.
 pub(in crate::interpreter) fn eval_throw_builtin_exception<T>(

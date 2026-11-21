@@ -20,7 +20,7 @@ description: "Compiler internals for intval(): lowering path, type checks, and r
 ## Semantic descriptor
 
 - **Target strategy**: `eir_graph`
-- **Validation**: `signature`
+- **Validation**: `shared`
 - **Result type source**: `declared`
 - **Result ownership**: `non_heap`
 - **Effects**: `shared`

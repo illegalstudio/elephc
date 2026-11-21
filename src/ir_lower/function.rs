@@ -30,8 +30,10 @@ use crate::types::{
     PackedClassInfo, PhpType, ReturnArgAlias, TypeEnv,
 };
 
+mod parameter_guards;
+pub(crate) use parameter_guards::lower_callable_parameter_guard;
 mod builtin_wrappers;
-pub(in crate::ir_lower) use builtin_wrappers::lower_builtin_callable_body;
+pub(in crate::ir_lower) use builtin_wrappers::lower_operator_callable_body;
 mod closure_defaults;
 pub(crate) use crate::types::deferred_defaults::contains_deferred_error;
 mod object_comparisons;
@@ -69,12 +71,16 @@ pub(crate) fn lower_main(
     program: &Program,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let web = module.web;
     let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
     function.flags.is_main = true;
+    function.flags.tracks_local_binding_state = [elephc_semantics::StrictFeature::Locals,
+        elephc_semantics::StrictFeature::Initialization, elephc_semantics::StrictFeature::Mixed,
+        elephc_semantics::StrictFeature::ArrayTypes].iter()
+        .any(|feature| check_result.semantic_profile.contains(*feature));
     let all_global_var_names = collect_global_var_names(program);
     let mut function_global_names =
         crate::ir_lower::program::collect_function_global_names(program);
@@ -85,6 +91,7 @@ pub(crate) fn lower_main(
     );
     let top_level_env = web_gated_global_env(&check_result.global_env, web);
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -112,6 +119,7 @@ pub(crate) fn lower_main(
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
         &check_result.local_value_read_types,
+        &check_result.local_store_contracts,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -191,7 +199,7 @@ pub(crate) fn lower_user_function(
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let web = module.web;
@@ -241,6 +249,7 @@ pub(crate) fn lower_user_function(
         signature.is_generator,
     );
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -268,6 +277,7 @@ pub(crate) fn lower_user_function(
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
         &check_result.local_value_read_types,
+        &check_result.local_store_contracts,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -308,7 +318,7 @@ pub(crate) fn lower_class_method(
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let web = module.web;
@@ -373,6 +383,7 @@ pub(crate) fn lower_class_method(
         signature.is_generator,
     );
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -400,6 +411,7 @@ pub(crate) fn lower_class_method(
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
         &check_result.local_value_read_types,
+        &check_result.local_store_contracts,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -467,7 +479,7 @@ pub(crate) fn lower_eval_aot_function(
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let return_type = PhpType::Mixed;
@@ -503,6 +515,7 @@ pub(crate) fn lower_eval_aot_function(
     // An eval fragment was never checked, so no promotion decision exists for its locals.
     let promotable_arrays = crate::types::PromotableArrays::default();
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -530,6 +543,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
         &check_result.local_value_read_types,
+        &check_result.local_store_contracts,
 
         &boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -565,16 +579,15 @@ pub(crate) fn lower_eval_aot_scope_function(
     name: &str,
     body: &[Stmt],
     scope_reads: &std::collections::BTreeSet<String>,
+    use_read_params: bool,
     scope_direct_writes: &std::collections::BTreeSet<String>,
     scope_flush_writes: &std::collections::BTreeSet<String>,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let return_type = PhpType::Mixed;
-    let use_read_params =
-        !scope_reads.is_empty() && scope_direct_writes.is_empty() && scope_flush_writes.is_empty();
     let params = if use_read_params {
         scope_reads
             .iter()
@@ -642,6 +655,7 @@ pub(crate) fn lower_eval_aot_scope_function(
     // An eval fragment was never checked, so no promotion decision exists for its locals.
     let promotable_arrays = crate::types::PromotableArrays::default();
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -669,6 +683,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
         &check_result.local_value_read_types,
+        &check_result.local_store_contracts,
 
         &boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -730,7 +745,7 @@ pub(crate) fn lower_property_init_thunk(
     class_info: &ClassInfo,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     if !super::property_initializers::needs_initializer(class_info) {
@@ -768,6 +783,7 @@ pub(crate) fn lower_property_init_thunk(
     env.insert("this".to_string(), this_type.clone());
     let params = vec![("this".to_string(), this_type)];
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         Some(class_info),
         &mut module.data,
@@ -795,6 +811,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
         &check_result.local_value_read_types,
+        &check_result.local_store_contracts,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -937,7 +954,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     provided_args: usize,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let function_name = dynamic_constructor_thunk_name(class_info.class_id, provided_args);
@@ -1156,6 +1173,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     }
     let web = module.web;
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -1183,6 +1201,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
         &check_result.local_value_read_types,
+        &check_result.local_store_contracts,
 
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -1238,7 +1257,7 @@ pub(crate) fn lower_clone_override_function(
     module: &mut Module,
     check_result: &CheckResult,
     functions: &std::collections::HashMap<String, FunctionSig>,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) -> FunctionSig {
     let sig = FunctionSig {
@@ -1286,6 +1305,7 @@ pub(crate) fn lower_clone_override_function(
     }
     let web = module.web;
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -1313,6 +1333,7 @@ pub(crate) fn lower_clone_override_function(
         &check_result.member_receiver_types,
         &check_result.array_append_element_types,
         &check_result.local_value_read_types,
+        &check_result.local_store_contracts,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
         &check_result.generic_call_sites,
@@ -1378,7 +1399,7 @@ pub(crate) fn eval_native_default_helper_name(
 pub(crate) fn lower_eval_native_default_helpers(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let uses_eval = super::program::all_lowered_functions(module).any(|function| {
@@ -1422,7 +1443,7 @@ pub(crate) fn lower_eval_native_default_helpers(
                             .cloned().unwrap_or_else(|| class_name.clone());
                         specs.push((eval_native_default_helper_name(
                             class_info.class_id, is_static, method_name, param_index,
-                        ), Some(scope), default.clone()));
+                        ), Some(scope), signature.default_value(param_index).expect("present method default")));
                     }
                 }
             }
@@ -1439,7 +1460,7 @@ pub(crate) fn lower_eval_native_default_helpers(
                 )
             {
                 specs.push((format!("__elephc_eval_default\\function\\{name}\\{index}"),
-                    None, default.clone()));
+                    None, signature.default_value(index).expect("present function default")));
             }
         }
     }
@@ -1516,6 +1537,7 @@ pub(crate) fn lower_eval_native_default_helpers(
         // The helper inherits class scope through `current_class` below. It must not enter the
         // separate property-initializer path, which skips `body` and expects an object receiver.
         let lower = || lower_body_into_function(
+            module.semantic_profile,
             &mut function,
             None,
             &mut module.data,
@@ -1543,6 +1565,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.member_receiver_types,
             &check_result.array_append_element_types,
             &check_result.local_value_read_types,
+            &check_result.local_store_contracts,
             &check_result.boxed_reference_promotion_sites,
             &check_result.first_class_builtin_call_types,
             &check_result.generic_call_sites,
@@ -1595,7 +1618,7 @@ fn eval_native_default_helper_literal(expr: &ExprKind) -> bool {
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::StringLiteral(_) => true,
-        ExprKind::Negate(inner) => matches!(
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) => matches!(
             &inner.kind,
             ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
         ),
@@ -1784,6 +1807,7 @@ fn lower_closure_function_with_signature(
         ),
     });
     let closures = lower_body_into_function(
+        parent.semantic_profile,
         &mut function,
         None,
         parent.data,
@@ -1811,6 +1835,7 @@ fn lower_closure_function_with_signature(
         parent.member_receiver_types,
         parent.array_append_element_types,
         parent.local_value_read_types,
+        parent.local_store_contracts,
 
         parent.boxed_reference_promotion_sites,
         parent.first_class_builtin_call_types,
@@ -1843,6 +1868,7 @@ fn lower_closure_function_with_signature(
 
 /// Lowers the supplied statements into `function` and appends a default terminator if needed.
 fn lower_body_into_function(
+    semantic_profile: elephc_semantics::SemanticProfile,
     function: &mut Function,
     property_initializers: Option<&ClassInfo>,
     data: &mut crate::ir::DataPool,
@@ -1876,6 +1902,7 @@ fn lower_body_into_function(
     member_receiver_types: &std::collections::HashMap<(String, Span), Option<PhpType>>,
     array_append_element_types: &std::collections::HashMap<(String, Span), Option<PhpType>>,
     local_value_read_types: &crate::types::LocalValueReadTypes,
+    local_store_contracts: &crate::types::LocalStoreContracts,
 
     boxed_reference_promotion_sites: &std::collections::HashMap<
         (String, Span),
@@ -1895,7 +1922,7 @@ fn lower_body_into_function(
     sparse_key_write_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     promotable_arrays: &crate::types::PromotableArrays,
     loop_storage_scope: String,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     current_class: Option<String>,
     return_php_type: PhpType,
     return_type_is_declared: bool,
@@ -1919,7 +1946,10 @@ fn lower_body_into_function(
     // Reuse full lowering so reference/collector validation and exception cleanup stay shared.
     let mut eager_validators = Vec::new();
     if function.flags.is_generator && function.signature.as_ref().is_some_and(|signature|
-        super::object_boundaries::needs_parameter_guards(signature, classes, interfaces)) {
+        super::object_boundaries::needs_parameter_guards(
+            semantic_profile.contains(elephc_semantics::StrictFeature::Nullability)
+                && !function.flags.is_internal,
+            signature, classes, interfaces)) {
         let mut validator = Function::new(crate::names::generator_parameter_guard_name(&function.name),
             IrType::Void, PhpType::Void);
         validator.params = function.params.clone();
@@ -1936,12 +1966,13 @@ fn lower_body_into_function(
             signature.by_ref_return = false;
         }
         eager_validators.extend(lower_body_into_function(
+            semantic_profile,
             &mut validator, None, data, &[], env.clone(), top_level_env.clone(), functions,
             extern_functions, extern_globals, callable_param_sigs, return_alias_summaries,
             fiber_return_sigs, classes, enums, interfaces, declared_trait_names,
             declared_trait_methods, declared_trait_properties, packed_classes, extern_classes,
             throw_access_sites, builtin_call_types, closure_generator_spans,
-            array_push_property_plans, member_receiver_types, array_append_element_types, local_value_read_types,
+            array_push_property_plans, member_receiver_types, array_append_element_types, local_value_read_types, local_store_contracts,
             boxed_reference_promotion_sites, first_class_builtin_call_types, generic_call_sites,
             loop_storage_types, string_incdec_locals, bind_kill_sites, ref_detach_sites,
             retype_sites, mixed_storage_store_sites, sparse_key_write_sites, promotable_arrays,
@@ -2023,11 +2054,19 @@ fn lower_body_into_function(
         let index = signature.params.iter().position(|(candidate, _)| candidate == name)?;
         signature.ref_params.get(index).copied().unwrap_or(false).then(|| name.clone())
     });
+    function.flags.tracks_local_binding_state = super::scope_introspection::body_needs_binding_presence(body)
+        || (semantic_profile.contains(elephc_semantics::StrictFeature::Initialization) && !function.flags.is_internal)
+        || ([elephc_semantics::StrictFeature::Locals, elephc_semantics::StrictFeature::Mixed,
+        elephc_semantics::StrictFeature::ArrayTypes].iter().any(|feature| semantic_profile.contains(*feature))
+        && !function.flags.is_internal
+        && (crate::ir_lower::body_contains_eval_call(body)
+            || local_store_contracts.has_runtime_origins_in_scope(&loop_storage_scope)));
     let mut builder = Builder::new(function);
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);
     builder.position_at_end(entry);
     let mut ctx = LoweringContext::new(
+        semantic_profile,
         builder,
         data,
         env,
@@ -2052,6 +2091,7 @@ fn lower_body_into_function(
         member_receiver_types,
         array_append_element_types,
         local_value_read_types,
+        local_store_contracts,
 
         boxed_reference_promotion_sites,
         first_class_builtin_call_types,
@@ -2123,6 +2163,14 @@ fn lower_body_into_function(
     // `$this` is excluded because it is an object, never a container.
     for (index, (name, php_type)) in params.iter().enumerate() {
         if name == "this" {
+            continue;
+        }
+        if ctx.local_store_contracts.entry_origin(&ctx.loop_storage_scope, name).is_some() {
+            if ctx.local_store_contracts.entry_is_reference(&ctx.loop_storage_scope, name) {
+                ctx.initialize_reference_parameter_binding(name, php_type);
+            } else {
+                ctx.privatize_parameter_binding(name, php_type);
+            }
             continue;
         }
         if !FunctionSig::parameter_needs_owned_shadow(
@@ -2923,7 +2971,7 @@ fn direct_closure_return_expr_type(
             }
         }
     }
-    crate::types::checker::infer_expr_type_syntactic(expr)
+    crate::types::checker::infer_expr_type_syntactic(expr, ctx.semantic_profile)
 }
 
 /// Returns literal storage for a closure return, resolving elements and spread keys
@@ -3039,7 +3087,7 @@ fn direct_closure_return_assoc_literal_type(
     for (key, value) in pairs {
         let next_key = crate::types::normalized_array_key_type(
             key,
-            crate::types::checker::infer_expr_type_syntactic(key),
+            crate::types::checker::infer_expr_type_syntactic(key, ctx.semantic_profile), ctx.semantic_profile,
         );
         let next_value = direct_closure_return_array_item_type(
             value,

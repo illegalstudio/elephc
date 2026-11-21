@@ -20,7 +20,7 @@ class Box { public function __construct(public T $value) {} public function id(T
 $box = new Box(7);
 echo get_class($box), ":", $box->value, "|", $box->id(8);
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "Box<int>:7|8");
     }
 }
@@ -37,14 +37,14 @@ echo get_class($box), ":", $box->value;
 "#;
     assert_eq!(compile_and_run(source), "Box<int>:7");
     let portable = source.replace("Box<int>(7)", "Box(7)");
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(&portable, flags), "Box<int>:7");
     }
 }
 
 /// An ordinary class method specializes its returned container at each call's concrete type.
 #[test]
-fn test_docblock_method_templates_specialize_with_and_without_strict_php() {
+fn test_docblock_method_templates_specialize_with_and_without_php_only() {
     let source = r#"<?php
 /** @template T */
 class Box {
@@ -68,7 +68,7 @@ $text = $f->wrap("seven");
 echo get_class($number), ":", $number->get() + 1, "|",
     get_class($text), ":", strtoupper($text->get());
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(
             compile_cli_file_and_run_with_flags(source, flags),
             "Box<int>:8|Box<string>:SEVEN",
@@ -245,7 +245,7 @@ class Repo {
 }
 echo (new Repo())->accept(new Other());
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         let warnings = compile_cli_file_with_flags_capturing_stderr(source, flags);
         assert!(
             warnings.contains(
@@ -272,7 +272,7 @@ class Repo {
 }
 (new Repo())->values(7);
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         let error = compile_cli_file_with_flags_expect_failure(source, flags);
         assert!(error.contains("array<int>") && error.contains("array<string>"), "{error}");
     }
@@ -283,7 +283,7 @@ class Repo {
 fn test_docblock_method_templates_example_runs_in_both_modes() {
     let source = include_str!("../../examples/generics-docblock/main.php");
     let expected = "42|hi|ok\n7|ab\n42|21\n10|x\n7|seven\n8|EIGHT\nBox<int>|Box<string>|Pair<int>\n";
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), expected, "{flags:?}");
     }
 }
@@ -302,7 +302,7 @@ fn test_docblock_on_the_declaration_line_binds_to_it() {
         "<?php\n/** @template T */\nclass Box { public function __construct(public T $v) {} }\n\
          $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
     ];
-    // Without `--strict-php` only: the written `new Box<int>` is an elephc extension it refuses.
+    // Without `--php-only` only: the written `new Box<int>` is an elephc extension it refuses.
     for source in sources {
         assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box<int>:7", "{source}");
     }
@@ -326,7 +326,7 @@ enum Id {
 }
 echo Id::A->id(ARG);
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(
             compile_cli_file_and_run_with_flags(&template.replace("ARG", "7"), flags),
             "7",
@@ -355,7 +355,7 @@ $number = new Box(5);
 $text = new Box("x");
 echo get_class($number), ":", $number->value, "|", get_class($text), ":", $text->value;
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(
             compile_cli_file_and_run_with_flags(source, flags),
             "Box<int>:5|Box<string>:x",
@@ -686,7 +686,7 @@ fn test_one_line_block_reads_its_opening_tag() {
 /// A method template whose only `@param` loses to a native `mixed` is bound by no argument, so
 /// an ordinary call reads it as `mixed`: the native signature php-src runs. A sibling whose
 /// `@param` is adopted still specializes, and a written `id<int>(7)` still selects its own
-/// instantiation (native syntax, so outside `--strict-php`).
+/// instantiation (native syntax, so outside `--php-only`).
 #[test]
 fn test_docblock_method_template_lost_to_native_mixed_still_compiles() {
     let declaration = r#"<?php
@@ -709,7 +709,7 @@ $repo = new Repo();
     let source = format!(
         "{declaration}echo $repo->id(7), \"|\", $repo->id(\"x\"), \"|\", $repo->same(8) + 1, \"|\", $repo->same(\"y\");\n"
     );
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(&source, flags), "7|x|9|y");
     }
     let written = format!("{declaration}echo $repo->id<int>(7) + 1, \"|\", $repo->id(\"x\");\n");
@@ -747,7 +747,7 @@ function pick($a, $b) { return $b; }
 function same($v) { return $v; }
 echo (new Locator())->make("Model")->hi(), "|", pick(1, "two"), "|", var_export(same(null), true);
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         let warnings = compile_cli_file_with_flags_capturing_stderr(source, flags);
         assert!(!warnings.contains("its bound"), "{warnings}");
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "hi|two|NULL", "{flags:?}");
@@ -842,7 +842,7 @@ function same(object $o): object { return $o; }
     "|", opt(new User()), opt(null), "|", same(new User())->hi();
 "#
     );
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         let warnings = compile_cli_file_with_flags_capturing_stderr(&valid, flags);
         assert!(!warnings.contains("its bound"), "{warnings}");
         assert_eq!(
@@ -966,7 +966,7 @@ function wide(object $m): Model { return $m; }
     let valid = format!(
         "{declarations}echo id(new User())->hi(), \"|\", make()->name(), \"|\", thing(new User())->hi(), \"|\", wide(new User())->hi();\n"
     );
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(
             compile_cli_file_and_run_with_flags(&valid, flags),
             "hi|model|hi|hi",

@@ -37,7 +37,7 @@ description: "Compiler internals for popen(): lowering path, type checks, and ru
 ## Signature summary
 
 ```php
-function popen(string $command, string $mode): mixed
+function popen(string $command, string $mode): resource|false
 ```
 
 ## What the type checker enforces

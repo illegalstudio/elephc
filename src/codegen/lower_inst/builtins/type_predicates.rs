@@ -41,7 +41,7 @@ pub(crate) fn lower_type_predicate(
     }
 }
 
-/// Lowers a static PHP type predicate for concrete non-Mixed values.
+/// Classifies scalar storage and boxed values without confusing missing strings with PHP strings.
 pub(crate) fn lower_static_type_predicate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -51,6 +51,10 @@ pub(crate) fn lower_static_type_predicate(
     ensure_arg_count(inst, name, 1)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.value_php_type(value)?;
+    if ty == PhpType::Str && expected == PhpType::Str {
+        predicates::emit_string_kind_bool(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
     if ty == PhpType::TaggedScalar {
         if expected == PhpType::Int {
             emit_tagged_scalar_int_predicate(ctx, value)?;

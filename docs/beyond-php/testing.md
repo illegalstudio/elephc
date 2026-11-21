@@ -92,7 +92,7 @@ What it does, in order:
    working directory, and exits with the suite's exit code.
 
 `--filter PATTERN` keeps the tests whose `Class::method` contains the pattern, before
-compilation. Compile options after the path (`--strict-php`, `--with-<crate>`,
+compilation. Compile options after the path (`--php-only`, `--with-<crate>`,
 `--heap-size`, `--php-version`, `--define`, `--ini`) reach the compiler; output modes
 and `--target` are refused. An empty run (no test files, no test classes, a filter that
 matches nothing) is an error, not a green build. See the

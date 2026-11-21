@@ -165,13 +165,14 @@ pub(in crate::interpreter) fn eval_empty_arg(
     }
     if let EvalExpr::ArrayGet { array, index } = arg {
         let mut empty = false;
-        with_eval_void_operands(&[array.as_ref(), index.as_ref()], context, scope, values,
+        with_eval_probe_void_operands(&[array.as_ref(), index.as_ref()], context, scope, values,
             |args, context, _, values| {
                 let array = args[0].borrowed();
                 let index = args[1].borrowed();
                 if values.type_tag(array)? == EVAL_TAG_OBJECT {
                     empty = eval_array_access_empty_result(array, index, context, values)?;
                 } else {
+                    checked_array_keys::for_receiver(array, index, context, values)?;
                     let value = values.array_get(array, index)?;
                     let answer = values.truthy(value).map(|truthy| !truthy);
                     let released = eval_release_value(context, values, value);

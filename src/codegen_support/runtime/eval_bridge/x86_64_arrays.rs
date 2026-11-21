@@ -176,20 +176,23 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed associative-array Mixed cell to Rust
 
-    label_c_global(emitter, "__elephc_eval_value_array_get");
-    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
-    emitter.instruction("sub rsp, 16");                                         // reserve local slots for the boxed array receiver
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the boxed array receiver while coercing the key
-    emitter.instruction("mov rdi, rsi");                                        // pass the boxed key to the eval key normalizer
-    emitter.instruction("call __elephc_eval_key_normalize");                    // normalize eval array key to key_lo/key_hi
-    emitter.instruction("mov rsi, rax");                                        // pass normalized key_lo to the reader
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed array receiver
-    emitter.instruction("xor ecx, ecx");                                        // eval bridge lookup reports misses through its own result contract
-    emitter.instruction("call __rt_mixed_array_get");                           // read the boxed Mixed element or Mixed(null)
-    emitter.instruction("add rsp, 16");                                         // release the array-get wrapper slots
-    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
-    emitter.instruction("ret");                                                 // return the boxed element to Rust
+    for (name, mode) in [("__elephc_eval_value_array_get", elephc_semantics::indexing::NORMALIZED_KEY_TUPLE),
+        ("__elephc_eval_value_array_get_checked", elephc_semantics::indexing::REPORT_MISSING | elephc_semantics::indexing::NORMALIZED_KEY_TUPLE)] {
+        label_c_global(emitter, name);
+        emitter.instruction("push rbp");                                        // preserve the Rust caller frame pointer across helper calls
+        emitter.instruction("mov rbp, rsp");                                    // establish a stable wrapper frame pointer
+        emitter.instruction("sub rsp, 16");                                     // reserve local slots for the boxed array receiver
+        emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                    // save the boxed array receiver while coercing the key
+        emitter.instruction("mov rdi, rsi");                                    // pass the boxed key to the eval key normalizer
+        emitter.instruction("call __elephc_eval_key_normalize");                // normalize eval array key to key_lo/key_hi
+        emitter.instruction("mov rsi, rax");                                    // pass normalized key_lo to the reader
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // reload the boxed array receiver
+        crate::codegen_support::abi::emit_load_int_immediate(emitter, "rcx", mode);
+        emitter.instruction("call __rt_mixed_array_get");                       // read the boxed Mixed element or Mixed(null)
+        emitter.instruction("add rsp, 16");                                     // release the array-get wrapper slots
+        emitter.instruction("pop rbp");                                         // restore the Rust caller frame pointer
+        emitter.instruction("ret");                                             // return the boxed element to Rust
+    }
 
     label_c_global(emitter, "__elephc_eval_value_array_key_exists");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls

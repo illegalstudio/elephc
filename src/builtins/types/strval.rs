@@ -5,56 +5,12 @@
 //! - The builtin registry through `crate::builtins::types`.
 //!
 //! Key details:
-//! - Lowering reuses the general EIR string cast instead of defining a builtin-specific opcode.
+//! - Prepared lowering shares explicit-cast behavior and publishes an independent string owner.
 
-use crate::builtins::semantics::{
-    BuiltinCallablePolicy, BuiltinEffects, BuiltinLowering, BuiltinLoweringContext,
-    BuiltinLoweringError, BuiltinRequirements, BuiltinResultOwnership, BuiltinResultType,
-    BuiltinRuntimeFunctions, BuiltinSemanticInput, BuiltinSemantics, BuiltinTargetStrategy,
-    BuiltinTargetSupport, BuiltinValidation, LoweredBuiltinValue, NormalizedBuiltinCall,
-};
-use crate::ir::{Immediate, IrType, Op};
-use crate::types::PhpType;
+use crate::builtins::semantics::BuiltinResultOwnership;
+use crate::parser::ast::CastType;
 
 builtin! {
     contract: "strval",
-    semantics: BuiltinSemantics {
-        validation: BuiltinValidation::SignatureOnly,
-        result_type: BuiltinResultType::Declared,
-        effects: BuiltinEffects::Shared(effects),
-        result_ownership: BuiltinResultOwnership::MayAliasArguments,
-        requirements: BuiltinRequirements::Static(&[]),
-        target_strategy: BuiltinTargetStrategy::EirPrimitive,
-        target_support: BuiltinTargetSupport::All,
-        runtime_functions: BuiltinRuntimeFunctions::None,
-        argument_lowering: crate::builtins::semantics::BuiltinArgumentLowering::Standard,
-        callable: BuiltinCallablePolicy::StaticOnly(
-            "runtime-selected strval requires a statically represented source value",
-        ),
-        lowering: BuiltinLowering::Eir(lower),
-    },
-}
-
-/// Returns the effect contract of the reusable EIR string cast.
-fn effects(_input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
-    Op::Cast.default_effects()
-}
-
-/// Lowers `strval` through the reusable EIR string-cast operation.
-fn lower(
-    ctx: &mut dyn BuiltinLoweringContext,
-    call: &NormalizedBuiltinCall<'_>,
-) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
-    let value = call.operand(0)?;
-    if ctx.value_php_type(value).codegen_repr() == PhpType::Str {
-        return Ok(LoweredBuiltinValue { value });
-    }
-    Ok(ctx.emit_value(
-        Op::Cast,
-        vec![value],
-        Some(Immediate::CastTarget(IrType::Str)),
-        call.result_type.clone(),
-        Op::Cast.default_effects(),
-        Some(call.span),
-    ))
+    semantics: super::scalar_conversion::semantics(CastType::String, BuiltinResultOwnership::Fresh),
 }

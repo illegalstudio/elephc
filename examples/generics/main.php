@@ -240,5 +240,5 @@ echo (new Box(7))->get(), '|', (new Box('inferred'))->get(), "\n";
 //
 //     for ($i = 1; $i <= $n; $i++) { $out[] = (int) ($i * $i); }
 
-// `array<T>` is an elephc extension with no PHP equivalent, so `--strict-php` rejects it.
+// `array<T>` is an elephc extension with no PHP equivalent, so `--php-only` rejects it.
 // A bare `array` hint stays valid PHP and is untouched.

@@ -99,7 +99,7 @@ pub(super) fn positional_evaluated_bound_args(
                 )?,
                 None => None,
             };
-            Ok(BoundMethodArg {
+            Ok(BoundMethodArg { source_type: arg.source_type,
                 value: arg.value,
                 ref_target,
                 variadic_ref_targets: Vec::new(),
@@ -243,7 +243,7 @@ fn stage_hidden_collector_count(
         }
     };
     // `bind_native_variadic_arg` releases the key itself when there is no writeback target.
-    let inserted = bind_native_variadic_arg(bound_args, variadic_index, key, count, None, values);
+    let inserted = bind_native_variadic_arg(bound_args, variadic_index, key, count, None, None, values);
     let released = values.release(count);
     inserted.and(released)
 }
@@ -269,7 +269,8 @@ pub(super) fn bind_native_signature_args(
     let filled = (|| {
         if let Some(index) = variadic_index {
             let array = values.array_new(args.len())?;
-            bound_args[index] = Some(BoundMethodArg {
+            bound_args[index] = Some(BoundMethodArg { source_type: Some(ArgumentSource::capture(
+                    EvalParameterType::new(vec![EvalParameterTypeVariant::Array],false),context)),
                 value: array,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
@@ -282,7 +283,7 @@ pub(super) fn bind_native_signature_args(
             }
         }
         if let Some(index) = hidden_argc_index {
-            bound_args[index] = Some(BoundMethodArg {
+            bound_args[index] = Some(BoundMethodArg { source_type: None,
                 value: values.int(actual_count as i64)?,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
@@ -298,6 +299,7 @@ pub(super) fn bind_native_signature_args(
                     &name,
                     arg.value,
                     arg.ref_target,
+                    arg.source_type,
                     by_ref_mode,
                     context,
                     values,
@@ -312,6 +314,7 @@ pub(super) fn bind_native_signature_args(
                     &mut next_variadic_index,
                     arg.value,
                     arg.ref_target,
+                    arg.source_type,
                     by_ref_mode,
                     values,
                 )?;
@@ -342,7 +345,8 @@ pub(super) fn bind_native_signature_args(
                         .ok_or(EvalStatus::RuntimeFatal)?,
                 )?,
             };
-            *value = Some(BoundMethodArg {
+            *value = Some(BoundMethodArg { source_type: signature.param_type(position)
+                .map(|ty| ArgumentSource::capture(ty.clone(),context)),
                 value: default_value,
                 ref_target: None,
                 variadic_ref_targets: Vec::new(),
@@ -466,6 +470,8 @@ pub(super) fn apply_native_callable_bound_arg_types(
             )?;
         } else {
             let original = bound_arg.value;
+            mixed_source_proofs::require_argument_with_target(param_type, bound_arg.source_type.as_ref(), original,
+                bound_arg.ref_target.as_ref(),context,values)?;
             let coerced = match callee {
                 Some(callee) => eval_method_parameter_value_or_throw(
                     callee,
@@ -503,8 +509,18 @@ pub(super) fn apply_native_callable_variadic_arg_type(
         let key = values.array_iter_key(bound_arg.value, element)?;
         let updated = (|| {
             let original = values.array_get(bound_arg.value, key)?;
-            // PHP omits the parameter name from a variadic argument TypeError.
-            let coerced = match callee {
+            let checked = (|| {
+                let source = array_argument_sources::entry(bound_arg.source_type.as_ref(),key,context,values)?;
+                let normalized = eval_array_reference_key(key,context.semantic_profile(),values)?;
+                let mut target = None;
+                for (candidate, reference) in &bound_arg.variadic_ref_targets {
+                    if normalized == eval_array_reference_key(*candidate,context.semantic_profile(),values)? {
+                        target = Some(reference); break;
+                    }
+                }
+                mixed_source_proofs::require_argument_with_target(param_type,source.as_ref(),original,target,context,values)?;
+                // PHP omits the parameter name from a variadic argument TypeError.
+                match callee {
                 Some(callee) => eval_method_parameter_value_or_throw(
                     callee,
                     variadic_index + 1 + element,
@@ -515,7 +531,9 @@ pub(super) fn apply_native_callable_variadic_arg_type(
                     values,
                 ),
                 None => eval_method_parameter_value(param_type, original, context, values),
-            };
+                }
+            })();
+            let coerced = checked;
             let inserted = coerced.and_then(|value| {
                 let inserted = values.array_set(bound_arg.value, key, value);
                 if value != original { release_expr_result(value, context, values)?; }
@@ -604,6 +622,7 @@ pub(super) fn bind_native_positional_signature_arg(
     next_variadic_index: &mut i64,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    source_type: Option<ArgumentSource>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -614,7 +633,7 @@ pub(super) fn bind_native_positional_signature_arg(
             .ok_or(EvalStatus::RuntimeFatal)?;
         let ref_target =
             native_parameter_ref_target(signature, variadic_index, ref_target, by_ref_mode, values)?;
-        return bind_native_variadic_arg(bound_args, variadic_index, key, value, ref_target, values);
+        return bind_native_variadic_arg(bound_args, variadic_index, key, value, ref_target, source_type, values);
     }
     let param_index = *next_positional;
     if param_index >= regular_count
@@ -625,7 +644,7 @@ pub(super) fn bind_native_positional_signature_arg(
     }
     let ref_target =
         native_parameter_ref_target(signature, Some(param_index), ref_target, by_ref_mode, values)?;
-    bound_args[param_index] = Some(BoundMethodArg {
+    bound_args[param_index] = Some(BoundMethodArg { source_type,
         value,
         ref_target,
         variadic_ref_targets: Vec::new(),
@@ -646,6 +665,7 @@ pub(super) fn bind_native_named_signature_arg(
     name: &str,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    source_type: Option<ArgumentSource>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -661,7 +681,7 @@ pub(super) fn bind_native_named_signature_arg(
             by_ref_mode,
             values,
         )?;
-        bound_args[param_index] = Some(BoundMethodArg {
+        bound_args[param_index] = Some(BoundMethodArg { source_type,
             value,
             ref_target,
             variadic_ref_targets: Vec::new(),
@@ -675,7 +695,7 @@ pub(super) fn bind_native_named_signature_arg(
         let key = values.string(name)?;
         let ref_target =
             native_parameter_ref_target(signature, variadic_index, ref_target, by_ref_mode, values)?;
-        return bind_native_variadic_arg(bound_args, variadic_index, key, value, ref_target, values);
+        return bind_native_variadic_arg(bound_args, variadic_index, key, value, ref_target, source_type, values);
     }
     eval_throw_error(&format!("Unknown named parameter ${name}"), context, values)
 }
@@ -748,14 +768,27 @@ pub(super) fn bind_native_variadic_arg(
     key: RuntimeCellHandle,
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
+    source_type: Option<ArgumentSource>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
     let bound = bound_args[index].as_mut().ok_or(EvalStatus::RuntimeFatal)?;
-    let inserted = values.array_set(bound.value, key, value);
+    let inserted = (|| {
+        let source_key = if bound.source_type.is_some() {
+            Some(match values.type_tag(key)? {
+                EVAL_TAG_INT => EvalArrayReferenceKey::Int(values.raw_value_word(key)? as i64),
+                EVAL_TAG_STRING => EvalArrayReferenceKey::String(values.string_bytes(key)?),
+                _ => return Err(EvalStatus::RuntimeFatal),
+            })
+        } else { None };
+        values.array_set(bound.value,key,value).map(|array|(array,source_key))
+    })();
     if ref_target.is_none() || inserted.is_err() { values.release(key)?; }
-    let array = inserted?;
+    let (array, source_key) = inserted?;
     bound.value = array;
+    if let (Some(source),Some(key)) = (bound.source_type.as_mut(),source_key) {
+        source.entries.push((key,source_type));
+    }
     if let Some(ref_target) = ref_target {
         bound.variadic_ref_targets.push((key, ref_target));
     }

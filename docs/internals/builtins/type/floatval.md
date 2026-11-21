@@ -14,13 +14,13 @@ description: "Compiler internals for floatval(): lowering path, type checks, and
 
 ### Lowering notes
 
-- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Uses the `eir_graph` strategy from the single-source builtin descriptor.
 - Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
 ## Semantic descriptor
 
-- **Target strategy**: `eir_primitive`
-- **Validation**: `signature`
+- **Target strategy**: `eir_graph`
+- **Validation**: `shared`
 - **Result type source**: `declared`
 - **Result ownership**: `non_heap`
 - **Effects**: `shared`

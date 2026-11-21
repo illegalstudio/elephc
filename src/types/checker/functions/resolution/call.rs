@@ -76,16 +76,16 @@ impl Checker {
             };
             return CompileError::new(span, &message);
         }
-        // Under `--strict-php`, a name that would resolve to an extension builtin
+        // Under `--php-only`, a name that would resolve to an extension builtin
         // lands here as undefined. Name the disabled extension so users understand
         // why a working non-strict program stopped compiling.
         let bare = name.rsplit('\\').next().unwrap_or(name);
         let key = crate::names::php_symbol_key(bare);
-        if crate::types::checker::builtins::strict_php_hidden_builtin(&key) {
+        if crate::types::checker::builtins::php_only_hidden_builtin(&key) {
             return CompileError::new(
                 span,
                 &format!(
-                    "Undefined function: {} ({}() exists as an elephc extension; it is disabled by --strict-php)",
+                    "Undefined function: {} ({}() exists as an elephc extension; it is disabled by --php-only)",
                     name, key
                 ),
             );
@@ -427,7 +427,7 @@ impl Checker {
                             .defaults
                             .get(i)
                             .and_then(|default| default.as_ref())
-                            .map(|default| self.infer_type(default, caller_env))
+                            .map(|default| self.infer_bound_default(default, &PhpType::Mixed, caller_env))
                             .transpose()?
                             .unwrap_or(PhpType::Int);
                         param_types.push((decl.params[i].clone(), param_ty));
@@ -489,6 +489,7 @@ impl Checker {
                     })
                     .transpose()?;
                 if supplied_reference {
+                    self.record_reference_argument_contract(arg, &ty);
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
@@ -715,7 +716,7 @@ impl Checker {
                     let default_ty = if deferred_scope_error {
                         declared_ty.clone()
                     } else {
-                        self.infer_type(default_expr, caller_env)?
+                        self.infer_bound_default(default_expr, &declared_ty, caller_env)?
                     };
                     self.require_compatible_arg_type(
                         &declared_ty,
@@ -728,7 +729,7 @@ impl Checker {
                     let ty = if deferred_scope_error {
                         PhpType::Mixed
                     } else {
-                        self.infer_type(default_expr, caller_env)?
+                        self.infer_bound_default(default_expr, &PhpType::Mixed, caller_env)?
                     };
                     param_types.push((decl.params[i].clone(), ty));
                 }

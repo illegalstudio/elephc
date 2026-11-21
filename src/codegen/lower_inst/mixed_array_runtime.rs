@@ -40,22 +40,41 @@ pub(super) fn lower_mixed_array_runtime_get(
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
     let warn_on_missing = expect_operand(inst, 2)?;
+    let original_box = !for_write && matches!(ctx.value_ir_type(key)?,
+        crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union));
+    let original_string = !for_write && ctx.value_php_type(key)? == PhpType::Str;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            hashes::materialize_hash_key_aarch64(ctx, key)?;
+            if original_box {
+                ctx.load_value_to_reg(key, "x1")?;
+                abi::emit_load_int_immediate(ctx.emitter, "x2", abi::BOXED_ARRAY_KEY);
+            } else if original_string {
+                hashes::materialize_hash_key_aarch64_with(ctx, key, hashes::HashKeyNormalization::RawString)?;
+            } else { hashes::materialize_hash_key_aarch64(ctx, key)?; }
             if for_write {
                 abi::emit_load_int_immediate(ctx.emitter, "x3", i64::from(pending_append));
             } else {
                 ctx.load_value_to_reg(warn_on_missing, "x3")?;
+                if inst.immediate == Some(Immediate::CheckedElementRead) {
+                    ctx.emitter.instruction("orr x3, x3, #4");                  // require an existing element after receiver dispatch
+                }
             }
             ctx.load_value_to_reg(receiver, "x0")?;
         }
         Arch::X86_64 => {
-            hashes::materialize_hash_key_x86_64(ctx, key)?;
+            if original_box {
+                ctx.load_value_to_reg(key, "rsi")?;
+                abi::emit_load_int_immediate(ctx.emitter, "rdx", abi::BOXED_ARRAY_KEY);
+            } else if original_string {
+                hashes::materialize_hash_key_x86_64_with(ctx, key, hashes::HashKeyNormalization::RawString)?;
+            } else { hashes::materialize_hash_key_x86_64(ctx, key)?; }
             if for_write {
                 abi::emit_load_int_immediate(ctx.emitter, "rcx", i64::from(pending_append));
             } else {
                 ctx.load_value_to_reg(warn_on_missing, "rcx")?;
+                if inst.immediate == Some(Immediate::CheckedElementRead) {
+                    ctx.emitter.instruction("or rcx, 4");                       // require an existing element after receiver dispatch
+                }
             }
             ctx.load_value_to_reg(receiver, "rdi")?;
         }

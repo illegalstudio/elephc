@@ -13,7 +13,7 @@ use super::*;
 pub(super) fn lower_property_init_thunks(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     let mut classes = check_result.classes.iter().collect::<Vec<_>>();

@@ -21,6 +21,22 @@ pub(super) fn lower(
     index: LoweredValue, value: LoweredValue, compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
     fallback: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue),
 ) -> bool {
+    let mut apply = |ctx: &mut LoweringContext<'_, '_>, array: LoweredValue| {
+        mutate(ctx, array, index, value, compound, span, diagnosed);
+    };
+    lower_container(ctx, object, property, span, &mut apply,
+        |ctx, object, _| fallback(ctx, object))
+}
+
+/// Selects one writable property container and delegates its nested mutation to `apply`.
+pub(super) fn lower_container<Apply>(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
+    apply: &mut Apply,
+    fallback: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue, &mut Apply),
+) -> bool
+where
+    Apply: FnMut(&mut LoweringContext<'_, '_>, LoweredValue),
+{
     let ty = ctx.builder.value_php_type(object.value);
     let base = crate::ir_lower::expr::singular_object_class(&ty).map(|(class, _)| class)
         .filter(|class| !class.is_empty() && !ctx.interfaces.contains_key(*class));
@@ -75,7 +91,7 @@ pub(super) fn lower(
         let receiver = ctx.emit_value(Op::MixedUnbox, vec![object.value], None, concrete.clone(),
             Op::mixed_unbox_effects(&concrete), Some(span));
         ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
-        write(ctx, object, receiver, &class, property, kind, index, value, compound, span, diagnosed);
+        write(ctx, object, receiver, &class, property, kind, span, apply);
         merge(ctx, done, &mut merged);
         ctx.builder.position_at_end(next);
         ctx.restore_initialized_slots(before);
@@ -83,7 +99,7 @@ pub(super) fn lower(
     ctx.builder.terminate(Terminator::Br { target: regular, args: vec![] });
     ctx.builder.position_at_end(regular);
     ctx.restore_initialized_slots(initial);
-    fallback(ctx, object);
+    fallback(ctx, object, apply);
     merge(ctx, done, &mut merged);
     ctx.builder.position_at_end(done);
     if let Some(merged) = merged { ctx.restore_initialized_slots(merged); }
@@ -121,12 +137,12 @@ fn kind(ctx: &LoweringContext<'_, '_>, class: &str, info: &crate::types::ClassIn
 /// Uses attached entries first, otherwise performs one visibility-aware property read.
 fn write(
     ctx: &mut LoweringContext<'_, '_>, boxed: LoweredValue, object: LoweredValue,
-    class: &str, property: &str, kind: Kind, index: LoweredValue, value: LoweredValue,
-    compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
+    class: &str, property: &str, kind: Kind, span: Span,
+    apply: &mut impl FnMut(&mut LoweringContext<'_, '_>, LoweredValue),
 ) {
     let name = string(ctx, property, span);
     if matches!(kind, Kind::Dynamic) {
-        attached(ctx, object, name, index, value, compound, span, diagnosed);
+        attached(ctx, object, name, span, apply);
         return;
     }
     if matches!(kind, Kind::Magic { hash: true }) {
@@ -141,37 +157,37 @@ fn write(
         ctx.builder.terminate(Terminator::CondBr { cond: present.value,
             then_target: stored, then_args: vec![], else_target: getter, else_args: vec![] });
         ctx.builder.position_at_end(stored);
-        attached(ctx, object, name, index, value, compound, span, diagnosed);
+        attached(ctx, object, name, span, apply);
         merge(ctx, done, &mut merged);
         ctx.builder.position_at_end(getter);
         ctx.restore_initialized_slots(initial);
-        fetched(ctx, boxed, name, class, property, true, index, value, compound, span, diagnosed);
+        fetched(ctx, boxed, name, class, property, true, span, apply);
         merge(ctx, done, &mut merged);
         ctx.builder.position_at_end(done);
         if let Some(merged) = merged { ctx.restore_initialized_slots(merged); }
     } else {
-        fetched(ctx, boxed, name, class, property, matches!(kind, Kind::Magic { .. }),
-            index, value, compound, span, diagnosed);
+        fetched(ctx, boxed, name, class, property, matches!(kind, Kind::Magic { .. }), span, apply);
     }
 }
 
 /// Fetches an independently guarded attached hash cell before changing its array payload.
 fn attached(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue,
-    index: LoweredValue, value: LoweredValue, compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
+    span: Span, apply: &mut impl FnMut(&mut LoweringContext<'_, '_>, LoweredValue),
 ) {
     let array = ctx.emit_owned_value(Op::RuntimeCall, vec![object.value, name.value],
         Some(Immediate::RuntimeCall(RuntimeCallTarget::PropertyHashFetchForWrite)), PhpType::Mixed,
         effects_lookup::runtime_effects(), Some(span));
     let (array, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, array, span);
-    mutate(ctx, array, index, value, compound, span, diagnosed);
+    apply(ctx, array);
     if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
 }
 
 /// Reads inaccessible and magic names through the complete runtime class dispatcher.
 fn fetched(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue, class: &str, property: &str,
-    magic: bool, index: LoweredValue, value: LoweredValue, compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
+    magic: bool, span: Span,
+    apply: &mut impl FnMut(&mut LoweringContext<'_, '_>, LoweredValue),
 ) {
     let current = ctx.emit_owned_value(Op::DynamicPropGet, vec![object.value, name.value],
         Some(Immediate::PropertyFetchMode(crate::ir::PropertyFetchMode::Read)), PhpType::Mixed,
@@ -198,7 +214,7 @@ fn fetched(
         ctx.builder.terminate(Terminator::Br { target: supported, args: vec![] });
         ctx.builder.position_at_end(supported);
     }
-    mutate(ctx, array, index, value, compound, span, diagnosed);
+    apply(ctx, array);
     if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
 }
 

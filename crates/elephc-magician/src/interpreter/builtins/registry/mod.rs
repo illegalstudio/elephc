@@ -28,6 +28,8 @@ mod dynamic_mutation;
 mod names;
 mod owned_arguments;
 mod signature;
+mod value_contracts;
+mod comparison_contracts;
 
 pub(in crate::interpreter) use arity::*;
 pub(in crate::interpreter) use binding::*;
@@ -38,6 +40,7 @@ pub(in crate::interpreter) use dynamic_mutation::*;
 pub(in crate::interpreter) use names::*;
 pub(in crate::interpreter) use owned_arguments::*;
 pub(in crate::interpreter) use signature::*;
+pub(in crate::interpreter) use value_contracts::{validate_builtin_call_arguments, with_eval_builtin_call_arguments};
 
 /// Lazy registry of builtins migrated to declarative eval specs.
 struct DeclaredBuiltinRegistry {
@@ -215,7 +218,7 @@ pub(in crate::interpreter) fn eval_declared_builtin_spec(
     let spec = &registry.specs[index];
     builtin_is_available(
         spec,
-        crate::strict_php_mode::strict_php_mode(),
+        crate::php_only_mode::php_only_mode(),
         crate::regex_provider::regex_provider_available(),
         crate::mbregex_provider::available(),
     )
@@ -225,11 +228,11 @@ pub(in crate::interpreter) fn eval_declared_builtin_spec(
 /// Returns whether one builtin is visible under the active runtime capabilities.
 fn builtin_is_available(
     spec: &EvalBuiltinSpec,
-    strict_php: bool,
+    php_only: bool,
     regex_available: bool,
     mbregex_available: bool,
 ) -> bool {
-    !(strict_php && spec.is_extension())
+    !(php_only && spec.is_extension())
         && (!matches!(spec.area(), EvalArea::Regex) || regex_available)
         && (!spec.runtime_builtin.is_some_and(RuntimeBuiltinId::is_mbregex) || mbregex_available)
         && (!matches!(spec.area(), EvalArea::Pcntl)
@@ -327,6 +330,7 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call_from_scope(
     let Some(spec) = eval_declared_builtin_spec(name) else {
         return Ok(None);
     };
+    value_contracts::validate_builtin_value_contracts(name, evaluated_args, context, values)?;
     if let Some(runtime_builtin) = spec.runtime_builtin {
         if runtime_builtin.supports_arity(evaluated_args.len()) || RuntimeBuiltinId::MBSTRING.contains(&runtime_builtin) {
             if let Some(result) = call_shared_runtime_builtin(runtime_builtin, evaluated_args, context, values)? {
@@ -353,13 +357,41 @@ fn call_shared_runtime_builtin(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Casts) {
+        match (id, args) {
+            (RuntimeBuiltinId::Boolval, [value]) => return eval_cast_value(&EvalCastType::Bool, *value, context, values).map(Some),
+            (RuntimeBuiltinId::Floatval, [value]) => return eval_cast_value(&EvalCastType::Float, *value, context, values).map(Some),
+            (RuntimeBuiltinId::Intval, [value]) => return eval_intval_result(*value, None, context, values).map(Some),
+            (RuntimeBuiltinId::Intval, [value, base]) => return eval_intval_result(*value, Some(*base), context, values).map(Some),
+            _ => {}
+        }
+    }
     // `pow()` is PHP's one math builtin whose operand overload reaches internal value objects.
     // The generated runtime adapter works on scalars only, so route an object operand through
     // the same `RuntimeValueOps::pow` default that `**` uses.
+    let numeric_policy = elephc_semantics::arithmetic_policy::ArithmeticPolicy::from_profile(context.semantic_profile());
+    if !numeric_policy.is_permissive() {
+        match (id, args) {
+            (elephc_builtin_contract::RuntimeBuiltinId::Abs, [value]) => {
+                crate::interpreter::numeric_domains::require_unary(
+                    elephc_semantics::numeric_domains::NumericOperator::Unary, *value, context, values)?;
+                if numeric_policy.checked_overflow() {
+                    return crate::interpreter::checked_numeric::apply(elephc_semantics::numeric::CheckedNumericOp::Abs,
+                        *value, *value, context, values).map(Some);
+                }
+            }
+            (elephc_builtin_contract::RuntimeBuiltinId::Pow, [base, exponent]) => {
+                if let Some(result) = crate::interpreter::checked_numeric::binary(EvalBinOp::Pow, *base, *exponent, context, values)? {
+                    return Ok(Some(result));
+                }
+            }
+            _ => (),
+        }
+    }
     if id == elephc_builtin_contract::RuntimeBuiltinId::Unserialize {
         if let [data] = args {
             if let Some(function) = context.native_function("__elephc_gmp_unserialize") {
-                let arguments = vec![EvaluatedCallArg {
+                let arguments = vec![EvaluatedCallArg { source_type: None,
                     evaluation_owner: None,
                     name: None,
                     value: data.borrowed(),
@@ -388,15 +420,11 @@ fn call_shared_runtime_builtin(
             }
         }
     }
-    match values.runtime_builtin_call(id, args) {
-        Err(EvalStatus::UncaughtThrowable) => {
-            if let Some(thrown) = values.take_pending_runtime_throwable()? {
-                context.set_pending_throw(thrown);
-            }
-            Err(EvalStatus::UncaughtThrowable)
-        }
-        result => result,
+    if let (RuntimeBuiltinId::ArrayKeyExists, [key, array]) = (id, args) {
+        checked_array_keys::for_receiver(*array, *key, context, values)?;
     }
+    let result = values.runtime_builtin_call(id, args);
+    crate::interpreter::native_results::finish(result, context, values)
 }
 
 /// Sends positional mbstring expressions through the same owner-aware builtin argument boundary.

@@ -54,6 +54,10 @@ pub enum EvalParseError {
     UnterminatedComment,
     ExpectedVariable,
     ExpectedSemicolon,
+    /// Checked integer spelling cannot fit a signed 64-bit value.
+    IntegerLiteralOverflow,
+    /// Loose equality syntax is forbidden by the selected semantic profile.
+    StrictComparisonSyntax,
     /// A `goto` PHP refuses when it compiles the fragment: an undefined or duplicate label, a
     /// jump into a loop or a `switch`, or a jump into or out of a `finally` block.
     InvalidJump,
@@ -69,6 +73,8 @@ impl EvalParseError {
             | Self::UnexpectedToken
             | Self::UnexpectedEof
             | Self::InvalidNumber
+            | Self::IntegerLiteralOverflow
+            | Self::StrictComparisonSyntax
             | Self::UnterminatedString
             | Self::UnterminatedComment
             | Self::ExpectedVariable

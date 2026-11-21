@@ -223,7 +223,7 @@ fn dynamic_new_class_is_planning_candidate(
             && args.iter().any(is_spread_arg)
             && !sig.ref_params.iter().any(|by_ref| *by_ref)
             && !crate::func_args::sig_has_hidden_argc_param(sig)
-            && crate::types::call_args::plan_call_args(sig, args, args[0].span, false, false).is_ok()
+            && crate::types::call_args::plan_call_args(sig, args, args[0].span, false, false, ctx.semantic_profile).is_ok()
     }) {
         return true;
     }
@@ -248,17 +248,25 @@ fn dynamic_new_class_is_planning_candidate(
     let Some(sig) = constructor_owner.methods.get(constructor_key) else {
         return false;
     };
-    let owns_promoted_references = body_owner.constructor_param_to_prop.iter().flatten()
-        .any(|property| body_owner.visible_property_index(property)
-            .is_some_and(|slot| body_owner.property_slot_owns_reference(slot)));
+    // Guarded by-value properties own cells without retaining a caller's reference binding.
+    let owns_promoted_references = body_owner.constructor_param_to_prop.iter().enumerate()
+        .any(|(index, property)| sig.ref_params.get(index).copied().unwrap_or(false)
+            && property.as_ref().and_then(|property| body_owner.visible_property_index(property))
+                .is_some_and(|slot| body_owner.property_slot_owns_reference(slot)));
+    let needs_original_values = sig.params.iter()
+        .take(crate::types::call_args::regular_param_count(sig))
+        .enumerate().any(|(index, (_, ty))| {
+            !sig.ref_params.get(index).copied().unwrap_or(false)
+                && crate::ir_lower::conversion_boundaries::active(ctx, ty)
+        });
+    let needs_fixed_binding = owns_promoted_references || needs_original_values;
     // Eval and backtraces append a hidden collector even to nonvariadic constructors.
-    // The generic padding thunk refuses references, so these constructors must retain the
-    // fixed-class argument planner that promotes and transfers their caller-owned cells.
-    if owns_promoted_references && crate::func_args::sig_collects_surplus_args(sig)
+    // Fixed binding promotes caller references and checks user value kinds before ABI conversion.
+    if needs_fixed_binding && crate::func_args::sig_collects_surplus_args(sig)
         && !args.iter().any(is_spread_arg)
     {
-        if crate::types::call_args::has_named_args(args) {
-            return crate::types::call_args::plan_call_args(sig, args, args[0].span, false, false).is_ok();
+        if args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. })) {
+            return crate::types::call_args::plan_call_args(sig, args, args[0].span, false, false, ctx.semantic_profile).is_ok();
         }
         let regular = crate::types::call_args::regular_param_count(sig);
         return args.len() >= regular || sig.defaults[args.len()..regular].iter().all(Option::is_some);
@@ -266,7 +274,7 @@ fn dynamic_new_class_is_planning_candidate(
     if sig.variadic.is_some() {
         return false;
     }
-    if !dynamic_new_args_need_planning(sig, args) && !owns_promoted_references {
+    if !dynamic_new_args_need_planning(sig, args) && !needs_fixed_binding {
         return false;
     }
     dynamic_new_args_lower_to_exact_arity(ctx, sig, args)
@@ -278,7 +286,7 @@ fn dynamic_new_class_is_planning_candidate(
 /// candidate whose constructor arity matches the operand count exactly, so any named
 /// argument, spread, or omitted optional parameter needs the planned path.
 fn dynamic_new_args_need_planning(sig: &FunctionSig, args: &[Expr]) -> bool {
-    crate::types::call_args::has_named_args(args)
+    args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
         || args.iter().any(is_spread_arg)
         || sig.params.len() != args.len()
 }
@@ -296,7 +304,7 @@ fn dynamic_new_args_lower_to_exact_arity(
     args: &[Expr],
 ) -> bool {
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
-    if crate::types::call_args::has_named_args(args) {
+    if args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. })) {
         let Ok(plan) =
             crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
                 sig,
@@ -306,6 +314,7 @@ fn dynamic_new_args_lower_to_exact_arity(
                 false,
                 true,
                 &assoc_spread_sources(ctx, args),
+                ctx.semantic_profile,
             )
         else {
             return false;

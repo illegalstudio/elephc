@@ -11,22 +11,22 @@
 
 use super::*;
 
-/// Resolves an owned scalar row to its canonical child without calls or unrelated scratch registers.
+/// Resolves an owned property row to its canonical child without calls or unrelated scratch registers.
 /// The metadata flag proves the cell is managed; borrowed constructor slots must never carry it.
-pub(crate) fn resolve_scalar_property(
+pub(crate) fn resolve_property_payload_shape(
     emitter: &mut Emitter, address: &str, tag: &str, marker: &str, prefix: &str,
 ) {
-    use crate::codegen_support::sentinels::CANONICAL_SCALAR_PROPERTY_FLAG;
+    use crate::codegen_support::sentinels::CANONICAL_PROPERTY_PAYLOAD_FLAG;
     debug_assert!(address != tag && address != marker && tag != marker);
     let raw = format!("{prefix}_scalar_raw");
     let done = format!("{prefix}_scalar_done");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("tst {tag}, #{CANONICAL_SCALAR_PROPERTY_FLAG}"));// only metadata-authenticated scalar cells permit header inspection
+            emitter.instruction(&format!("tst {tag}, #{CANONICAL_PROPERTY_PAYLOAD_FLAG}"));// only metadata-authenticated owned cells permit header inspection
             emitter.instruction(&format!("b.eq {done}"));                       // preserve borrowed and container-specific reference layouts
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("test {tag}, {CANONICAL_SCALAR_PROPERTY_FLAG}"));// only metadata-authenticated scalar cells permit header inspection
+            emitter.instruction(&format!("test {tag}, {CANONICAL_PROPERTY_PAYLOAD_FLAG}"));// only metadata-authenticated owned cells permit header inspection
             emitter.instruction(&format!("jz {done}"));                         // preserve borrowed and container-specific reference layouts
         }
     }
@@ -35,14 +35,14 @@ pub(crate) fn resolve_scalar_property(
         Arch::AArch64 => {
             emitter.instruction(&format!("ldr {tag}, [{address}, #-8]"));       // inspect the metadata-authenticated cell header
             emitter.instruction(&format!("ubfx {tag}, {tag}, #8, #7"));         // isolate the live cell's physical payload descriptor
-            emitter.instruction(&format!("cmp {tag}, #7"));                     // promoted scalar cells own a Mixed PHPRef wrapper
+            emitter.instruction(&format!("cmp {tag}, #7"));                     // canonical property cells own a Mixed PHPRef wrapper
             emitter.instruction(&format!("b.ne {raw}"));                        // raw scalars and strings retain their logical row tag
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov {tag}, QWORD PTR [{address} - 8]"));// inspect the metadata-authenticated cell header
             emitter.instruction(&format!("shr {tag}, 8"));                      // position the live cell's physical payload descriptor
             emitter.instruction(&format!("and {tag}, 127"));                    // remove heap and collector flags
-            emitter.instruction(&format!("cmp {tag}, 7"));                      // promoted scalar cells own a Mixed PHPRef wrapper
+            emitter.instruction(&format!("cmp {tag}, 7"));                      // canonical property cells own a Mixed PHPRef wrapper
             emitter.instruction(&format!("jne {raw}"));                         // raw scalars and strings retain their logical row tag
         }
     }
@@ -187,7 +187,7 @@ mod tests {
             let mut emitter = Emitter::new(target);
             let (address, tag, marker) = if target.arch == Arch::AArch64 { ("x14", "x17", "x15") }
                 else { ("r10", "r9", "r11") };
-            resolve_scalar_property(&mut emitter, address, tag, marker, "scalar_row_probe");
+            resolve_property_payload_shape(&mut emitter, address, tag, marker, "scalar_row_probe");
             let assembly = emitter.output();
             let metadata_guard = assembly.find("1024").unwrap();
             let header = assembly.find(if target.arch == Arch::AArch64 { "#-8]" } else { " - 8]" }).unwrap();

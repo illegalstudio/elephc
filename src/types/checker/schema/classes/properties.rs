@@ -197,10 +197,10 @@ fn apply_static_property(
             &format!("Static property {}::${} default", class.name, prop.name),
         )?;
         state.declared_static_properties.insert(prop.name.clone());
-        refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
+        refine_declared_array_type_from_default(declared_ty, prop.default.as_ref(), checker.semantic_profile)
     } else if let Some(default) = &prop.default {
         state.declared_static_properties.remove(&prop.name);
-        infer_untyped_property_default_type(&resolve_class_constants_for_typing(default, class, checker))
+        infer_untyped_property_default_type(&resolve_class_constants_for_typing(default, class, checker), checker.semantic_profile)
     } else {
         state.declared_static_properties.remove(&prop.name);
         PhpType::Void
@@ -355,9 +355,9 @@ fn apply_instance_property(
         )?;
         state.declared_properties.insert(prop.name.clone());
         is_declared_slot = true;
-        refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
+        refine_declared_array_type_from_default(declared_ty, prop.default.as_ref(), checker.semantic_profile)
     } else if let Some(default) = &prop.default {
-        infer_untyped_property_default_type(&resolve_class_constants_for_typing(default, class, checker))
+        infer_untyped_property_default_type(&resolve_class_constants_for_typing(default, class, checker), checker.semantic_profile)
     } else {
         PhpType::Void
     };
@@ -466,9 +466,9 @@ fn apply_instance_property_redeclaration(
             &format!("Property {}::${} default", class.name, prop.name),
         )?;
         state.declared_properties.insert(prop.name.clone());
-        refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
+        refine_declared_array_type_from_default(declared_ty, prop.default.as_ref(), checker.semantic_profile)
     } else if let Some(default) = &prop.default {
-        infer_untyped_property_default_type(&resolve_class_constants_for_typing(default, class, checker))
+        infer_untyped_property_default_type(&resolve_class_constants_for_typing(default, class, checker), checker.semantic_profile)
     } else {
         PhpType::Void
     };
@@ -561,10 +561,10 @@ fn apply_private_parent_property_shadowing(
             )?;
         }
         state.declared_properties.insert(prop.name.clone());
-        refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
+        refine_declared_array_type_from_default(declared_ty, prop.default.as_ref(), checker.semantic_profile)
     } else if let Some(default) = &prop.default {
         state.declared_properties.remove(&prop.name);
-        infer_expr_type_syntactic(&resolve_class_constants_for_typing(default, class, checker))
+        infer_expr_type_syntactic(&resolve_class_constants_for_typing(default, class, checker), checker.semantic_profile)
     } else {
         state.declared_properties.remove(&prop.name);
         PhpType::Void
@@ -1002,10 +1002,10 @@ fn php_property_types_invariant(parent: &PhpType, child: &PhpType) -> bool {
 /// as `AssocArray` so string-key access type-checks, mirroring how untyped associative-default
 /// properties are inferred. Non-array hints, missing defaults, and positional/empty array defaults
 /// keep the declared type unchanged.
-fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option<&Expr>) -> PhpType {
+fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option<&Expr>, profile: elephc_semantics::SemanticProfile) -> PhpType {
     if let (PhpType::Array(_), Some(default)) = (&declared_ty, default) {
         if matches!(default.kind, ExprKind::ArrayLiteralAssoc(_)) {
-            return infer_untyped_property_default_type(default);
+            return infer_untyped_property_default_type(default, profile);
         }
     }
     declared_ty
@@ -1109,8 +1109,8 @@ fn typing_constant_value(
 /// Infers storage for an untyped property default while widening the literal `false` subtype.
 /// Mutable untyped properties initialized with `false` must continue accepting later boolean
 /// writes; explicit `false` property declarations retain their narrower contract.
-fn infer_untyped_property_default_type(default: &Expr) -> PhpType {
-    widen_false_literal_storage_type(infer_expr_type_syntactic(default))
+fn infer_untyped_property_default_type(default: &Expr, profile: elephc_semantics::SemanticProfile) -> PhpType {
+    widen_false_literal_storage_type(infer_expr_type_syntactic(default, profile))
 }
 
 /// PHP treats a plain untyped property with no explicit default as `= null`: the slot

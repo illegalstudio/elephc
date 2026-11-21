@@ -6,7 +6,7 @@ sidebar:
 ---
 
 > **Strict mode:** hosted extensions are declared through the project's
-> `elephc.toml`, not in source, so `--strict-php` programs can use them. What
+> `elephc.toml`, not in source, so `--php-only` programs can use them. What
 > they add to a program is exactly the PHP surface the extension registers.
 
 Elephc can host **real PHP extensions** — a PECL release, a PIE package from

@@ -70,31 +70,42 @@ pub(super) struct RefPlaceRewrite {
     plans: Vec<RefPlacePlan>,
 }
 
-/// Selects an owned exact-Mixed physical slot whose ordinary PHP binding can cross a native call.
+/// Selects an owned physical slot usable by an ordinary Mixed reference parameter.
 pub(super) fn live_mixed_property_argument(
     ctx: &LoweringContext<'_, '_>, arg: &Expr, expected: &PhpType,
 ) -> bool {
-    if *expected != PhpType::Mixed { return false; }
-    let ExprKind::PropertyAccess { object, property } = &arg.kind else { return false; };
-    let Some(class_name) = place_object_class_name(ctx, object) else { return false; };
-    let Some(info) = ctx.classes.get(class_name.as_str()) else { return false; };
+    if matches!(arg.kind, ExprKind::StaticPropertyAccess { .. }) {
+        return *expected == PhpType::Mixed && live_boxed_static_property(ctx, arg);
+    }
+    *expected == PhpType::Mixed && writable_property_argument_type(ctx, arg).is_some_and(|ty|
+        ty == PhpType::Mixed || (crate::types::checked_property_references(ctx.semantic_profile)
+            && crate::types::canonical_property_reference_payload(&ty).is_some()))
+}
+
+/// Selects ordinary Mixed static storage and reviewed checked declarations with boxed payloads.
+pub(super) fn live_boxed_static_property(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
+    matches!(arg.kind, ExprKind::StaticPropertyAccess { .. })
+        && static_place_type(ctx, arg).is_some_and(|ty| ty == PhpType::Mixed
+            || (crate::types::checked_property_references(ctx.semantic_profile)
+                && crate::types::canonical_property_reference_payload(&ty).is_some()))
+}
+
+/// Resolves an owned writable physical cell using the caller's lexical property scope.
+fn writable_property_argument_type(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> Option<PhpType> {
+    let ExprKind::PropertyAccess { object, property } = &arg.kind else { return None; };
+    let class_name = place_object_class_name(ctx, object)?;
+    let info = ctx.classes.get(class_name.as_str())?;
     let (index, metadata) = match crate::types::resolve_property_name(
         ctx.classes, &class_name, property, ctx.current_class.as_deref(),
     ) {
-        crate::types::PropertyNameResolution::Visible => {
-            let Some(index) = info.visible_property_index(property) else { return false; };
-            (index, info)
-        }
-        crate::types::PropertyNameResolution::ScopePrivate { scope, index } => {
-            let Some(metadata) = ctx.classes.get(&scope) else { return false; };
-            (index, metadata)
-        }
-        _ => return false,
+        crate::types::PropertyNameResolution::Visible => (info.visible_property_index(property)?, info),
+        crate::types::PropertyNameResolution::ScopePrivate { scope, index } => (index, ctx.classes.get(&scope)?),
+        _ => return None,
     };
-    info.properties.get(index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
-        && info.property_slot_owns_reference(index)
+    (info.property_slot_owns_reference(index)
         && !metadata.is_internal && !metadata.readonly_properties.contains(property)
-        && metadata.property_hooks.get(property).is_none_or(|hooks| !hooks.any())
+        && metadata.property_hooks.get(property).is_none_or(|hooks| !hooks.any()))
+        .then(|| info.properties.get(index).map(|(_, ty)| ty.clone())).flatten()
 }
 
 /// Rewrites a direct user method/constructor call whose by-reference argument is a property
@@ -785,6 +796,7 @@ pub(super) fn lower_builtin_ref_place_call(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let canonical = name.as_str();
+    if super::prepared_builtin_refs::active(ctx, canonical) { return None; }
     let prefer_extension = source_prefers_extension_builtin(canonical);
     if !prefer_extension
         && (ctx.functions.contains_key(canonical) || ctx.extern_functions.contains_key(canonical))

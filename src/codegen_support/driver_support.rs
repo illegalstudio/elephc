@@ -94,17 +94,34 @@ pub fn generate_runtime_with_features_mode(
     pic: bool,
     library_boundary: bool,
 ) -> String {
-    generate_runtime_profile(heap_size, target, features, pic, library_boundary, false)
+    generate_runtime_with_semantics(heap_size, target, features, pic, library_boundary,
+        elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Generates runtime helpers under an explicit immutable semantic profile.
+pub fn generate_runtime_with_semantics(
+    heap_size: usize, target: Target, features: RuntimeFeatures, pic: bool,
+    library_boundary: bool, semantic_profile: elephc_semantics::SemanticProfile,
+) -> String {
+    generate_runtime_profile(heap_size, target, features, pic, library_boundary, false, semantic_profile)
 }
 
 /// Generates producer runtime code with recoverable boundaries and deferred PHP output.
+#[allow(dead_code)] // The default-profile producer entry remains available to library harnesses.
 pub(crate) fn generate_phpext_runtime(heap_size: usize, target: Target, features: RuntimeFeatures) -> String {
-    generate_runtime_profile(heap_size, target, features, true, true, true)
+    generate_phpext_runtime_with_semantics(heap_size, target, features, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Preserves user guarantees when producing a PHP-hosted runtime image.
+pub(crate) fn generate_phpext_runtime_with_semantics(heap_size: usize, target: Target,
+    features: RuntimeFeatures, profile: elephc_semantics::SemanticProfile) -> String {
+    generate_runtime_profile(heap_size, target, features, true, true, true, profile)
 }
 
 /// Shares runtime generation while keeping producer-specific output out of ordinary cache entries.
 fn generate_runtime_profile(heap_size: usize, target: Target, features: RuntimeFeatures,
-    pic: bool, library_boundary: bool, phpext: bool) -> String {
+    pic: bool, library_boundary: bool, phpext: bool,
+    semantic_profile: elephc_semantics::SemanticProfile) -> String {
     // macOS executables strip unreachable runtime helpers per-symbol: internal
     // labels are renamed to assembler-local (`L`-prefixed) labels and a
     // `.subsections_via_symbols` footer lets the linker's `-dead_strip` drop
@@ -119,6 +136,7 @@ fn generate_runtime_profile(heap_size: usize, target: Target, features: RuntimeF
         (false, false) => Emitter::new(target),
     };
     emitter.dead_strip = dead_strip;
+    emitter.semantic_profile = semantic_profile;
     // The result arena shares the program's memory budget: a larger heap means a
     // larger scratch arena, so encoders are not capped at the historical 64 KiB.
     // Capped at 1 GiB so x86_64 can compare against it as a signed 32-bit immediate; a
@@ -141,6 +159,9 @@ fn generate_runtime_profile(heap_size: usize, target: Target, features: RuntimeF
         target,
         crate::codegen_support::compile_php_version(),
     ));
+    output.push_str(&runtime::semantic_guards::data(semantic_profile));
+    output.push_str(&runtime::strict_comparators::data(semantic_profile));
+    output.push_str(&runtime::strict_numeric::data(semantic_profile));
     // PIC runtime globals are implementation details on every shared-library
     // target. ELF uses hidden visibility; Mach-O uses private extern visibility.
     if library_boundary && !phpext {

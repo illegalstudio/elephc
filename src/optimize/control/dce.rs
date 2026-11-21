@@ -338,6 +338,7 @@ pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
 /// side-effect-free expression statements. Guard state is propagated and invalidated
 /// based on writes and branch structure.
 fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
+    let _semantics = crate::optimize::semantic_context::scoped_source_mode(stmt.source_mode);
     let profile = stmt.profile();
     crate::source::with_parse_mode(profile, || {
         dce_stmt_in_source_mode(stmt, guards)

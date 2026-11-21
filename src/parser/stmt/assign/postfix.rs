@@ -772,7 +772,7 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
         ExprKind::InstanceOf { value, target } => {
             can_replay_assignment_target(value) && can_replay_instanceof_target(target)
         }
-        ExprKind::Negate(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Cast { expr: value, .. }
@@ -817,7 +817,7 @@ fn reads_array_element(expr: &Expr) -> bool {
             reads_array_element(left) || reads_array_element(right)
         }
         ExprKind::InstanceOf { value, .. }
-        | ExprKind::Negate(value)
+        | ExprKind::UnaryPlus(value) | ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Cast { expr: value, .. }

@@ -9,7 +9,6 @@
 //! - Fresh results cannot alias operands; strict identity never invokes these handlers.
 
 use super::*;
-use crate::ir::RuntimeCallTarget;
 
 /// Distinguishes possible PHP objects from scalar unions that merely use boxed storage.
 pub(super) fn can_contain_object(ty: &PhpType) -> bool {
@@ -23,6 +22,22 @@ pub(super) fn can_contain_object(ty: &PhpType) -> bool {
 /// Captures a by-value left operand before later source expressions can replace its storage.
 pub(super) fn capture_left_operand(
     ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, right: &Expr, span: Span,
+) -> (LoweredValue, Vec<super::call_operand_owners::PinnedInFlightOwner>) {
+    capture_left_operand_with_policy(ctx, value, right, span, false)
+}
+
+/// Captures comparison values without enabling snapshots for unrelated PHP operator families.
+pub(super) fn capture_comparison_operand(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, right: &Expr, span: Span,
+) -> (LoweredValue, Vec<super::call_operand_owners::PinnedInFlightOwner>) {
+    let exact = crate::semantics::comparisons::active(ctx.semantic_profile, ctx.source_mode);
+    capture_left_operand_with_policy(ctx, value, right, span, exact)
+}
+
+/// Shares the original native-class lifetime policy with an explicit scalar snapshot requirement.
+pub(super) fn capture_left_operand_with_policy(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, right: &Expr, span: Span,
+    exact: bool,
 ) -> (LoweredValue, Vec<super::call_operand_owners::PinnedInFlightOwner>) {
     if ctx.builder.value_defining_op(value.value) == Some(Op::StrCharAt) {
         let captured = crate::ir_lower::ownership::persist_string_byte_view(ctx, value, Some(span));
@@ -40,7 +55,7 @@ pub(super) fn capture_left_operand(
     {
         return (value, Vec::new());
     }
-    if ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())) {
+    if exact || ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())) {
         let captured = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             ctx.emit_owned_value(Op::MixedClone, vec![value.value], None, ty,
                 Op::MixedClone.default_effects(), Some(span))
@@ -74,6 +89,22 @@ pub(crate) fn lower_dynamic_object_binary(
         ctx, lhs, op, rhs, expr, result_type, consume,
     ) { return Some(result); }
     Some(lower_dynamic_operator_plans(ctx, lhs, op, rhs, expr, consume, &plans, false, scalar))
+}
+
+/// Selects native unary-plus handlers before the exact scalar unary kernel.
+pub(super) fn lower_dynamic_object_plus(
+    ctx: &mut LoweringContext<'_, '_>, zero: LoweredValue, value: LoweredValue,
+    expr: &Expr, scalar: impl FnOnce(&mut LoweringContext<'_, '_>) -> LoweredValue,
+) -> Option<LoweredValue> {
+    let ty = ctx.builder.value_php_type(value.value);
+    if !can_contain_object(&ty) { return None; }
+    let mut plans = ctx.classes.keys().filter_map(|name|
+        crate::types::object_operators::binary_plan(&BinOp::Add, &PhpType::Int, &PhpType::Object(name.clone())))
+        .collect::<Vec<_>>();
+    plans.sort_unstable_by_key(|plan| plan.class.name);
+    plans.dedup_by_key(|plan| plan.class.name);
+    if plans.is_empty() { return None; }
+    Some(lower_dynamic_operator_plans(ctx, zero, &BinOp::Add, value, expr, true, &plans, false, scalar))
 }
 
 /// Negates numeric-result classes with multiplication while retaining other classes' subtraction.
@@ -332,7 +363,8 @@ pub(super) fn lower_object_cast(
         crate::types::object_operators::cast_method(class, cast)?;
         return Some(emit_cast_method(ctx, class, cast, value, expr));
     }
-    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && !(super::checked_cast::active(ctx, target) && can_contain_object(&ty)) {
         return None;
     }
     let mut class_names: Vec<String> = ctx.classes.keys().cloned().collect();
@@ -386,14 +418,16 @@ pub(super) fn lower_object_cast(
     }
     ctx.restore_initialized_slots(initialized.clone());
     let php_type = cast_php_type(target, &ty);
-    let result = ctx.emit_value(
+    let result = if super::checked_cast::active(ctx, target) {
+        super::checked_cast::lower(ctx, target, value, expr)
+    } else { ctx.emit_value(
         Op::Cast,
         vec![value.value],
         Some(Immediate::CastTarget(value_ir_type(&php_type))),
         php_type,
         Op::Cast.default_effects(),
         Some(expr.span),
-    );
+    ) };
     store_value_into_temp(ctx, &temp, result_type, result, expr.span);
     branch_to(ctx, merge);
     let scalar_initialized = ctx.initialized_slots_snapshot();
@@ -417,6 +451,24 @@ fn emit_cast_method(
     value: LoweredValue,
     expr: &Expr,
 ) -> LoweredValue {
+    if crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode) {
+        let native_cast = match cast {
+            crate::types::object_operators::ObjectCast::Int => elephc_builtin_contract::ObjectCast::Int,
+            crate::types::object_operators::ObjectCast::Float => elephc_builtin_contract::ObjectCast::Float,
+            _ => unreachable!("explicit cast only selects int/float"),
+        };
+        if let Some(projection) = class.operators.and_then(|operators| operators.checked_numeric_projection(native_cast)) {
+            let pins = pin_in_flight_owners(ctx, &[value.value], expr.span);
+            let text = emit_guarded_adapter(ctx, value, class.name, projection.source_method, PhpType::Str, Some(expr.span));
+            let target = if cast == crate::types::object_operators::ObjectCast::Int { CastType::Int } else { CastType::Float };
+            let result = super::checked_cast::lower(ctx, &target, text, expr);
+            release_binary_operand_temporary(ctx, text, expr.span);
+            let result = projection.result_method.map_or(result, |method|
+                emit_guarded_adapter(ctx, value, class.name, method, PhpType::Float, Some(expr.span)));
+            unpin_in_flight_owners(ctx, pins, expr.span);
+            return result;
+        }
+    }
     let method = crate::types::object_operators::cast_method(class, cast)
         .expect("cast adapter was selected by cast_method");
     let result_type = match cast {
@@ -523,16 +575,7 @@ fn lower_dynamic_numeric_cast(
 ) -> LoweredValue {
     let Some((class, method)) = handlers.first() else {
         if bit_not {
-            let at = span.unwrap_or_else(Span::dummy);
-            let operand = box_operand(ctx, input, at);
-            let pins = pin_in_flight_owners(ctx, &[input.value, operand.value], at);
-            let result = ctx.emit_owned_value(Op::RuntimeCall, vec![operand.value],
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedBitNot)), PhpType::Mixed,
-                Effects::all(), span);
-            unpin_in_flight_owners(ctx, pins, at);
-            if operand.value != input.value { release_binary_operand_temporary(ctx, operand, at); }
-            release_binary_operand_temporary(ctx, input, at);
-            return result;
+            return super::unary_logic::lower_boxed_bitnot(ctx, input, span);
         }
         let at = span.unwrap_or_else(Span::dummy);
         let operand = if matches!(ctx.builder.value_php_type(input.value), PhpType::Object(_)) {

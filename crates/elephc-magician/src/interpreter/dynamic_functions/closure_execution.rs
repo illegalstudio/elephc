@@ -18,7 +18,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_values(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args = evaluated_args
         .into_iter()
-        .map(|value| EvaluatedCallArg {
+        .map(|value| EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value,
@@ -110,6 +110,8 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     let binding_result = bind_method_scope_args(
         &mut function_scope,
         &binding_params,
+        function.parameter_types(),
+        function.parameter_is_variadic(),
         &scope_parameter_is_by_ref,
         &evaluated_args,
         context,
@@ -122,13 +124,15 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     // on. The body and its return coercion run under the declaring fragment's mode.
     let caller_strict_types = context.strict_types();
     context.set_strict_types(function.strict_types());
-    let result = binding_result.and_then(|()| {
-        if let Some(body) = function.bytecode().cloned() {
+    let result = binding_result.and_then(|()| with_source_return_contract(
+        function.return_type(), None, None, context, |context| {
+        if let Some(body) = function.bytecode().filter(|_|
+            !super::super::bytecode::source_proofs_require_walker(context)).cloned() {
             super::super::bytecode::execute_bound_body(body, context, &mut function_scope, values)
         } else {
             execute_statements(function.body(), context, &mut function_scope, values)
         }
-    });
+    }));
     let persist_result = persist_static_locals(
         context,
         function.name(),
@@ -461,7 +465,7 @@ fn eval_closure_with_optional_binding(
         mut frame,
     } = bound_call;
     let mut function_scope = ElephcEvalScope::new();
-    bind_closure_captures(&mut function_scope, closure.captures());
+    bind_closure_captures(&mut function_scope, closure.captures(), context);
     let backtrace_class = binding
         .as_ref()
         .map(|binding| binding.class_scope.clone());
@@ -474,6 +478,8 @@ fn eval_closure_with_optional_binding(
     let binding_result = bind_method_scope_args(
         &mut function_scope,
         &binding_params,
+        function.parameter_types(),
+        function.parameter_is_variadic(),
         &scope_parameter_is_by_ref,
         &evaluated_args,
         context,
@@ -491,13 +497,16 @@ fn eval_closure_with_optional_binding(
     // the mode of the fragment that declared this closure.
     let caller_strict_types = context.strict_types();
     context.set_strict_types(function.strict_types());
-    let result = binding_result.and_then(|()| {
-        if let Some(body) = function.bytecode().cloned() {
+    let result = binding_result.and_then(|()| with_source_return_contract(
+        function.return_type(), binding.as_ref().map(|binding| binding.class_scope.as_str()),
+        binding.as_ref().map(|binding| binding.called_class.as_str()), context, |context| {
+        if let Some(body) = function.bytecode().filter(|_|
+            !super::super::bytecode::source_proofs_require_walker(context)).cloned() {
             super::super::bytecode::execute_bound_body(body, context, &mut function_scope, values)
         } else {
             execute_statements(function.body(), context, &mut function_scope, values)
         }
-    });
+    }));
     let persist_result = persist_static_locals(
         context,
         function.name(),
@@ -573,8 +582,12 @@ pub(in crate::interpreter) fn eval_closure_bound_object_class_name(
 fn bind_closure_captures(
     function_scope: &mut ElephcEvalScope,
     captures: &[EvalClosureCaptureBinding],
+    context: &ElephcEvalContext,
 ) {
     for capture in captures {
+        if let Some(origin) = capture.binding_type() {
+            function_scope.infer_local_type(capture.name().to_string(), origin.clone());
+        }
         if let Some(target) = capture.by_ref_target().cloned() {
             function_scope.set_reference(
                 capture.name().to_string(),
@@ -590,6 +603,9 @@ fn bind_closure_captures(
                 ScopeCellOwnership::Borrowed,
             );
         }
+        if let Some(source) = capture.source_view(context) {
+            function_scope.record_local_source_view(capture.name().to_string(), source.clone(), context.source_view_epoch());
+        }
     }
 }
 
@@ -604,13 +620,7 @@ fn write_back_closure_ref_captures(
         let Some(target) = capture.by_ref_target() else {
             continue;
         };
-        let Some(entry) = function_scope
-            .entry(capture.name())
-            .filter(|entry| entry.flags().is_visible() && entry.flags().by_ref)
-        else {
-            continue;
-        };
-        write_back_method_ref_target(target, entry.cell(), context, values)?;
+        write_back_live_reference_binding(function_scope, capture.name(), target, context, values)?;
     }
     Ok(())
 }
@@ -624,6 +634,7 @@ pub(in crate::interpreter) fn persist_static_locals(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for name in names {
+        if !scope.is_static_binding(name) { continue; }
         if let Some(cell) = scope.visible_cell(name) {
             if context.static_local(function_name, name) == Some(cell) { continue; }
             let cell = values.retain(cell)?;

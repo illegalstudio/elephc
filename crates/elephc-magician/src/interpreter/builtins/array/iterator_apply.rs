@@ -173,7 +173,7 @@ pub(in crate::interpreter) fn eval_iterator_apply_iterator_object(
 fn truthy_owned_result(
     value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let truth = values.truthy(value);
+    let truth = eval_boolean_condition(value, context, values);
     let released = eval_release_value(context, values, value);
     truth.and_then(|truth| released.map(|()| truth))
 }

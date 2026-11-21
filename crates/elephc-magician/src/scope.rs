@@ -13,6 +13,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+mod native_snapshots;
+mod source_views;
+
 use crate::context::EvalReferenceTarget;
 use crate::value::RuntimeCellHandle;
 
@@ -138,15 +141,47 @@ impl ScopeEntry {
     }
 }
 
+/// One binding-local source observation, separate from its enforced value contract.
+#[derive(Clone)]
+struct LocalSourceView {
+    generation: u64,
+    write_epoch: u64,
+    ty: crate::eval_ir::EvalParameterType,
+    predicate_guard: bool,
+}
+
+/// A binding generation and its optional nested argument evidence.
+#[derive(Clone)]
+struct LocalArgumentSource {
+    generation: u64,
+    source: crate::source_snapshot::SourceSnapshot,
+}
+
+/// Stable roots whose lifetime is provided by the activation or its class registry.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum GuardRoot { Variable(String), Static(String) }
+
+/// Distinct physical property and semantic array-key projections.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum GuardSelector { Property(String), Index(crate::context::EvalArrayReferenceKey) }
+
 /// Materialized activation scope passed opaquely across the eval ABI.
 pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
     local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
+    inferred_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
+    local_source_views: HashMap<String, LocalSourceView>,
+    projection_source_views: HashMap<(GuardRoot, GuardSelector), LocalSourceView>,
+    local_argument_sources: HashMap<String, LocalArgumentSource>,
+    array_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_storage_types: HashMap<String, crate::eval_ir::EvalParameterType>,
+    native_binding_types: HashMap<String, crate::eval_ir::EvalParameterType>,
+    pending_native_sources: HashMap<String, (crate::eval_ir::EvalParameterType, bool, bool)>,
     native_detached_names: HashSet<String>,
     aot_visible_names: HashSet<String>,
     global_aliases: HashMap<String, String>,
     reference_targets: HashMap<String, EvalReferenceTarget>,
+    static_bindings: HashSet<String>,
     generation: u64,
 }
 
@@ -156,11 +191,19 @@ impl ElephcEvalScope {
         Self {
             entries: HashMap::new(),
             local_types: HashMap::new(),
+            inferred_local_types: HashMap::new(),
+            local_source_views: HashMap::new(),
+            projection_source_views: HashMap::new(),
+            local_argument_sources: HashMap::new(),
+            array_local_types: HashMap::new(),
             native_storage_types: HashMap::new(),
+            native_binding_types: HashMap::new(),
+            pending_native_sources: HashMap::new(),
             native_detached_names: HashSet::new(),
             aot_visible_names: HashSet::new(),
             global_aliases: HashMap::new(),
             reference_targets: HashMap::new(),
+            static_bindings: HashSet::new(),
             generation: 0,
         }
     }
@@ -178,6 +221,43 @@ impl ElephcEvalScope {
     /// Removes a tentative declaration whose initializer could not enter shared storage.
     pub(crate) fn clear_local_type(&mut self, name: &str) {
         self.local_types.remove(name);
+    }
+
+    /// Records the first successful producer's contract until this binding is unset.
+    pub(crate) fn infer_local_type(&mut self, name: String, declared: crate::eval_ir::EvalParameterType) {
+        self.inferred_local_types.entry(name).or_insert(declared);
+    }
+
+    /// Returns a successful producer's contract, including explicitly open mixed origins.
+    pub(crate) fn inferred_local_type(&self, name: &str) -> Option<&crate::eval_ir::EvalParameterType> {
+        self.inferred_local_types.get(name)
+    }
+
+    /// Records array contents independently from the whole binding's producer kind.
+    pub(crate) fn infer_array_local_type(&mut self, name: String, ty: crate::eval_ir::EvalParameterType) {
+        match self.array_local_types.entry(name) {
+            std::collections::hash_map::Entry::Vacant(entry) => { entry.insert(ty); }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if crate::eval_ir::contains_pending_array_contents(&crate::eval_ir::generic_type(entry.get())) {
+                    entry.insert(ty);
+                }
+            }
+        }
+    }
+
+    /// Borrows the retained array-content contract of a successful producer.
+    pub(crate) fn array_local_type(&self, name: &str) -> Option<&crate::eval_ir::EvalParameterType> {
+        self.array_local_types.get(name)
+    }
+
+    /// Refreshes a native semantic source independently of its current snapshot representation.
+    pub(crate) fn set_native_binding_type(&mut self, name: String, ty: crate::eval_ir::EvalParameterType) {
+        self.native_binding_types.insert(name, ty);
+    }
+
+    /// Reads a native source contract without treating an object-layout guard as a producer type.
+    pub(crate) fn native_binding_type(&self, name: &str) -> Option<&crate::eval_ir::EvalParameterType> {
+        self.native_binding_types.get(name)
     }
 
     /// Refreshes a native reference contract, which ends when eval unsets the imported name.
@@ -199,12 +279,16 @@ impl ElephcEvalScope {
     /// Collects explicit contracts from every visible name sharing this PHP reference group.
     pub(crate) fn local_type_contracts(&self, name: &str) -> Vec<crate::eval_ir::EvalParameterType> {
         let mut types = self.local_type(name).cloned().into_iter().collect::<Vec<_>>();
+        if let Some(ty) = self.array_local_type(name).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
+        if let Some(ty) = self.inferred_local_type(name).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
         if let Some(ty) = self.native_storage_types.get(name).filter(|ty| !types.contains(ty)) {
             types.push(ty.clone());
         }
         if let Some(entry) = self.entry(name).filter(|entry| entry.flags().is_visible() && entry.flags().by_ref) {
             for (alias, alias_entry) in &self.entries {
                 if alias_entry.flags().is_visible() && alias_entry.flags().by_ref && alias_entry.cell() == entry.cell() {
+                    if let Some(ty) = self.array_local_type(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
+                    if let Some(ty) = self.inferred_local_type(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
                     if let Some(ty) = self.local_type(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
                     if let Some(ty) = self.native_storage_types.get(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
                 }
@@ -245,7 +329,16 @@ impl ElephcEvalScope {
         let previous = self.entries.get(&name).copied().filter(|entry| {
             entry.flags().is_visible() && entry.flags().ownership == ScopeCellOwnership::Owned
         }).map(ScopeEntry::cell);
-        self.set(name, cell, ownership);
+        self.set(name.clone(), cell, ownership);
+        if let Some((ty, declared, contents)) = self.pending_native_sources.remove(&name) {
+            if declared { self.declare_local_type(name.clone(), ty.clone()); }
+            else if contents {
+                if let Some(schema) = crate::eval_ir::array_contents_type(crate::eval_ir::generic_type(&ty)) {
+                    self.infer_array_local_type(name.clone(), crate::eval_ir::parameter_type(&schema));
+                }
+            }
+            self.record_local_source_view(name, ty, crate::context::ElephcEvalContext::current_source_view_epoch());
+        }
         // Native reload acquired its own lease. Republishing that same address must
         // retire the former scope owner instead of losing it when the flags change.
         previous
@@ -341,6 +434,7 @@ impl ElephcEvalScope {
             return owned_cell_except(previous, cell).into_iter().collect();
         }
 
+        self.static_bindings.remove(&target);
         let previous_source = self.entries.insert(
             source,
             ScopeEntry::reference(cell, source_ownership, self.generation),
@@ -354,7 +448,9 @@ impl ElephcEvalScope {
 
     /// Records the caller-side storage target for one by-reference local variable.
     pub fn set_reference_target(&mut self, name: impl Into<String>, target: EvalReferenceTarget) {
-        self.reference_targets.insert(name.into(), target);
+        let name = name.into();
+        self.static_bindings.remove(&name);
+        self.reference_targets.insert(name, target);
     }
 
     /// Returns the caller-side storage target associated with one by-reference local.
@@ -366,7 +462,13 @@ impl ElephcEvalScope {
     pub fn unset(&mut self, name: impl Into<String>) -> Option<RuntimeCellHandle> {
         self.bump_generation();
         let name = name.into();
+        self.static_bindings.remove(&name);
         self.native_storage_types.remove(&name);
+        self.inferred_local_types.remove(&name);
+        self.array_local_types.remove(&name);
+        self.local_source_views.remove(&name);
+        self.local_argument_sources.remove(&name);
+        self.native_binding_types.remove(&name);
         if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         self.reference_targets.remove(&name);
         let previous = self
@@ -381,7 +483,13 @@ impl ElephcEvalScope {
         name: impl Into<String>,
     ) -> Option<RuntimeCellHandle> {
         let name = name.into();
+        self.static_bindings.remove(&name);
         self.native_storage_types.remove(&name);
+        self.inferred_local_types.remove(&name);
+        self.array_local_types.remove(&name);
+        self.local_source_views.remove(&name);
+        self.local_argument_sources.remove(&name);
+        self.native_binding_types.remove(&name);
         if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         let Some(entry) = self.entries.get(&name).copied() else {
             return self.unset(name);
@@ -483,6 +591,12 @@ impl ElephcEvalScope {
         entries
     }
 
+    /// Records a static declaration actually reached by this activation.
+    pub(crate) fn mark_static_binding(&mut self, name: &str) { self.static_bindings.insert(name.to_string()); }
+
+    /// Reports whether a name still refers to its reached static declaration.
+    pub(crate) fn is_static_binding(&self, name: &str) -> bool { self.static_bindings.contains(name) }
+
     /// Marks a variable name as an alias to the eval context's global scope.
     pub fn mark_global_alias(&mut self, name: impl Into<String>) {
         let name = name.into();
@@ -495,7 +609,9 @@ impl ElephcEvalScope {
         name: impl Into<String>,
         global_name: impl Into<String>,
     ) {
-        self.global_aliases.insert(name.into(), global_name.into());
+        let name = name.into();
+        self.static_bindings.remove(&name);
+        self.global_aliases.insert(name, global_name.into());
     }
 
     /// Removes a variable's global alias marker after local `unset()`.
@@ -545,6 +661,14 @@ impl ElephcEvalScope {
 
     /// Removes every entry and returns runtime cells owned by the scope.
     pub fn drain_owned_cells(&mut self) -> Vec<RuntimeCellHandle> {
+        self.static_bindings.clear();
+        self.inferred_local_types.clear();
+        self.array_local_types.clear();
+        self.local_source_views.clear();
+        self.projection_source_views.clear();
+        self.local_argument_sources.clear();
+        self.native_binding_types.clear();
+        self.pending_native_sources.clear();
         self.aot_visible_names.clear();
         self.reference_targets.clear();
         self.entries
@@ -600,3 +724,33 @@ impl Default for ElephcEvalScope {
 
 #[cfg(test)]
 mod tests;
+
+impl ElephcEvalScope {
+    /// Identifies the lifetime of a projection root without retaining its PHP value.
+    pub(crate) fn guard_root_generation(&self, root: &GuardRoot) -> Option<u64> {
+        match root {
+            GuardRoot::Variable(name) => self.entry(name).filter(|entry| entry.flags().is_visible()).map(|entry| entry.generation()),
+            GuardRoot::Static(_) => Some(0),
+        }
+    }
+
+    /// Publishes a predicate observation only on the same root generation observed before evaluation.
+    pub(crate) fn record_projection_source(&mut self, root: GuardRoot, selector: GuardSelector,
+        generation: u64, epoch: u64, ty: crate::eval_ir::EvalParameterType,
+    ) {
+        if self.guard_root_generation(&root) == Some(generation) {
+            self.projection_source_views.insert((root, selector), LocalSourceView {
+                generation, write_epoch: epoch, ty, predicate_guard: true,
+            });
+        }
+    }
+
+    /// Gives reached predicates precedence while root replacement and possible effects retire them.
+    pub(crate) fn projection_source(&self, root: &GuardRoot, selector: &GuardSelector,
+        context: &crate::context::ElephcEvalContext,
+    ) -> Option<&crate::eval_ir::EvalParameterType> {
+        let view = self.projection_source_views.get(&(root.clone(), selector.clone()))?;
+        (self.guard_root_generation(root) == Some(view.generation) && view.write_epoch == context.source_view_epoch())
+            .then_some(&view.ty)
+    }
+}

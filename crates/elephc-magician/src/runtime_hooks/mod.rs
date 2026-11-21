@@ -20,8 +20,11 @@ mod object_owners;
 #[cfg(not(test))]
 mod tags;
 pub(crate) mod owner_frames;
+pub(crate) mod descriptor_sources;
 #[cfg(not(test))]
 pub(crate) mod release;
+#[cfg(not(test))]
+pub(crate) mod scope_assignment;
 
 #[cfg(not(test))]
 use crate::errors::EvalStatus;

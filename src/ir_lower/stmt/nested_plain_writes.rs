@@ -47,15 +47,43 @@ fn lower_store_selected(
 fn lower_captured_store(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: LoweredValue, span: Span,
 ) {
+    let mut apply = |ctx: &mut LoweringContext<'_, '_>, root: LoweredValue| {
+        lower_captured_store_with_root(ctx, target, value, span, Some(root));
+    };
+    if super::property_array_writes::lower_runtime_named_property_container(
+        ctx,
+        target,
+        PropertyDimensionFetchMode::Write,
+        &mut apply,
+    ) {
+        return;
+    }
+    lower_captured_store_with_root(ctx, target, value, span, None);
+}
+
+/// Writes through a property container selected before traversing deeper dimensions.
+fn lower_captured_store_with_root(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: LoweredValue,
+    span: Span,
+    property_root: Option<LoweredValue>,
+) {
     let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, target, target)
         .map_or_else(|| target.clone(), |(_, write)| write);
     let ExprKind::ArrayAccess { array, index } = &target.kind else { unreachable!() };
-    let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, array, span);
+    let parent = super::nested_array_writes::lower_nested_assign_parent_for_store_with_root(
+        ctx,
+        array,
+        span,
+        property_root,
+    );
     if ctx.builder.insertion_block_is_terminated() { return; }
     let parent = resolve_parent_for_write(ctx, parent, span);
     let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
     let key = lower_expr(ctx, index);
     let (key, key_owner) = super::nested_array_writes::root_static_update_receiver(ctx, key, span);
+    crate::ir_lower::array_key_guards::before_parent_materialization(ctx, parent, key, span);
     let pending = super::nested_false_errors::capture(ctx, parent, span);
     super::nested_false_errors::handle_pending(ctx, pending, Some(key), span, |ctx| {
         emit_store(ctx, parent, key, value, index, span);
@@ -99,11 +127,56 @@ fn lower_append_selected(
 fn lower_captured_append(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: LoweredValue, span: Span,
 ) {
+    let mut apply = |ctx: &mut LoweringContext<'_, '_>, root: LoweredValue| {
+        lower_captured_append_with_root(ctx, target, value, span, Some(root));
+    };
+    if super::property_array_writes::lower_runtime_named_property_container(
+        ctx,
+        target,
+        PropertyDimensionFetchMode::Write,
+        &mut apply,
+    ) {
+        return;
+    }
+    lower_captured_append_with_root(ctx, target, value, span, None);
+}
+
+/// Appends through a property container selected before traversing deeper dimensions.
+fn lower_captured_append_with_root(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: LoweredValue,
+    span: Span,
+    property_root: Option<LoweredValue>,
+) {
     let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, target, target)
         .map_or_else(|| target.clone(), |(_, write)| write);
-    let parent =
-        super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, &target, span);
+    let parent = super::nested_array_writes::lower_nested_assign_parent_for_store_with_root(
+        ctx,
+        &target,
+        span,
+        property_root,
+    );
     if ctx.builder.insertion_block_is_terminated() { return; }
+    append_prepared(ctx, parent, value, span);
+}
+
+/// Completes one boxed append through a captured writable cell with deferred callback failure.
+pub(super) fn append_prepared(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, value: LoweredValue, span: Span,
+) {
+    let exact_array = super::array_write_core::boxed_receiver_has_array_contract(ctx, parent);
+    if exact_array {
+        let parent = super::array_write_core::direct_boxed_array_receiver(ctx, parent);
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![parent.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+        return;
+    }
     let parent = resolve_parent_for_write(ctx, parent, span);
     let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
     let pending = super::nested_false_errors::capture(ctx, parent, span);
@@ -119,6 +192,13 @@ fn lower_captured_append(
 fn resolve_parent_for_write(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span,
 ) -> LoweredValue {
+    let published = super::array_write_core::direct_published_boxed_receiver(ctx, parent);
+    if matches!(
+        ctx.builder.value_defining_op(published.value),
+        Some(Op::PropGetForWrite | Op::LoadRefCell)
+    ) {
+        return published;
+    }
     if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {
         return parent;
     }
@@ -166,6 +246,7 @@ fn emit_append(
     branch_to(ctx, done);
     ctx.builder.position_at_end(array_append);
     ctx.restore_initialized_slots(initialized.clone());
+    let parent = super::array_write_core::direct_published_boxed_receiver(ctx, parent);
     ctx.emit_void(Op::MixedArrayAppend, vec![parent.value, value.value], None,
         Op::MixedArrayAppend.default_effects(), Some(span));
     branch_to(ctx, done);
@@ -235,6 +316,7 @@ pub(super) fn fetch_parent(
         super::nested_array_writes::root_static_update_receiver(ctx, receiver, span);
     let key = lower_expr(ctx, index);
     let (key, key_owner) = super::nested_array_writes::root_static_update_receiver(ctx, key, span);
+    crate::ir_lower::array_key_guards::before_parent_materialization(ctx, receiver, key, span);
     let pending = super::nested_false_errors::capture(ctx, receiver, span);
     super::nested_false_errors::handle_pending(ctx, pending, Some(key), span, |ctx| {
         let null = lower_expr(ctx, &Expr::new(ExprKind::Null, span));

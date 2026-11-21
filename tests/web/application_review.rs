@@ -468,7 +468,7 @@ class Application implements Elephc\Web\WorkerApplication {
     public function shutdown(): void {}
 }
 Elephc\Web\Worker::register(new Application());
-"#, "app", &["--web-lifecycle=application", "--strict-php"]);
+"#, "app", &["--web-lifecycle=application", "--php-only"]);
     let addr = format!("127.0.0.1:{}", free_port());
     let _server = spawn_server(&binary, &addr, "1");
     assert_eq!(body(&addr, "/"), "1:4");
@@ -491,7 +491,7 @@ class Application implements Elephc\Web\WorkerApplication {
     public function shutdown(): void {}
 }
 Elephc\Web\Worker::register(new Application());
-"#, "app", &["--web-lifecycle=application", "--strict-php", "--with-regex"]);
+"#, "app", &["--web-lifecycle=application", "--php-only", "--with-regex"]);
     let addr = format!("127.0.0.1:{}", free_port());
     let _server = spawn_server(&binary, &addr, "1");
     assert_eq!(body(&addr, "/"), "1:4");

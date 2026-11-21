@@ -123,6 +123,7 @@ fn assigns_through_kept_type_slot(ctx: &LoweringContext<'_, '_>, mut expr: &Expr
 /// Lowers the value side of `??`, suppressing undefined-offset warnings from
 /// native array reads while preserving nullsafe-chain lazy evaluation.
 pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value: &Expr) -> LoweredValue {
+    if let Some(value) = initialization_probes::coalesce_value(ctx, value) { return value; }
     if let Some(value) = nullsafe_chain::lower_with_missing_warning(ctx, value, false) {
         return value;
     }
@@ -189,7 +190,7 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
                 let receiver = lower_array_access_with_missing_warning(ctx, array, index, object, false);
                 refine_member_receiver(ctx, receiver, receiver_expr)
             }
-            _ => lower_member_receiver(ctx, receiver_expr, value),
+            _ => lower_member_probe_receiver(ctx, object, value),
         };
         if native_property_method_for_value(ctx, object.value, property,
             elephc_builtin_contract::ObjectProperty::Probe).is_some()
@@ -200,7 +201,8 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
             || union_hook_probe_class(ctx, object.value, property).is_some() {
             return lower_initialized_property_value(ctx, object, property, value);
         }
-        if needs_probe {
+        if needs_probe || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization)
+            || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability) {
             return lower_property_probe_from_value(ctx, object, property, value);
         }
         // A class with neither a declared slot nor a dynamic hash can never hold the name:
@@ -432,10 +434,11 @@ pub(super) fn lower_short_ternary(
     let value = lower_array_value_for_merge(ctx, value).unwrap_or_else(|| lower_expr(ctx, value));
     // A retained constant-null branch uses the raw I64 null sentinel. It is PHP-falsy,
     // while `truthy` deliberately forwards ordinary I64 conditions without converting them.
-    let cond = if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Void {
+    let cond = if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Void
+        && !ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Bools) {
         emit_bool_literal(ctx, false, Some(condition_span))
     } else {
-        ctx.truthy(value, Some(condition_span))
+        ctx.condition_truthy(value, Some(condition_span))
     };
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();

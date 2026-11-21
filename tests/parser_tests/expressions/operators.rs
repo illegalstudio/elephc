@@ -14,12 +14,15 @@ use super::*;
 fn test_unary_plus_precedence() {
     let stmts = parse_source("<?php echo +$n ** 2 * 3;");
     let expected = Stmt::echo(Expr::binop(
-        Expr::binop(Expr::int_lit(0), BinOp::Add,
-            Expr::binop(Expr::var("n"), BinOp::Pow, Expr::int_lit(2))),
+        Expr::unary_plus(Expr::binop(Expr::var("n"), BinOp::Pow, Expr::int_lit(2))),
         BinOp::Mul, Expr::int_lit(3),
     ));
     assert_eq!(stmts, vec![expected]);
     assert!(parse_fails("<?php echo +;"));
+    let statements = parse_source("<?php +$n; -$n;");
+    assert!(matches!(&statements[0].kind, StmtKind::ExprStmt(Expr { kind: ExprKind::UnaryPlus(_), .. })));
+    assert!(matches!(&statements[1].kind, StmtKind::ExprStmt(Expr { kind: ExprKind::Negate(_), .. })));
+
 }
 
 /// Verifies that `<?php echo 2 + 3 * 4;` parses as `2 + (3 * 4)` — multiplication has higher

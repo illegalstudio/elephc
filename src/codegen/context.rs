@@ -75,6 +75,7 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) numeric_frame_only_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
+    pub(super) binding_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
     callable_reachability: CallableReachabilityAnalysis,
     /// Runtime names a declared-`callable` conversion may resolve when provenance is open
@@ -123,6 +124,21 @@ pub(crate) struct FunctionContext<'a> {
 }
 
 impl<'a> FunctionContext<'a> {
+    /// Reads the original named-property policy, including across inlining and getter dispatch.
+    pub(super) fn property_read_requires_initialization(&self) -> bool {
+        self.current_inst.and_then(|id| self.function.instruction(id)).is_some_and(|inst| {
+            let profile = match inst.immediate {
+                Some(Immediate::ProfiledData { profile, .. }
+                    | Immediate::ReflectionPropertyRef { profile, .. })
+                    if matches!(inst.op, Op::PropGet | Op::NullsafePropGet) => Some(profile),
+                Some(Immediate::ProfiledPropertyFetch { mode: crate::ir::PropertyFetchMode::Read, profile })
+                    if inst.op == Op::DynamicPropGet => Some(profile),
+                _ => None,
+            };
+            profile.is_some_and(|profile| profile.semantics().contains(elephc_semantics::StrictFeature::Initialization))
+        })
+    }
+
     /// Returns the PHP lexical class scope the current instruction executes in.
     ///
     /// An instruction the inliner spliced in from a method body keeps that method's class
@@ -222,6 +238,7 @@ impl<'a> FunctionContext<'a> {
             numeric_frame_only_slots: layout.numeric_frame_only_slots,
             numeric_values: layout.numeric_values,
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
+            binding_state_offsets: layout.binding_state_offsets,
             local_analysis: layout.local_analysis,
             callable_reachability,
             declared_callable_candidates: None,
@@ -450,12 +467,11 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns the type a value is boxed into `mixed` as.
     ///
-    /// That is its codegen type, except for a `?ptr<T>`: its codegen form is the bare pointer,
-    /// and only the declared union tells the boxer that address 0 is PHP null (a plain `ptr`
-    /// boxes 0 as the integer it is).
+    /// Nullable pointers retain null at address zero. Resources retain their PHP tag even
+    /// though their native payload uses the same integer-word representation as an int.
     pub(super) fn mixed_box_type(&self, value: ValueId) -> Result<PhpType> {
         let raw = self.raw_value_php_type(value)?;
-        if crate::types::is_nullable_pointer_type(&raw) {
+        if crate::types::is_nullable_pointer_type(&raw) || matches!(raw, PhpType::Resource(_)) {
             Ok(raw)
         } else {
             self.value_php_type(value)
@@ -1033,14 +1049,7 @@ impl<'a> FunctionContext<'a> {
     /// Loads the value pointed to by a local ref-cell pointer slot.
     fn load_ref_cell_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
         let storage_ty = self.local_php_type(slot)?;
-        let payload_ty = self.ref_cell_payload_type(slot)?;
-        self.load_ref_cell_payload_to_result(slot, &payload_ty)?;
-        super::lower_inst::coerce_loaded_local_to_result_type(
-            self,
-            &payload_ty,
-            &storage_ty,
-        )?;
-        Ok(storage_ty)
+        super::lower_inst::load_ref_cell_local_to_result_as(self, slot, &storage_ty)
     }
 
     /// Loads a reference cell's physical payload without coercing it to the logical slot type.
@@ -1632,14 +1641,21 @@ impl<'a> FunctionContext<'a> {
     /// the function signature. Other promoted locals use their final frame storage shape for
     /// both representations.
     pub(super) fn ref_cell_payload_type(&self, slot: LocalSlotId) -> Result<PhpType> {
-        if let Some(ty) = self.current_inst.and_then(|inst|
-            self.local_analysis.ref_cell_payload_type_before_inst(inst, slot)) {
-            return Ok(ty.clone());
-        }
-        if let Some(ty) = self.local_analysis.stable_ref_cell_payload_type(slot) {
-            return Ok(ty.clone());
+        if let Some(ty) = self.proven_ref_cell_payload_type(slot) { return Ok(ty); }
+        if let Some(parameter) = self.function.params.get(slot.as_raw() as usize)
+            .filter(|parameter| parameter.by_ref && !parameter.variadic) {
+            return Ok(parameter.php_type.clone());
         }
         self.local_php_type(slot)
+    }
+
+    /// Keeps proven current payload facts separate from a raw incoming ABI fallback.
+    pub(super) fn proven_ref_cell_payload_type(&self, slot: LocalSlotId) -> Option<PhpType> {
+        if let Some(ty) = self.current_inst.and_then(|inst|
+            self.local_analysis.ref_cell_payload_type_before_inst(inst, slot)) {
+            return Some(ty.clone());
+        }
+        self.local_analysis.stable_ref_cell_payload_type(slot).cloned()
     }
 
     /// Stores the current result register(s) through a local ref-cell pointer slot.
@@ -1815,7 +1831,8 @@ impl<'a> FunctionContext<'a> {
         }
         use crate::builtins::semantics::BuiltinResultOwnership;
         let fresh = match inst.immediate {
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) =>
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))
+            | Some(Immediate::RuntimeCall(RuntimeCallTarget::NumericFunction { target, .. })) =>
                 target.result_ownership() == BuiltinResultOwnership::Fresh,
             Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target, .. })) =>
                 target.result_ownership() == BuiltinResultOwnership::Fresh,

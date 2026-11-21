@@ -11,7 +11,10 @@
 
 builtin! {
     contract: "get_resource_type",
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::GetResourceType,
+    semantics: crate::builtins::mixed_inputs::with_domains(
+        crate::builtins::semantics::runtime_fn_semantics(
+            crate::ir::RuntimeFnId::GetResourceType,
+        ),
+        crate::builtins::mixed_inputs::first_resource,
     ),
 }

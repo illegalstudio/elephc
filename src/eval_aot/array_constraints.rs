@@ -20,10 +20,11 @@ pub(super) struct ArrayScopeReadConstraintSets {
 pub(super) fn collect_array_scope_read_constraint_sets(
     program: &[Stmt],
     scope_reads: &BTreeSet<String>,
+    profile: elephc_semantics::SemanticProfile,
 ) -> ArrayScopeReadConstraintSets {
     let mut constraints = ArrayScopeReadConstraintSets::default();
     for stmt in program {
-        collect_stmt_array_scope_read_constraints(stmt, scope_reads, &mut constraints);
+        collect_stmt_array_scope_read_constraints(stmt, scope_reads, &mut constraints, profile);
     }
     constraints
 }
@@ -33,18 +34,19 @@ pub(super) fn collect_stmt_array_scope_read_constraints(
     stmt: &Stmt,
     scope_reads: &BTreeSet<String>,
     constraints: &mut ArrayScopeReadConstraintSets,
+    profile: elephc_semantics::SemanticProfile,
 ) {
     match &stmt.kind {
         StmtKind::Synthetic(body) => {
             for stmt in body {
-                collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints);
+                collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints, profile);
             }
         }
         StmtKind::Echo(expr) | StmtKind::ExprStmt(expr) | StmtKind::Return(Some(expr)) => {
-            collect_expr_array_scope_read_constraints(expr, scope_reads, constraints);
+            collect_expr_array_scope_read_constraints(expr, scope_reads, constraints, profile);
         }
         StmtKind::Assign { value, .. } => {
-            collect_expr_array_scope_read_constraints(value, scope_reads, constraints);
+            collect_expr_array_scope_read_constraints(value, scope_reads, constraints, profile);
         }
         StmtKind::If {
             condition,
@@ -52,26 +54,26 @@ pub(super) fn collect_stmt_array_scope_read_constraints(
             elseif_clauses,
             else_body,
         } => {
-            collect_expr_array_scope_read_constraints(condition, scope_reads, constraints);
+            collect_expr_array_scope_read_constraints(condition, scope_reads, constraints, profile);
             for stmt in then_body {
-                collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints);
+                collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints, profile);
             }
             for (condition, body) in elseif_clauses {
-                collect_expr_array_scope_read_constraints(condition, scope_reads, constraints);
+                collect_expr_array_scope_read_constraints(condition, scope_reads, constraints, profile);
                 for stmt in body {
-                    collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints);
+                    collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints, profile);
                 }
             }
             if let Some(else_body) = else_body {
                 for stmt in else_body {
-                    collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints);
+                    collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints, profile);
                 }
             }
         }
         StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
-            collect_expr_array_scope_read_constraints(condition, scope_reads, constraints);
+            collect_expr_array_scope_read_constraints(condition, scope_reads, constraints, profile);
             for stmt in body {
-                collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints);
+                collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints, profile);
             }
         }
         StmtKind::For {
@@ -81,16 +83,16 @@ pub(super) fn collect_stmt_array_scope_read_constraints(
             body,
         } => {
             if let Some(init) = init {
-                collect_stmt_array_scope_read_constraints(init, scope_reads, constraints);
+                collect_stmt_array_scope_read_constraints(init, scope_reads, constraints, profile);
             }
             if let Some(condition) = condition {
-                collect_expr_array_scope_read_constraints(condition, scope_reads, constraints);
+                collect_expr_array_scope_read_constraints(condition, scope_reads, constraints, profile);
             }
             if let Some(update) = update {
-                collect_stmt_array_scope_read_constraints(update, scope_reads, constraints);
+                collect_stmt_array_scope_read_constraints(update, scope_reads, constraints, profile);
             }
             for stmt in body {
-                collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints);
+                collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints, profile);
             }
         }
         StmtKind::Foreach { array, body, .. } => {
@@ -99,12 +101,12 @@ pub(super) fn collect_stmt_array_scope_read_constraints(
                     constraints.array_like.insert(variable.clone());
                 }
             }
-            collect_expr_array_scope_read_constraints(array, scope_reads, constraints);
+            collect_expr_array_scope_read_constraints(array, scope_reads, constraints, profile);
             if expr_is_static_empty_array_literal_source(array) {
                 return;
             }
             for stmt in body {
-                collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints);
+                collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints, profile);
             }
         }
         StmtKind::Switch {
@@ -112,18 +114,18 @@ pub(super) fn collect_stmt_array_scope_read_constraints(
             cases,
             default,
         } => {
-            collect_expr_array_scope_read_constraints(subject, scope_reads, constraints);
+            collect_expr_array_scope_read_constraints(subject, scope_reads, constraints, profile);
             for (conditions, body) in cases {
                 for condition in conditions {
-                    collect_expr_array_scope_read_constraints(condition, scope_reads, constraints);
+                    collect_expr_array_scope_read_constraints(condition, scope_reads, constraints, profile);
                 }
                 for stmt in body {
-                    collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints);
+                    collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints, profile);
                 }
             }
             if let Some(default) = default {
                 for stmt in default {
-                    collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints);
+                    collect_stmt_array_scope_read_constraints(stmt, scope_reads, constraints, profile);
                 }
             }
         }
@@ -136,66 +138,67 @@ pub(super) fn collect_expr_array_scope_read_constraints(
     expr: &Expr,
     scope_reads: &BTreeSet<String>,
     constraints: &mut ArrayScopeReadConstraintSets,
+    profile: elephc_semantics::SemanticProfile,
 ) {
     match &expr.kind {
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Print(inner)
         | ExprKind::Spread(inner)
         | ExprKind::NamedArg { value: inner, .. } => {
-            collect_expr_array_scope_read_constraints(inner, scope_reads, constraints);
+            collect_expr_array_scope_read_constraints(inner, scope_reads, constraints, profile);
         }
         ExprKind::BinaryOp { left, right, .. } => {
-            collect_expr_array_scope_read_constraints(left, scope_reads, constraints);
-            collect_expr_array_scope_read_constraints(right, scope_reads, constraints);
+            collect_expr_array_scope_read_constraints(left, scope_reads, constraints, profile);
+            collect_expr_array_scope_read_constraints(right, scope_reads, constraints, profile);
         }
         ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
         } => {
-            collect_expr_array_scope_read_constraints(condition, scope_reads, constraints);
-            collect_expr_array_scope_read_constraints(then_expr, scope_reads, constraints);
-            collect_expr_array_scope_read_constraints(else_expr, scope_reads, constraints);
+            collect_expr_array_scope_read_constraints(condition, scope_reads, constraints, profile);
+            collect_expr_array_scope_read_constraints(then_expr, scope_reads, constraints, profile);
+            collect_expr_array_scope_read_constraints(else_expr, scope_reads, constraints, profile);
         }
         ExprKind::ShortTernary { value, default } | ExprKind::NullCoalesce { value, default } => {
-            collect_expr_array_scope_read_constraints(value, scope_reads, constraints);
-            collect_expr_array_scope_read_constraints(default, scope_reads, constraints);
+            collect_expr_array_scope_read_constraints(value, scope_reads, constraints, profile);
+            collect_expr_array_scope_read_constraints(default, scope_reads, constraints, profile);
         }
         ExprKind::Cast { expr, .. } => {
-            collect_expr_array_scope_read_constraints(expr, scope_reads, constraints);
+            collect_expr_array_scope_read_constraints(expr, scope_reads, constraints, profile);
         }
         ExprKind::Match {
             subject,
             arms,
             default,
         } => {
-            collect_expr_array_scope_read_constraints(subject, scope_reads, constraints);
+            collect_expr_array_scope_read_constraints(subject, scope_reads, constraints, profile);
             for (conditions, result) in arms {
                 for condition in conditions {
-                    collect_expr_array_scope_read_constraints(condition, scope_reads, constraints);
+                    collect_expr_array_scope_read_constraints(condition, scope_reads, constraints, profile);
                 }
-                collect_expr_array_scope_read_constraints(result, scope_reads, constraints);
+                collect_expr_array_scope_read_constraints(result, scope_reads, constraints, profile);
             }
             if let Some(default) = default {
-                collect_expr_array_scope_read_constraints(default, scope_reads, constraints);
+                collect_expr_array_scope_read_constraints(default, scope_reads, constraints, profile);
             }
         }
         ExprKind::ArrayAccess { array, index } => {
-            collect_expr_array_scope_read_constraints(array, scope_reads, constraints);
-            collect_expr_array_scope_read_constraints(index, scope_reads, constraints);
+            collect_expr_array_scope_read_constraints(array, scope_reads, constraints, profile);
+            collect_expr_array_scope_read_constraints(index, scope_reads, constraints, profile);
         }
         ExprKind::ArrayLiteral(items) => {
             for item in items {
-                collect_expr_array_scope_read_constraints(item, scope_reads, constraints);
+                collect_expr_array_scope_read_constraints(item, scope_reads, constraints, profile);
             }
         }
         ExprKind::ArrayLiteralAssoc(pairs) => {
             for (key, value) in pairs {
-                collect_expr_array_scope_read_constraints(key, scope_reads, constraints);
-                collect_expr_array_scope_read_constraints(value, scope_reads, constraints);
+                collect_expr_array_scope_read_constraints(key, scope_reads, constraints, profile);
+                collect_expr_array_scope_read_constraints(value, scope_reads, constraints, profile);
             }
         }
         ExprKind::FunctionCall { name, args } => {
@@ -204,9 +207,10 @@ pub(super) fn collect_expr_array_scope_read_constraints(
                 args,
                 scope_reads,
                 constraints,
+                profile,
             );
             for arg in args {
-                collect_expr_array_scope_read_constraints(arg, scope_reads, constraints);
+                collect_expr_array_scope_read_constraints(arg, scope_reads, constraints, profile);
             }
         }
         _ => {}
@@ -219,9 +223,10 @@ pub(super) fn collect_builtin_array_scope_read_constraints(
     args: &[Expr],
     scope_reads: &BTreeSet<String>,
     constraints: &mut ArrayScopeReadConstraintSets,
+    profile: elephc_semantics::SemanticProfile,
 ) {
     let short_name = php_symbol_key(name.trim_start_matches('\\'));
-    let Some(args) = normalize_eir_runtime_builtin_args(&short_name, args) else {
+    let Some(args) = normalize_eir_runtime_builtin_args(&short_name, args, profile) else {
         return;
     };
     match short_name.as_str() {

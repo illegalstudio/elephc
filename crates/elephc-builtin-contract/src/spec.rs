@@ -121,6 +121,8 @@ pub enum TypeSpec {
     /// Same reason as `Ptr`: `__elephc_normalize_callable` checks as `PhpType::Callable`, whose
     /// representation is a descriptor rather than a boxed cell.
     Callable,
+    /// PHP resource value kind, which is not a userland type-hint keyword.
+    Resource,
 }
 
 /// Static PHP value used as an optional builtin parameter default.
@@ -315,6 +317,11 @@ impl BuiltinContract {
     /// Returns the fixed PHP parameter names that can contain callable descriptors.
     pub fn callback_parameter_names(&self) -> &'static [&'static str] {
         crate::callback_parameters::names(self.id)
+    }
+
+    /// Returns the shared policy for automatic comparison or an explicit identity mode.
+    pub fn comparison_policy(&self) -> Option<crate::ComparisonPolicy> {
+        crate::comparison_policy::policy(self.id)
     }
 }
 

@@ -32,11 +32,12 @@
 
 use crate::errors::EvalParseError;
 use crate::eval_ir::EvalProgram;
-use crate::lexer::{tokenize_at_line, Token, TokenKind};
+use crate::lexer::{tokenize_at_line_with_semantics, Token, TokenKind};
 use crate::parse_cache::parse_script_cached;
 use crate::parser;
 use elephc_builtin_contract::string_literal::{push_escaped_byte, push_literal_char};
 use std::sync::Arc;
+use elephc_semantics::SemanticProfile;
 
 /// Whether a script parse should go through the byte-keyed parse memo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +61,11 @@ pub(crate) enum ScriptSegment {
 }
 
 impl ScriptSegment {
+    /// Confirms that a cached AST was normalized under the header's semantic policy.
+    pub(crate) fn matches_semantic_profile(&self, profile: SemanticProfile) -> bool {
+        match self { Self::Code(program) => program.matches_semantic_profile(profile), Self::ParseError(_) => true }
+    }
+
     /// Returns the byte footprint this segment contributes to the cache budget.
     ///
     /// A parsed file is charged its source length, which is the same accounting
@@ -73,10 +79,16 @@ impl ScriptSegment {
 }
 
 /// Parses an included PHP file into the segment list the script cache stores: one segment.
+#[cfg(test)]
 pub(crate) fn segment_script(bytes: &[u8], mode: ParseMode) -> Vec<ScriptSegment> {
+    segment_script_with_semantics(bytes, mode, SemanticProfile::PERMISSIVE)
+}
+
+/// Parses or memoizes a file with the caller's immutable semantic rules.
+pub(crate) fn segment_script_with_semantics(bytes: &[u8], mode: ParseMode, profile: SemanticProfile) -> Vec<ScriptSegment> {
     let parsed = match mode {
-        ParseMode::Fresh => parse_script(bytes).map(Arc::new),
-        ParseMode::Memoized => parse_script_cached(bytes),
+        ParseMode::Fresh => parse_script_with_semantics(bytes, profile).map(Arc::new),
+        ParseMode::Memoized => parse_script_cached(bytes, profile),
     };
     vec![match parsed {
         Ok(program) => ScriptSegment::Code(program),
@@ -85,7 +97,7 @@ pub(crate) fn segment_script(bytes: &[u8], mode: ParseMode) -> Vec<ScriptSegment
 }
 
 /// Parses a whole PHP file, which starts in HTML mode, into one program.
-pub(crate) fn parse_script(bytes: &[u8]) -> Result<EvalProgram, EvalParseError> {
+pub(crate) fn parse_script_with_semantics(bytes: &[u8], profile: SemanticProfile) -> Result<EvalProgram, EvalParseError> {
     let mut tokens = Vec::new();
     let mut line: i64 = 1;
     let mut counted = 0;
@@ -99,7 +111,7 @@ pub(crate) fn parse_script(bytes: &[u8]) -> Result<EvalProgram, EvalParseError> 
                     tokens.push(Token::new(TokenKind::Ident("echo".to_string()), line));
                 }
                 let source = std::str::from_utf8(code).map_err(|_| EvalParseError::InvalidUtf8)?;
-                let mut block = tokenize_at_line(source, line)?;
+                let mut block = tokenize_at_line_with_semantics(source, line, profile)?;
                 block.pop(); // this block's end-of-input sentinel: the file goes on
                 tokens.extend(block);
                 line += newlines(code);
@@ -113,7 +125,7 @@ pub(crate) fn parse_script(bytes: &[u8]) -> Result<EvalProgram, EvalParseError> 
     }
     line += newlines(&bytes[counted..]);
     tokens.push(Token::new(TokenKind::Eof, line));
-    parser::parse_tokens(tokens, bytes.len())
+    parser::parse_tokens_with_semantics(tokens, bytes.len(), profile)
 }
 
 /// One piece of an included file, as its tags cut it.

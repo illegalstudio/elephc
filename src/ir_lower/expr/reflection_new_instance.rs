@@ -10,82 +10,11 @@
 use super::*;
 
 /// Returns the source arguments that can be forwarded to `new $class(...)`.
-pub(super) fn reflection_class_new_instance_args(args: &[Expr]) -> Vec<Expr> {
+pub(super) fn reflection_class_new_instance_args(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Vec<Expr> {
     if has_static_call_spread_args(args) {
-        return expand_static_call_spread_args(args);
+        return expand_static_call_spread_args(args, profile);
     }
     args.to_vec()
-}
-
-/// Returns constructor arguments carried by a static `newInstanceArgs()` array argument.
-pub(super) fn reflection_class_new_instance_args_array(
-    ctx: &LoweringContext<'_, '_>,
-    args: &[Expr],
-) -> Option<Vec<Expr>> {
-    let args = reflection_class_new_instance_args(args);
-    match args.as_slice() {
-        [] => Some(Vec::new()),
-        [arg] => reflection_class_new_instance_args_value(ctx, arg),
-        _ => None,
-    }
-}
-
-/// Extracts the actual array value passed to the `newInstanceArgs()` `$args` parameter.
-pub(super) fn reflection_class_new_instance_args_value(
-    ctx: &LoweringContext<'_, '_>,
-    arg: &Expr,
-) -> Option<Vec<Expr>> {
-    let array_expr = match &arg.kind {
-        ExprKind::NamedArg { name, value } if php_symbol_key(name) == "args" => value.as_ref(),
-        ExprKind::NamedArg { .. } => return None,
-        _ => arg,
-    };
-    if let ExprKind::Variable(name) = &array_expr.kind {
-        return ctx.reflection_arg_array_local(name);
-    }
-    reflection_class_new_instance_args_value_without_locals(array_expr)
-}
-
-/// Extracts an inline static array value passed to a reflection argument-array API.
-pub(super) fn reflection_class_new_instance_args_value_without_locals(arg: &Expr) -> Option<Vec<Expr>> {
-    let array_expr = match &arg.kind {
-        ExprKind::NamedArg { name, value } if php_symbol_key(name) == "args" => value.as_ref(),
-        ExprKind::NamedArg { .. } => return None,
-        _ => arg,
-    };
-    match &array_expr.kind {
-        ExprKind::ArrayLiteral(items) => Some(items.clone()),
-        ExprKind::ArrayLiteralAssoc(entries) => reflection_class_new_instance_assoc_args(entries),
-        _ => None,
-    }
-}
-
-/// Converts a static associative argument array into positional and named call arguments.
-pub(super) fn reflection_class_new_instance_assoc_args(entries: &[(Expr, Expr)]) -> Option<Vec<Expr>> {
-    entries
-        .iter()
-        .map(|(key, value)| reflection_class_new_instance_assoc_arg(key, value))
-        .collect()
-}
-
-/// Converts one `newInstanceArgs()` associative-array element into a constructor argument.
-pub(super) fn reflection_class_new_instance_assoc_arg(key: &Expr, value: &Expr) -> Option<Expr> {
-    match &key.kind {
-        ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::FloatLiteral(_) => {
-            Some(value.clone())
-        }
-        ExprKind::StringLiteral(name) if crate::types::is_php_integer_array_key(name) => {
-            Some(value.clone())
-        }
-        ExprKind::StringLiteral(name) => Some(Expr::new(
-            ExprKind::NamedArg {
-                name: name.clone(),
-                value: Box::new(value.clone()),
-            },
-            value.span,
-        )),
-        _ => None,
-    }
 }
 
 /// Returns the reflected constructor signature when the ReflectionClass receiver
@@ -161,11 +90,11 @@ pub(super) fn reflection_class_constructor_class_arg(
     ctx: &LoweringContext<'_, '_>,
     args: &[Expr],
 ) -> Option<Expr> {
-    let args = reflection_class_new_instance_args(args);
+    let args = reflection_class_new_instance_args(args, ctx.semantic_profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
-    if !crate::types::call_args::has_named_args(&args) {
+    if !crate::types::call_args::has_named_args(&args, ctx.semantic_profile) {
         return args.first().cloned();
     }
     let sig = ctx
@@ -184,6 +113,7 @@ pub(super) fn reflection_class_constructor_class_arg(
         false,
         true,
         &assoc_spread_sources(ctx, &args),
+        ctx.semantic_profile,
     )
     .ok()?;
     if plan.has_spread_args() {
@@ -197,11 +127,11 @@ pub(super) fn reflection_object_constructor_object_arg(
     ctx: &LoweringContext<'_, '_>,
     args: &[Expr],
 ) -> Option<Expr> {
-    let args = reflection_class_new_instance_args(args);
+    let args = reflection_class_new_instance_args(args, ctx.semantic_profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
-    if !crate::types::call_args::has_named_args(&args) {
+    if !crate::types::call_args::has_named_args(&args, ctx.semantic_profile) {
         return args.first().cloned();
     }
     let sig = ctx
@@ -220,6 +150,7 @@ pub(super) fn reflection_object_constructor_object_arg(
         false,
         true,
         &assoc_spread_sources(ctx, &args),
+        ctx.semantic_profile,
     )
     .ok()?;
     if plan.has_spread_args() {

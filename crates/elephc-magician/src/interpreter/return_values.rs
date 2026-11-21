@@ -180,7 +180,8 @@ fn eval_declared_return_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if eval_declared_return_type_accepts_exact(
+    checked_nullability::declared(value, return_type, context, values)?;
+    if eval_declared_value_type_accepts_exact(
         return_type,
         return_owner,
         called_class_name,
@@ -189,6 +190,9 @@ fn eval_declared_return_value(
         values,
     )? {
         return Ok(value);
+    }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) {
+        return eval_throw_type_error("--strict-coercions forbids implicit return conversion", context, values);
     }
     if return_type.is_intersection() {
         if context.current_function().is_some_and(|name| name.contains('<')) {
@@ -228,212 +232,9 @@ fn eval_declared_return_value(
     }
     if return_type.variants().iter().any(|ty| matches!(ty, EvalParameterTypeVariant::Generic(_)))
         || context.current_function().is_some_and(|name| name.contains('<')) {
-        return eval_throw_type_error(&format!("Return value does not satisfy {}", crate::eval_ir::generic_type(return_type)), context, values);
+        return eval_throw_type_error(&format!("Return value does not satisfy {}", crate::eval_ir::php_type_label(return_type)), context, values);
     }
     Err(EvalStatus::RuntimeFatal)
-}
-
-/// Returns whether a value already satisfies one declared return type.
-fn eval_declared_return_type_accepts_exact(
-    return_type: &EvalParameterType,
-    return_owner: Option<&str>,
-    called_class_name: Option<&str>,
-    value: RuntimeCellHandle,
-    context: &ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    let tag = values.type_tag(value)?;
-    if tag == EVAL_TAG_NULL && eval_declared_return_type_allows_null(return_type) {
-        return Ok(true);
-    }
-    if return_type.is_intersection() {
-        for variant in return_type.variants() {
-            if !eval_declared_return_variant_accepts_exact(
-                variant,
-                return_owner,
-                called_class_name,
-                value,
-                tag,
-                context,
-                values,
-            )? {
-                return Ok(false);
-            }
-        }
-        return Ok(true);
-    }
-    for variant in return_type.variants() {
-        if eval_declared_return_variant_accepts_exact(
-            variant,
-            return_owner,
-            called_class_name,
-            value,
-            tag,
-            context,
-            values,
-        )? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-/// Returns whether one non-null return type atom accepts a runtime value exactly.
-fn eval_declared_return_variant_accepts_exact(
-    variant: &EvalParameterTypeVariant,
-    return_owner: Option<&str>,
-    called_class_name: Option<&str>,
-    value: RuntimeCellHandle,
-    tag: u64,
-    context: &ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    match variant {
-        EvalParameterTypeVariant::Generic(ty) => generic_value_accepts(ty, value, context, values),
-        EvalParameterTypeVariant::Array => Ok(matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)),
-        EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
-        EvalParameterTypeVariant::Callable => Ok(matches!(
-            tag,
-            EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE
-        )),
-        EvalParameterTypeVariant::Class(class_name) => eval_declared_return_class_accepts(
-            value,
-            tag,
-            class_name,
-            return_owner,
-            called_class_name,
-            context,
-            values,
-        ),
-        EvalParameterTypeVariant::Float => Ok(tag == EVAL_TAG_FLOAT),
-        EvalParameterTypeVariant::Int => Ok(tag == EVAL_TAG_INT),
-        EvalParameterTypeVariant::Iterable => {
-            if matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-                return Ok(true);
-            }
-            if eval_declared_return_class_accepts(
-                value,
-                tag,
-                "Traversable",
-                return_owner,
-                called_class_name,
-                context,
-                values,
-            )? {
-                return Ok(true);
-            }
-            eval_declared_return_class_accepts(
-                value,
-                tag,
-                "Iterator",
-                return_owner,
-                called_class_name,
-                context,
-                values,
-            )
-        }
-        EvalParameterTypeVariant::Mixed => Ok(true),
-        EvalParameterTypeVariant::Never | EvalParameterTypeVariant::Void => Ok(false),
-        EvalParameterTypeVariant::Object => Ok(matches!(tag, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE)),
-        EvalParameterTypeVariant::String => Ok(tag == EVAL_TAG_STRING),
-    }
-}
-
-/// Returns whether an object value satisfies one class-like declared return target.
-fn eval_declared_return_class_accepts(
-    value: RuntimeCellHandle,
-    tag: u64,
-    class_name: &str,
-    return_owner: Option<&str>,
-    called_class_name: Option<&str>,
-    context: &ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    if !matches!(tag, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) {
-        return Ok(false);
-    }
-    let target = eval_declared_return_runtime_class_name(
-        class_name,
-        return_owner,
-        called_class_name,
-        context,
-    )?;
-    if tag == EVAL_TAG_CALLABLE {
-        return Ok(target.eq_ignore_ascii_case("Closure"));
-    }
-    let identity = values.object_identity(value)?;
-    if let Some(class) = context.dynamic_object_class(identity) {
-        return Ok(eval_declared_dynamic_object_is_a(
-            class.name(),
-            &target,
-            context,
-        ));
-    }
-    if values.object_is_a(value, &target, false)? {
-        return Ok(true);
-    }
-    if target.eq_ignore_ascii_case("Traversable") {
-        return Ok(values.object_is_a(value, "Iterator", false)?
-            || values.object_is_a(value, "IteratorAggregate", false)?);
-    }
-    Ok(false)
-}
-
-/// Returns whether one eval-created object class satisfies a declared return target.
-fn eval_declared_dynamic_object_is_a(
-    class_name: &str,
-    target: &str,
-    context: &ElephcEvalContext,
-) -> bool {
-    if context.class_is_a(class_name, target, false) {
-        return true;
-    }
-    target.eq_ignore_ascii_case("Traversable")
-        && (context.class_is_a(class_name, "Iterator", false)
-            || context.class_is_a(class_name, "IteratorAggregate", false))
-}
-
-/// Resolves class keywords and aliases in a declared return type atom.
-pub(in crate::interpreter) fn eval_declared_return_runtime_class_name(
-    class_name: &str,
-    return_owner: Option<&str>,
-    called_class_name: Option<&str>,
-    context: &ElephcEvalContext,
-) -> Result<String, EvalStatus> {
-    match class_name
-        .trim_start_matches('\\')
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "self" => return_owner
-            .map(|owner| owner.trim_start_matches('\\').to_string())
-            .ok_or(EvalStatus::RuntimeFatal),
-        "static" => called_class_name
-            .or(return_owner)
-            .map(|owner| owner.trim_start_matches('\\').to_string())
-            .ok_or(EvalStatus::RuntimeFatal),
-        "parent" => {
-            let owner = return_owner.ok_or(EvalStatus::RuntimeFatal)?;
-            context
-                .class(owner)
-                .and_then(EvalClass::parent)
-                .map(|parent| parent.trim_start_matches('\\').to_string())
-                .ok_or(EvalStatus::RuntimeFatal)
-        }
-        _ => Ok(context
-            .resolve_class_like_name(class_name)
-            .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string())),
-    }
-}
-
-/// Returns whether a declared return type can accept PHP null.
-fn eval_declared_return_type_allows_null(return_type: &EvalParameterType) -> bool {
-    return_type.allows_null()
-        || (!return_type.is_intersection()
-            && return_type
-                .variants()
-                .iter()
-                .any(|variant| matches!(variant, EvalParameterTypeVariant::Mixed)))
 }
 
 /// Returns whether a declared return type is exactly PHP `never`.
@@ -448,4 +249,35 @@ fn eval_declared_return_type_is_void(return_type: &EvalParameterType) -> bool {
     !return_type.allows_null()
         && !return_type.is_intersection()
         && matches!(return_type.variants(), [EvalParameterTypeVariant::Void])
+}
+
+/// Gives each interpreted body its own return declaration without inheriting a caller's contract.
+pub(in crate::interpreter) fn with_source_return_contract<T>(return_type: Option<&EvalParameterType>,
+    declaring_class: Option<&str>, called_class: Option<&str>, context: &mut ElephcEvalContext,
+    body: impl FnOnce(&mut ElephcEvalContext) -> T,
+) -> T {
+    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { return body(context); }
+    let contract = return_type.map(|ty| crate::context::ReturnSourceContract {
+        ty: ty.clone(), declaring_class: declaring_class.map(str::to_string),
+        called_class: called_class.map(str::to_string),
+    });
+    context.with_return_source_contract(contract, body)
+}
+
+/// Checks a logical return source where the function's own catch/finally regions can observe failure.
+pub(in crate::interpreter) fn eval_source_return_expression(expr: &EvalExpr,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (value, source) = mixed_eval::evaluate(expr, context, scope, values)?;
+    let result = (|| {
+        if let Some(contract) = context.return_source_contract().cloned() {
+            let target = local_binding_origins::resolve_declared_source_type(&crate::eval_ir::generic_type(&contract.ty),
+                contract.declaring_class.as_deref(), contract.called_class.as_deref(), context)?;
+            let expected = crate::eval_ir::parameter_type(&target);
+            let source = source.as_ref().map(|source| ArgumentSource::capture(crate::eval_ir::parameter_type(source), context));
+            mixed_source_proofs::require_argument(&expected, source.as_ref(), value, false, context, values)?;
+        }
+        Ok(value)
+    })();
+    finish_declared_return_value(value, result, context, values)
 }

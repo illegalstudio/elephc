@@ -46,9 +46,10 @@ pub(super) fn check_callback(cx: &mut BuiltinCheckCtx, types: &[PhpType]) -> Res
             if sig.variadic.is_some() { count } else { sig.params.len().min(count) }
         }),
     };
-    crate::types::checker::builtins::check_array_callback_builtin_call(
+    let result = crate::types::checker::builtins::check_array_callback_builtin_call(
         cx.checker, callback, &types[..visible], cx.span, cx.env,
         &format!("{}() callback", cx.name),
     )?;
+    cx.checker.require_boolean_type(&result, callback.span)?;
     Ok(())
 }

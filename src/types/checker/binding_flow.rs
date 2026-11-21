@@ -13,15 +13,35 @@ use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
 
 impl Checker {
+    /// Creates the initialized null value of an undeclared reference source with an open contract.
+    pub(crate) fn initialize_missing_reference_local(&mut self, name: &str, env: &mut TypeEnv) {
+        if env.contains_key(name) || self.typed_local_names.contains_key(name) { return; }
+        env.insert(name.to_string(), PhpType::Mixed);
+        self.record_local_storage_effect(name, &PhpType::Mixed);
+        self.inferred_local_contracts.insert(name.to_string(), PhpType::Mixed);
+        self.local_binding_depth.insert(name.to_string(), self.local_conditional_depth);
+        self.definitely_bound_locals.insert(name.to_string());
+    }
+
+    /// Forms reference captures at callable creation without evaluating the deferred body.
+    pub(crate) fn prepare_reference_captures(&mut self, captures: &[String], env: &mut TypeEnv) {
+        for name in captures {
+            self.invalidate_local_flow_narrowing(name, env);
+            self.initialize_missing_reference_local(name, env);
+        }
+    }
+
     /// Runs a diagnostic-only walk without publishing binding or value-flow changes.
     pub(super) fn with_preserved_binding_flow<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
         let bound = self.definitely_bound_locals.clone();
         let storage = self.guarded_union_types.clone();
         let origins = self.narrowed_local_origins.clone();
+        let inferred_contracts = self.inferred_local_contracts.clone();
         let result = body(self);
         self.definitely_bound_locals = bound;
         self.guarded_union_types = storage;
         self.narrowed_local_origins = origins;
+        self.inferred_local_contracts = inferred_contracts;
         result
     }
 

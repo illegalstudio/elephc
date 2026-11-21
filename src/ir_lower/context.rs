@@ -49,6 +49,8 @@ pub(crate) struct IfArmExit {
     pub types: TypeEnv,
     /// Definitely-initialized slots at the end of this edge.
     pub initialized: HashSet<LocalSlotId>,
+    /// Names that may still point to reference storage on this edge.
+    pub ref_bound: HashSet<String>,
     /// Compile-time callable targets that remain valid at the end of this edge.
     pub static_callables: HashMap<String, StaticCallableBinding>,
     /// Reflection targets that remain valid at the end of this edge.
@@ -171,6 +173,8 @@ pub(crate) struct CallArgumentEvaluationScope {
     pub rooted_reference_value_views: HashSet<ValueId>,
     /// Direct native source functions can adopt the call's live property argument owners.
     pub live_property_reference_arguments: bool,
+    /// Prepared builtin graphs require local aliases for addressable reference operands.
+    pub prepared_builtin_reference_arguments: bool,
     /// Property by-reference parameter checks read at their source position but raised only
     /// after every argument has evaluated, matching PHP's entry-boundary `TypeError`.
     pub pending_property_type_guards: Vec<PendingPropertyTypeGuard>,
@@ -262,7 +266,7 @@ pub(crate) struct LoweringSnapshot {
     initialized_slots: HashSet<LocalSlotId>,
     /// PHP slots assigned by an already lowered store, including conditional stores.
     assigned_php_local_slots: HashSet<LocalSlotId>,
-    constants: HashMap<String, (ExprKind, PhpType)>,
+    constants: crate::types::GlobalConstants,
     loop_stack: Vec<LoopFrame>,
     join_edge_arms: Vec<(BlockId, Vec<IfArmExit>)>,
     loop_carried_missing_strings: Vec<HashSet<String>>,
@@ -274,7 +278,6 @@ pub(crate) struct LoweringSnapshot {
     reflection_function_locals: HashMap<String, String>,
     reflection_property_locals: HashMap<String, (String, String)>,
     reflection_method_locals: HashMap<String, (String, String)>,
-    reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
     reference_marker_array_locals: HashSet<String>,
@@ -371,6 +374,14 @@ const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 
 /// Mutable state for one function body while it is lowered.
 pub(crate) struct LoweringContext<'m, 'f> {
+    /// Immutable semantic policy inherited by ordinary and synthetic functions.
+    pub(crate) semantic_profile: elephc_semantics::SemanticProfile,
+    /// Representation-only stores preserve the source binding's existing presence state.
+    pub(super) binding_state_suppressed: bool,
+    /// Physical source of the operation; internal implementation control flow is explicit.
+    pub(crate) source_mode: crate::source::SourceMode,
+    /// A statically resolved callable invocation retains the prepared builtin body contract.
+    pub(crate) prepared_builtin_invocation: bool,
     pub builder: Builder<'f>,
     pub data: &'m mut DataPool,
     pub local_slots: HashMap<String, LocalSlotId>,
@@ -466,6 +477,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub array_append_element_types: &'m HashMap<(String, Span), Option<PhpType>>,
     /// Checked integer value views, separate from the physical local/reference contract.
     pub local_value_read_types: &'m crate::types::LocalValueReadTypes,
+    /// Checked declaration contracts for statement and expression stores.
+    pub local_store_contracts: &'m crate::types::LocalStoreContracts,
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
     pub boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
     pub first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
@@ -516,7 +529,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub promotable_arrays: &'m crate::types::PromotableArrays,
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
-    pub constants: HashMap<String, (ExprKind, PhpType)>,
+    pub constants: crate::types::GlobalConstants,
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
@@ -554,7 +567,6 @@ pub(crate) struct LoweringContext<'m, 'f> {
     reflection_function_locals: HashMap<String, String>,
     reflection_property_locals: HashMap<String, (String, String)>,
     reflection_method_locals: HashMap<String, (String, String)>,
-    reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
     /// Array locals that may contain invoker reference markers, including copies of a
@@ -662,6 +674,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
 impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Creates a lowering context over one function builder and shared module data.
     pub(crate) fn new(
+        semantic_profile: elephc_semantics::SemanticProfile,
         builder: Builder<'f>,
         data: &'m mut DataPool,
         env: TypeEnv,
@@ -686,6 +699,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
         array_append_element_types: &'m HashMap<(String, Span), Option<PhpType>>,
         local_value_read_types: &'m crate::types::LocalValueReadTypes,
+        local_store_contracts: &'m crate::types::LocalStoreContracts,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
         first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
         generic_call_sites: &'m HashMap<(String, Span), String>,
@@ -698,7 +712,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         sparse_key_write_sites: &'m HashMap<Span, HashSet<String>>,
         promotable_arrays: &'m crate::types::PromotableArrays,
         loop_storage_scope: String,
-        constants: &'m HashMap<String, (ExprKind, PhpType)>,
+        constants: &'m crate::types::GlobalConstants,
         top_level_env: TypeEnv,
         current_class: Option<String>,
         owner_name: String,
@@ -732,6 +746,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
         let return_type = return_ir_type(&return_php_type);
         Self {
+            semantic_profile,
+            binding_state_suppressed: false,
+            source_mode: crate::source::SourceMode::Internal,
+            prepared_builtin_invocation: false,
             builder,
             data,
             local_slots: HashMap::new(),
@@ -760,6 +778,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             member_receiver_types,
             array_append_element_types,
             local_value_read_types,
+            local_store_contracts,
             boxed_reference_promotion_sites,
             first_class_builtin_call_types,
             generic_call_sites,
@@ -789,7 +808,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reflection_function_locals: HashMap::new(),
             reflection_property_locals: HashMap::new(),
             reflection_method_locals: HashMap::new(),
-            reflection_arg_array_locals: HashMap::new(),
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
             reference_marker_array_locals: HashSet::new(),
@@ -877,7 +895,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reflection_function_locals: self.reflection_function_locals.clone(),
             reflection_property_locals: self.reflection_property_locals.clone(),
             reflection_method_locals: self.reflection_method_locals.clone(),
-            reflection_arg_array_locals: self.reflection_arg_array_locals.clone(),
             fiber_start_sigs: self.fiber_start_sigs.clone(),
             ref_bound_locals: self.ref_bound_locals.clone(),
             reference_marker_array_locals: self.reference_marker_array_locals.clone(),
@@ -993,7 +1010,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_function_locals = snapshot.reflection_function_locals;
         self.reflection_property_locals = snapshot.reflection_property_locals;
         self.reflection_method_locals = snapshot.reflection_method_locals;
-        self.reflection_arg_array_locals = snapshot.reflection_arg_array_locals;
         self.fiber_start_sigs = snapshot.fiber_start_sigs;
         self.ref_bound_locals = snapshot.ref_bound_locals;
         self.reference_marker_array_locals = snapshot.reference_marker_array_locals;
@@ -1209,7 +1225,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns the prescanned value and PHP type for a global constant name.
-    pub(crate) fn constant_value(&self, name: &str) -> Option<(ExprKind, PhpType)> {
+    pub(crate) fn constant_value(&self, name: &str) -> Option<(crate::parser::ast::Expr, PhpType)> {
         self.constants
             .get(name)
             .or_else(|| self.constants.get(elephc_builtin_contract::canonical_constant_name(name)))
@@ -1312,7 +1328,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Records a constant discovered while lowering source-order `define()` calls.
-    pub(crate) fn register_constant(&mut self, name: String, value: ExprKind, ty: PhpType) {
+    pub(crate) fn register_constant(&mut self, name: String, value: crate::parser::ast::Expr, ty: PhpType) {
         self.constants.entry(name).or_insert((value, ty));
     }
 
@@ -1581,11 +1597,42 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.store_local(name, value, php_type.clone(), span);
     }
 
+    /// Moves a recreatable by-value parameter into an owned cell without changing its input ABI.
+    pub(crate) fn privatize_parameter_binding(&mut self, name: &str, incoming: &PhpType) {
+        let borrowed = self.load_local(name, None);
+        let value = self.box_value_as_mixed(borrowed, PhpType::Mixed, None);
+        let shadow = self.builder.add_local(Some(format!("{name}#cow")), value_ir_type(&PhpType::Mixed),
+            PhpType::Mixed, LocalKind::PhpLocal);
+        self.local_slots.insert(name.into(), shadow);
+        self.local_kinds.insert(name.into(), LocalKind::PhpLocal);
+        self.set_local_type(name, PhpType::Mixed);
+        self.prepare_eval_native_binding_store(name, Span::dummy());
+        super::local_binding_origins::prepare_entry(self, name);
+        self.store_local(name, value, PhpType::Mixed, None);
+        self.set_local_type(name, incoming.clone());
+    }
+
+    /// Tracks a detachable incoming reference without copying or replacing its caller's cell.
+    pub(crate) fn initialize_reference_parameter_binding(&mut self, name: &str, incoming: &PhpType) {
+        let slot = self.local_slots[name];
+        self.builder.widen_local_storage_type(slot, PhpType::Mixed);
+        super::local_binding_state::emit(self, slot, false);
+        super::local_binding_origins::prepare_entry(self, name);
+        super::local_binding_state::emit(self, slot, true);
+        self.set_local_logical_type(name, incoming.clone());
+    }
+
     /// Marks a local slot as initialized by caller or synthetic setup.
     pub(crate) fn mark_local_initialized(&mut self, name: &str) {
-        if let Some(slot) = self.local_slots.get(name) {
-            self.initialized_slots.insert(*slot);
+        if let Some(slot) = self.local_slots.get(name).copied() {
+            self.mark_slot_initialized(slot);
         }
+    }
+
+    /// Records actual initialization separately from the slot's zero-filled storage.
+    fn mark_slot_initialized(&mut self, slot: LocalSlotId) {
+        self.initialized_slots.insert(slot);
+        super::local_binding_state::emit(self, slot, true);
     }
 
     /// Captures the definitely-initialized local slots at a control-flow split.
@@ -1598,7 +1645,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots.contains(&slot)
     }
 
-    /// Returns definitely visible PHP locals in declaration order for scope introspection.
+    /// Returns PHP scope candidates, including conditional bindings when presence is tracked.
     ///
     /// Compiler-generated frame and parser temporaries are `PhpLocal`s like any other by the
     /// time lowering sees them, so they are excluded by the one shared name predicate rather
@@ -1640,8 +1687,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     .copied()
                     .unwrap_or(LocalKind::PhpLocal);
                 (kind == LocalKind::PhpLocal
-                    && self.initialized_slots.contains(slot)
-                    && !matches!(self.local_types.get(name), Some(PhpType::Void | PhpType::Never)))
+                    && (self.builder.function().flags.tracks_local_binding_state
+                        || (self.initialized_slots.contains(slot)
+                            && !matches!(self.local_types.get(name), Some(PhpType::Void | PhpType::Never)))))
                 .then(|| {
                     let position = first_slots.get(name.as_str()).copied();
                     (position.unwrap_or(slot.as_raw()), name.clone())
@@ -1697,6 +1745,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn mark_ref_bound_local(&mut self, name: &str) {
         self.ref_bound_locals.insert(name.to_string());
     }
+
+    /// Captures possible reference bindings independently of narrowed value and presence facts.
+    pub(crate) fn ref_bound_locals_snapshot(&self) -> HashSet<String> { self.ref_bound_locals.clone() }
+
+    /// Restores one predecessor's possible reference bindings before lowering its sibling.
+    pub(crate) fn restore_ref_bound_locals(&mut self, names: HashSet<String>) { self.ref_bound_locals = names; }
 
     /// Clears the by-reference alias marker for a local after `unset()`.
     pub(crate) fn unmark_ref_bound_local(&mut self, name: &str) {
@@ -1870,7 +1924,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         let slot = self.declare_local_with_kind(&name, PhpType::Int, LocalKind::HiddenTemp);
         self.builder.seed_entry_int_local(slot, 0);
-        self.initialized_slots.insert(slot);
+        self.mark_slot_initialized(slot);
         slot
     }
 
@@ -2131,6 +2185,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Ensures this function has a persistent eval scope handle slot.
     pub(crate) fn declare_eval_scope_local(&mut self) -> LocalSlotId {
+        if self.in_main { return self.declare_eval_global_scope_local(); }
         self.declare_local_with_kind(EVAL_SCOPE_LOCAL_NAME, PhpType::Int, LocalKind::EvalScope)
     }
 
@@ -2251,14 +2306,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             }
             let scope = self.load_local(&scope_param, span);
             let value = self.load_local(&name, span);
-            let name_data = self.intern_global_name(&name);
-            self.emit_void(
-                Op::EvalScopeSet,
-                vec![scope.value, value.value],
-                Some(Immediate::GlobalName(name_data)),
-                Op::EvalScopeSet.default_effects(),
-                span,
-            );
+            self.publish_eval_scope_value(scope, &name, value, span);
+            crate::ir_lower::ownership::release_if_owned(self, value, span);
         }
     }
 
@@ -2271,7 +2320,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.clear_reflection_function_local(name);
             self.clear_reflection_property_local(name);
             self.clear_reflection_method_local(name);
-            self.clear_reflection_arg_array_local(name);
             self.clear_fiber_start_sig(name);
         }
         self.declare_eval_scope_local();
@@ -2357,7 +2405,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Some(Immediate::LocalSlotPair { first: source, second: owner }),
             Op::RetainLocalRefCell.default_effects(), None,
         );
-        self.initialized_slots.insert(owner);
+        self.mark_slot_initialized(owner);
     }
 
     /// Returns the physical payload type a store through `variable`'s ref-cell must publish.
@@ -2547,12 +2595,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         };
         if op == Op::LoadRefCellValue { php_type = PhpType::Mixed; }
         let ir_type = value_ir_type(&php_type);
-        // Reference-cell reads borrow their pointee. Append normalization chooses the
-        // final boxed representation without changing other reference payload contracts.
+        // Global symbols and reference cells lend their current heap value. Append
+        // normalization chooses the final box without changing reference payload contracts.
+        let conditional_ref_cell_view = op == Op::LoadLocal
+            && self.ref_cell_owner_locals.contains_key(name)
+            && self.builder.local_php_type(slot).codegen_repr() == PhpType::Mixed
+            && php_type.supports_borrowed_mixed_payload_view();
         let ownership = if op == Op::LoadRefCellValue {
             Ownership::Owned
-        } else if op == Op::LoadRefCell
-            && Ownership::php_type_needs_lifetime_tracking(&php_type)
+        } else if (matches!(op, Op::LoadRefCell | Op::LoadGlobal)
+            && Ownership::php_type_needs_lifetime_tracking(&php_type))
+            || conditional_ref_cell_view
         {
             Ownership::Borrowed
         } else {
@@ -2641,6 +2694,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 || self.eval_scope_write_names.contains(name))
     }
 
+    /// Observes a scope-only name through the same materialized handle used by its value read.
+    pub(crate) fn eval_scope_binding_present(&mut self, name: &str, span: Span) -> LoweredValue {
+        let scope_param = self.eval_scope_read_param.clone().expect("eval scope presence has a handle");
+        let scope = self.load_local(&scope_param, Some(span));
+        let data = self.intern_global_name(name);
+        self.emit_value(Op::EvalScopeContains, vec![scope.value], Some(Immediate::GlobalName(data)),
+            PhpType::Bool, Op::EvalScopeContains.default_effects(), Some(span))
+    }
+
     /// Emits an `EvalScopeGet` for a selected eval-scope variable read.
     fn load_eval_scope_name(&mut self, name: &str, span: Option<Span>) -> LoweredValue {
         let scope_param = self
@@ -2676,6 +2738,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         name != scope_param && self.eval_scope_write_names.contains(name)
     }
 
+    /// Roots a scope assignment's value until its retaining publication completes or unwinds.
+    fn publish_eval_scope_value(&mut self, scope: LoweredValue, name: &str,
+        value: LoweredValue, span: Option<Span>) {
+        let name_data = self.intern_global_name(name);
+        let at = span.unwrap_or_else(Span::dummy);
+        let owners = crate::ir_lower::expr::pin_in_flight_owners(self, &[value.value], at);
+        let contract = self.semantic_profile.contains(crate::semantics::StrictFeature::Locals)
+            .then(|| crate::semantics::conversions::inferred_binding_contract(&self.builder.value_php_type(value.value))).flatten();
+        self.emit_void(Op::EvalScopeSet, vec![scope.value, value.value],
+            Some(Immediate::EvalScopeStore(Box::new(crate::ir::EvalScopeStoreImmediate { name: name_data, contract, role: crate::ir::EvalBindingRole::Contract }))),
+            Op::EvalScopeSet.default_effects(), span);
+        crate::ir_lower::expr::unpin_in_flight_owners(self, owners, at);
+    }
+
     /// Emits an `EvalScopeSet` for a selected eval-scope variable write.
     fn store_eval_scope_name(
         &mut self,
@@ -2695,14 +2771,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .clone()
             .expect("eval scope write mode has a scope parameter");
         let scope = self.load_local(&scope_param, span);
-        let name_data = self.intern_global_name(name);
-        self.emit_void(
-            Op::EvalScopeSet,
-            vec![scope.value, value.value],
-            Some(Immediate::GlobalName(name_data)),
-            Op::EvalScopeSet.default_effects(),
-            span,
-        );
+        self.publish_eval_scope_value(scope, name, value, span);
         let slot = self.declare_local(name, php_type.clone());
         self.builder
             .widen_local_storage_type(slot, php_type.clone());
@@ -2881,7 +2950,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
-        self.store_local_impl(name, value, php_type, span, false)
+        let previous = self.binding_state_suppressed;
+        self.binding_state_suppressed = true;
+        let stored = self.store_local_impl(name, value, php_type, span, false);
+        self.binding_state_suppressed = previous;
+        stored
     }
 
     /// Re-stores a local's CURRENT value in a new representation without rebinding it.
@@ -2897,7 +2970,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
-        self.store_local_impl(name, value, php_type, span, false)
+        let previous = self.binding_state_suppressed;
+        self.binding_state_suppressed = true;
+        let stored = self.store_local_impl(name, value, php_type, span, false);
+        self.binding_state_suppressed = previous;
+        stored
     }
 
     /// Stores a new local owner, optionally resetting the cursor for a PHP-visible assignment.
@@ -2917,7 +2994,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_reflection_function_local(name);
         self.clear_reflection_property_local(name);
         self.clear_reflection_method_local(name);
-        self.clear_reflection_arg_array_local(name);
         self.clear_fiber_start_sig(name);
         if let Some(extern_type) = self.extern_global_type(name) {
             let release_source_after_store = self.value_is_owning_temporary(value);
@@ -2986,10 +3062,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // and store, so cleanup loads must be typed after this store's widening.
         // For ref-bound locals, keep the existing slot type to avoid widening
         // Int→Mixed mid-function (which would break earlier loads that expect I64).
-        // The codegen narrows Mixed→Int at the store point instead.
+        // Canonical cells expose their actual boxed tag; legacy references keep their raw ABI.
         let is_ref_bound = self.is_ref_bound_local(name);
         let widen_type = if is_ref_bound {
-            previous_type.clone()
+            self.builder.local_php_type(slot)
         } else {
             php_type.clone()
         };
@@ -3103,9 +3179,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // from the final widened type either way.
         self.builder.widen_local_storage_type(slot, widen_type);
         if uses_global {
+            // Publication owns the acquired value; its source lease must survive a throwing retirement.
+            let source_owner = if release_source_after_store && !transfer_source_to_store {
+                crate::ir_lower::expr::root_owned_call_operand(self, source,
+                    span.unwrap_or_else(Span::dummy)).1
+            } else { None };
             self.store_global_name(name, slot, value, span);
             self.set_local_type(name, php_type);
-            if release_source_after_store && !transfer_source_to_store {
+            if let Some(owner) = source_owner {
+                crate::ir_lower::expr::retire_owned_call_operand(self, owner, span.unwrap_or_else(Span::dummy));
+            } else if release_source_after_store && !transfer_source_to_store {
                 crate::ir_lower::ownership::release_if_owned(self, source, span);
             }
             return value;
@@ -3473,7 +3556,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_reflection_function_local(name);
         self.clear_reflection_property_local(name);
         self.clear_reflection_method_local(name);
-        self.clear_reflection_arg_array_local(name);
         self.clear_fiber_start_sig(name);
         let previous_kind = self
             .local_kinds
@@ -3558,6 +3640,31 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         null: LoweredValue,
         span: Option<Span>,
     ) -> LoweredValue {
+        let previous = self.binding_state_suppressed;
+        let ends_origin = self.local_store_contracts.has_runtime_origin(&self.loop_storage_scope, name);
+        let ends_presence = self.semantic_profile.contains(elephc_semantics::StrictFeature::Initialization);
+        if ends_presence {
+            if let Some(slot) = self.local_slots.get(name).copied() {
+                super::local_binding_state::emit(self, slot, false);
+            }
+        }
+        super::local_binding_origins::end(self, name, span);
+        self.binding_state_suppressed = previous || ends_origin || ends_presence;
+        if ends_presence && self.local_uses_global_storage(name) && !self.extern_globals.contains_key(name) {
+            let data = self.intern_global_name(name);
+            self.emit_void(Op::UnsetGlobal, Vec::new(), Some(Immediate::GlobalName(data)),
+                Op::UnsetGlobal.default_effects(), span);
+            self.local_types.insert(name.to_string(), PhpType::Void);
+            self.binding_state_suppressed = previous;
+            return null;
+        }
+        let result = self.unset_local_storage(name, null, span);
+        self.binding_state_suppressed = previous;
+        result
+    }
+
+    /// Clears physical storage without inventing a successful source-level binding event.
+    fn unset_local_storage(&mut self, name: &str, null: LoweredValue, span: Option<Span>) -> LoweredValue {
         let abandons_binding = span.is_some_and(|span| {
             span.identifies_a_node()
                 && self
@@ -3587,11 +3694,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_reflection_function_local(name);
         self.clear_reflection_property_local(name);
         self.clear_reflection_method_local(name);
-        self.clear_reflection_arg_array_local(name);
         self.clear_fiber_start_sig(name);
         let slot = self.declare_local(name, PhpType::Void);
         // A conditional capture may leave the current path owning the unpromoted raw value.
-        // Keep that destructor boundary explicit before either reference ownership or state ends.
+        // Retire that raw owner while its representation still identifies the stored value.
         self.emit_void(
             Op::ReleaseRawLocalSlot,
             Vec::new(),
@@ -3599,7 +3705,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::ReleaseRawLocalSlot.default_effects(),
             span,
         );
-        self.release_ref_cell_owner(name, span);
         self.emit_void(
             Op::UnsetLocal,
             Vec::new(),
@@ -3607,6 +3712,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::UnsetLocal.default_effects(),
             span,
         );
+        // A throwing destructor must leave neither a stale pointer nor an attached-cell flag.
+        self.release_ref_cell_owner(name, span);
         self.unmark_ref_bound_local(name);
         self.clear_reference_marker_array_local(name);
         if detaches_reference {
@@ -3621,7 +3728,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             );
             self.reset_array_pointer_cursor(name);
             self.ref_cell_owner_locals.remove(name);
-            self.initialized_slots.insert(slot);
+            self.mark_slot_initialized(slot);
             self.abandon_local_binding(name);
             return null;
         }
@@ -3634,7 +3741,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             self.set_local_type(name, PhpType::Void);
         }
-        self.initialized_slots.insert(slot);
+        self.mark_slot_initialized(slot);
         null
     }
 
@@ -3690,6 +3797,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// `load_local` emits `ConstNull` for an absent `Void` binding without creating storage.
     /// The probe therefore answers false, and a later store creates a fresh slot at its own type.
     fn abandon_local_binding(&mut self, name: &str) {
+        if let Some(slot) = self.local_slots.get(name).copied() {
+            super::local_binding_state::emit(self, slot, false);
+        }
         self.local_slots.remove(name);
         self.local_kinds.remove(name);
         self.local_types.insert(name.to_string(), PhpType::Void);
@@ -3753,7 +3863,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_reflection_function_local(name);
         self.clear_reflection_property_local(name);
         self.clear_reflection_method_local(name);
-        self.clear_reflection_arg_array_local(name);
         self.clear_fiber_start_sig(name);
         self.reset_array_pointer_cursor(name);
         let storage = self.builder.local_php_type(slot);
@@ -3783,7 +3892,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 span,
             );
         }
-        self.initialized_slots.insert(slot);
+        self.mark_slot_initialized(slot);
         self.abandon_local_binding(name);
     }
 
@@ -3995,6 +4104,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Emits an idempotent promotion of an initialized local into an owned fallback ref-cell.
     pub(crate) fn promote_local_ref_cell(&mut self, name: &str, span: Option<Span>) {
+        if !self.is_ref_bound_local(name) && self.local_can_own_reference_cell(name)
+            && self.local_type(name).codegen_repr() == PhpType::Void {
+            // A frame-owned null reference must carry future values, including getter-only captures.
+            let slot = self.declare_local(name, PhpType::Mixed);
+            self.builder.widen_local_storage_type(slot, PhpType::Mixed);
+            self.set_local_type(name, PhpType::Mixed);
+        }
         let slot = self.declare_local(name, self.local_type(name));
         let fallback_ty = self.builder.local_php_type(slot);
         let owner_slot = self.declare_ref_cell_owner(name, fallback_ty.clone());
@@ -4012,8 +4128,33 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.mark_ref_bound_local(name);
-        self.initialized_slots.insert(slot);
-        self.initialized_slots.insert(owner_slot);
+        self.mark_slot_initialized(slot);
+        self.mark_slot_initialized(owner_slot);
+    }
+
+    /// Selects owned boxed eval bindings without changing borrowed or raw typed-reference ABIs.
+    pub(super) fn supports_eval_native_binding_store(&self, name: &str) -> bool {
+        self.builder.function().flags.tracks_local_binding_state
+            && (self.eval_barrier_active || self.local_store_contracts.has_runtime_origin(&self.loop_storage_scope, name))
+            && !crate::names::is_generated_local_name(name) && self.local_can_own_reference_cell(name)
+            && eval_barrier_can_widen(&self.local_type(name))
+            && (!self.is_ref_bound_local(name) || self.ref_cell_owner_slot(name).is_some_and(|owner|
+                self.builder.local_php_type(owner) == PhpType::Mixed
+                    || self.local_store_contracts.entry_is_reference(&self.loop_storage_scope, name)))
+    }
+
+    /// Shares the surviving scope reference even when a conditional predecessor left raw storage.
+    pub(super) fn prepare_eval_native_binding_store(&mut self, name: &str, span: Span) {
+        if !self.supports_eval_native_binding_store(name) { return; }
+        let suppressed = self.binding_state_suppressed;
+        self.binding_state_suppressed = true;
+        let slot = self.declare_local(name, PhpType::Mixed);
+        self.builder.widen_local_storage_type(slot, PhpType::Mixed);
+        self.set_local_type(name, PhpType::Mixed);
+        // Keep the original scope wrapper intact before reading any narrowed source view.
+        // MAY alias facts do not prove that eval left a cell attached at runtime.
+        self.promote_local_ref_cell(name, Some(span));
+        self.binding_state_suppressed = suppressed;
     }
 
     /// Promotes a typed property's copy-in/copy-out temporary, attaching the runtime metadata
@@ -4048,6 +4189,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Widens a concrete local to boxed `Mixed` storage, then promotes that storage to a
     /// durable heap reference cell suitable for an escaping by-reference parameter.
     pub(crate) fn promote_local_mixed_ref_cell(&mut self, name: &str, span: Option<Span>) {
+        self.promote_local_mixed_ref_cell_storage(name, span);
+        self.bind_local_reference_contract(name, span);
+    }
+
+    /// Attaches a semantic source without changing an existing reference's declared payload ABI.
+    pub(crate) fn bind_local_reference_contract(&mut self, name: &str, span: Option<Span>) {
+        let contract = span.and_then(|span| self.local_store_contracts.get(
+            &(self.loop_storage_scope.clone(), span, name.to_string()))).cloned();
+        if let Some(contract) = contract.filter(|contract|
+            contract.feature == elephc_semantics::StrictFeature::Locals)
+        {
+            if let Some(owner) = self.ref_cell_owner_slot(name) {
+                self.builder.emit_with_effects(Op::BindLocalRefContract, Vec::new(),
+                    Some(Immediate::LocalSlot(owner)), IrType::Void, contract.ty,
+                    Ownership::NonHeap, Op::BindLocalRefContract.default_effects(), span);
+            }
+        }
+    }
+
+    /// Normalizes physical reference storage independently of its semantic binding contract.
+    fn promote_local_mixed_ref_cell_storage(&mut self, name: &str, span: Option<Span>) {
         // The alias map is a MAY fact across branches; owner initialization is a MUST fact.
         // Promote before loading a narrowed view when an earlier alternative only declared
         // the owner, so this path publishes its cell and retires the raw value it replaces.
@@ -4056,6 +4218,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.is_ref_bound_local(name) && self.local_type(name).codegen_repr() == PhpType::Mixed
             && !owner_needs_promotion
         {
+            // An initialized owner word can contain zero after a conditional detach.
+            // Runtime-idempotent promotion republishes the owner on that predecessor.
+            self.promote_local_ref_cell(name, span);
             return;
         }
         if !self.is_ref_bound_local(name) || owner_needs_promotion {
@@ -4091,9 +4256,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Binds one local name to the same ref-cell pointer as another local.
     pub(crate) fn alias_local_ref_cell(&mut self, target: &str, source: &str, span: Option<Span>) {
-        if target == source {
-            return;
-        }
+        if target == source && !self.local_can_own_reference_cell(source) { return; }
         // An existing reference can point into an object property whose payload remains raw.
         // Reboxing that shared cell here would make property reads treat a box as an object.
         let source_repr = self.local_type(source).codegen_repr();
@@ -4104,18 +4267,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         {
             self.promote_local_mixed_ref_cell(source, span);
         }
-        let source_ty = self.local_type(source);
         // `is_ref_bound_local` is intentionally conservative across lowered
         // branches, so a source marked by a conditional predecessor may still
         // be raw on another runtime path. An idempotent promotion here gives
         // every alias operation a cell on all incoming paths.
         self.promote_local_ref_cell(source, span);
+        if target == source { return; }
+        let source_ty = self.local_type(source);
         self.clear_static_callable_local(target);
         self.clear_reflection_class_local(target);
         self.clear_reflection_function_local(target);
         self.clear_reflection_property_local(target);
         self.clear_reflection_method_local(target);
-        self.clear_reflection_arg_array_local(target);
         self.clear_fiber_start_sig(target);
         // Declare the owner before retirement so the first syntactic binding also
         // releases an alias left by a previous execution of this loop body.
@@ -4148,14 +4311,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             self.borrowed_element_ref_locals.remove(target);
         }
-        self.initialized_slots.insert(target_slot);
+        self.mark_slot_initialized(target_slot);
         if let Some((source_owner, target_owner)) = owner_pair {
             self.emit_void(
                 Op::RetainLocalRefCell, Vec::new(),
                 Some(Immediate::LocalSlotPair { first: source_owner, second: target_owner }),
                 Op::RetainLocalRefCell.default_effects(), span,
             );
-            self.initialized_slots.insert(target_owner);
+            self.mark_slot_initialized(target_owner);
         }
     }
 
@@ -4172,7 +4335,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         value_type: PhpType,
         span: Option<Span>,
     ) {
-        self.bind_ref_cell_ptr_impl(target, cell_ptr, value_type, false, false, span);
+        self.bind_ref_cell_ptr_impl(target, cell_ptr, value_type, false, false, false, span);
+    }
+
+    /// Retains canonical persistent storage without changing an earlier raw frame payload ABI.
+    pub(crate) fn bind_persistent_ref_cell_ptr(&mut self, target: &str, cell_ptr: LoweredValue, span: Span) {
+        self.bind_ref_cell_ptr_impl(target, cell_ptr, PhpType::Mixed, true, false, true, Some(span));
     }
 
     /// Retains a property cell before replacing the target, which may own the source object.
@@ -4184,7 +4352,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         let staged = self.declare_synthetic_php_local(value_type.clone());
-        self.bind_ref_cell_ptr_impl(&staged, cell_ptr, value_type, true, false, span);
+        self.bind_ref_cell_ptr_impl(&staged, cell_ptr, value_type, true, false, false, span);
         self.alias_local_ref_cell(target, &staged, span);
         self.release_ref_cell_owner(&staged, span);
     }
@@ -4209,7 +4377,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         value_type: PhpType,
         span: Option<Span>,
     ) {
-        self.bind_ref_cell_ptr_impl(staged, cell_ptr, value_type, true, true, span);
+        self.bind_ref_cell_ptr_impl(staged, cell_ptr, value_type, true, true, false, span);
     }
 
     /// Binds a borrowed or owned cell, retiring the previous binding before publishing the new one.
@@ -4220,16 +4388,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         value_type: PhpType,
         owns_cell: bool,
         adopts_cell: bool,
+        preserve_storage: bool,
         span: Option<Span>,
     ) {
         self.clear_static_callable_local(target);
         self.clear_fiber_start_sig(target);
         self.release_replaced_local_before_ref_alias(target, span);
         let target_slot = self.declare_local(target, value_type.clone());
-        self.set_local_type(target, value_type.clone());
+        if preserve_storage {
+            self.set_local_logical_type(target, value_type.clone());
+        } else {
+            self.set_local_type(target, value_type.clone());
+        }
         let immediate = if owns_cell {
             let owner = self.declare_ref_cell_owner(target, value_type.clone());
-            self.initialized_slots.insert(owner);
+            self.mark_slot_initialized(owner);
             Immediate::LocalSlotPair { first: target_slot, second: owner }
         } else {
             Immediate::LocalSlot(target_slot)
@@ -4249,7 +4422,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // The caller marks an interior binding explicitly; a plain rebinding clears the marker
         // so a name reused for a managed cell is not treated as borrowed storage.
         self.borrowed_element_ref_locals.remove(target);
-        self.initialized_slots.insert(target_slot);
+        self.mark_slot_initialized(target_slot);
     }
 
     /// Releases storage currently owned by a local before rebinding it as a ref alias.
@@ -5078,19 +5251,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_method_locals.get(name).cloned()
     }
 
-    /// Records that a PHP local currently holds a safe static argument array for reflection.
-    pub(crate) fn bind_reflection_arg_array_local(&mut self, name: &str, args: Vec<Expr>) {
-        if self.can_track_static_callable_local(name) {
-            self.reflection_arg_array_locals
-                .insert(name.to_string(), args);
-        }
-    }
-
-    /// Returns the static reflection argument array associated with a local.
-    pub(crate) fn reflection_arg_array_local(&self, name: &str) -> Option<Vec<Expr>> {
-        self.reflection_arg_array_locals.get(name).cloned()
-    }
-
     /// Records that a PHP local currently holds a Fiber with a known callback signature.
     pub(crate) fn bind_fiber_start_sig(&mut self, name: &str, sig: FunctionSig) {
         if self.can_track_static_callable_local(name) {
@@ -5187,11 +5347,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_method_locals.remove(name);
     }
 
-    /// Clears the compile-time reflection argument-array association for one local.
-    pub(crate) fn clear_reflection_arg_array_local(&mut self, name: &str) {
-        self.reflection_arg_array_locals.remove(name);
-    }
-
     /// Clears the known Fiber callback association for one local.
     pub(crate) fn clear_fiber_start_sig(&mut self, name: &str) {
         self.fiber_start_sigs.remove(name);
@@ -5207,7 +5362,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_function_locals.clear();
         self.reflection_property_locals.clear();
         self.reflection_method_locals.clear();
-        self.reflection_arg_array_locals.clear();
         self.fiber_start_sigs.clear();
     }
 
@@ -5485,7 +5639,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::StoreGlobal.default_effects(),
             span,
         );
-        self.initialized_slots.insert(slot);
+        self.mark_slot_initialized(slot);
     }
 
     /// Emits a store opcode to an already declared local or static-local slot.
@@ -5515,7 +5669,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if op == Op::StoreLocal && self.builder.local_kind(slot) == LocalKind::PhpLocal {
             self.assigned_php_local_slots.insert(slot);
         }
-        self.initialized_slots.insert(slot);
+        self.mark_slot_initialized(slot);
     }
 
     /// Keeps the original RHS and assignment-site mode beside the alias's physical target type.
@@ -5554,7 +5708,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::StoreRefCell.default_effects(),
             span,
         );
-        self.initialized_slots.insert(slot);
+        self.mark_slot_initialized(slot);
     }
 
     /// Starts a call-local capture group without disturbing a surrounding argument evaluation.
@@ -5573,7 +5727,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let mut guarded = Vec::new();
         self.begin_argument_guard_scope();
         for (index, value) in values.iter().enumerate() {
-            if self.value_is_owned_unboxed_local_load(value.value)
+            let boxed_local_view = self.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed
+                && matches!(self.builder.value_defining_op(value.value), Some(Op::LoadLocal | Op::LoadStaticLocal))
+                && self.value_needs_release_after_use(*value);
+            if (self.value_is_owned_unboxed_local_load(value.value) || boxed_local_view)
                 && !self.has_call_argument_guard(value.value)
             {
                 self.guard_call_argument(*value, index, span);
@@ -5714,6 +5871,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         )
     }
 
+    /// Keeps public builtin invocation contracts separate from generated implementation expressions.
+    pub(crate) fn builtin_source_mode(&self) -> crate::source::SourceMode {
+        if self.builder.function().flags.is_builtin_contract_wrapper { crate::source::SourceMode::Php }
+        else { self.source_mode }
+    }
+
     /// Emits a value-producing opcode with computed storage and ownership metadata.
     pub(crate) fn emit_value(
         &mut self,
@@ -5845,6 +6008,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
+    /// Checks a user condition without changing explicit casts or quiet probe semantics.
+    pub(crate) fn condition_truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
+        let input = if self.source_mode != crate::source::SourceMode::Internal
+            && self.semantic_profile.contains(elephc_semantics::StrictFeature::Bools)
+            && !matches!(self.builder.value_php_type(input.value).codegen_repr(), PhpType::Bool | PhpType::False)
+        {
+            super::semantic_guards::require_kind(self, input, crate::ir::PhpTypePredicate::Bool, "strict-bools", span)
+        } else { input };
+        self.truthy(input, span)
+    }
+
+    /// Consumes a guarded condition while balancing a separately materialized boolean result.
+    pub(crate) fn condition_truthy_consuming(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
+        let owns_input = self.value_is_owning_temporary(input);
+        let result = self.condition_truthy(input, span);
+        if owns_input && result.value != input.value {
+            crate::ir_lower::ownership::release_if_owned(self, input, span);
+        }
+        result
+    }
+
     /// Emits an `is_truthy` conversion unless the value is an integer that is already its own
     /// truthiness.
     ///
@@ -5899,6 +6083,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 }
 
 impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, '_> {
+    /// Preserves the semantic identity received from the checker.
+    fn semantic_profile(&self) -> elephc_semantics::SemanticProfile { self.semantic_profile }
+
+    /// Preserves the invocation contract independently of generated statement source modes.
+    fn source_mode(&self) -> crate::source::SourceMode { self.builtin_source_mode() }
+
     /// Returns the source file associated with the enclosing lowered function.
     fn source_path(&self) -> Option<&str> {
         self.source_path.as_deref()
@@ -5908,7 +6098,7 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
     fn error_reporting_mask(&self) -> i64 {
         self.constants
             .get("E_ALL")
-            .and_then(|(value, _)| match value {
+            .and_then(|(value, _)| match &value.kind {
                 ExprKind::IntLiteral(mask) => Some(*mask),
                 _ => None,
             })
@@ -5941,6 +6131,84 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
     /// Returns PHP metadata already attached to an EIR operand.
     fn value_php_type(&self, value: ValueId) -> PhpType {
         self.builder.value_php_type(value)
+    }
+
+    /// Validates every borrowed argument before numeric builtin conversion or calculation.
+    fn emit_numeric_domain_guard(
+        &mut self, operator: elephc_semantics::numeric_domains::NumericOperator, operands: &[ValueId],
+        source_mode: crate::source::SourceMode, span: Span,
+    ) -> Result<(), crate::builtins::semantics::BuiltinLoweringError> {
+        let previous = self.source_mode;
+        self.source_mode = source_mode;
+        let pins = super::expr::pin_in_flight_owners(self, operands, span);
+        for operand in operands {
+            let value = LoweredValue { value: *operand, ir_type: self.builder.value_type(*operand) };
+            super::numeric_domains::unary(self, value, operator, span);
+        }
+        super::expr::unpin_in_flight_owners(self, pins, span);
+        self.source_mode = previous;
+        Ok(())
+    }
+
+    /// Borrows already-rooted builtin operands while checking the selected array's original key.
+    fn emit_array_key_guard(&mut self, input: crate::builtins::array_key_inputs::ArrayKeyInput,
+        operands: &[ValueId], span: Span) -> Result<(), crate::builtins::semantics::BuiltinLoweringError> {
+        let crate::builtins::array_key_inputs::ArrayKeyInput::Value { argument, receiver, nullable } = input
+            else { return Ok(()); };
+        let Some((&key, &array)) = operands.get(argument).zip(operands.get(receiver)) else {
+            return Err(crate::builtins::semantics::BuiltinLoweringError::new("missing builtin key operands"));
+        };
+        let key = LoweredValue { value: key, ir_type: self.builder.value_type(key) };
+        let array = LoweredValue { value: array, ir_type: self.builder.value_type(array) };
+        let key = super::ownership::borrow_value(self, key, Some(span));
+        let array = super::ownership::borrow_value(self, array, Some(span));
+        super::array_key_guards::for_receiver_with_null(self, array, key, span, nullable);
+        Ok(())
+    }
+
+    /// Shares scalar and internal-object operator semantics without evaluating arguments twice.
+    fn emit_numeric_binary(
+        &mut self, left: ValueId, operation: crate::parser::ast::BinOp, right: ValueId,
+        source_mode: crate::source::SourceMode, span: Span,
+    ) -> Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+        let result = super::expr::builtin_numeric::lower(self, left, operation, right, source_mode, span);
+        Ok(crate::builtins::semantics::LoweredBuiltinValue { value: result.value })
+    }
+
+    /// Reports the explicit prepared-builtin lowering role to profile-dependent semantic homes.
+    fn uses_prepared_builtin_semantics(&self) -> bool {
+        self.prepared_builtin_invocation || self.builder.function().flags.is_builtin_contract_wrapper
+    }
+
+    /// Reuses the rooted explicit-cast graph while preserving the builtin invocation's policy.
+    fn emit_numeric_cast(&mut self, target: elephc_semantics::numeric_cast::NumericCastTarget,
+        value: ValueId, base: Option<ValueId>, source_mode: crate::source::SourceMode, span: Span)
+        -> Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+        let result = super::expr::builtin_casts::lower(self, target, value, base, source_mode, span);
+        Ok(crate::builtins::semantics::LoweredBuiltinValue { value: result.value })
+    }
+
+    /// Reuses the original-operand cast adapter without consuming any caller argument owner.
+    fn emit_scalar_cast(&mut self, target: &crate::parser::ast::CastType, value: ValueId,
+        source_mode: crate::source::SourceMode, span: Span)
+        -> Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+        if !matches!(target, crate::parser::ast::CastType::Bool | crate::parser::ast::CastType::String
+            | crate::parser::ast::CastType::Int | crate::parser::ast::CastType::Float) {
+            return Err(crate::builtins::semantics::BuiltinLoweringError::new("scalar conversion requires a scalar target"));
+        }
+        let result = super::expr::builtin_casts::scalar(self, target, value, source_mode, span);
+        Ok(crate::builtins::semantics::LoweredBuiltinValue { value: result.value })
+    }
+
+    /// Uses one original-value conversion graph and the ordinary local/reference store boundary.
+    fn emit_settype_conversion(&mut self, value: ValueId, target: ValueId,
+        source_mode: crate::source::SourceMode, span: Span)
+        -> Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+        let previous = self.source_mode; self.source_mode = source_mode;
+        let result = self.with_independent_write_receiver(|ctx|
+            super::expr::builtin_settype::lower(ctx, value, target, span));
+        self.source_mode = previous;
+        result.map(|result| crate::builtins::semantics::LoweredBuiltinValue { value: result.value })
     }
 
     /// Reports whether one of the program's declared classes is the named internal class.
@@ -6021,8 +6289,10 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
                 crate::ir::RuntimeCallTarget::ProfiledFunction {
                     target,
                     arguments: crate::ir::RuntimeArgumentLayout::Values,
-                    strict_php: crate::strict_php::is_enabled(),
+                    php_only: crate::php_only::is_enabled(),
                     strict_types: Some(crate::source::current_strict_types()),
+                    strict_comparisons: crate::semantics::comparisons::active(
+                        self.semantic_profile, self.builtin_source_mode()),
                 }
             }
             target => target,
@@ -6134,18 +6404,18 @@ impl LoweringContext<'_, '_> {
             .get(&(self.loop_storage_scope.clone(), span))
     }
 
-    /// Returns the PHP variable an operand was loaded from, for every load shape
+    /// Returns the PHP variable an operand addresses, for place markers and every load shape
     /// `load_local` emits, or `None` for any other value (a literal, a call result, a
     /// property read).
     ///
     /// Frame, `static` and reference-cell loads carry their `LocalSlot`, which maps back
     /// to the name through `local_slots`; `global`, extern-global and eval-scope loads
     /// carry the interned `GlobalName`, which maps back through the module data pool.
-    fn operand_local_name(&self, operand: ValueId) -> Option<String> {
+    pub(in crate::ir_lower) fn operand_local_name(&self, operand: ValueId) -> Option<String> {
         let inst = self.builder.value_defining_instruction(operand)?;
         match (inst.op, &inst.immediate) {
             (
-                Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell | Op::LoadRefCellValue,
+                Op::LocalPlace | Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell | Op::LoadRefCellValue,
                 Some(Immediate::LocalSlot(slot)),
             ) => self
                 .local_slots

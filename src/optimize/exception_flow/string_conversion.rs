@@ -26,7 +26,8 @@ impl ExceptionFlowAnalysis {
             ExprKind::BinaryOp { left, op, right } if matches!(op,
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow
             ) && binary_op_exact_throw_type(left, op, right).is_none() => ThrownTypes::unknown(),
-            ExprKind::Negate(inner) => self.string_conversion_throws(inner, class_context),
+            ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) =>
+                self.string_conversion_throws(inner, class_context),
             ExprKind::Cast { target: CastType::Float, .. } => ThrownTypes::unknown(),
             ExprKind::StringLiteral(_)
             | ExprKind::IntLiteral(_)

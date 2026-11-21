@@ -176,19 +176,22 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the assoc-new wrapper frame
     emitter.instruction("ret");                                                 // return the boxed associative-array Mixed cell to Rust
 
-    label_c_global(emitter, "__elephc_eval_value_array_get");
-    emitter.instruction("sub sp, sp, #32");                                     // allocate a wrapper frame for key coercion
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across helper calls
-    emitter.instruction("add x29, sp, #16");                                    // establish a stable wrapper frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save the boxed array receiver while coercing the key
-    emitter.instruction("mov x0, x1");                                          // pass the boxed key to the eval key normalizer
-    emitter.instruction("bl __elephc_eval_key_normalize");                      // normalize eval array key to key_lo/key_hi
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed array receiver
-    emitter.instruction("mov x3, xzr");                                         // eval bridge lookup reports misses through its own result contract
-    emitter.instruction("bl __rt_mixed_array_get");                             // read the boxed Mixed element or Mixed(null)
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the array-get wrapper frame
-    emitter.instruction("ret");                                                 // return the boxed element to Rust
+    for (name, mode) in [("__elephc_eval_value_array_get", elephc_semantics::indexing::NORMALIZED_KEY_TUPLE),
+        ("__elephc_eval_value_array_get_checked", elephc_semantics::indexing::REPORT_MISSING | elephc_semantics::indexing::NORMALIZED_KEY_TUPLE)] {
+        label_c_global(emitter, name);
+        emitter.instruction("sub sp, sp, #32");                                 // allocate a wrapper frame for key coercion
+        emitter.instruction("stp x29, x30, [sp, #16]");                         // save frame pointer and return address across helper calls
+        emitter.instruction("add x29, sp, #16");                                // establish a stable wrapper frame pointer
+        emitter.instruction("str x0, [sp, #0]");                                // save the boxed array receiver while coercing the key
+        emitter.instruction("mov x0, x1");                                      // pass the boxed key to the eval key normalizer
+        emitter.instruction("bl __elephc_eval_key_normalize");                  // normalize eval array key to key_lo/key_hi
+        emitter.instruction("ldr x0, [sp, #0]");                                // reload the boxed array receiver
+        crate::codegen_support::abi::emit_load_int_immediate(emitter, "x3", mode);
+        emitter.instruction("bl __rt_mixed_array_get");                         // read the boxed Mixed element or Mixed(null)
+        emitter.instruction("ldp x29, x30, [sp, #16]");                         // restore frame pointer and return address
+        emitter.instruction("add sp, sp, #32");                                 // release the array-get wrapper frame
+        emitter.instruction("ret");                                             // return the boxed element to Rust
+    }
 
     label_c_global(emitter, "__elephc_eval_value_array_key_exists");
     emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for key existence probing

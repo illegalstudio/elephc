@@ -65,7 +65,7 @@ pub(super) fn discover_expr(
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
             discover_instanceof_target(target, base_dir, loaded_paths, include_chain, state, output)?;
         }
-        ExprKind::Negate(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)

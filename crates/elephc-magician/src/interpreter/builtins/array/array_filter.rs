@@ -129,7 +129,7 @@ fn eval_array_filter_result_from_scope(
             let keep = if let Some(callback) = callback.as_ref() {
                 let args = eval_array_filter_callback_args(mode, key, value)?;
                 let result = eval_evaluated_callable_with_values(callback, args, context, values)?;
-                values.truthy(result)?
+                eval_boolean_condition(result, context, values)?
             } else {
                 values.truthy(value)?
             };

@@ -38,6 +38,7 @@ pub(crate) fn plan_call_args(
     call_span: Span,
     trim_trailing_defaults: bool,
     allow_unknown_named_variadic: bool,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<CallArgPlan, CallArgPlanError> {
     plan_call_args_with_regular_param_count(
         sig,
@@ -46,6 +47,7 @@ pub(crate) fn plan_call_args(
         regular_param_count(sig),
         trim_trailing_defaults,
         allow_unknown_named_variadic,
+        profile,
     )
 }
 
@@ -60,11 +62,12 @@ pub(crate) fn plan_call_args_with_regular_param_count(
     regular_param_count: usize,
     trim_trailing_defaults: bool,
     allow_unknown_named_variadic: bool,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<CallArgPlan, CallArgPlanError> {
     validate_no_spread_after_named(args)?;
     validate_positional_spread_order(args)?;
-    validate_static_unpack_order(args)?;
-    let expanded = expand_static_assoc_spread_args_with_origins(args);
+    validate_static_unpack_order(args, profile)?;
+    let expanded = expand_static_assoc_spread_args_with_origins(args, profile);
     let assoc_spread_sources = vec![false; expanded.args.len()];
     let (source_args, source_origins, assoc_spread_sources) =
         expand_static_tail_spreads_after_unpack_named(
@@ -77,8 +80,8 @@ pub(crate) fn plan_call_args_with_regular_param_count(
         .position(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }));
 
     if first_named_pos.is_none() {
-        validate_positional_spread_order(&source_args)?;
         return Ok(CallArgPlan {
+            semantic_profile: profile,
             passthrough_args: Some(source_args.clone()),
             source_args,
             source_origins,
@@ -102,6 +105,7 @@ pub(crate) fn plan_call_args_with_regular_param_count(
         first_named_pos,
         &source_origins,
         &assoc_spread_sources,
+        profile,
     )
 }
 
@@ -117,11 +121,12 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
     trim_trailing_defaults: bool,
     allow_unknown_named_variadic: bool,
     assoc_spread_sources: &[bool],
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<CallArgPlan, CallArgPlanError> {
     validate_no_spread_after_named(args)?;
     validate_positional_spread_order(args)?;
-    validate_static_unpack_order(args)?;
-    let expanded = expand_static_assoc_spread_args_with_origins(args);
+    validate_static_unpack_order(args, profile)?;
+    let expanded = expand_static_assoc_spread_args_with_origins(args, profile);
     let expanded_assoc_spread_sources = (0..expanded.args.len())
         .map(|idx| assoc_spread_sources.get(idx).copied().unwrap_or(false))
         .collect();
@@ -136,8 +141,8 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
         .position(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }));
 
     if first_named_pos.is_none() {
-        validate_positional_spread_order(&source_args)?;
         return Ok(CallArgPlan {
+            semantic_profile: profile,
             passthrough_args: Some(source_args.clone()),
             source_args,
             source_origins,
@@ -161,6 +166,7 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
         first_named_pos,
         &source_origins,
         &assoc_spread_sources,
+        profile,
     )
 }
 
@@ -194,10 +200,15 @@ fn validate_no_spread_after_named(args: &[Expr]) -> Result<(), CallArgPlanError>
 }
 
 /// Validates syntactic ordering even when no callee signature is available for planning.
-pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr]) -> Result<(), CallArgPlanError> {
+pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Result<(), CallArgPlanError> {
+    validate_syntactic_call_argument_order(args)?;
+    validate_static_unpack_order(args, profile)
+}
+
+/// Validates syntax before a semantic profile is available, without classifying array keys.
+pub(crate) fn validate_syntactic_call_argument_order(args: &[Expr]) -> Result<(), CallArgPlanError> {
     validate_no_spread_after_named(args)?;
     validate_positional_spread_order(args)?;
-    validate_static_unpack_order(args)?;
     let mut seen_named = false;
     for arg in args {
         if matches!(arg.kind, ExprKind::NamedArg { .. }) {
@@ -237,6 +248,7 @@ fn plan_named_call_args(
     first_named_pos: Option<usize>,
     source_origins: &[ExpandedArgOrigin],
     assoc_spread_sources: &[bool],
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<CallArgPlan, CallArgPlanError> {
     let mut named_values: Vec<Option<NamedValue>> = vec![None; regular_param_count];
     let mut named_tracker = NamedParamTracker::new(regular_param_count);
@@ -482,7 +494,7 @@ fn plan_named_call_args(
             if slot.is_some() {
                 continue;
             }
-            let default = sig.defaults.get(idx).and_then(|default| default.clone());
+            let default = sig.default_value(idx);
             *slot = Some(PlannedRegularArg::SpreadElement {
                 spread_expr: dynamic_prefix_expr.clone(),
                 spread_span: dynamic_prefix_expr.span,
@@ -509,8 +521,8 @@ fn plan_named_call_args(
     for (idx, slot) in resolved.into_iter().take(output_len).enumerate() {
         if let Some(arg) = slot {
             regular_args.push(arg);
-        } else if let Some(Some(default_expr)) = sig.defaults.get(idx) {
-            regular_args.push(PlannedRegularArg::Default(default_expr.clone()));
+        } else if let Some(default_expr) = sig.default_value(idx) {
+            regular_args.push(PlannedRegularArg::Default(default_expr));
         } else {
             return Err(CallArgPlanError::MissingRequired {
                 span: call_span,
@@ -522,6 +534,7 @@ fn plan_named_call_args(
     variadic_args.sort_by_key(|arg| arg.source_index);
 
     Ok(CallArgPlan {
+        semantic_profile: profile,
         source_args,
         source_origins: source_origins.to_vec(),
         regular_args,

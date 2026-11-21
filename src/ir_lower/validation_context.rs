@@ -19,6 +19,8 @@ pub(super) fn describe(module: &Module, error: ValidationError) -> LoweringError
     {
         let Err(failure) = crate::ir::validate_function(function) else { continue; };
         let detail = match &failure {
+            ValidationError::InvalidLocalReferenceContract(id) =>
+                format!("; instruction={:?}", function.instruction(*id)),
             ValidationError::OwnershipTypeMismatch(id) | ValidationError::PhpTypeMismatch(id)
             | ValidationError::ResultTypeMismatch(id) => function.value(*id).map(|value| {
                 let instruction = match value.def {

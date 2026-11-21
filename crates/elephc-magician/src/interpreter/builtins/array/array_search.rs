@@ -11,6 +11,7 @@
 //!   shares the same scan.
 
 use super::super::super::*;
+use crate::runtime_hooks::owner_frames::with_runtime_owners;
 
 eval_builtin! {
     contract: "array_search",
@@ -31,11 +32,11 @@ pub(in crate::interpreter) fn eval_array_search_declared_call(
 /// Dispatches evaluated-argument eval calls for the `array_search` array builtin.
 pub(in crate::interpreter) fn eval_array_search_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (needle, array, strict) = eval_array_search_value_args(evaluated_args, values)?;
-    eval_array_search_result("array_search", needle, array, strict, values)
+    eval_array_search_result("array_search", needle, array, strict, context, values)
 }
 
 /// Splits evaluated `in_array()`/`array_search()` arguments into needle, haystack, and `$strict`.
@@ -74,7 +75,7 @@ pub(in crate::interpreter) fn eval_builtin_array_search(
         }
         None => false,
     };
-    eval_array_search_result(name, needle, array, strict, values)
+    eval_array_search_result(name, needle, array, strict, context, values)
 }
 
 /// Searches an eval array with PHP's loose `==` comparison, or `===` when `strict` is set.
@@ -83,21 +84,28 @@ pub(in crate::interpreter) fn eval_array_search_result(
     needle: RuntimeCellHandle,
     array: RuntimeCellHandle,
     strict: bool,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let comparison = if strict { EvalBinOp::StrictEq } else { EvalBinOp::LooseEq };
     let len = values.array_len(array)?;
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        let equal = values.compare(comparison, needle, value)?;
-        if values.truthy(equal)? {
-            return match name {
-                "in_array" => values.bool_value(true),
-                "array_search" => Ok(key),
-                _ => Err(EvalStatus::UnsupportedConstruct),
-            };
-        }
+        let mut owners = Vec::with_capacity(3);
+        let mut found = false;
+        let result = (|| {
+            let key = values.array_iter_key(array, position)?;
+            owners.push(key);
+            let value = with_runtime_owners(&owners, || values.array_get(array, key))?;
+            owners.push(value);
+            let equal = with_runtime_owners(&owners, || values.compare(comparison, needle, value))?;
+            owners.push(equal);
+            found = values.truthy(equal)?;
+            // The finisher promotes a borrowed result before retiring the scan's leases.
+            Ok(if found && name == "array_search" { key.borrowed() } else { equal.borrowed() })
+        })();
+        let result = finish_eval_argument_values(result, owners, context, values)?;
+        if found { return Ok(result); }
+        eval_release_value(context, values, result)?;
     }
     match name {
         "in_array" => values.bool_value(false),

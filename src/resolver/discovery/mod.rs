@@ -46,11 +46,13 @@ pub(super) fn discover_include_declarations(
     stmts: &[Stmt],
     base_dir: &Path,
     defines: &HashSet<String>,
+    semantic_profile: elephc_semantics::SemanticProfile,
 ) -> Result<IncludeDiscovery, CompileError> {
     let mut output = DiscoveryOutput::default();
     let mut loaded_paths = HashSet::new();
     let mut include_chain = Vec::new();
     let mut state = ResolveState::with_conditional_defines(defines);
+    state.semantic_profile = semantic_profile;
 
     discover_stmts(
         stmts,

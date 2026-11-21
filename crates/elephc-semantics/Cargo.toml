@@ -1,0 +1,10 @@
+[package]
+name = "elephc-semantics"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Shared semantic profiles for the elephc compiler and eval runtime"
+
+[lib]
+crate-type = ["rlib"]

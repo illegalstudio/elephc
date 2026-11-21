@@ -10,7 +10,7 @@
 use super::*;
 
 /// Parses a literal eval fragment with the builtin visibility of its physical call site.
-pub(crate) fn parse_literal_fragment(fragment: &str, strict_php: bool) -> Option<Program> {
+pub(crate) fn parse_literal_fragment(fragment: &str, profile: EvalSourceProfile) -> Option<Program> {
     let source = format!("<?php {}", fragment);
     // Each parsed eval fragment carries its own source identity, so a span in the fragment can
     // never alias the ROOT file's equal coordinates in span-keyed maps such as
@@ -19,13 +19,14 @@ pub(crate) fn parse_literal_fragment(fragment: &str, strict_php: bool) -> Option
     // it cannot alias an INCLUDED or autoloaded file's id either: the include counter restarts at
     // the start of every compile, which is why sharing it left a narrower alias gap.
     let source_id = crate::span::Span::fresh_synthetic_source_id();
-    let tokens = crate::lexer::tokenize_with_mode_and_source_id(
+    let tokens = crate::lexer::tokenize_with_semantics(
         &source,
         crate::source::SourceMode::Php,
         source_id,
+        profile.semantics(),
     )
     .ok()?;
-    let source_mode = if strict_php {
+    let source_mode = if profile.php_only() {
         crate::source::SourceMode::Php
     } else {
         crate::source::SourceMode::Lfc
@@ -40,9 +41,9 @@ pub(crate) fn parse_literal_fragment(fragment: &str, strict_php: bool) -> Option
 pub(crate) fn parse_literal_fragment_with_source_path(
     fragment: &str,
     source_path: Option<&str>,
-    strict_php: bool,
+    profile: EvalSourceProfile,
 ) -> Option<Program> {
-    let program = parse_literal_fragment(fragment, strict_php)?;
+    let program = parse_literal_fragment(fragment, profile)?;
     Some(match source_path {
         Some(source_path) => crate::magic_constants::substitute_file_and_scope_constants(
             program,
@@ -52,21 +53,25 @@ pub(crate) fn parse_literal_fragment_with_source_path(
     })
 }
 /// Returns a deterministic internal function name for a literal eval fragment and source profile.
-pub(crate) fn eir_function_name(fragment: &str, strict_php: bool) -> String {
+pub(crate) fn eir_function_name(fragment: &str, profile: EvalSourceProfile) -> String {
     format!(
-        "{}_{}_{:016x}",
+        "{}_{}_v{}_{:016x}_{:016x}",
         EIR_AOT_FUNCTION_PREFIX,
-        if strict_php { "strict" } else { "elephc" },
+        if profile.php_only() { "php" } else { "elephc" },
+        elephc_semantics::SEMANTICS_ABI_VERSION,
+        profile.semantics().bits(),
         stable_fragment_hash(fragment)
     )
 }
 
 /// Returns a deterministic internal function name for a profiled scope-aware eval fragment.
-pub(crate) fn eir_scope_function_name(fragment: &str, strict_php: bool) -> String {
+pub(crate) fn eir_scope_function_name(fragment: &str, profile: EvalSourceProfile) -> String {
     format!(
-        "{}_scope_{}_{:016x}",
+        "{}_scope_{}_v{}_{:016x}_{:016x}",
         EIR_AOT_FUNCTION_PREFIX,
-        if strict_php { "strict" } else { "elephc" },
+        if profile.php_only() { "php" } else { "elephc" },
+        elephc_semantics::SEMANTICS_ABI_VERSION,
+        profile.semantics().bits(),
         stable_fragment_hash(fragment)
     )
 }
@@ -74,7 +79,7 @@ pub(crate) fn eir_scope_function_name(fragment: &str, strict_php: bool) -> Strin
 /// Builds the shared literal eval AOT plan for scan, lowering, and codegen decisions.
 pub(crate) fn plan_literal_fragment_with_static_calls<F>(
     fragment: &str,
-    strict_php: bool,
+    profile: EvalSourceProfile,
     static_call_supported: F,
 ) -> EvalAotPlan
 where
@@ -82,7 +87,7 @@ where
 {
     plan_literal_fragment_with_static_and_method_calls(
         fragment,
-        strict_php,
+        profile,
         static_call_supported,
         |_, _, _| false,
     )
@@ -91,7 +96,7 @@ where
 /// Builds the shared literal eval AOT plan with function and static-method support.
 pub(crate) fn plan_literal_fragment_with_static_and_method_calls<F, M>(
     fragment: &str,
-    strict_php: bool,
+    profile: EvalSourceProfile,
     static_call_supported: F,
     static_method_supported: M,
 ) -> EvalAotPlan
@@ -99,12 +104,12 @@ where
     F: Fn(&str, &[Expr]) -> bool,
     M: Fn(&StaticReceiver, &str, &[Expr]) -> bool,
 {
-    let Some(program) = parse_literal_fragment(fragment, strict_php) else {
+    let Some(program) = parse_literal_fragment(fragment, profile) else {
         return parse_error_plan();
     };
     plan_parsed_literal_fragment_with_static_and_method_calls(
         fragment,
-        strict_php,
+        profile,
         program,
         static_call_supported,
         static_method_supported,
@@ -115,7 +120,7 @@ where
 pub(crate) fn plan_literal_fragment_with_source_path_and_static_and_method_calls<F, M>(
     fragment: &str,
     source_path: Option<&str>,
-    strict_php: bool,
+    profile: EvalSourceProfile,
     static_call_supported: F,
     static_method_supported: M,
 ) -> EvalAotPlan
@@ -124,13 +129,13 @@ where
     M: Fn(&StaticReceiver, &str, &[Expr]) -> bool,
 {
     let Some(program) =
-        parse_literal_fragment_with_source_path(fragment, source_path, strict_php)
+        parse_literal_fragment_with_source_path(fragment, source_path, profile)
     else {
         return parse_error_plan();
     };
     plan_parsed_literal_fragment_with_static_and_method_calls(
         fragment,
-        strict_php,
+        profile,
         program,
         static_call_supported,
         static_method_supported,
@@ -140,6 +145,7 @@ where
 /// Returns a conservative plan for fragments that cannot be parsed statically.
 pub(super) fn parse_error_plan() -> EvalAotPlan {
     EvalAotPlan {
+        profile: EvalSourceProfile::default(),
         function_name: None,
         eir_program: None,
         scope_function_name: None,
@@ -162,7 +168,7 @@ pub(super) fn parse_error_plan() -> EvalAotPlan {
 /// Builds the shared literal eval AOT plan from an already parsed fragment program.
 pub(super) fn plan_parsed_literal_fragment_with_static_and_method_calls<F, M>(
     fragment: &str,
-    strict_php: bool,
+    profile: EvalSourceProfile,
     program: Program,
     static_call_supported: F,
     static_method_supported: M,
@@ -171,6 +177,7 @@ where
     F: Fn(&str, &[Expr]) -> bool,
     M: Fn(&StaticReceiver, &str, &[Expr]) -> bool,
 {
+    let _semantics = crate::optimize::scoped_semantic_profile(profile.semantics());
     let mut scope_access = collect_scope_accesses(&program);
     scope_access.reads = collect_scope_reads_before_writes(&program);
     let quiet_reads = scope_access
@@ -178,11 +185,11 @@ where
         .difference(&scope_access.warning_reads)
         .cloned()
         .collect();
-    let folded_program = fold_static_builtin_calls_in_program(program.clone(), strict_php);
+    let folded_program = fold_static_builtin_calls_in_program(program.clone(), profile);
     let support = EirStaticCallPredicates {
         function: &static_call_supported,
         static_method: &static_method_supported,
-        strict_php,
+        profile,
     };
     let eir_program =
         program_is_eir_function_safe(&folded_program, &support).then_some(folded_program.clone());
@@ -195,9 +202,12 @@ where
         && !scope_names.is_empty()
         && !scope_access.creates_unknown_vars
         && program_is_eir_scope_function_safe(&folded_program, &support, &scope_names);
-    let scope_flush_local =
-        scope_eir_safe && scope_access.reads.is_empty() && !scope_access.writes.is_empty();
-    let scope_direct = scope_eir_safe && !scope_access.reads.is_empty();
+    // A caller contract can reject any write, including one overwritten before return.
+    let checked_writes = profile.semantics().contains(elephc_semantics::StrictFeature::Locals)
+        && !scope_access.writes.is_empty();
+    let scope_flush_local = scope_eir_safe && !checked_writes
+        && scope_access.reads.is_empty() && !scope_access.writes.is_empty();
+    let scope_direct = scope_eir_safe && (!scope_access.reads.is_empty() || checked_writes);
     let scope_direct_writes = if scope_direct {
         scope_access.writes.clone()
     } else {
@@ -209,7 +219,7 @@ where
         BTreeSet::new()
     };
     let array_read_constraint_sets =
-        collect_array_scope_read_constraint_sets(&folded_program, &scope_access.reads);
+        collect_array_scope_read_constraint_sets(&folded_program, &scope_access.reads, profile.semantics());
     let array_read_constraints = array_read_constraint_sets.array_like;
     let assoc_array_read_constraints = array_read_constraint_sets.assoc;
     let float_predicate_read_constraints =
@@ -220,13 +230,14 @@ where
     let needs_global_scope =
         !is_fully_static_no_bridge && !has_scope_eir && scope_access.has_scope_access();
     EvalAotPlan {
+        profile,
         function_name: eir_program
             .as_ref()
-            .map(|_| eir_function_name(fragment, strict_php)),
+            .map(|_| eir_function_name(fragment, profile)),
         eir_program,
         scope_function_name: scope_eir_program
             .as_ref()
-            .map(|_| eir_scope_function_name(fragment, strict_php)),
+            .map(|_| eir_scope_function_name(fragment, profile)),
         scope_eir_program,
         reads: scope_access.reads,
         quiet_reads,
@@ -254,8 +265,8 @@ mod tests {
     /// differs.
     #[test]
     fn literal_fragment_spans_carry_a_distinct_source_id() {
-        let first = parse_literal_fragment("echo strlen('x');", false).expect("first fragment");
-        let second = parse_literal_fragment("echo strlen('x');", false).expect("second fragment");
+        let first = parse_literal_fragment("echo strlen('x');", EvalSourceProfile::permissive(false)).expect("first fragment");
+        let second = parse_literal_fragment("echo strlen('x');", EvalSourceProfile::permissive(false)).expect("second fragment");
         let span_of = |program: &Program| program.first().expect("one statement").span;
 
         let first_span = span_of(&first);
@@ -274,11 +285,72 @@ mod tests {
         // An include-resolution reset must not rewind the synthetic counter, or a later fragment
         // could reuse an included file's identity (issue #1291).
         crate::span::Span::reset_source_ids();
-        let third = parse_literal_fragment("echo strlen('x');", false).expect("third fragment");
+        let third = parse_literal_fragment("echo strlen('x');", EvalSourceProfile::permissive(false)).expect("third fragment");
         assert_ne!(
             first_span.source_id(),
             span_of(&third).source_id(),
             "a fragment after an include reset keeps a fresh identity"
         );
+    }
+}
+
+#[cfg(test)]
+mod strict_profile_tests {
+    use super::*;
+    use elephc_semantics::{SemanticProfile, StrictFeature};
+
+    /// Literal eval names cannot alias across syntax visibility, semantics or scope strategies.
+    #[test]
+    fn strict_eval_profiles_partition_aot_identities() {
+        let mut names = std::collections::HashSet::new();
+        for semantics in [SemanticProfile::PERMISSIVE, SemanticProfile::all(),
+            SemanticProfile::PERMISSIVE.with(StrictFeature::Bools, true)] {
+            for php_only in [true, false] {
+                let profile = EvalSourceProfile::new(php_only, semantics);
+                assert_eq!(profile.php_only(), php_only);
+                assert_eq!(profile.semantics(), semantics);
+                assert!(names.insert(eir_function_name("return 1;", profile)));
+                assert!(names.insert(eir_scope_function_name("return 1;", profile)));
+            }
+        }
+        assert_eq!(std::mem::size_of::<EvalSourceProfile>(), 4);
+    }
+
+    /// AOT parsing applies checked literal rules before eligibility and constant folding.
+    #[test]
+    fn strict_eval_profiles_preserve_numeric_literal_evidence() {
+        let source = "return 9223372036854775808;";
+        assert!(parse_literal_fragment(source, EvalSourceProfile::permissive(false)).is_some());
+        let profile = EvalSourceProfile::new(false, SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true));
+        assert!(parse_literal_fragment(source, profile).is_none());
+        assert!(parse_literal_fragment("return -9223372036854775808;", profile).is_some());
+        let plan = plan_literal_fragment_with_static_calls(source, profile, |_, _| false);
+        assert!(matches!(plan.fallback_reason(), Some(EvalAotFallbackReason::ParseError)));
+        let tokens = crate::lexer::tokenize("<?php eval('if (false) { echo 9223372036854775808; }');").unwrap();
+        let program = crate::parser::parse_with_mode(&tokens, crate::source::SourceMode::Php).unwrap();
+        let error = crate::semantics::validate_source(&program, profile.semantics()).unwrap_err();
+        assert!(error.message.contains("strict-overflow"), "{}", error.message);
+    }
+
+    /// Lowering retains explicit profiles and the EIR boundary rejects incompatible metadata.
+    #[test]
+    fn strict_eval_profiles_survive_lowering_on_all_supported_targets() {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Bools, true);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            let tokens = crate::lexer::tokenize("<?php eval('echo true;');").unwrap();
+            let program = crate::parser::parse_with_mode(&tokens, crate::source::SourceMode::Php).unwrap();
+            let checked = crate::types::check_with_target_and_options(&program, target,
+                crate::types::CheckOptions { semantic_profile: profile, ..Default::default() },
+                &crate::generics::GenericContext::default()).unwrap();
+            let mut module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+            crate::ir::validate_module(&module).unwrap();
+            let inst = module.functions.iter_mut().flat_map(|function| &mut function.instructions)
+                .find(|inst| inst.op == crate::ir::Op::EvalLiteralCall).expect("source-sensitive eval");
+            let Some(crate::ir::Immediate::ProfiledData { profile: actual, .. }) = &mut inst.immediate else { panic!("missing profile"); };
+            assert_eq!(actual.semantics(), profile, "{name}");
+            *actual = EvalSourceProfile::permissive(false);
+            assert!(matches!(crate::ir::validate_module(&module), Err(crate::ir::ValidationError::SemanticProfileMismatch { .. })), "{name}");
+        }
     }
 }

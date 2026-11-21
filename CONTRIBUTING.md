@@ -777,7 +777,7 @@ Every contract also names the PHP module that owns the symbol (`module: PhpModul
 `scripts/docs/gen_php_comparison.py` cross-checks both against the vendored PHP baseline.
 
 Builtins that are elephc extensions with no PHP equivalent must declare
-`extension: true` on their shared `BuiltinContract` so `--strict-php` hides them from
+`extension: true` on their shared `BuiltinContract` so `--php-only` hides them from
 both AOT and eval.
 Injected compiler preludes must never call a PHP-visible extension builtin — use an
 `internal: true` `__elephc_*` alias instead (see `src/builtins/pointers/__elephc_ptr_read_string.rs`);

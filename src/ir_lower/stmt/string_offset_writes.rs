@@ -184,7 +184,9 @@ pub(super) fn lower_boxed_set(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue,
     key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
-    if ctx.builder.value_php_type(receiver.value).codegen_repr() != PhpType::Mixed {
+    if super::array_write_core::boxed_receiver_has_array_contract(ctx, receiver)
+        || ctx.builder.value_php_type(receiver.value).codegen_repr() != PhpType::Mixed
+    {
         ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value, value.value],
             key_already_diagnosed.then_some(Immediate::Bool(true)),
             Op::RuntimeCall.default_effects(), Some(span));
@@ -210,9 +212,11 @@ pub(super) fn lower_boxed_set(
     branch_to(ctx, merge);
     ctx.builder.position_at_end(array_block);
     ctx.restore_initialized_slots(initialized.clone());
-    ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value, value.value],
-        key_already_diagnosed.then_some(Immediate::Bool(true)),
-        Op::RuntimeCall.default_effects(), Some(span));
+    crate::ir_lower::expr::lower_array_access_set_or(ctx, receiver, key, value, span, |ctx| {
+        ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value, value.value],
+            key_already_diagnosed.then_some(Immediate::Bool(true)),
+            Op::RuntimeCall.default_effects(), Some(span));
+    });
     branch_to(ctx, merge);
     ctx.builder.position_at_end(merge);
     ctx.restore_initialized_slots(initialized);

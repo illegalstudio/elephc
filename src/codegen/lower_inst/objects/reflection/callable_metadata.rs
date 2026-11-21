@@ -20,7 +20,7 @@ pub(super) fn reflection_function_metadata(
     let function_name = const_required_string_operand(ctx, function_operand, "ReflectionFunction")?;
     let Some(function) = ctx.function_by_name(&function_name) else {
         if let Some((builtin_name, signature)) =
-            reflection_builtin_function_signature(&function_name)
+            reflection_builtin_function_signature(ctx, &function_name)
         {
             return reflection_builtin_function_metadata(ctx, &builtin_name, &signature);
         }
@@ -107,9 +107,9 @@ pub(super) fn reflection_builtin_function_metadata(
 }
 
 /// Returns the canonical callable-builtin name and signature for ReflectionFunction.
-pub(super) fn reflection_builtin_function_signature(function_name: &str) -> Option<(String, FunctionSig)> {
+pub(super) fn reflection_builtin_function_signature(ctx: &FunctionContext<'_>, function_name: &str) -> Option<(String, FunctionSig)> {
     let builtin_key = php_symbol_key(function_name.trim_start_matches('\\'));
-    crate::types::first_class_callable_builtin_sig(&builtin_key)
+    crate::types::first_class_callable_builtin_sig_with_semantics(&builtin_key, ctx.module.semantic_profile)
         .map(|signature| (builtin_key, signature))
 }
 
@@ -126,7 +126,7 @@ pub(super) fn reflection_function_or_method_is_internal(
         if ctx.function_by_name(name).is_some() {
             return false;
         }
-        return reflection_builtin_function_signature(name).is_some();
+        return reflection_builtin_function_signature(ctx, name).is_some();
     }
     metadata
         .parent_class_name

@@ -14,7 +14,7 @@ pub(super) fn lower_class_like_methods(
     statements: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     #[cfg(debug_assertions)]
@@ -33,7 +33,7 @@ fn lower_class_like_methods_inner(
     statements: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     for stmt in statements {
@@ -332,7 +332,7 @@ pub(super) fn lower_methods_for_class_like(
     methods: &[ClassMethod],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     for method in methods {

@@ -12,14 +12,14 @@ use super::*;
 /// Materializes a first-class callable value as a static descriptor pointer when possible.
 pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let target = callable_target_data(ctx, inst)?.to_string();
-    let strict_php = instruction_strict_php_profile(inst);
+    let php_only = instruction_php_only_profile(inst);
     if emit_static_late_bound_first_class_callable(ctx, &target)? {
         return store_callable_descriptor(ctx, inst);
     }
     if emit_instance_method_first_class_callable(ctx, inst, &target)? {
         return store_callable_descriptor(ctx, inst);
     }
-    if let Some(descriptor) = first_class_callable_descriptor(ctx, &target, strict_php)? {
+    if let Some(descriptor) = first_class_callable_descriptor(ctx, &target, php_only)? {
         let owns_string_return = descriptor.owns_string_return;
         let default_scope = if descriptor.kind == callable_descriptor::CALLABLE_DESC_KIND_STATIC_METHOD {
             descriptor.invocation.receiver_name.as_ref().and_then(|receiver| {
@@ -91,7 +91,7 @@ fn declared_callable_wrapper_helpers_present(ctx: &FunctionContext<'_>, key: &st
 pub(super) fn declared_callable_name_cases(
     ctx: &mut FunctionContext<'_>,
     candidate_names: Option<&[String]>,
-    strict_php: bool,
+    php_only: bool,
 ) -> Result<Vec<crate::codegen_support::callable_dispatch::RuntimeCallableCase>> {
     let names: Vec<String> = ctx.module.declared_callable_names.iter().cloned().collect();
     let mut cases = Vec::new();
@@ -104,7 +104,7 @@ pub(super) fn declared_callable_name_cases(
         {
             continue;
         }
-        let Some(descriptor) = first_class_callable_descriptor(ctx, &key, strict_php)? else {
+        let Some(descriptor) = first_class_callable_descriptor(ctx, &key, php_only)? else {
             continue;
         };
         let Some(entry_label) = descriptor.entry_label.clone() else {

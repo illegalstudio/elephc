@@ -784,6 +784,15 @@ fn decl_class_simplexmlelement() -> Stmt {
                 ]),
         )
         .method(
+            method("__elephc_numeric_source")
+                .final_()
+                .returns(TypeExpr::Str)
+                .body(vec![
+                    s_assign("handle", e_this_prop("__elephc_handle")),
+                    s_return(e_call("elephc_xml_sx_string", vec![e_var("handle"), e_int(0)])),
+                ]),
+        )
+        .method(
             method("__elephc_int")
                 .final_()
                 .returns(TypeExpr::Int)
@@ -1114,6 +1123,21 @@ fn decl_class_simplexmlelement() -> Stmt {
                 .returns(TypeExpr::Void)
                 .body(vec![
                     s_expr(e_method_call(e_this(), "__elephc_property_write", vec![e_var("name"), e_var("value"), e_str("")])),
+                ]),
+        )
+        .method(
+            method("__elephc_property_update_read")
+                .final_()
+                .param("name", TypeExpr::Str)
+                .returns(t_nullable(t_class("static")))
+                .body(vec![
+                    s_if(
+                        e_binop(e_var("name"), BinOp::StrictEq, e_str("")),
+                        vec![s_throw(e_new("ValueError", vec![e_str("Cannot create element with an empty name")]))],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_method_call(e_this(), "__elephc_property_get", vec![e_var("name")])),
                 ]),
         )
         .method(

@@ -128,3 +128,21 @@ echo array_sum(array_map(fn(int $x): int => $x + 1, $ints));
         assert!(asm.contains("__rt_array_map_sum_add"), "{name}");
     }
 }
+
+/// Fused predicates retire an owned local view when a later eval widens its frame slot.
+fn verify_array_element_predicate_eval_view_cleanup(target: &str) {
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
+    let source = "<?php $items = [2.0, 'kept']; echo is_float($items[0]); $code = $argc > 0 ? 'echo 1;' : ''; eval($code);";
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+    let call = main.instructions.iter().find(|inst| matches!(inst.immediate,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::ArrayElementTypeCheck))))).unwrap();
+    let receiver = call.operands[0];
+    assert!(main.instructions.iter().any(|inst| inst.op == Op::Release && inst.operands == [receiver]),
+        "{target}: fused predicates must retire their retained array view");
+    crate::ir::validate_module(&module).unwrap();
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+}
+
+supported_target_cases!(array_element_predicate_eval_view_cleanup, verify_array_element_predicate_eval_view_cleanup);

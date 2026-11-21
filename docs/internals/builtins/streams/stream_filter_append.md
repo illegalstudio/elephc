@@ -37,7 +37,7 @@ description: "Compiler internals for stream_filter_append(): lowering path, type
 ## Signature summary
 
 ```php
-function stream_filter_append(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed
+function stream_filter_append(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): resource|false
 ```
 
 ## What the type checker enforces

@@ -31,9 +31,13 @@ pub enum EvalOutcome {
     Throwable(RuntimeCellHandle),
 }
 
+pub(super) use crate::source_snapshot::SourceSnapshot as ArgumentSource;
+
 /// One already evaluated function-like call argument.
 #[derive(Clone)]
 pub(super) struct EvaluatedCallArg {
+    /// Logical producer alternatives captured before later argument effects.
+    pub(super) source_type: Option<ArgumentSource>,
     /// Exact source-evaluation lease, preserved through binding without copying its owner.
     pub(super) evaluation_owner: Option<ArgumentValueOwner>,
     pub(super) name: Option<String>,
@@ -44,6 +48,7 @@ pub(super) struct EvaluatedCallArg {
 /// One method argument after PHP parameter-order binding and default materialization.
 #[derive(Clone)]
 pub(super) struct BoundMethodArg {
+    pub(super) source_type: Option<ArgumentSource>,
     pub(super) value: RuntimeCellHandle,
     pub(super) ref_target: Option<EvalReferenceTarget>,
     pub(super) variadic_ref_targets: Vec<(RuntimeCellHandle, EvalReferenceTarget)>,

@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Direct and evaluated-argument dispatch stay in this leaf.
+//! - Both overloads share weak separator binding and the existing operand owner boundary.
 //! - Both overloads report PHP's catchable argument TypeErrors.
 
 eval_builtin! {
@@ -30,15 +31,17 @@ pub(in crate::interpreter) fn eval_builtin_implode(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let operands = match args {
-        [array] => vec![array],
-        [separator, array] => vec![separator, array],
+    match args {
+        [_] | [_, _] => {}
         _ => return Err(EvalStatus::RuntimeFatal),
-    };
-    with_eval_operands(&operands, context, scope, values, |args, context, _, values| {
+    }
+    let arguments = args.iter().cloned().map(EvalCallArg::positional).collect::<Vec<_>>();
+    with_eval_builtin_call_arguments("implode", &arguments, context, scope, values,
+        |arguments, context, _, values| {
+        let args = arguments.iter().map(|argument| argument.value).collect::<Vec<_>>();
         // Zend specializes a direct one-argument implode call as an array-only join. It
         // reports this overload error without attempting separator coercion.
-        if let [array] = args {
+        if let [array] = args.as_slice() {
             if !matches!(values.type_tag(*array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
                 return eval_throw_type_error(
                     &format!("implode(): {IMPLODE_NULL_TYPE_ERROR}"),
@@ -47,7 +50,7 @@ pub(in crate::interpreter) fn eval_builtin_implode(
                 );
             }
         }
-        eval_implode_named_result("implode", args, context, values)
+        eval_implode_named_result("implode", &args, context, values)
     })
 }
 
@@ -87,7 +90,8 @@ pub(in crate::interpreter) fn eval_implode_result(
     // PHP converts the separator before any element.
     let separator = match separator {
         Some(separator) => {
-            let rendered = eval_string_context_value(separator.borrowed(), context, values)?;
+            let string_type = EvalParameterType::new(vec![EvalParameterTypeVariant::String], false);
+            let rendered = eval_method_parameter_value(&string_type, separator.borrowed(), context, values)?;
             let mut bytes = Vec::new();
             with_eval_value_lease(rendered, context, values, |rendered, _, values| {
                 bytes = values.string_bytes(rendered)?;

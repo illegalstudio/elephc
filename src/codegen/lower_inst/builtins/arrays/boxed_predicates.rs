@@ -85,7 +85,7 @@ pub(super) fn acquire_callback_descriptor(
         PhpType::Str => {
             callables::emit_runtime_string_descriptor_value_with_type_error(
                 ctx, callback, result, name,
-                super::super::instruction_strict_php_profile(inst), callback_error,
+                super::super::instruction_php_only_profile(inst), callback_error,
             )?;
             callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
         }

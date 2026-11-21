@@ -1636,6 +1636,7 @@ pub(super) fn integer_op(op: MixedNumericOp) -> Op {
         MixedNumericOp::Sub => Op::ISub,
         MixedNumericOp::Mul => Op::IMul,
         MixedNumericOp::Pow => Op::IPow,
+        MixedNumericOp::Div | MixedNumericOp::Mod => unreachable!("raw promotable loops exclude division and remainder"),
     }
 }
 
@@ -1646,5 +1647,6 @@ fn float_op(op: MixedNumericOp) -> Op {
         MixedNumericOp::Sub => Op::FSub,
         MixedNumericOp::Mul => Op::FMul,
         MixedNumericOp::Pow => Op::FPow,
+        MixedNumericOp::Div | MixedNumericOp::Mod => unreachable!("raw promotable loops exclude division and remainder"),
     }
 }

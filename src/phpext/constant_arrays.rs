@@ -58,6 +58,7 @@ fn pairs(array: &Expr, depth: usize) -> Option<Vec<Pair>> {
     }
     let ExprKind::ArrayLiteralAssoc(values) = crate::types::fold_spreadless_mixed_array_literal(
         &ExprKind::ArrayLiteralMixed(flat), crate::codegen_support::compile_php_version(),
+        elephc_semantics::SemanticProfile::PERMISSIVE,
     )? else { return None; };
     let mut unique: Vec<Pair> = Vec::new();
     for (expression, value) in values {

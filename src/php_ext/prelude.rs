@@ -157,7 +157,7 @@ const COMPACT_WRAPPERS_HELPER: &str = "__elephc_php_ext_compact_wrappers";
 /// The wrapper method returning (creating on first use) its engine object.
 const OBJECT_METHOD: &str = "__elephcObject";
 /// The internal aliases of `zval_pack`, `zval_free` and `zval_unpack`: a prelude never calls a
-/// PHP-visible extension builtin, which `--strict-php` hides.
+/// PHP-visible extension builtin, which `--php-only` hides.
 const ZVAL_PACK: &str = "__elephc_zval_pack";
 const ZVAL_FREE: &str = "__elephc_zval_free";
 const ZVAL_UNPACK: &str = "__elephc_zval_unpack";

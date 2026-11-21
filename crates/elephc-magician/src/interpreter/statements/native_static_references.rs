@@ -30,3 +30,17 @@ pub(in crate::interpreter) fn eval_native_static_property_reference_after_read(
     }
     eval_with_native_bridge_scope(&owner, context, values, |values| values.static_property_reference(&owner, property, &owner))
 }
+
+/// Publishes an authorized native reference source without leaving an interpreter-only alias overlay.
+pub(super) fn eval_native_static_property_reference_bind(
+    owner: &str, property: &str, source: &str, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if !context.semantic_profile().checked_property_references() { return Ok(false); }
+    let Some(reference) = eval_persistent_variable_reference(source, context, scope, values)?
+    else { return Ok(false); };
+    let bound = eval_with_native_bridge_scope(owner, context, values,
+        |values| values.static_property_reference_bind(owner, property, reference))?;
+    if bound { context.clear_static_property_alias(owner, property); }
+    Ok(bound)
+}

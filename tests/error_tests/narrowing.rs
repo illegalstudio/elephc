@@ -292,16 +292,16 @@ fn test_the_guard_stops_governing_after_the_region_stores() {
 /// `NarrowedLocalOrigin::stored_in_region` travels outward at `exit_flow_narrowing` and the two
 /// spellings agree again.
 ///
-/// Written with `$a = 1.5` rather than `$a = "x"` on purpose: `"x"` does not fit the `int`
-/// binding either, so it is rejected at the inner store and never reaches the shape under test.
+/// Written with `$a = 1.5` rather than `$a = "x"` so permissive flow still reaches the later
+/// union mismatch. Strict locals rejects the first store against the original integer contract.
 #[test]
 fn a_store_in_a_nested_guard_ends_the_enclosing_guards_authority() {
     let source =
         "<?php $a = 1; if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; } echo $a;";
-    // The nested branch can leave either its float store or the enclosing string view.
-    // Neither alternative permits the later integer store, in either locals mode.
+    // Permissive flow reaches the later union mismatch, while strict binding contracts stop at
+    // the first incompatible store independently of the nested guard view.
     expect_error(source, "cannot reassign $a from string|float to int");
-    expect_error_strict(source, "cannot reassign $a from string|float to int");
+    expect_error_strict(source, "cannot reassign $a from int to float");
 }
 
 /// Shared classes for the readonly-narrowing fixtures: `Box::$plugin` is readonly, and only

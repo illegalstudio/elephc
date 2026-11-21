@@ -135,7 +135,7 @@ pub(crate) fn lower_elephc_callable_ptr(
                 value,
                 &result_reg,
                 "__elephc_callable_ptr",
-                crate::strict_php::is_enabled(),
+                crate::php_only::is_enabled(),
             )?;
         }
         PhpType::Array(element)
@@ -238,7 +238,7 @@ pub(crate) fn lower_elephc_normalize_callable(
                 value,
                 &result_reg,
                 "__elephc_normalize_callable",
-                crate::strict_php::is_enabled(),
+                crate::php_only::is_enabled(),
             )?;
         }
         PhpType::Array(element)

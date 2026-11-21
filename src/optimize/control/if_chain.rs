@@ -34,7 +34,7 @@ pub(crate) fn prune_if_chain(
     else_body: Option<Vec<Stmt>>,
 ) -> Vec<Stmt> {
     let condition = prune_expr(condition);
-    match scalar_value(&condition) {
+    match condition_scalar_value(&condition) {
         Some(value) if value.truthy() => prune_block(then_body),
         Some(_) => prune_else_if_chain(elseif_clauses, else_body),
         None => {
@@ -121,7 +121,7 @@ pub(crate) fn prune_else_if_chain(
     let mut clauses = elseif_clauses.into_iter();
     while let Some((condition, body)) = clauses.next() {
         let condition = prune_expr(condition);
-        match scalar_value(&condition) {
+        match condition_scalar_value(&condition) {
             Some(value) if value.truthy() => return prune_block(body),
             Some(_) => continue,
             None => {
@@ -158,7 +158,7 @@ pub(crate) fn prune_remaining_elseif_chain(
     let mut kept = Vec::new();
     for (condition, body) in elseif_clauses {
         let condition = prune_expr(condition);
-        match scalar_value(&condition) {
+        match condition_scalar_value(&condition) {
             Some(value) if value.truthy() => return (kept, Some(prune_block(body))),
             Some(_) => {}
             None => kept.push((condition, prune_block(body))),

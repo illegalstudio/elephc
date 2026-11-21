@@ -41,7 +41,7 @@ enum Id {
 echo Id::A->first(7, 8) + 1, "|", strtoupper(Id::A->first("seven", "eight")), "|",
     Id::emptyValue(), "|", Id::A->copy(9), "|", Id::A->name;
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "8|SEVEN|empty|9|A");
     }
 }
@@ -65,7 +65,7 @@ namespace App {
     echo Id::A->id(new Base(7));
 }
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "7");
     }
 }
@@ -86,7 +86,7 @@ enum Id {
 }
 Id::A->id("seven");
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         let warnings = compile_cli_file_with_flags_capturing_stderr(source, flags);
         assert!(warnings.contains("does not satisfy its bound int"), "{warnings}");
     }
@@ -107,7 +107,7 @@ enum Id {
 }
 Id::A->values(7);
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         let error = compile_cli_file_with_flags_expect_failure(source, flags);
         assert!(error.contains("array<int>") && error.contains("array<string>"), "{error}");
     }

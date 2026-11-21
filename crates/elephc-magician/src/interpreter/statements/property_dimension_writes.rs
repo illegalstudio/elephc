@@ -11,6 +11,7 @@
 //! - Eval-owned static arrays detach their boxed cell before runtime payload COW writes.
 
 use super::*;
+use super::array_parent_publication::{ArrayParentPlace, PreparedArrayParent, prepare_empty_array_parent};
 use super::property_write_receivers::{PreparedPropertyName, prepare_index, finish_name};
 
 /// Supplies a literal property or a computed member name at its original source position.
@@ -37,7 +38,7 @@ pub(super) fn eval_property_dimension_write(
         };
         let late_index = index.filter(|index| matches!(index, EvalExpr::LoadVar(_)));
         let staged_index = if late_index.is_some() { None } else { index };
-        let (key, assigned) = stage_operands(staged_index, value, &mut operands, context, scope, values)?;
+        let (key, assigned, producer, key_source) = stage_operands_with_source(staged_index, value, &mut operands, context, scope, values)?;
         let early = if matches!(object, EvalExpr::LoadVar(_)) { None } else {
             let object = finish_dimension_receiver(receiver.take().ok_or(EvalStatus::RuntimeFatal)?,
                 &mut operands, &mut receiver_roots, context, scope, values)?;
@@ -52,7 +53,7 @@ pub(super) fn eval_property_dimension_write(
                 &mut operands, &mut receiver_roots, context, scope, values)?;
             object
         };
-        write_selected(object, &property, key, late_index, op, assigned, &mut operands,
+        write_selected(object, &property, key, late_index, op, assigned, producer.as_ref(), key_source, &mut operands,
             &receiver_roots, context, scope, values)
     })();
     for operand in operands.into_iter().rev() {
@@ -69,36 +70,41 @@ fn finish_dimension_receiver(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let start = operands.len();
-    let object = finish_property_write_receiver(plan, operands, context, scope, values)?;
+    let (object, source) = super::property_write_receivers::finish_sourced_write_receiver(plan, operands, context, scope, values)?;
     operands.push(object);
+    write_source_domains::object(source.as_ref(), context, values)?;
     roots.extend(start..operands.len());
     Ok(object)
 }
 
-/// Evaluates a computed key before the RHS and a variable key after it, each exactly once.
-pub(super) fn stage_operands(
+/// Preserves the original RHS producer alongside the shared early/late index and owner protocol.
+pub(super) fn stage_operands_with_source(
     index: Option<&EvalExpr>, value: &EvalExpr, operands: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-) -> Result<(Option<RuntimeCellHandle>, RuntimeCellHandle), EvalStatus> {
+) -> Result<(Option<RuntimeCellHandle>, RuntimeCellHandle, Option<ArgumentSource>, Option<ArgumentSource>), EvalStatus> {
     let late_key = matches!(index, Some(EvalExpr::LoadVar(_)));
-    let early = if late_key { None } else {
-        index.map(|key| eval_owned_expr(key, context, scope, values)).transpose()?
+    let (early, mut key_source) = if late_key { (None, None) } else {
+        match index {
+            Some(key) => { let (value, source) = evaluate_member_value(key, context, scope, values)?; (Some(value), source) }
+            None => (None, None),
+        }
     };
     if let Some(key) = early { operands.push(key); }
-    let assigned = eval_owned_expr(value, context, scope, values)?;
+    let (assigned, source) = evaluate_member_value(value, context, scope, values)?;
     operands.push(assigned);
     let key = if late_key {
-        let key = eval_owned_expr(index.ok_or(EvalStatus::RuntimeFatal)?, context, scope, values)?;
+        let (key, source) = evaluate_member_value(index.ok_or(EvalStatus::RuntimeFatal)?, context, scope, values)?;
+        key_source = source;
         operands.push(key);
         Some(key)
     } else { early };
-    Ok((key, assigned))
+    Ok((key, assigned, source, key_source))
 }
 
 /// Selects a native writable child or ordinary property only after key and RHS evaluation.
 fn write_selected(
     object: RuntimeCellHandle, property: &str, index: Option<RuntimeCellHandle>, late_index: Option<&EvalExpr>,
-    op: Option<EvalBinOp>, assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
+    op: Option<EvalBinOp>, assigned: RuntimeCellHandle, producer: Option<&ArgumentSource>, mut key_source: Option<ArgumentSource>, operands: &mut Vec<RuntimeCellHandle>,
     receiver_roots: &[usize], context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -110,7 +116,7 @@ fn write_selected(
         let current = if current.is_borrowed() { values.retain(current)? } else { current };
         operands.push(current);
         retire_native_parent(operands, receiver_roots, context, values)?;
-        let index = finish_dimension_index(index, late_index, operands, context, scope, values)?;
+        let index = finish_dimension_index(index, late_index, &mut key_source, operands, context, scope, values)?;
         return match write_value(current, index, op, assigned, operands, context, values)? {
             None => Ok(()), Some(_) => Err(EvalStatus::RuntimeFatal),
         };
@@ -122,7 +128,7 @@ fn write_selected(
     // Only a native child needs its key after parent retirement. Other storage retains its
     // previous key-before-getter order, without running ordinary accessors twice.
     let index = if probed.is_none() {
-        finish_dimension_index(index, late_index, operands, context, scope, values)?
+        finish_dimension_index(index, late_index, &mut key_source, operands, context, scope, values)?
     } else { index };
     let late_index = if probed.is_none() { None } else { late_index };
     let selected = if probed.is_none() && index.is_none() && late_index.is_none() && op.is_none() {
@@ -142,7 +148,7 @@ fn write_selected(
     } else { false };
     if stored && super::super::runtime_ops::simplexml_properties::is_native(values, current, "")? {
         retire_native_parent(operands, receiver_roots, context, values)?;
-        let index = finish_dimension_index(index, late_index, operands, context, scope, values)?;
+        let index = finish_dimension_index(index, late_index, &mut key_source, operands, context, scope, values)?;
         return match write_value(current, index, op, assigned, operands, context, values)? {
             None => Ok(()), Some(_) => Err(EvalStatus::RuntimeFatal),
         };
@@ -151,21 +157,43 @@ fn write_selected(
         && property_dimension_guards::array_uses_writable_storage(object, property, context, values)?
         && values.final_object_identity_for_release(object)?.is_some() {
         retire_native_parent(operands, receiver_roots, context, values)?;
-        let index = finish_dimension_index(index, late_index, operands, context, scope, values)?;
+        let index = finish_dimension_index(index, late_index, &mut key_source, operands, context, scope, values)?;
         // The parent expired before mutation. Its selected array remains an independent
         // value, so publishing the updated copy back would access destroyed object storage.
         write_value(current, index, op, assigned, operands, context, values)?;
         return Ok(());
     }
-    let index = finish_dimension_index(index, late_index, operands, context, scope, values)?;
-    if let Some(array) = write_value(current, index, op, assigned, operands, context, values)? {
-        if dynamic {
-            super::property_append_fetch::write(object, property, array, context, values)?;
-        } else {
-            eval_property_set_result(object, property, array, context, values)?;
+    let index = finish_dimension_index(index, late_index, &mut key_source, operands, context, scope, values)?;
+    if matches!(values.type_tag(current)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_STRING) {
+        if let Some(index) = index {
+            let source = write_source_domains::source_type(key_source.as_ref(), index, context, values)?;
+            nullsafe_chains::validate_offset_key_source(None, source.as_ref(), context, values)?;
         }
     }
-    Ok(())
+    let data_source = array_mutation_source(index, op, assigned, producer, context, values)?;
+    let prepared = if !dynamic
+        && property_dimension_guards::has_ordinary_backing_slot(object, property, context, values)?
+    {
+        prepare_empty_array_parent(
+            ArrayParentPlace::Instance(object, property),
+            current, index, op.is_some(), operands, context, scope, values)?
+    } else { PreparedArrayParent::Snapshot(current) };
+    let storage = if matches!(prepared, PreparedArrayParent::Captured(_)) {
+        ArrayWriteStorage::Captured
+    } else { ArrayWriteStorage::Snapshot };
+    prepared.finish_write(index, context, values, |context, values| {
+        let contracts = property_dimension_guards::array_contracts(object, property, context, values)?;
+        if op.is_none() { write_source_domains::elements(&contracts, prepared.value(), producer, assigned, context, values)?; }
+        if let Some(array) = write_value_in_storage(prepared.value(), index, op, assigned, storage, &contracts, operands, context, values)? {
+            if matches!(prepared, PreparedArrayParent::Detached(_)) { return Ok(()); }
+            if dynamic {
+                super::property_append_fetch::write(object, property, array, context, values)?;
+            } else {
+                eval_array_property_set_result(object, property, array, data_source.as_ref(), context, values)?;
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Drops duplicate leases of the final receiver without destroying it or shifting capture indices.
@@ -186,11 +214,12 @@ fn retire_duplicate_receiver_captures(
 
 /// Reads a bare variable dimension after selection and native parent retirement.
 fn finish_dimension_index(
-    staged: Option<RuntimeCellHandle>, late: Option<&EvalExpr>, operands: &mut Vec<RuntimeCellHandle>,
+    staged: Option<RuntimeCellHandle>, late: Option<&EvalExpr>, source: &mut Option<ArgumentSource>, operands: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let Some(late) = late else { return Ok(staged); };
-    let key = eval_owned_expr(late, context, scope, values)?;
+    let (key, observed) = evaluate_member_value(late, context, scope, values)?;
+    *source = observed;
     operands.push(key);
     Ok(Some(key))
 }
@@ -215,7 +244,7 @@ pub(super) fn write_value(
     assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    write_value_in_storage(current, index, op, assigned, ArrayWriteStorage::Snapshot,
+    write_value_in_storage(current, index, op, assigned, ArrayWriteStorage::Snapshot, &[],
         operands, context, values)
 }
 
@@ -225,7 +254,17 @@ pub(super) fn write_attached_value(
     assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    write_value_in_storage(current, index, op, assigned, ArrayWriteStorage::Attached,
+    write_value_in_storage(current, index, op, assigned, ArrayWriteStorage::Attached, &[],
+        operands, context, values)
+}
+
+/// Mutates a freshly published ordinary child in place without using SPL storage hooks.
+pub(super) fn write_captured_value(
+    current: RuntimeCellHandle, index: Option<RuntimeCellHandle>, op: Option<EvalBinOp>,
+    assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    write_value_in_storage(current, index, op, assigned, ArrayWriteStorage::Captured, &[],
         operands, context, values)
 }
 
@@ -235,12 +274,13 @@ enum ArrayWriteStorage {
     Snapshot,
     Published,
     Attached,
+    Captured,
 }
 
 /// Shares dimension semantics while preserving published or attached runtime storage identity.
 fn write_value_in_storage(
     current: RuntimeCellHandle, index: Option<RuntimeCellHandle>, op: Option<EvalBinOp>,
-    assigned: RuntimeCellHandle, storage: ArrayWriteStorage, operands: &mut Vec<RuntimeCellHandle>,
+    assigned: RuntimeCellHandle, storage: ArrayWriteStorage, declared: &[EvalParameterType], operands: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let append = index.is_none();
@@ -268,6 +308,7 @@ fn write_value_in_storage(
         return Ok(None);
     }
     let attached = matches!(storage, ArrayWriteStorage::Attached);
+    let captured = matches!(storage, ArrayWriteStorage::Captured);
     if values.type_tag(current)? == EVAL_TAG_STRING {
         if let Some(index) = index {
             if op.is_some() {
@@ -282,6 +323,7 @@ fn write_value_in_storage(
             return Ok(Some(replacement));
         }
     }
+    checked_array_keys::before_selected_parent_materialization(current, index, context, values)?;
     if attached {
         match values.type_tag(current)? {
             EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_NULL => {}
@@ -296,7 +338,7 @@ fn write_value_in_storage(
     }
     let index = match index {
         Some(index) if values.type_tag(index)? == EVAL_TAG_STRING => {
-            if let Some(key) = eval_numeric_string_array_key(&values.string_bytes(index)?) {
+            if let Some(key) = eval_numeric_string_array_key(&values.string_bytes(index)?, context.semantic_profile()) {
                 let key = values.int(key)?; operands.push(key); key
             } else { index }
         }
@@ -309,11 +351,15 @@ fn write_value_in_storage(
             operands.push(key); key
         },
     };
-    let reuse = attached
+    let reuse = attached || captured
         || matches!(storage, ArrayWriteStorage::Published) && values.is_array_like(current)?;
     let array = if reuse { current }
         else if values.is_array_like(current)? { values.array_clone_shallow(current)? }
-        else { eval_array_autovivification(Some(current), append, context, values)? };
+        else {
+            let was_false = values.type_tag(current)? == EVAL_TAG_BOOL && !values.truthy(current)?;
+            eval_false_array_parent_diagnostic(was_false, context, values)?;
+            eval_array_autovivification(Some(current), append, context, values)?
+        };
     if !reuse {
         operands.push(array);
         if values.type_tag(current)? == EVAL_TAG_ASSOC {
@@ -321,9 +367,9 @@ fn write_value_in_storage(
         }
         context.clone_array_element_aliases(current, array, None);
     }
-    let promoted = if attached {
+    let promoted = if attached || captured {
         // The runtime setter promotes the payload through this installed Mixed cell. Building
-        // an independent associative box here would detach the write from its SPL parent.
+        // an independent associative box here would detach the write from its captured parent.
         array
     } else {
         eval_array_set_target_for_index(array, index, values)?
@@ -334,7 +380,11 @@ fn write_value_in_storage(
         context.clone_array_element_aliases(array, promoted, None);
     }
     let array = promoted;
+    checked_array_keys::for_receiver(array, index, context, values)?;
     let value = compound_value(array, index, op, assigned, operands, context, values)?;
+    for declared in declared {
+        validate_generic_local_element(Some(declared), array, index, value, context, values)?;
+    }
     for declared in context.local_reference_types(current) {
         validate_generic_local_element(Some(&declared), array, index, value, context, values)?;
     }
@@ -344,7 +394,7 @@ fn write_value_in_storage(
     } else {
         values.array_set(array, index, value)?;
     }
-    Ok((!attached).then_some(array))
+    Ok((!attached && !captured).then_some(array))
 }
 
 /// Delays direct static-property append until the RHS has selected the live static slot.
@@ -370,25 +420,44 @@ fn static_write(
 ) -> Result<(), EvalStatus> {
     let mut operands = Vec::new();
     let mut result = (|| {
-        let (key, assigned) = stage_operands(index, value, &mut operands, context, scope, values)?;
+        let (key, assigned, producer, key_source) = stage_operands_with_source(index, value, &mut operands, context, scope, values)?;
+        let data_source = array_mutation_source(key, op, assigned, producer.as_ref(), context, values)?;
         let current = eval_static_property_get_result(class_name, property, context, values)?;
         let current = if current.is_borrowed() { values.retain(current)? } else { current };
         operands.push(current);
-        let (current, storage) = match detach_live_static_array(
-            class_name, property, current, &mut operands, context, values,
-        )? {
-            Some(current) => {
-                operands.push(current);
-                (current, ArrayWriteStorage::Published)
+        let prepared = prepare_empty_array_parent(
+            ArrayParentPlace::Static(class_name, property),
+            current, key, op.is_some(), &mut operands, context, scope, values)?;
+        prepared.finish_write(key, context, values, |context, values| {
+            let current = prepared.value();
+            let (current, storage) = if matches!(prepared, PreparedArrayParent::Captured(_)) {
+                (current, ArrayWriteStorage::Captured)
+            } else { match detach_live_static_array(
+                class_name, property, current, &mut operands, context, values,
+            )? {
+                Some(current) => {
+                    operands.push(current);
+                    (current, ArrayWriteStorage::Published)
+                }
+                None => (current, ArrayWriteStorage::Snapshot),
+            } };
+            let contracts = eval_static_property_array_contracts(class_name, property, context, values)?;
+            if matches!(values.type_tag(current)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_STRING) {
+                if let Some(key) = key {
+                    let source = write_source_domains::source_type(key_source.as_ref(), key, context, values)?;
+                    nullsafe_chains::validate_offset_key_source(None, source.as_ref(), context, values)?;
+                }
             }
-            None => (current, ArrayWriteStorage::Snapshot),
-        };
-        if let Some(array) = write_value_in_storage(
-            current, key, op, assigned, storage, &mut operands, context, values,
-        )? {
-            eval_static_property_set_result(class_name, property, array, context, values)?;
-        }
-        Ok(())
+            if op.is_none() { write_source_domains::elements(&contracts, current, producer.as_ref(), assigned, context, values)?; }
+            if let Some(array) = write_value_in_storage(
+                current, key, op, assigned, storage, &contracts, &mut operands, context, values,
+            )? {
+                if !matches!(prepared, PreparedArrayParent::Detached(_)) {
+                    eval_array_static_property_set_result(class_name, property, array, data_source.as_ref(), context, values)?;
+                }
+            }
+            Ok(())
+        })
     })();
     for operand in operands.into_iter().rev() {
         let released = eval_release_value(context, values, operand);

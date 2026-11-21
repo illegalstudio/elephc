@@ -21,7 +21,7 @@ description: "Compiler internals for implode(): lowering path, type checks, and 
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `signature`
+- **Validation**: `mixed_inputs`
 - **Result type source**: `declared`
 - **Result ownership**: `fresh`
 - **Effects**: `shared`

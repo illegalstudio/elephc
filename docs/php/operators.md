@@ -15,7 +15,14 @@ sidebar:
 | `/` | `$a / $b` | Division (always returns float). A zero divisor raises a catchable `DivisionByZeroError` ("Division by zero"). |
 | `%` | `$a % $b` | Modulo. A zero divisor raises a catchable `DivisionByZeroError` ("Modulo by zero"); `PHP_INT_MIN % -1` is `0`. |
 | `**` | `$a ** $b` | Exponentiation (right-associative). Int-preserving like PHP: two `int` operands with a non-negative exponent give an `int` while the result fits (`2 ** 3` is `int(8)`), and promote to `double` at the multiplication that overflows (`2 ** 63`). A negative exponent or a `float` operand always gives a `float`. |
-| `-$x` | `-$x` | Unary negation |
+| `+$x` | `+$x` | Numeric unary plus. Preserves the kind and sign of an existing `int` or `float`. |
+| `-$x` | `-$x` | Unary negation. Floating negation preserves signed zero and NaN payloads. |
+
+Unary plus accepts numeric strings using the numeric conversion rules below. Its
+floating result preserves negative zero: `fdiv(1.0, +(-0.0))` is negative infinity.
+Both numeric unary operators can appear as ordinary expression statements, for
+example `+$value;`, so their warnings and exceptions remain observable when the
+result is discarded.
 
 ### Internal decimal objects
 

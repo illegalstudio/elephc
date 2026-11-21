@@ -19,7 +19,7 @@ pub(in crate::ir_lower) fn call_return_type(
         eir_user_function_return_type(sig)
     } else if let Some(sig) = ctx.extern_functions.get(name) {
         sig.return_type.clone()
-    } else if let Some(sig) = builtin_call_signature(name) {
+    } else if let Some(sig) = builtin_call_signature(ctx, name) {
         sig.return_type
     } else {
         PhpType::Mixed

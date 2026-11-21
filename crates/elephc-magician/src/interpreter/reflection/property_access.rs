@@ -49,6 +49,11 @@ pub(super) fn eval_reflection_instance_property_get_value(
         );
     }
     let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization)
+        && !context.dynamic_property_is_initialized(values.object_identity(object)?, &storage_property_name)
+    {
+        return initialization::missing_property(property_name, context, values);
+    }
     values.property_get(object, &storage_property_name)
 }
 
@@ -92,7 +97,7 @@ pub(super) fn eval_reflection_instance_property_set_value(
                 &object_class_name,
                 &hook_method,
                 object,
-                vec![EvaluatedCallArg {
+                vec![EvaluatedCallArg { source_type: None,
                     evaluation_owner: None,
                     name: None,
                     value,
@@ -107,7 +112,7 @@ pub(super) fn eval_reflection_instance_property_set_value(
     } else if property.has_get_hook() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    eval_reject_null_object_property(declaring_class, &property, value, context, values)?;
+    eval_validate_property_value(declaring_class, &property, value, context, values)?;
     let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
     values.property_set(object, &storage_property_name, value)?;
     let identity = values.object_identity(object)?;
@@ -176,7 +181,7 @@ pub(super) fn eval_reflection_aot_instance_property_set_raw_value(
     eval_reflection_aot_instance_property_validate_object(declaring_class, object, context, values)?;
     if let Some(ty) = context.native_property_type(declaring_class, property_name) {
         let metadata = EvalClassProperty::new(property_name, None).with_type(Some(ty));
-        eval_reject_null_object_property(declaring_class, &metadata, value, context, values)?;
+        eval_validate_property_value(declaring_class, &metadata, value, context, values)?;
     }
     eval_reflection_with_declaring_class_scope(declaring_class, context, |_| {
         values.property_set(object, property_name, value)
@@ -298,7 +303,7 @@ pub(super) fn eval_reflection_instance_property_set_raw_value(
         return Err(EvalStatus::RuntimeFatal);
     }
     validate_eval_reflection_property_write(declaring_class, &property, context)?;
-    eval_reject_null_object_property(declaring_class, &property, value, context, values)?;
+    eval_validate_property_value(declaring_class, &property, value, context, values)?;
     let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
     values.property_set(object, &storage_property_name, value)?;
     let identity = values.object_identity(object)?;
@@ -315,6 +320,11 @@ pub(super) fn eval_reflection_dynamic_property_get_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_reflection_dynamic_property_validate_object(declaring_class, object, context, values)?;
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization)
+        && !values.property_is_initialized(object, property_name)?
+    {
+        return initialization::missing_property(property_name, context, values);
+    }
     values.property_get(object, property_name)
 }
 

@@ -105,8 +105,8 @@ echo implode(",", array_keys($stringKeys)), implode(",", array_keys($snapshot));
     }
 }
 
-/// A conditional write through a declared array reference republishes a detached Mixed cell for
-/// both packed and keyed payloads.
+/// A conditional write through a declared array reference pins the stable published Mixed cell
+/// before mutating either packed or keyed payloads.
 #[test]
 fn conditional_php_array_reference_writes_keep_the_attached_cell() {
     use crate::ir::Op;
@@ -128,8 +128,13 @@ checkConditionalArray($argc > 0);
         let callee = module.functions.iter()
             .find(|function| function.name.eq_ignore_ascii_case("conditionallyWriteArray"))
             .unwrap();
-        let clone = callee.instructions.iter().position(|inst| inst.op == Op::MixedClone)
-            .unwrap_or_else(|| panic!("{name}: the shared caller value must detach before mutation"));
+        let pinned = callee.instructions.windows(2).position(|pair| {
+            pair[0].op == Op::LoadRefCell
+                && pair[1].op == Op::Acquire
+                && pair[1].immediate == Some(crate::ir::Immediate::Bool(true))
+                && pair[0].result.is_some_and(|result| pair[1].operands == [result])
+        })
+            .unwrap_or_else(|| panic!("{name}: the published caller cell must be pinned before mutation"));
         // The parameter's entry type guard (php's RECV check) formats its TypeError through
         // get_class() / gettype() on its failure path; those calls are not the write.
         let setter = callee.instructions.iter().position(|inst| {
@@ -143,8 +148,12 @@ checkConditionalArray($argc > 0);
         })
             .unwrap_or_else(|| panic!("{name}: missing boxed array setter"));
         assert!(
-            clone < setter,
-            "{name}: the detached cell must be published before the conditional write",
+            pinned < setter,
+            "{name}: the published cell must be pinned before the conditional write",
+        );
+        assert!(
+            !callee.instructions.iter().any(|inst| inst.op == Op::StoreRefCell),
+            "{name}: the stable published cell must be mutated in place",
         );
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));

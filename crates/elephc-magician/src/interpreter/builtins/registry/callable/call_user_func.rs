@@ -16,7 +16,7 @@ pub(in crate::interpreter) fn eval_call_user_func_with_call_args_from_scope(
     lexical_scope: Option<&ElephcEvalScope>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
+) -> Result<(RuntimeCellHandle, Option<elephc_generics::Type>), EvalStatus> {
     let mut callback = None;
     let mut callback_args = Vec::new();
     for argument in arguments {
@@ -40,7 +40,8 @@ pub(in crate::interpreter) fn eval_call_user_func_with_call_args_from_scope(
     let callback_is_object = values.type_tag(callback)? == EVAL_TAG_OBJECT;
     let callback =
         eval_call_user_func_callback(callback, "call_user_func", lexical_scope, context, values)?;
-    callback.with_values(context, values, |callback, context, values| {
+    callback.with_source_result(context, values, |callback, context, values| {
+        let source = crate::interpreter::mixed_callable_sources::resolved(callback, context, values)?;
         if let EvaluatedCallable::Named { name, .. } = &callback {
             if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
                 if forbidden != "get_defined_vars" || callback_is_object {
@@ -55,10 +56,10 @@ pub(in crate::interpreter) fn eval_call_user_func_with_call_args_from_scope(
                         );
                     }
                     let positional = callback_args.iter().map(|arg| arg.value).collect::<Vec<_>>();
-                    return eval_get_defined_vars_from_scope(&positional, lexical_scope, values);
+                    return eval_get_defined_vars_from_scope(&positional, lexical_scope, values).map(|value| (value, source));
                 }
             }
         }
-        eval_evaluated_callable_with_by_value_call_args(&callback, callback_args, context, values)
+        crate::interpreter::mixed_callable_sources::invoke(callback, callback_args, true, source, context, values)
     })
 }

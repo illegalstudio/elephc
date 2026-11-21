@@ -383,23 +383,31 @@ function read_unpromoted_ref_string(int $flag): void {
             .find(|function| function.name == "read_unpromoted_ref_string")
             .expect("fixture function");
         let load = function.instructions.iter().find(|instruction| {
+            instruction.op == Op::LoadLocal
+                && instruction.result.is_some_and(|result| {
+                    function.value(result).is_some_and(|value| {
+                        value.php_type.codegen_repr() == PhpType::Str
+                    })
+                })
+        }).expect("surviving branch reads the unpromoted string local");
+        assert_eq!(
+            function.value(load.result.unwrap()).unwrap().ownership,
+            Ownership::Borrowed,
+            "{name}: the storage-backed string view stays borrowed",
+        );
+        assert!(!function.instructions.iter().any(|instruction| {
             instruction.op == Op::LoadRefCell
                 && instruction.result.is_some_and(|result| {
                     function.value(result).is_some_and(|value| {
                         value.php_type.codegen_repr() == PhpType::Str
                     })
                 })
-        }).expect("surviving branch reads the conditionally promoted string local");
-        assert_eq!(
-            function.value(load.result.unwrap()).unwrap().ownership,
-            Ownership::Borrowed,
-            "{name}: the storage-backed string view stays borrowed",
-        );
+        }), "{name}: an unexecuted promotion must not change the surviving string read");
 
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let body = assembly.split_once("@fn name=read_unpromoted_ref_string ").unwrap().1
             .split_once("@endfn name=read_unpromoted_ref_string").unwrap().0;
-        let read = body.split_once("op=load_ref_cell").unwrap().1
+        let read = body.rsplit_once("op=load_local").unwrap().1
             .split_once("op=echo_value").unwrap().0;
         assert!(read.contains("__rt_mixed_unbox"), "{name}: {read}");
         assert!(!read.contains("__rt_mixed_cast_string"), "{name}: {read}");
@@ -427,16 +435,21 @@ function read_unpromoted_ref_object(int $flag): void {
         );
         let function = module.functions.iter()
             .find(|function| function.name == "read_unpromoted_ref_object").unwrap();
-        let load = function.instructions.iter().find(|inst| inst.op == Op::LoadRefCell
+        let load = function.instructions.iter().find(|inst| inst.op == Op::LoadLocal
             && inst.result_php_type == PhpType::Object("ReferenceViewObject".into()))
-            .expect("flow-proven object read from conditionally promoted storage");
-        let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("local cell read"); };
+            .expect("flow-proven object read from the unpromoted storage branch");
+        let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("local storage read"); };
         assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), PhpType::Mixed);
         assert_eq!(function.value(load.result.unwrap()).unwrap().ownership, Ownership::Borrowed);
+        assert!(!function.instructions.iter().any(|instruction| {
+            instruction.op == Op::LoadRefCell
+                && instruction.result_php_type
+                    == PhpType::Object("ReferenceViewObject".into())
+        }), "{name}: an unexecuted promotion must not change the surviving object read");
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let body = assembly.split_once("@fn name=read_unpromoted_ref_object ").unwrap().1
             .split_once("@endfn name=read_unpromoted_ref_object").unwrap().0;
-        let read = body.rsplit_once("op=load_ref_cell").unwrap().1
+        let read = body.rsplit_once("op=load_local").unwrap().1
             .lines().take_while(|line| !line.contains("@src ")).collect::<Vec<_>>().join("\n");
         assert_eq!(read.matches("__rt_mixed_unbox").count(), 1,
             "{name}: the surviving raw branch must expose the object payload: {read}");

@@ -28,10 +28,10 @@ pub(in crate::interpreter) fn eval_in_array_declared_call(
 /// Dispatches evaluated-argument eval calls for the `in_array` array builtin.
 pub(in crate::interpreter) fn eval_in_array_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (needle, array, strict) =
         super::array_search::eval_array_search_value_args(evaluated_args, values)?;
-    super::array_search::eval_array_search_result("in_array", needle, array, strict, values)
+    super::array_search::eval_array_search_result("in_array", needle, array, strict, context, values)
 }

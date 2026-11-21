@@ -11,6 +11,7 @@
 //!   value-bridge hooks; EvalIR constants are syntax data, not owned PHP values.
 
 mod attributes;
+mod array_contracts;
 mod bytecode;
 mod callable;
 mod classes;
@@ -25,6 +26,7 @@ mod statements;
 mod traits;
 
 pub use attributes::*;
+pub(crate) use array_contracts::{contains_pending_array_contents, merge_array_element_sources, array_contents_type, array_contents_schema, pending_array_contents, pending_array_contents_type};
 pub(crate) use bytecode::{CompiledBody, CompiledCall, CompiledModule, Op};
 pub use callable::*;
 pub use classes::*;

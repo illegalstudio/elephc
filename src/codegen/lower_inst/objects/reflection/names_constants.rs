@@ -246,6 +246,11 @@ pub(super) fn reflection_constant_value(
     expr: &Expr,
     depth: usize,
 ) -> Result<ReflectionConstantValue> {
+    if let ExprKind::UnaryPlus(inner) = &expr.kind {
+        if let Some(number) = crate::semantics::numeric::literal_unary_plus(inner) {
+            return reflection_constant_value(ctx, current_class, current_info, &number, depth + 1);
+        }
+    }
     if depth > 16 {
         return Err(CodegenIrError::unsupported(
             "deep recursive ReflectionClass constant metadata",
@@ -451,10 +456,10 @@ pub(super) fn reflection_scoped_constant_value(
 pub(super) fn reflection_global_constant_value(
     ctx: &FunctionContext<'_>,
     name: &crate::names::Name,
-    span: crate::span::Span,
+    _span: crate::span::Span,
     depth: usize,
 ) -> Result<ReflectionConstantValue> {
-    let expr_kind = ctx
+    let expr = ctx
         .module
         .global_constants
         .get(name.as_str())
@@ -466,7 +471,7 @@ pub(super) fn reflection_global_constant_value(
                 name.as_str().trim_start_matches('\\')
             ))
         })?;
-    let expr = crate::parser::ast::Expr::new(expr_kind, span);
+    let expr = crate::codegen::const_default_values::materialized_global_constant(ctx.module, &expr);
     reflection_constant_value(ctx, "", None, &expr, depth + 1)
 }
 

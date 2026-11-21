@@ -24,6 +24,20 @@ pub(super) fn attached_property_root(ctx: &LoweringContext<'_, '_>, target: &Exp
         crate::ir_lower::expr::nested_property_has_boxed_root(ctx, object, property))
 }
 
+/// Limits direct attached-cell updates to a receiver whose class is known before runtime dispatch.
+pub(super) fn static_attached_property_root(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
+    named_property_root(target).is_some_and(|(object, property)|
+        crate::ir_lower::expr::nested_property_has_static_boxed_root(ctx, object, property))
+}
+
+/// Recognizes a named property whose concrete storage class is known only at runtime.
+pub(super) fn runtime_dispatched_property_root(
+    ctx: &LoweringContext<'_, '_>, target: &Expr,
+) -> bool {
+    named_property_root(target).is_some_and(|(object, _)|
+        crate::ir_lower::expr::nested_property_requires_runtime_dispatch(ctx, object))
+}
+
 /// Settles a compound RHS before the first element read, including expression-result captures.
 pub(super) fn capture_compound_rhs(
     ctx: &mut LoweringContext<'_, '_>, value: &mut Expr,
@@ -44,7 +58,8 @@ pub(crate) fn lower_nested_property_compound_expression(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr,
     result: Option<&Expr>, prelude: &[Stmt], conditional: Option<&str>, span: Span,
 ) -> Option<LoweredValue> {
-    if conditional.is_some() || !attached_property_root(ctx, target)
+    if conditional.is_some()
+        || !(attached_property_root(ctx, target) || runtime_dispatched_property_root(ctx, target))
         || !matches!(&target.kind, ExprKind::ArrayAccess { array, .. }
             if matches!(array.kind, ExprKind::ArrayAccess { .. })) { return None; }
     let ExprKind::Variable(result_name) = &value.kind else { return None; };

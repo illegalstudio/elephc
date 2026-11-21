@@ -7,25 +7,30 @@
 //! Key details:
 //! - Base-expression effects precede the snapshot and always execute.
 //! - Intermediate segment values may survive a later nullsafe short circuit.
+//! - Operand-only bindings remain conditional after the shared continuation.
 //! - Distinct scalar alternatives use boxed storage; plain pointers keep their address word.
 
 use crate::ir_lower::context::LoweringContext;
 use crate::types::{PhpType, TypeEnv};
+use std::collections::HashSet;
 
 /// Read representations that can reach the chain's shared continuation.
 pub(super) struct LocalViews {
     types: TypeEnv,
+    initialized: HashSet<crate::ir::LocalSlotId>,
 }
 
 impl LocalViews {
     /// Captures existing PHP bindings after evaluating the chain's base expression.
     pub(super) fn new(ctx: &LoweringContext<'_, '_>) -> Self {
         Self { types: ctx.local_types_snapshot().into_iter().filter(|(name, _)|
-            !crate::names::is_generated_local_name(name)).collect() }
+            !crate::names::is_generated_local_name(name)).collect(),
+            initialized: ctx.initialized_slots_snapshot() }
     }
 
     /// Includes values that can remain after a later segment skips its operands.
     pub(super) fn observe(&mut self, ctx: &LoweringContext<'_, '_>) {
+        self.initialized.retain(|slot| ctx.slot_is_initialized(*slot));
         for (name, previous) in &mut self.types {
             let Some(current) = ctx.local_types.get(name) else { continue; };
             if previous == current { continue; }
@@ -40,6 +45,7 @@ impl LocalViews {
 
     /// Uses the shared representation for reads after either the taken or skipped path.
     pub(super) fn publish(self, ctx: &mut LoweringContext<'_, '_>) {
+        ctx.restore_initialized_slots(self.initialized);
         for (name, ty) in self.types {
             if ctx.has_local_slot(&name) && ctx.local_type(&name) != ty {
                 ctx.set_local_type(&name, ty);

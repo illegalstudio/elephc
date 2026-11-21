@@ -44,6 +44,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
+/// Owns each fixture directory through compiler diagnostic and assertion failures.
+struct TestDirectory(PathBuf);
+
+impl std::ops::Deref for TestDirectory {
+    type Target = Path;
+    /// Keeps ordinary path operations available without releasing directory ownership.
+    fn deref(&self) -> &Path { &self.0 }
+}
+
+impl AsRef<Path> for TestDirectory {
+    /// Passes the owned directory to filesystem and command APIs.
+    fn as_ref(&self) -> &Path { &self.0 }
+}
+
+impl Drop for TestDirectory {
+    /// Removes only this fixture's explicitly created directory on every exit.
+    fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+}
+
 /// Expected capability reminder for eval fixtures that intentionally omit regex support.
 const EVAL_WITHOUT_REGEX_REMINDER: &str =
     "warning: dynamic eval was compiled without optional regex support";
@@ -52,13 +71,13 @@ const EVAL_WITHOUT_REGEX_REMINDER: &str =
 const DYN_HELPER: &str = "function dyn(string $s): string { return substr('x' . $s, 1); }";
 
 /// Creates an isolated temp dir unique across parallel test threads/processes.
-fn make_test_dir(prefix: &str) -> PathBuf {
+fn make_test_dir(prefix: &str) -> TestDirectory {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("{}_{}_{:?}_{}", prefix, pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
-    dir
+    TestDirectory(dir)
 }
 
 /// Resolves the elephc CLI binary path (cargo env var, fallback next to the test binary).

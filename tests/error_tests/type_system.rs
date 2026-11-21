@@ -2745,10 +2745,10 @@ fn test_branch_divergent_assignment_warns() {
     expect_warning("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;", "boxed mixed storage");
 }
 
-/// --strict-locals disables the pre-scan: the divergent assignment errors as today.
+/// Distinct first bindings on exclusive paths retain their own strict source contracts.
 #[test]
-fn test_branch_divergent_assignment_errors_under_strict() {
-    expect_error_strict("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;", "cannot reassign");
+fn test_branch_divergent_first_bindings_are_accepted_under_strict() {
+    expect_no_error_strict("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;");
 }
 
 /// Single-branch retype of an outer binding is also handled by marking.
@@ -2783,13 +2783,12 @@ fn test_marking_survives_a_type_guard_on_the_marked_name() {
     );
 }
 
-/// Control for the test above: `--strict-locals` marks nothing, so the DIVERGENT assignment is the
-/// error it always was. The guard changes nothing about that half.
+/// Strict locals gives mutually exclusive first producers independent runtime binding origins.
+/// The guarded store is therefore checked against the origin selected on the executed path.
 #[test]
 fn test_marking_survives_a_type_guard_control_under_strict() {
-    expect_error_strict(
+    expect_no_error_strict(
         "<?php if ($argc > 1) { $a = 1; } else { $a = \"s\"; } if (is_int($a)) { $a = \"z\"; } echo $a;",
-        "cannot reassign $a from int to string",
     );
 }
 
@@ -3011,7 +3010,7 @@ fn test_mixed_storage_store_sites_are_recorded_once() {
     assert_eq!(
         mixed_warnings[0].message,
         "$a is assigned incompatible types (int and string); it is compiled as boxed mixed \
-         storage (compile with --strict-locals to make this an error)"
+         storage (compile with --strict-locals to enforce binding contracts)"
     );
     // The LATER span of the first failing pair: the `else` branch's assignment, at column 41.
     assert_eq!(
@@ -3260,26 +3259,24 @@ fn test_a_top_level_reference_assignment_does_not_disturb_marking() {
     );
 }
 
-/// `is_array($a)` narrows too, so a conflicting store inside its branch is not evidence.
+/// `is_array($a)` narrows too, so a conflicting store inside its branch does not require boxed
+/// permissive storage.
 ///
 /// The recogniser skipped it because `GuardTarget::AnyArray` has no single `PhpType`, on the
-/// reasoning that missing a guard "costs only a spurious warning". It is the same truthfulness
-/// violation this feature removed everywhere else: measured, `$a = 1; if (is_array($a)) { $a = "x"; }`
-/// warned "compile with --strict-locals to make this an error" while `--strict-locals` compiled it
-/// CLEAN — the only such hit in a ~120-fixture sweep.
+/// reasoning that missing a guard "costs only a spurious warning". The permissive checker accepts
+/// the guarded assignment without changing the local's physical storage.
 ///
 /// The target is modelled as `Mixed`, which is what `GuardTarget::AnyArray::fallback_type` yields
 /// whenever the guarded name is not already array-typed. It cannot be one for a name this scan
 /// marks: `has_exact_syntactic_type` refuses array literals and `(array)` casts outright, so a
-/// markable name's replay never holds an array. Over-recognising for an array-typed pre-bound name
-/// would only suppress a mark, which reverts that body to the pre-feature error rather than to a
-/// wrong answer.
+/// markable name's replay never holds an array. Strict locals separately preserves the original
+/// integer binding contract, so its rejection does not make this a permissive storage conflict.
 #[test]
-fn test_an_is_array_guard_does_not_produce_false_advice() {
+fn test_an_is_array_guard_does_not_force_mixed_storage() {
     let source = "<?php $a = 1; if (is_array($a)) { $a = \"x\"; } echo $a;";
     expect_no_warning(source, "boxed mixed storage");
     expect_no_error(source);
-    expect_no_error_strict(source);
+    expect_error_strict(source, "cannot reassign $a from int to string");
 }
 
 /// Controls: the guards whose warning is TRUE keep it. `is_object` is not a narrowing predicate the
@@ -3810,4 +3807,18 @@ class FollowupBadStrictCounter implements FollowupStrictCounter {
     #[\ReturnTypeWillChange] public function count(): string { return "5"; }
 }
 "#, "incompatible return type string (interface returns int)");
+}
+
+
+/// Unary plus requires a source operand and cannot silently become a malformed binary expression.
+#[test]
+fn test_error_unary_plus_missing_operand() {
+    assert!(check_source("<?php echo +;").is_err());
+}
+
+
+/// Numeric unary plus reuses the existing arithmetic diagnostic for a known nonnumeric string.
+#[test]
+fn test_error_unary_plus_nonnumeric_literal() {
+    expect_error("<?php echo +'bad';", "Arithmetic operators require numeric operands");
 }

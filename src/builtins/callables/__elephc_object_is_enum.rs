@@ -7,7 +7,7 @@
 //!   renders an enum case as `\Enum::Case` instead of `__set_state(...)`.
 //!
 //! Key details:
-//! - `internal: true`: never PHP-visible, so `--strict-php` cannot hide it from
+//! - `internal: true`: never PHP-visible, so `--php-only` cannot hide it from
 //!   the prelude and no user program can call it.
 //! - There is no PHP-visible equivalent to alias. `$v instanceof UnitEnum` is the
 //!   PHP spelling, but elephc does not yet report enum cases as implementing

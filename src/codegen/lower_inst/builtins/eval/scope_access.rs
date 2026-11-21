@@ -26,6 +26,29 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_get(
     store_if_result(ctx, inst)
 }
 
+/// Reads scope visibility without confusing initialized null with an absent name.
+pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_contains(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "eval scope contains", 1)?;
+    let scope = expect_operand(inst, 0)?;
+    let name = eval_scope_instruction_name(ctx, inst)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    load_eval_scope_operand_to_arg(ctx, scope, 0)?;
+    emit_eval_scope_get_for_loaded_scope(ctx, &name, 0, 8);
+    let missing = ctx.next_label("eval_scope_absent");
+    let done = ctx.next_label("eval_scope_presence_done");
+    super::scope_io::emit_branch_if_scope_entry_missing_at(ctx, 8, &missing);
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result, 1);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&missing);
+    abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    ctx.emitter.label(&done);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers an EIR eval-scope write for a static variable name.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_set(
     ctx: &mut FunctionContext<'_>,
@@ -41,14 +64,25 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_set(
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     load_eval_scope_operand_to_arg(ctx, scope, 0)?;
-    emit_eval_scope_set_for_loaded_scope(ctx, &name, EVAL_SCOPE_FLAG_OWNED);
+    let flags = EVAL_SCOPE_FLAG_OWNED | if ctx.module.semantic_profile.contains(
+        elephc_semantics::StrictFeature::Locals) { EVAL_SCOPE_FLAG_ASSIGN_REFERENCE } else { 0 };
+    let contract = match &inst.immediate {
+        Some(Immediate::EvalScopeStore(metadata)) => metadata.contract.as_ref(), _ => None,
+    };
+    let descriptor = contract.map(|contract|
+        crate::codegen::runtime_metadata::local_reference_descriptor(ctx.module, contract))
+        .transpose()?;
+    emit_eval_scope_set_for_loaded_scope_with_contract(ctx, &name, flags, descriptor.as_deref());
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     Ok(())
 }
 
 /// Returns the static PHP variable name attached to an eval-scope instruction.
 pub(super) fn eval_scope_instruction_name(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<String> {
-    let data = expect_global_name(inst)?;
+    let data = match &inst.immediate {
+        Some(Immediate::EvalScopeStore(metadata)) => metadata.name,
+        _ => expect_global_name(inst)?,
+    };
     ctx.module
         .data
         .global_names
@@ -98,8 +132,10 @@ pub(super) fn emit_eval_scope_get_for_loaded_scope(
     emit_eval_status_check(ctx);
 }
 
-/// Calls `__elephc_eval_scope_set` using an already-loaded scope handle arg.
-pub(super) fn emit_eval_scope_set_for_loaded_scope(ctx: &mut FunctionContext<'_>, name: &str, flags: i64) {
+/// Carries source producer metadata separately from the already materialized runtime value.
+fn emit_eval_scope_set_for_loaded_scope_with_contract(ctx: &mut FunctionContext<'_>, name: &str,
+    flags: i64, descriptor: Option<&str>,
+) {
     let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
     let name_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_symbol_address(ctx.emitter, name_arg, &name_label);
@@ -118,9 +154,7 @@ pub(super) fn emit_eval_scope_set_for_loaded_scope(ctx: &mut FunctionContext<'_>
         abi::int_arg_reg_name(ctx.emitter.target, 4),
         flags,
     );
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
-    emit_eval_status_check(ctx);
+    emit_scope_set_call(ctx, descriptor);
 }
 
 /// Returns the literal fragment attached to an `EvalLiteralCall`, if this is one.
@@ -149,7 +183,7 @@ pub(super) fn emit_eval_literal_aot_marker(ctx: &mut FunctionContext<'_>, inst: 
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         &fragment,
         ctx.module.source_path.as_deref(),
-        super::super::instruction_strict_php_profile(inst),
+        super::super::instruction_eval_source_profile(inst, ctx.module.semantic_profile),
         |name, args| eval_literal_static_function_supported_by_codegen(ctx, name, args),
         |receiver, method, args| {
             eval_literal_static_method_supported_by_codegen(ctx, receiver, method, args)
@@ -206,6 +240,19 @@ pub(super) fn set_eval_call_site(ctx: &mut FunctionContext<'_>, inst: &Instructi
         .emitter
         .target
         .extern_symbol("__elephc_eval_context_set_call_site");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+}
+
+/// Routes PHP assignments and native imports through one activation-origin publisher.
+pub(super) fn emit_scope_set_call(ctx: &mut FunctionContext<'_>, descriptor: Option<&str>) {
+    let checked = ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Locals);
+    let symbol = if checked {
+        let register = abi::int_arg_reg_name(ctx.emitter.target, 5);
+        if let Some(descriptor) = descriptor { abi::emit_symbol_address(ctx.emitter, register, descriptor); }
+        else { abi::emit_load_int_immediate(ctx.emitter, register, 0); }
+        "__rt_eval_scope_set_with_contract".into()
+    } else { ctx.emitter.target.extern_symbol("__elephc_eval_scope_set") };
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
 }

@@ -339,7 +339,7 @@ impl Checker {
             args,
             stored_sig,
             regular_param_count,
-            caller_env,
+            caller_env, self.semantic_profile,
         )
         {
             if let Some(variadic_name) = stored_sig.variadic.as_deref() {
@@ -396,7 +396,7 @@ fn function_variadic_tail_needs_iterable(
     args: &[Expr],
     sig: &FunctionSig,
     regular_param_count: usize,
-    env: &TypeEnv,
+    env: &TypeEnv, profile: elephc_semantics::SemanticProfile,
 ) -> bool {
     if sig.variadic.is_none() {
         return false;
@@ -404,7 +404,7 @@ fn function_variadic_tail_needs_iterable(
     if args.iter().any(|arg| {
         matches!(
             &arg.kind,
-            ExprKind::Spread(inner) if function_spread_source_keeps_runtime_keys(inner, env)
+            ExprKind::Spread(inner) if function_spread_source_keeps_runtime_keys(inner, env, profile)
         )
     }) {
         return true;
@@ -423,7 +423,7 @@ fn function_variadic_tail_needs_iterable(
 }
 
 /// Returns whether a spread source can carry string keys into a variadic function tail.
-fn function_spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
+fn function_spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv, profile: elephc_semantics::SemanticProfile) -> bool {
     match &expr.kind {
         ExprKind::Variable(name) => matches!(
             env.get(name),
@@ -431,7 +431,7 @@ fn function_spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool
         ),
         ExprKind::ArrayLiteralAssoc(_) => true,
         _ => matches!(
-            crate::types::checker::infer_expr_type_syntactic(expr),
+            crate::types::checker::infer_expr_type_syntactic(expr, profile),
             PhpType::AssocArray { .. } | PhpType::Iterable
         ),
     }

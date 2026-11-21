@@ -76,6 +76,7 @@ pub mod krsort;
 pub mod ksort;
 pub mod natcasesort;
 pub mod natsort;
+mod numeric_aggregate;
 pub mod next;
 pub mod prev;
 pub mod range;

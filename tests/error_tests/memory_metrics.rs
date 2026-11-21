@@ -35,10 +35,10 @@ fn test_memory_metrics_flag_errors() {
 /// Strict PHP retains the standard APIs and hides the two allocation-counter extensions.
 #[test]
 fn test_memory_metrics_strict_visibility() {
-    let _guard = elephc::strict_php::scoped_enable();
+    let _guard = elephc::php_only::scoped_enable();
     assert!(check_source("<?php memory_get_usage(); memory_get_peak_usage(true); memory_reset_peak_usage();").is_ok());
     for name in ["memory_get_allocations", "memory_get_frees"] {
         let error = check_source(&format!("<?php {name}();")).expect_err("extension must be hidden");
-        assert!(error.contains("disabled by --strict-php"), "{error}");
+        assert!(error.contains("disabled by --php-only"), "{error}");
     }
 }

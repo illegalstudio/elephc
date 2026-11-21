@@ -108,6 +108,7 @@ fn promote_unsafe_eval_scope_access_to_full(
             &next,
         );
         if matches!(local.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            crate::codegen::local_binding_state::branch_if_uninitialized(ctx, local.slot, &next);
             ctx.load_eval_local_snapshot_to_mixed(local.slot)?;
             emit_branch_if_mixed_numeric_scalar(ctx.emitter, &next, true);
         }

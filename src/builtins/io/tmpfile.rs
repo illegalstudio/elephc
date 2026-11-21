@@ -13,8 +13,7 @@
 //! - `max_args` affects only `check_arity`; `function_sig`/`arity_bounds` still derive
 //!   `(0, Some(0))` from the zero-param list, keeping parity green.
 //! - `is_empty_static_array_spread` is relocated here from `streams.rs` (its only caller).
-//! - `returns: Mixed` is used because the union involves a resource type that the
-//!   scalar `returns:` field cannot express.
+//! - The shared catalog declares `resource|false`; the checker refines its native stream kind.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -30,14 +29,14 @@ builtin! {
 }
 
 /// Accepts `tmpfile()` and `tmpfile(...[])` (empty static-array spread) but rejects
-/// any real argument. Returns `Union(stream_resource, Bool)` on success.
+/// any real argument. Returns `Union(stream_resource, False)` on success.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if !cx.args.is_empty() && !is_empty_static_array_spread(cx.args) {
         return Err(CompileError::new(cx.span, "tmpfile() takes no arguments"));
     }
     Ok(cx.checker.normalize_union_type(vec![
         PhpType::stream_resource(),
-        PhpType::Bool,
+        PhpType::False,
     ]))
 }
 

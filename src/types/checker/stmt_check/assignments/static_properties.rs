@@ -100,6 +100,7 @@ pub(super) fn check_static_property_array_push(
     {
         return Ok(());
     }
+    checker.require_array_write_contract(&target.prop_ty, &PhpType::Int, &val_ty, span)?;
     let updated_prop_ty = match target.prop_ty {
         PhpType::Array(elem_ty) => {
             if target.property_has_declared_type {
@@ -166,17 +167,18 @@ pub(super) fn check_static_property_array_assign(
 ) -> Result<(), CompileError> {
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let normalized_idx_ty =
-        super::properties::property_write_key_type(normalized_array_key_type(index, idx_ty.clone()));
+        super::properties::property_write_key_type(normalized_array_key_type(index, idx_ty.clone(), checker.semantic_profile));
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
+    crate::semantics::array_keys::validate_write_receiver(checker.semantic_profile, &target.prop_ty, &idx_ty, index.span)?;
     let mixed_elements = match target.prop_ty.codegen_repr() {
         PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
         PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
         _ => false,
     };
-    if target.dynamic_eval_target || target.prop_ty.is_php_array() || mixed_elements
-        || target.prop_ty == PhpType::Mixed
-    {
+    // An erased target can contain ArrayAccess, whose original keys reach its own signature.
+    if target.dynamic_eval_target || target.prop_ty == PhpType::Mixed { return Ok(()); }
+    if target.prop_ty.is_php_array() || mixed_elements {
         if !is_dynamic_eval_static_property_array_key_type(&normalized_idx_ty) {
             return Err(CompileError::new(span, "Array index must be integer"));
         }

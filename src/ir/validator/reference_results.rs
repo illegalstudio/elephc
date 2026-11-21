@@ -1,5 +1,5 @@
 //! Purpose:
-//! Keeps native reference-return adoption attached directly to its producing call.
+//! Keeps native reference adoption attached directly to its owning producer.
 //!
 //! Called from:
 //! - Function validation after structural, dominance, operand and effect checks.
@@ -10,7 +10,7 @@
 
 use super::*;
 
-/// Rejects reference adopters whose operand no longer names the direct producing call.
+/// Rejects reference adopters whose operand no longer names a direct owning producer.
 pub(super) fn validate_transfers(function: &Function) -> Result<(), ValidationError> {
     for block in &function.blocks {
         for id in &block.instructions {
@@ -21,7 +21,7 @@ pub(super) fn validate_transfers(function: &Function) -> Result<(), ValidationEr
                 ValueDef::Instruction { inst, .. } => matches!(function.instructions[inst.as_raw() as usize].op,
                     Op::Call | Op::FunctionVariantCall | Op::MethodCall | Op::NullsafeMethodCall
                     | Op::StaticMethodCall | Op::EvalStaticMethodCall | Op::EvalFunctionCall
-                    | Op::ClosureCall | Op::ExprCall | Op::PipeCall),
+                    | Op::ClosureCall | Op::ExprCall | Op::PipeCall | Op::LoadGlobalRefCell),
                 ValueDef::BlockParam { .. } => false,
             };
             if !valid {
@@ -35,6 +35,32 @@ pub(super) fn validate_transfers(function: &Function) -> Result<(), ValidationEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Global leases transfer ownership directly; borrowed addresses and copied leases cannot.
+    #[test]
+    fn global_reference_adoption_requires_an_owned_direct_producer() {
+        for (op, copied, accepts) in [(Op::LoadGlobalRefCell, false, true),
+            (Op::LoadGlobalRefCell, true, false), (Op::LocalPlace, false, false)] {
+            let mut function = Function::new("global_transfer".into(), IrType::Void, PhpType::Void);
+            let local = function.add_local(Some("alias".into()), IrType::from_php(&PhpType::Mixed), PhpType::Mixed, LocalKind::PhpLocal);
+            let owner = function.add_local(Some("owner".into()), IrType::from_php(&PhpType::Mixed), PhpType::Mixed, LocalKind::RefCell);
+            {
+                let mut builder = crate::ir::Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", vec![]); builder.position_at_end(entry);
+                let immediate = if op == Op::LoadGlobalRefCell { Immediate::GlobalName(crate::ir::DataId::from_raw(0)) }
+                    else { Immediate::LocalSlot(local) };
+                let value = builder.emit(op, vec![], Some(immediate), IrType::I64,
+                    PhpType::Pointer(None), Ownership::NonHeap).unwrap();
+                let value = if copied { builder.emit(Op::Borrow, vec![value], None, IrType::I64,
+                    PhpType::Pointer(None), Ownership::NonHeap).unwrap() } else { value };
+                builder.emit(Op::AdoptRefCellPtr, vec![value],
+                    Some(Immediate::LocalSlotPair { first: local, second: owner }),
+                    IrType::Void, PhpType::Mixed, Ownership::NonHeap);
+                builder.terminate(Terminator::Return { value: None });
+            }
+            assert_eq!(validate_transfers(&function).is_ok(), accepts, "{op:?}, copied={copied}");
+        }
+    }
 
     /// A copy between the call and adopter must fail instead of changing the backend ABI silently.
     #[test]

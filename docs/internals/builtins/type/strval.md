@@ -14,18 +14,18 @@ description: "Compiler internals for strval(): lowering path, type checks, and r
 
 ### Lowering notes
 
-- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Uses the `eir_graph` strategy from the single-source builtin descriptor.
 - Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
 ## Semantic descriptor
 
-- **Target strategy**: `eir_primitive`
+- **Target strategy**: `eir_graph`
 - **Validation**: `signature`
 - **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
-- **Effects**: `shared`
+- **Result ownership**: `fresh`
+- **Effects**: `static (17 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary

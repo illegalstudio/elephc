@@ -11,6 +11,7 @@
 
 mod string_append;
 mod reference_results;
+mod eval_scope_owners;
 mod dominators;
 
 use dominators::DominatorSets;
@@ -64,6 +65,7 @@ pub enum ValidationError {
         expected: &'static str,
     },
     UnexpectedImmediate(InstId),
+    SemanticProfileMismatch { inst: InstId, expected: u64, actual: u64 },
     InvalidStringAppendTransfer(InstId),
     UnknownRuntimeCallSignature(InstId),
     EffectMismatch {
@@ -101,6 +103,7 @@ pub enum ValidationError {
     NeverFunctionReturns,
     InvalidReferenceOwner { local: LocalSlotId, owner: LocalSlotId },
     InvalidReferenceArgumentOwner(LocalSlotId),
+    InvalidLocalReferenceContract(InstId),
     InvalidReferenceCallResult { inst: InstId, operand: ValueId },
 }
 
@@ -117,6 +120,60 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
         .chain(module.runtime_callable_invokers.iter())
     {
         validate_function(function)?;
+        for (index, inst) in function.instructions.iter().enumerate() {
+            if let Some(Immediate::EvalBindingCopy { source, .. }) = inst.immediate {
+                let canonical = inst.result_php_type == PhpType::Mixed
+                    || crate::semantics::conversions::inferred_binding_contract(&inst.result_php_type).as_ref()
+                        == Some(&inst.result_php_type);
+                if !canonical || module.data.global_names.get(source.as_raw() as usize)
+                    .is_none_or(|name| crate::names::is_generated_local_name(name)) {
+                    return Err(ValidationError::InvalidLocalReferenceContract(InstId::from_raw(index as u32)));
+                }
+            }
+            if let Some(Immediate::EvalScopeStore(metadata)) = &inst.immediate {
+                if metadata.role == crate::ir::EvalBindingRole::Contract
+                    && metadata.contract.as_ref().is_some_and(|contract|
+                    crate::semantics::conversions::inferred_binding_contract(contract).as_ref() != Some(contract)) {
+                    return Err(ValidationError::InvalidLocalReferenceContract(InstId::from_raw(index as u32)));
+                }
+            }
+            let mut required = inst.arithmetic_policy().requirements().bits();
+            if inst.immediate == Some(Immediate::CheckedElementRead) {
+                required |= elephc_semantics::StrictFeature::Indexing.bit();
+            }
+            if let Some(Immediate::InitializedGetter { method, property }) = inst.immediate {
+                required |= elephc_semantics::StrictFeature::Initialization.bit();
+                if module.data.strings.get(method.as_raw() as usize).map(String::as_str) != Some("__get")
+                    || module.data.strings.get(property.as_raw() as usize).is_none() {
+                    return Err(ValidationError::UnexpectedImmediate(InstId::from_raw(index as u32)));
+                }
+            }
+            required |= eval_scope_owners::required_binding_feature(
+                InstId::from_raw(index as u32), inst, module.semantic_profile)?;
+            if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::CheckedNumericCast(_)
+                | crate::ir::RuntimeCallTarget::CheckedRadixInt))) {
+                required |= elephc_semantics::StrictFeature::Casts.bit();
+            }
+            if required & !module.semantic_profile.bits() != 0 {
+                return Err(ValidationError::SemanticProfileMismatch { inst: InstId::from_raw(index as u32),
+                    expected: module.semantic_profile.bits(), actual: required });
+            }
+            let read_profile = match inst.immediate {
+                Some(Immediate::ProfiledData { profile, .. }
+                    | Immediate::ProfiledPropertyFetch { profile, .. }) => Some(profile),
+                Some(Immediate::ReflectionPropertyRef { profile, .. })
+                    if profile.semantics() != elephc_semantics::SemanticProfile::PERMISSIVE => Some(profile),
+                _ => None,
+            };
+            if let Some(profile) = read_profile {
+                if profile.semantics() != module.semantic_profile {
+                    return Err(ValidationError::SemanticProfileMismatch {
+                        inst: InstId::from_raw(index as u32), expected: module.semantic_profile.bits(),
+                        actual: profile.semantics().bits(),
+                    });
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -412,6 +469,13 @@ fn validate_instruction_effects_with_operand(
         && operand_type.is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Int | PhpType::Bool));
     let expected = if pure_int_restamp {
         Effects::PURE
+    } else if inst.op == Op::Cast && matches!(inst.result_php_type, PhpType::Str | PhpType::Bool)
+        && inst.effects == Effects::php_conversion() {
+        Effects::php_conversion()
+    } else if matches!(inst.immediate, Some(Immediate::NumericOperation { .. } | Immediate::NumericUpdate { .. })) {
+        inst.op.arithmetic_effects(inst.arithmetic_policy())
+    } else if inst.immediate == Some(Immediate::CheckedElementRead) {
+        inst.op.checked_element_read_effects()
     } else if inst.op == Op::MixedUnbox {
         Op::mixed_unbox_effects(&inst.result_php_type)
     } else if inst.op == Op::FToI
@@ -458,6 +522,22 @@ fn validate_instruction_effects_with_operand(
 mod instruction_effect_tests {
     use super::*;
     use crate::ir::Ownership;
+
+    /// Scalar callback casts require the complete callback summary while legacy casts retain defaults.
+    #[test]
+    fn scalar_conversion_callback_effect_contract() {
+        for (ty, ir_type) in [(PhpType::Str, IrType::Str), (PhpType::Bool, IrType::I64)] {
+            let mut instruction = Instruction::new(Op::Cast, Vec::new(),
+                Some(Immediate::CastTarget(ir_type)), None, ir_type, ty.clone(), Ownership::for_php_type(&ty),
+                Effects::php_conversion(), None);
+            let id = InstId::from_raw(0);
+            assert_eq!(validate_instruction_effects(id, &instruction), Ok(()));
+            instruction.effects.remove(Effects::MAY_THROW);
+            assert!(matches!(validate_instruction_effects(id, &instruction), Err(ValidationError::EffectMismatch { .. })));
+            instruction.effects = Op::Cast.default_effects();
+            assert_eq!(validate_instruction_effects(id, &instruction), Ok(()));
+        }
+    }
 
     /// Unresolved calls accept their default effects and reject unproven purity claims.
     #[test]
@@ -591,6 +671,7 @@ mod instruction_effect_tests {
             let immediate = Some(Immediate::ReflectionPropertyRef {
                 class: 1,
                 property: 0,
+                profile: crate::source::EvalSourceProfile::default(),
             });
             let mut instruction = Instruction::new(
                 op,
@@ -695,7 +776,38 @@ fn validate_instruction_immediate(
 ) -> Result<(), ValidationError> {
     use Immediate as Imm;
     use Op::*;
+    if matches!(inst.immediate, Some(Imm::NumericUpdate { .. })) && inst.op != StrIncDec {
+        return Err(ValidationError::UnexpectedImmediate(inst_id));
+    }
+    if matches!(inst.immediate, Some(Imm::ProfiledPropertyFetch { .. })) && inst.op != DynamicPropGet {
+        return Err(ValidationError::UnexpectedImmediate(inst_id));
+    }
+    if matches!(inst.immediate, Some(Imm::NumericOperation { .. }))
+        && !matches!(inst.op, MixedNumericBinop | ICheckedPow)
+    { return Err(ValidationError::UnexpectedImmediate(inst_id)); }
+    if inst.immediate == Some(Imm::CheckedElementRead) {
+        if !matches!(inst.op, ArrayGet | ArrayGetForWrite | ArrayGetMixedKey | HashGet | HashGetForWrite | StrCharAt | RuntimeCall | LoadArrayElemRefCellExisting) {
+            return Err(ValidationError::UnexpectedImmediate(inst_id));
+        }
+        let required = inst.op.checked_element_read_effects();
+        if !inst.effects.contains(required) {
+            return Err(ValidationError::EffectMismatch { inst: inst_id, expected: required, actual: inst.effects });
+        }
+        return Ok(());
+    }
+    if matches!(inst.immediate, Some(Imm::InitializedGetter { .. })) {
+        if inst.op != MethodCall { return Err(ValidationError::UnexpectedImmediate(inst_id)); }
+        let required = Effects::MAY_THROW | Effects::READS_GLOBAL | Effects::WRITES_GLOBAL;
+        if !inst.effects.contains(required) {
+            return Err(ValidationError::EffectMismatch { inst: inst_id, expected: inst.effects | required, actual: inst.effects });
+        }
+        return Ok(());
+    }
     match inst.op {
+        ICheckedPow => {
+            if inst.immediate.is_none() || matches!(inst.immediate, Some(Imm::NumericOperation { op: crate::ir::MixedNumericOp::Pow, .. })) { Ok(()) }
+            else { Err(ValidationError::UnexpectedImmediate(inst_id)) }
+        }
         ConstI64 => require_immediate(inst_id, inst, "i64", |imm| matches!(imm, Imm::I64(_))),
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
@@ -725,8 +837,8 @@ fn validate_instruction_immediate(
         EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
             matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
         }),
-        PropGet => require_immediate(inst_id, inst, "property name or reflected physical slot", |imm| {
-            matches!(imm, Imm::Data(_) | Imm::ReflectionPropertyRef { .. })
+        PropGet | NullsafePropGet => require_immediate(inst_id, inst, "profiled property name or reflected physical slot", |imm| {
+            matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. } | Imm::ReflectionPropertyRef { .. })
         }),
         PropSet => require_immediate(inst_id, inst, "property name or trusted physical slot", |imm| {
             matches!(
@@ -739,10 +851,10 @@ fn validate_instruction_immediate(
         PropUnset => require_immediate(inst_id, inst, "property name or initializer physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
-        StrAppend | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
-        | ReleaseLocalRefCell | AcquireRefCell
+        StrAppend | LocalPlace | LoadLocal | StoreLocal | SetLocalBindingState | GetNativeBindingState | GetEvalBindingState | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
+        | ReleaseLocalRefCell | AcquireRefCell | BindLocalRefContract
         | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner
-        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
+        | LoadStaticLocal | LoadStaticLocalRefCell | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
         | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
@@ -755,20 +867,37 @@ fn validate_instruction_immediate(
         AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
-        EvalScopeGet | EvalScopeSet => require_immediate(inst_id, inst, "global name", |imm| {
+        GlobalBindingPresent | UnsetGlobal | LoadGlobalRefCell | EvalScopeGet | EvalScopeContains | EvalScopeBindingType | EvalScopeEndBinding => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
+        }),
+        EvalScopeBindLocalType => require_immediate(inst_id, inst, "checked scope binding type", |imm| {
+            matches!(imm, Imm::EvalScopeStore(metadata) if metadata.contract.is_some())
+        }),
+        EvalScopeStartBinding => require_immediate(inst_id, inst, "first native binding producer", |imm| {
+            matches!(imm, Imm::EvalScopeStore(_))
+        }),
+        EvalScopeCopyBindingType => require_immediate(inst_id, inst, "independent scope binding copy", |imm| {
+            matches!(imm, Imm::EvalBindingCopy { .. })
+        }),
+        EvalScopeSet => require_immediate(inst_id, inst, "scope store or global name", |imm| {
+            matches!(imm, Imm::GlobalName(_) | Imm::EvalScopeStore(_))
         }),
         ICmp | FCmp | PhpRelCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
             matches!(imm, Imm::CmpPredicate(_))
         }),
         MixedNumericBinop => require_immediate(inst_id, inst, "mixed numeric op", |imm| {
-            matches!(imm, Imm::MixedNumericOp(_))
+            match imm {
+                Imm::MixedNumericOp(op) => !matches!(op, crate::ir::MixedNumericOp::Div | crate::ir::MixedNumericOp::Mod),
+                Imm::NumericOperation { op, policy } => !matches!(op, crate::ir::MixedNumericOp::Div | crate::ir::MixedNumericOp::Mod)
+                    || policy.checked_overflow(),
+                _ => false,
+            }
         }),
         ICheckedNumericChainToInt => {
             require_immediate(inst_id, inst, "checked numeric chain", |imm| {
                 matches!(imm, Imm::CheckedNumericChain(chain) if !chain.operations().is_empty()
                     && chain.operations().iter()
-                        .all(|op| !matches!(op, crate::ir::MixedNumericOp::Pow)))
+                        .all(|op| op.supports_checked_chain()))
             })
         }
         // A pair rule selects between exactly two operands, a fold rule among three or more.
@@ -777,7 +906,7 @@ fn validate_instruction_immediate(
                 .is_some_and(|rule| rule.accepts_operand_count(inst.operands.len())))
         }),
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
-            matches!(imm, Imm::I64(1) | Imm::I64(-1))
+            matches!(imm, Imm::I64(1) | Imm::I64(-1) | Imm::NumericUpdate { .. })
         }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
             matches!(imm, Imm::CastTarget(_) | Imm::StringOffsetCast | Imm::ImplicitIntCast)
@@ -888,6 +1017,21 @@ fn validate_opcode_rules(
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
     use Op::*;
+    if inst.op == RuntimeCall && inst.immediate == Some(Immediate::CheckedElementRead) {
+        check_count(inst_id, inst, 3, "receiver, key and read mode")?;
+        check_operand_type(function, inst_id, inst, 2, IrType::I64, "boolean read mode")?;
+        if inst.result.is_none() { return Err(ValidationError::InstructionResultMissing(inst_id)); }
+        return Ok(());
+    }
+    if matches!(inst.immediate, Some(Immediate::InitializedGetter { .. })) {
+        check_count(inst_id, inst, 2, "receiver and property name for initialized getter")?;
+        check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Object), "raw Object receiver")?;
+        let name = function.value(inst.operands[1]).ok_or(ValidationError::UnknownValue(inst.operands[1]))?.ir_type;
+        if !matches!(name, IrType::Str | IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)) {
+            check_operand_type(function, inst_id, inst, 1, IrType::Str, "string-compatible getter argument")?;
+        }
+        return Ok(());
+    }
     match inst.op {
         ConstI64 | ConstBool | ConstNull => check_count(inst_id, inst, 0, "0"),
         ConstF64 | ConstStr | ConstClassName | ConstEnumCase | LoadCalledClassId | DataAddr | ArrayNew | HashNew
@@ -927,6 +1071,42 @@ fn validate_opcode_rules(
         EvalLiteralCall | EvalFunctionCallArray | EvalScopeGet => {
             check_count(inst_id, inst, 1, "1")
         }
+        EvalScopeCopyBindingType => {
+            if !(1..=2).contains(&inst.operands.len()) {
+                return check_count(inst_id, inst, 1, "native origin and optional frozen descriptor");
+            }
+            let Some(Immediate::EvalBindingCopy { destination, owner, .. }) = inst.immediate else { unreachable!() };
+            let valid = function.locals.get(destination.as_raw() as usize).is_some_and(|local|
+                local.kind == LocalKind::PhpLocal && local.name.as_deref().is_some_and(|name|
+                    !crate::names::is_generated_local_name(name)))
+                && function.locals.get(owner.as_raw() as usize).is_some_and(|local|
+                    local.kind == LocalKind::RefCell
+                        && crate::types::canonical_property_reference_payload(&local.php_type)
+                            .is_some());
+            if !valid || !function.flags.tracks_local_binding_state || inst.result.is_some()
+                || !eval_scope_owners::has_scope_owner(function)
+                || !function.value(inst.operands[0]).is_some_and(|value| value.php_type == PhpType::Bool)
+                || inst.operands.get(1).is_some_and(|descriptor|
+                    !function.value(*descriptor).is_some_and(|value| value.php_type == PhpType::Int)) {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
+            }
+            Ok(())
+        },
+        EvalScopeBindingType => {
+            check_count(inst_id, inst, 0, "0")?;
+            if inst.result_php_type != PhpType::Int || inst.result.is_none()
+                || !eval_scope_owners::has_scope_owner(function) {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
+            }
+            Ok(())
+        },
+        EvalScopeBindLocalType | EvalScopeStartBinding | EvalScopeEndBinding => {
+            check_count(inst_id, inst, 0, "0")?;
+            if !eval_scope_owners::has_scope_owner(function) {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
+            }
+            Ok(())
+        },
         EvalScopeSet => check_count(inst_id, inst, 2, "2"),
         ClosureNew => Ok(()),
         ClosureBind => {
@@ -958,6 +1138,9 @@ fn validate_opcode_rules(
         }
         ICheckedNumericChainToInt => check_checked_numeric_chain(function, inst_id, inst),
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),
+        MixedNumericBinop if !inst.arithmetic_policy().is_permissive() => {
+            check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Mixed), "boxed Mixed")
+        }
         MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
         // Each operand is a raw int/float scalar or a boxed Mixed cell; the backend dispatches
         // on the operand's EIR type. The rule immediate pins the exact arity (two for a pair
@@ -965,6 +1148,8 @@ fn validate_opcode_rules(
         MixedMinMax => check_count_at_least(inst_id, inst, 2, "at least 2"),
         // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
         // the arity is pinned here; the backend dispatches on the operand's EIR type.
+        StrIncDec if !inst.arithmetic_policy().is_permissive() => check_unary_any(function, inst_id, inst,
+            &[IrType::Str, IrType::Heap(IrHeapKind::Mixed)], "Str or boxed Mixed"),
         StrIncDec => check_count(inst_id, inst, 1, "1"),
         INeg | IBitNot => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         FNeg => check_unary(function, inst_id, inst, IrType::F64, "F64"),
@@ -1003,6 +1188,21 @@ fn validate_opcode_rules(
             { return Err(ValidationError::ResultTypeMismatch(result)); }
             Ok(())
         }
+        LocalPlace | LoadGlobalRefCell | LoadStaticLocalRefCell => {
+            check_count(inst_id, inst, 0, "0")?;
+            if inst.op == LoadStaticLocalRefCell {
+                let Some(Immediate::LocalSlot(slot)) = inst.immediate else { unreachable!() };
+                if function.flags.is_main || !function.locals.get(slot.as_raw() as usize).is_some_and(|local|
+                    local.kind == LocalKind::StaticLocal && local.php_type == PhpType::Mixed) {
+                    return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
+                }
+            }
+            let result = inst.result.ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::I64 || !matches!(inst.result_php_type, PhpType::Pointer(_))
+                || inst.result_ownership != Ownership::NonHeap
+            { return Err(ValidationError::ResultTypeMismatch(result)); }
+            Ok(())
+        }
         LoadLocal
         | LoadRefCell
         | LoadGlobal
@@ -1013,7 +1213,8 @@ fn validate_opcode_rules(
         | LoadReflectionStaticProperty
         | ReflectionStaticPropertyInitialized
         | ExternGlobalLoad => check_count(inst_id, inst, 0, "0"),
-        ThrowError => check_count(inst_id, inst, 0, "0"),
+        UnsetGlobal | ThrowError | ThrowTypeError | ThrowValueError | ThrowArithmeticError | ThrowOutOfBounds =>
+            check_count(inst_id, inst, 0, "0"),
         ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
         UnsetLocal | ZeroLocalSlot | PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell
         | ReleaseLocalRefCell
@@ -1030,14 +1231,63 @@ fn validate_opcode_rules(
             }
             Ok(())
         }
+        GlobalBindingPresent | EvalScopeContains => {
+            let count = usize::from(inst.op == EvalScopeContains);
+            check_count(inst_id, inst, count, "presence operands")?;
+            if inst.op == EvalScopeContains && !function.value(inst.operands[0])
+                .is_some_and(|value| value.php_type == PhpType::Int) {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
+            }
+            let result = inst.result.ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::I64 || inst.result_php_type != PhpType::Bool {
+                return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            Ok(())
+        }
+        GetNativeBindingState | GetEvalBindingState => {
+            check_count(inst_id, inst, 0, "0")?;
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else { unreachable!() };
+            if !function.flags.tracks_local_binding_state
+                || !function.locals.get(slot.as_raw() as usize).is_some_and(|local| local.kind == LocalKind::PhpLocal
+                    && local.name.as_deref().is_some_and(|name| !crate::names::is_generated_local_name(name)))
+                || inst.result_php_type != PhpType::Bool {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
+            }
+            Ok(())
+        }
+        SetLocalBindingState => {
+            check_count(inst_id, inst, 1, "1")?;
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else { unreachable!() };
+            let local = function.locals.get(slot.as_raw() as usize);
+            if !function.flags.tracks_local_binding_state
+                || !local.is_some_and(|local| local.kind == LocalKind::PhpLocal)
+                || !function.value(inst.operands[0]).is_some_and(|value| value.php_type == PhpType::Bool) {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
+            }
+            Ok(())
+        }
+        BindLocalRefContract => {
+            check_count(inst_id, inst, 0, "0")?;
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else { unreachable!() };
+            let valid_owner = function.locals.get(slot.as_raw() as usize).is_some_and(|local|
+                (local.kind == LocalKind::RefCell
+                    && crate::types::canonical_property_reference_payload(&local.php_type).is_some())
+                    || (local.kind == LocalKind::StaticLocal && local.php_type == PhpType::Mixed
+                        && !function.flags.is_main));
+            if !valid_owner || crate::semantics::conversions::implicit_contract(&inst.result_php_type).is_none() {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
+            }
+            Ok(())
+        }
         StoreStaticProperty | StoreReflectionStaticProperty => {
-            if !(1..=3).contains(&inst.operands.len()) {
-                return check_count(inst_id, inst, 1, "original RHS, optional assignment-site Bool and source owner");
+            let maximum = if inst.op == StoreReflectionStaticProperty { 4 } else { 3 };
+            if !(1..=maximum).contains(&inst.operands.len()) {
+                return check_count(inst_id, inst, 1, "original RHS, optional assignment-site Bool, source owner and class argument owner");
             }
             if inst.operands.len() >= 2 {
                 check_operand_type(function, inst_id, inst, 1, IrType::I64, "assignment-site bool (I64)")?;
             }
-            if let Some(owner_id) = inst.operands.get(2) {
+            for owner_id in inst.operands.iter().skip(2) {
                 let owner = function.value(*owner_id).ok_or(ValidationError::UnknownValue(*owner_id))?;
                 let ValueDef::Instruction { inst: load, .. } = owner.def else {
                     return Err(ValidationError::OwnershipTypeMismatch(*owner_id));
@@ -1452,6 +1702,34 @@ fn validate_typed_runtime_call(
     let Some(Immediate::RuntimeCall(target)) = inst.immediate else {
         return Ok(());
     };
+    if matches!(target, crate::ir::RuntimeCallTarget::NumericUnary { .. })
+        && (!inst.effects.contains(Effects::MAY_THROW)
+            || inst.result_type != IrType::Heap(IrHeapKind::Mixed)
+            || inst.result_php_type != PhpType::Mixed) {
+        return Err(ValidationError::UnexpectedImmediate(inst_id));
+    }
+    if let crate::ir::RuntimeCallTarget::CheckedNumericCast(target) = target {
+        let expected = match target {
+            elephc_semantics::numeric_cast::NumericCastTarget::Int => PhpType::Int,
+            elephc_semantics::numeric_cast::NumericCastTarget::Float => PhpType::Float,
+        };
+        if !inst.effects.contains(Effects::MAY_THROW) || inst.result_php_type != expected {
+            return Err(ValidationError::UnexpectedImmediate(inst_id));
+        }
+    }
+    if target == crate::ir::RuntimeCallTarget::CheckedRadixInt
+        && (!inst.effects.contains(Effects::MAY_THROW) || inst.result_php_type != PhpType::Int) {
+        return Err(ValidationError::UnexpectedImmediate(inst_id));
+    }
+    if let crate::ir::RuntimeCallTarget::NumericFunction { target, policy } = target {
+        if !matches!(target, crate::ir::RuntimeFnId::Abs | crate::ir::RuntimeFnId::ArraySum | crate::ir::RuntimeFnId::ArrayProduct)
+            || policy.is_permissive()
+            || (target == crate::ir::RuntimeFnId::Abs && !policy.checked_overflow())
+            || !inst.effects.contains(Effects::MAY_THROW)
+            || inst.result_type != IrType::Heap(IrHeapKind::Mixed)
+            || inst.result_php_type != PhpType::Mixed
+        { return Err(ValidationError::UnexpectedImmediate(inst_id)); }
+    }
     if target == crate::ir::RuntimeCallTarget::ExceptionGuardOwned {
         check_count(inst_id, inst, 2, "owned heap value and insertion token")?;
         check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;

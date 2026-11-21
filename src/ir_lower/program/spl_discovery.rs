@@ -13,7 +13,7 @@ use super::*;
 pub(super) fn lower_referenced_builtin_spl_methods(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     loop {
@@ -400,7 +400,7 @@ pub(in crate::ir_lower) fn php_method_key(method_name: &str) -> String {
 pub(super) fn lower_dynamic_constructor_thunks(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     let mut arg_counts = BTreeSet::new();

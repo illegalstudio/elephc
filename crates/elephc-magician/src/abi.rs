@@ -34,6 +34,9 @@ pub const SCOPE_FLAG_NATIVE_SNAPSHOT: u32 = 1 << 5;
 /// A native PHP name was detached by unset, including when eval subsequently rebound it.
 pub const SCOPE_FLAG_NATIVE_DETACHED: u32 = 1 << 6;
 
+/// Scope-set input flag selecting validated assignment through an existing native reference.
+pub const SCOPE_FLAG_ASSIGN_REFERENCE: u32 = 1 << 7;
+
 /// Result storage written by `__elephc_eval_execute`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

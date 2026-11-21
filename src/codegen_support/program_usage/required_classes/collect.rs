@@ -350,7 +350,7 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
                 _ => {}
             }
         }
-        ExprKind::Negate(expr)
+        ExprKind::UnaryPlus(expr) | ExprKind::Negate(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)

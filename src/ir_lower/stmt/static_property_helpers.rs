@@ -103,6 +103,16 @@ pub(crate) fn static_property_type(
         .map(|(_, property_ty)| property_lowering_type(property_ty))
 }
 
+/// Resolves physical storage independently of the original PHP declaration used by coercion.
+pub(super) fn static_property_storage_type(
+    ctx: &LoweringContext<'_, '_>, receiver: &StaticReceiver, property: &str,
+) -> Option<PhpType> {
+    let class_name = static_receiver_class_name(ctx, receiver)?;
+    let class = ctx.classes.get(&class_name)?;
+    let owner = class.static_property_declaring_classes.get(property).unwrap_or(&class_name);
+    crate::types::static_property_storage_type(ctx.classes.get(owner)?, property, ctx.semantic_profile)
+}
+
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.
 pub(super) fn static_receiver_class_name(
     ctx: &LoweringContext<'_, '_>,

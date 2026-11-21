@@ -97,6 +97,7 @@ fn lower_interface_adapter(
     function.flags.is_internal = true;
     function.flags.by_ref_return = signature.by_ref_return;
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function, None, &mut module.data, &body,
         env_from_signature(&signature, module.web), TypeEnv::new(),
         &Default::default(), &Default::default(), &module.extern_globals,
@@ -112,6 +113,7 @@ fn lower_interface_adapter(
         &Default::default(), // checked member receiver types
         &Default::default(), // checked declared-array append elements
         &Default::default(), // checked integer read sites
+        &Default::default(), // synthesized bodies have no declared local store contracts
         &Default::default(), // boxed reference promotions
         &Default::default(), // first-class builtin call types
         &Default::default(), // synthesized calls have no written generic arguments

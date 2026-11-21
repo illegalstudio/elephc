@@ -156,7 +156,7 @@ fn expr_contains_yield(expr: &Expr) -> bool {
             expr_contains_yield(left) || expr_contains_yield(right)
         }
         ExprKind::InstanceOf { value, .. } => expr_contains_yield(value),
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

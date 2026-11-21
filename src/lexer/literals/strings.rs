@@ -69,13 +69,15 @@ impl EscapeInput for CharsEscapeInput<'_, '_> {
 
 /// Scan a double-quoted string with interpolation support.
 /// Returns one or more tokens: for `"Hello $name!"` it returns
-/// `("Hello " . Variable("name") . "!")` (parenthesized, with Dot tokens for concatenation).
+/// A parenthesized concat stream whose variable operand carries the internal StringFormat
+/// prefix, preserving formatting separately from ordinary `.` concatenation.
 pub(in crate::lexer) fn scan_double_string_interpolated(
     cursor: &mut Cursor,
 ) -> Result<Vec<SpannedToken>, CompileError> {
     let span = cursor.span();
     cursor.advance(); // opening "
-    interpolate(cursor, span, Some('"'), MissingEscape::Error)
+    let profile = cursor.semantic_profile;
+    interpolate(cursor, span, Some('"'), MissingEscape::Error, profile)
 }
 
 /// Appends one interpolated expression part (already a token list) to the running stream,
@@ -103,9 +105,12 @@ fn push_interp_part(
         ));
     }
     tokens.push(spanned(Token::Dot, span));
+    tokens.push(spanned(Token::StringFormat, span));
+    tokens.push(spanned(Token::LParen, span));
     for token in part {
         tokens.push(token);
     }
+    tokens.push(spanned(Token::RParen, span));
 }
 
 /// Shared interpolation routine for double-quoted strings and heredoc bodies.
@@ -120,6 +125,7 @@ fn interpolate(
     span: Span,
     terminator: Option<char>,
     missing_escape: MissingEscape,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<Vec<SpannedToken>, CompileError> {
     let mut tokens: Vec<SpannedToken> = Vec::new();
     let mut current = String::new();
@@ -146,7 +152,7 @@ fn interpolate(
             Some('{') if input.peek_nth(1) == Some('$') => {
                 input.advance_escape(); // consume '{'
                 let inner = capture_braced_expr(input, span)?;
-                let fragment = tokenize_fragment(&inner, span)?;
+                let fragment = tokenize_fragment(&inner, span, profile)?;
                 has_interpolation = true;
                 let mut part = vec![spanned(Token::LParen, span)];
                 part.extend(fragment);
@@ -163,7 +169,7 @@ fn interpolate(
                     let inner_raw = capture_braced_expr(input, span)?;
                     // Re-prepend the $ so the expression is valid PHP ($a['x'] not a['x'])
                     let inner = format!("${}", inner_raw);
-                    let fragment = tokenize_fragment(&inner, span)?;
+                    let fragment = tokenize_fragment(&inner, span, profile)?;
                     has_interpolation = true;
                     let mut part = vec![spanned(Token::LParen, span)];
                     part.extend(fragment);
@@ -186,7 +192,7 @@ fn interpolate(
                 } else {
                     has_interpolation = true;
                     let mut part = vec![spanned(Token::Variable(name), span)];
-                    append_simple_access(input, &mut part, span)?;
+                    append_simple_access(input, &mut part, span, profile)?;
                     push_interp_part(&mut tokens, &mut current, part, span);
                 }
             }
@@ -220,10 +226,11 @@ fn append_simple_access(
     input: &mut impl EscapeInput,
     part: &mut Vec<SpannedToken>,
     span: Span,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<(), CompileError> {
     if input.peek_escape() == Some('[') {
         input.advance_escape(); // consume '['
-        append_simple_offset_key(input, part, span);
+        append_simple_offset_key(input, part, span, profile);
         if input.peek_escape() == Some(']') {
             input.advance_escape();
         } else {
@@ -260,6 +267,7 @@ fn append_simple_offset_key(
     input: &mut impl EscapeInput,
     part: &mut Vec<SpannedToken>,
     span: Span,
+    profile: elephc_semantics::SemanticProfile,
 ) {
     part.push(spanned(Token::LBracket, span));
     match input.peek_escape() {
@@ -290,10 +298,13 @@ fn append_simple_offset_key(
                     break;
                 }
             }
-            part.push(spanned(
-                Token::IntLiteral(digits.parse().unwrap_or(0)),
-                span,
-            ));
+            // PHP classifies canonical numeric text before ArrayAccess dispatch too.
+            // Exact-key mode keeps the original text instead of applying that conversion.
+            let token = match elephc_semantics::array_keys::classify_string_key(profile, digits.as_bytes()) {
+                elephc_semantics::array_keys::StringKey::Integer(value) => Token::IntLiteral(value),
+                elephc_semantics::array_keys::StringKey::String(_) => Token::StringLiteral(digits),
+            };
+            part.push(spanned(token, span));
         }
         _ => {
             let mut key = String::new();
@@ -424,9 +435,9 @@ fn copy_line_comment(input: &mut impl EscapeInput, inner: &mut String) {
 /// a synthetic `<?php` tag, then dropping the open tag and EOF and re-spanning the tokens
 /// to the enclosing string's span. Reuses the full lexer so nested strings, calls, and
 /// array/property access inside the braces are handled like any other expression.
-fn tokenize_fragment(inner: &str, span: Span) -> Result<Vec<SpannedToken>, CompileError> {
+fn tokenize_fragment(inner: &str, span: Span, profile: elephc_semantics::SemanticProfile) -> Result<Vec<SpannedToken>, CompileError> {
     let source = format!("<?php {}", inner);
-    let tokens = crate::lexer::tokenize(&source)?;
+    let tokens = crate::lexer::tokenize_with_semantics(&source, crate::source::SourceMode::Php, span.source_id(), profile)?;
     Ok(tokens
         .into_iter()
         .filter(|(token, _)| !matches!(token, Token::OpenTag | Token::Eof))
@@ -565,7 +576,7 @@ pub(in crate::lexer) fn scan_heredoc(
 
                     let mut chars = content.chars().peekable();
                     let mut input = CharsEscapeInput { chars: &mut chars };
-                    return interpolate(&mut input, span, None, MissingEscape::Literal);
+                    return interpolate(&mut input, span, None, MissingEscape::Literal, cursor.semantic_profile);
                 }
             }
         }

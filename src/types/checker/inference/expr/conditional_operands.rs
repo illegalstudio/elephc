@@ -31,11 +31,15 @@ impl Checker {
             || matches!(&object.kind, ExprKind::Variable(name) if !self.local_flow_read_is_stable(name));
         let evaluate = |checker: &mut Self, env: &mut TypeEnv| {
             if let Some(name) = name { checker.infer_type_with_assignment_effects(name, env)?; }
-            let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
+            let prepared = checker.member_call_reference_arguments(expr, Some(&object_ty), args, env)?;
+            let expanded = prepared.args;
             if let ExprKind::NullsafeMethodCall { method, .. } = &expr.kind {
                 checker.promote_pdo_binding_ref_storage(object, method, &expanded, env)?;
             }
-            for arg in &expanded { checker.infer_type_with_assignment_effects(arg, env)?; }
+            for (index, arg) in expanded.iter().enumerate() {
+                checker.prepare_reference_source_argument(arg, index, &prepared.reference_sources, env);
+                checker.infer_type_with_assignment_effects(arg, env)?;
+            }
             checker.infer_type(expr, env)
         };
         let result = if can_skip {

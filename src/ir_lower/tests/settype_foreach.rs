@@ -70,9 +70,9 @@ function convert_static_mixed(): void {
         }
         for name in ["convert_static", "convert_static_mixed"] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            assert!(function.instructions.iter().any(|instruction| instruction.op == Op::StoreStaticLocal),
-                "{name} on {target}: fixture must write static storage");
-            assert!(function.instructions.iter().filter(|instruction| instruction.op == Op::LoadStaticLocal)
+            assert!(function.instructions.iter().any(|instruction| instruction.op == Op::LoadStaticLocalRefCell),
+                "{name} on {target}: fixture must bind persistent static storage");
+            assert!(function.instructions.iter().filter(|instruction| instruction.op == Op::LoadRefCell)
                 .all(|instruction| instruction.result_php_type == PhpType::Mixed),
                 "{name} on {target}: converted static reads must retain their boxed runtime tag");
         }

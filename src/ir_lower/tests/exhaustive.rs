@@ -123,6 +123,7 @@ fn dummy_check_result() -> CheckResult {
     );
 
     CheckResult {
+        semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
         trait_collision_defaults: HashMap::new(),
         class_binding: Default::default(),
         requested_instantiations: Vec::new(),
@@ -142,6 +143,7 @@ fn dummy_check_result() -> CheckResult {
         callable_return_sigs: HashMap::new(),
         callable_array_return_sigs: HashMap::new(),
         closure_param_hints: HashMap::new(),
+        closure_result_types: HashMap::new(),
         interfaces: HashMap::new(),
         classes,
         enums,
@@ -160,6 +162,7 @@ fn dummy_check_result() -> CheckResult {
         member_receiver_types: HashMap::new(),
         array_append_element_types: HashMap::new(),
         local_value_read_types: HashMap::new(),
+        local_store_contracts: Default::default(),
         boxed_reference_promotion_sites: HashMap::new(),
         buffer_read_sites: Default::default(),
         first_class_builtin_call_types: HashMap::new(),
@@ -311,6 +314,7 @@ fn lowers_every_expr_variant_smoke() {
         }),
         bool_lit(true),
         expr(ExprKind::Null),
+        expr(ExprKind::UnaryPlus(Box::new(int(1)))),
         expr(ExprKind::Negate(Box::new(int(1)))),
         expr(ExprKind::Not(Box::new(bool_lit(false)))),
         expr(ExprKind::BitNot(Box::new(int(1)))),

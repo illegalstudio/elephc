@@ -6,7 +6,7 @@ description: "Sets the default stream context."
 ## stream_context_set_default()
 
 ```php
-function stream_context_set_default(array $options): mixed
+function stream_context_set_default(array $options): resource
 ```
 
 Sets the default stream context.
@@ -14,7 +14,7 @@ Sets the default stream context.
 **Parameters**:
 - `$options` (`array`)
 
-**Returns**: `mixed`
+**Returns**: `resource`
 
 ## Availability
 

@@ -21,6 +21,10 @@ use super::super::Checker;
 pub(crate) struct ReturnInfo {
     pub ty: PhpType,
     pub has_value: bool,
+    /// Source operation retained after the body's checker scope has been restored.
+    pub source_mode: crate::source::SourceMode,
+    /// The return site, independent of the enclosing declaration's diagnostic location.
+    pub span: crate::span::Span,
 }
 
 /// Adds one scalar member to an inferred return type, the way [`nullable_return_type`] adds
@@ -67,6 +71,18 @@ fn nullable_return_type(other: &PhpType) -> PhpType {
 }
 
 impl Checker {
+    /// Joins recorded return values without inventing a scalar conversion in an inferred ABI.
+    pub(crate) fn inferred_return_contract(&self, infos: &[ReturnInfo],
+        legacy_join: fn(&PhpType, &PhpType) -> PhpType) -> Option<PhpType> {
+        let first = infos.first()?;
+        let source = if infos.iter().any(|info| info.source_mode != crate::source::SourceMode::Internal) {
+            crate::source::SourceMode::Php
+        } else { crate::source::SourceMode::Internal };
+        Some(infos.iter().skip(1).fold(first.ty.clone(), |left, info|
+            crate::semantics::conversions::inferred_scalar_join(self.semantic_profile, source, &left, &info.ty)
+                .unwrap_or_else(|| legacy_join(&left, &info.ty))))
+    }
+
     /// Recursively collects ReturnInfo from all return statements in `stmt` and its
     /// nested blocks (if/while/try/etc.), appending each to `returns`. Untyped or unresolvable
     /// expressions are skipped silently — only well-typed returns contribute to the vector.
@@ -91,6 +107,8 @@ impl Checker {
                     returns.push(ReturnInfo {
                         ty,
                         has_value: true,
+                        source_mode: stmt.source_mode,
+                        span: stmt.span,
                     });
                 }
             }
@@ -98,6 +116,8 @@ impl Checker {
                 returns.push(ReturnInfo {
                     ty: PhpType::Void,
                     has_value: false,
+                    source_mode: stmt.source_mode,
+                    span: stmt.span,
                 });
             }
             StmtKind::If {
@@ -372,6 +392,21 @@ impl Checker {
             return Err(CompileError::new(span, &format!("{context} must return a null value")));
         }
         self.require_compatible_return_type(expected, actual, has_value, span, context)
+    }
+
+    /// Checks a recorded return with its own source contract before declaration compatibility.
+    pub(crate) fn require_return_info_hint(&self, hint: &TypeExpr, expected: &PhpType,
+        info: &ReturnInfo, span: crate::span::Span, context: &str) -> Result<(), CompileError> {
+        if info.has_value && !matches!(expected, PhpType::Void) {
+            self.require_noncoercive_value_type(expected, &info.ty, info.source_mode, info.span, context)?;
+            if info.ty == PhpType::Mixed && crate::semantics::conversions::permits_guarded_unknown(expected)
+                && matches!(crate::semantics::conversions::implicit(self.semantic_profile,
+                    info.source_mode, expected, &info.ty),
+                    elephc_semantics::conversions::ConversionPlan::Guard { .. }) {
+                return Ok(());
+            }
+        }
+        self.require_compatible_return_hint(hint, expected, &info.ty, info.has_value, span, context)
     }
 
     /// Checks that an actual return type is compatible with the declared return type.

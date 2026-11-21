@@ -57,7 +57,14 @@ pub(crate) const fn join_semantics(target: crate::ir::RuntimeFnId) -> crate::bui
     let mut semantics =
         crate::builtins::semantics::runtime_fn_semantics(target);
     semantics.effects = crate::builtins::semantics::BuiltinEffects::Shared(implode_effects);
+    semantics.validation = crate::builtins::semantics::BuiltinValidation::MixedInputs(mixed_input_roles);
     // Omitted `$array` selects the one-argument overload, including after named planning.
     semantics.argument_lowering = crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced;
     semantics
+}
+
+/// Uses the supplied arity to distinguish a sole array from a separator followed by an array.
+fn mixed_input_roles(input: &crate::builtins::semantics::BuiltinSemanticInput<'_>)
+    -> Vec<(usize, crate::types::PhpType)> {
+    crate::builtins::mixed_inputs::shared_domains(input)
 }

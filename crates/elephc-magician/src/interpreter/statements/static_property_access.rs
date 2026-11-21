@@ -35,7 +35,7 @@ pub(in crate::interpreter) fn store_borrowed_static_property(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    eval_reject_null_object_static_property(class_name, property_name, value, context, values)?;
+    eval_validate_static_property_value(class_name, property_name, value, context, values)?;
     let value = match context.static_property_alias(class_name, property_name) {
         Some(EvalReferenceTarget::Cell { cell }) if values.is_reference(*cell)? => *cell,
         _ => value,
@@ -44,6 +44,7 @@ pub(in crate::interpreter) fn store_borrowed_static_property(
         return Ok(());
     }
     let retained = values.retain(value)?;
+    eval_note_static_property_array_value(class_name, property_name, value, context, values)?;
     if let Some(previous) = context.set_static_property(class_name, property_name, retained) {
         eval_release_value(context, values, previous)?;
     }
@@ -62,6 +63,7 @@ pub(in crate::interpreter) fn store_static_property_value(
     if value.is_borrowed() {
         return store_borrowed_static_property(class_name, property_name, value, context, values);
     }
+    eval_note_static_property_array_value(class_name, property_name, value, context, values)?;
     if let Some(previous) = context.set_static_property(class_name, property_name, value) {
         eval_release_value(context, values, previous)?;
     }
@@ -429,9 +431,9 @@ fn eval_initialize_class(
             context.begin_deprecation_silence();
         }
         let mut default_scope = ElephcEvalScope::new();
-        let value = eval_class_like_member_default(
+        let value = eval_property_default(
             declaring.name(),
-            property.trait_origin(),
+            property,
             default,
             context,
             &mut default_scope,
@@ -452,9 +454,9 @@ fn eval_initialize_class(
     {
         let Some(default) = property.default() else { continue };
         let mut default_scope = ElephcEvalScope::new();
-        let value = eval_class_like_member_default(
+        let value = eval_property_default(
             class.name(),
-            property.trait_origin(),
+            property,
             default,
             context,
             &mut default_scope,
@@ -470,7 +472,13 @@ fn eval_initialize_class(
             }
             continue;
         }
+        let origin = eval_default_property_array_origin(
+            class.name(), property, value, context, values,
+        )?;
         store_static_property_value(class.name(), property.name(), value, context, values)?;
+        if let Some(origin) = origin {
+            context.set_static_property_array_type(class.name(), property.name(), origin);
+        }
     }
     Ok(())
 }
@@ -554,9 +562,9 @@ fn eval_property_slot_defaults(
     for (class, property) in slots {
         let Some(default) = property.default() else { continue };
         let mut default_scope = ElephcEvalScope::new();
-        let value = eval_class_like_member_default(
+        let value = eval_property_default(
             class.name(),
-            property.trait_origin(),
+            property,
             default,
             context,
             &mut default_scope,
@@ -784,7 +792,7 @@ fn eval_class_like_display_name(class_name: &str, context: &ElephcEvalContext) -
 }
 
 /// Resolves eval-visible built-in Reflection class constants.
-pub(super) fn eval_builtin_reflection_class_constant(
+pub(in crate::interpreter) fn eval_builtin_reflection_class_constant(
     class_name: &str,
     constant_name: &str,
     values: &mut impl RuntimeValueOps,
@@ -902,6 +910,7 @@ pub(super) fn eval_static_property_reference_bind_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    context.invalidate_member_source_views();
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
     // Binding a static by reference fetches it, which initializes the class first, as every
     // other static-property access does.
@@ -940,10 +949,13 @@ pub(super) fn eval_static_property_reference_bind_result(
             scope,
             values,
         )?;
+        prepare_property_reference_admission(&declaring_class,&property,&target,context,values)?;
         let value = eval_reference_target_value(&target, context, values)?;
-        eval_reject_null_object_property(&declaring_class, &property, value, context, values)?;
-        context.bind_static_property_alias(&declaring_class, property.name(), target);
-        return store_borrowed_static_property(&declaring_class, property.name(), value, context, values);
+        return with_eval_value_lease(value, context, values, |value, context, values| {
+            eval_validate_static_property_value(&declaring_class, property.name(), value, context, values)?;
+            context.bind_static_property_alias(&declaring_class, property.name(), target);
+            store_borrowed_static_property(&declaring_class, property.name(), value, context, values)
+        });
     }
     if eval_static_member_context_owns_class(&class_name, context) {
         if let Some(parent) = context.class_native_parent_name(&class_name) {
@@ -974,6 +986,8 @@ pub(super) fn eval_static_property_reference_bind_result(
                         values,
                     );
                 }
+                if eval_native_static_property_reference_bind(&declaring_class, property_name,
+                    source_name, context, scope, values)? { return Ok(()); }
                 let target = eval_static_property_reference_target(
                     &declaring_class,
                     property_name,
@@ -1023,6 +1037,8 @@ pub(super) fn eval_static_property_reference_bind_result(
                 values,
             );
         }
+        if eval_native_static_property_reference_bind(&declaring_class, property_name,
+            source_name, context, scope, values)? { return Ok(()); }
         let target = eval_static_property_reference_target(
             &declaring_class,
             property_name,
@@ -1061,6 +1077,9 @@ pub(super) fn eval_static_property_reference_target(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalReferenceTarget, EvalStatus> {
+    if let Some(target) = owned_property_reference_source(source_name, context, scope, values)? {
+        return Ok(target);
+    }
     if let Some(target) = scope.reference_target(source_name).cloned() {
         let resolved = persistent_reference_target(target.clone())?;
         if reference_target_has_object_root(&resolved) {
@@ -1124,6 +1143,29 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    set_static_property_with_source(class_name, property_name, value, MemberWriteSource::Internal, context, values)
+}
+
+/// Carries an evaluated producer through the selected static declaration and backing slot.
+pub(in crate::interpreter) fn eval_sourced_static_property_set_result(class: &str, property: &str,
+    value: RuntimeCellHandle, source: Option<&ArgumentSource>, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    set_static_property_with_source(class, property, value, MemberWriteSource::Evaluated(source), context, values)
+}
+
+/// Publishes an array mutation's data schema without manufacturing an argument proof.
+pub(in crate::interpreter) fn eval_array_static_property_set_result(class: &str, property: &str, value: RuntimeCellHandle,
+    schema: Option<&elephc_generics::Type>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    set_static_property_with_source(class, property, value, MemberWriteSource::ArrayContents(schema), context, values)
+}
+
+/// Shares static authorization and source publication while preserving old-value retirement ordering.
+fn set_static_property_with_source(class_name: &str, property_name: &str, value: RuntimeCellHandle,
+    source: MemberWriteSource<'_>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    context.invalidate_member_source_views();
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
     if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
         if !property.is_static() {
@@ -1151,20 +1193,29 @@ pub(in crate::interpreter) fn eval_static_property_set_result(
             );
         }
         validate_native_static_class_defaults(&class_name, &declaring_class, context, values)?;
-        eval_reject_null_object_property(&declaring_class, &property, value, context, values)?;
+        source.validate(property.property_type(), &declaring_class, &class_name, value, context, values)?;
+        eval_validate_static_property_value(&declaring_class, property.name(), value, context, values)?;
+        if context.static_property_alias(&declaring_class,property.name()).is_none() {
+            if let Some(candidate)=coerce_property_value_candidate(&declaring_class,&property,value,context,values)? {
+                return with_eval_value_lease(candidate,context,values,|candidate,context,values|
+                    eval_static_property_set_result(&declaring_class,property.name(),candidate,context,values));
+            }
+        }
+        let existing = context.static_property_array_type(&declaring_class, property.name()).cloned();
+        let mut origin = source.array_origin(existing.as_ref(), property.property_type(), property.name(), value, context, values)?;
         if let Some(target) = context
             .static_property_alias(&declaring_class, property.name())
             .cloned()
         {
-            eval_static_reference_target_write(
-                &declaring_class,
-                property.name(),
-                target,
-                value,
-                context,
-                values,
-            )?;
+            let handled = write_member_reference_origin(&target, value, origin.as_ref(), context, values,
+                |context, values, origin, cell| {
+                    context.set_static_property_array_type(&declaring_class, property.name(), origin.clone());
+                    eval_note_static_property_array_value(&declaring_class, property.name(), cell, context, values)
+                })?;
+            if handled { origin = None; }
+            else { eval_static_reference_target_write(&declaring_class, property.name(), target, value, context, values)?; }
         }
+        if let Some(origin) = origin { context.set_static_property_array_type(&declaring_class, property.name(), origin); }
         return store_borrowed_static_property(&declaring_class, property.name(), value, context, values);
     }
     if eval_static_member_context_owns_class(&class_name, context) {

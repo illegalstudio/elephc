@@ -54,6 +54,7 @@ impl FakeOps {
             return Err(EvalStatus::UnsupportedConstruct);
         };
         elements.push(value);
+        self.transfer_reference_value_owner(value);
         Ok(array)
     }
     /// Appends one object to a fake direct-object indexed array, retaining it like the
@@ -70,6 +71,7 @@ impl FakeOps {
             return Err(EvalStatus::UnsupportedConstruct);
         };
         elements.push(retained);
+        self.transfer_reference_value_owner(retained);
         Ok(array)
     }
     /// Creates a fake associative array cell.
@@ -114,15 +116,46 @@ impl FakeOps {
                 elements
                     .get(index as usize)
                     .copied()
-                    .map_or_else(|| self.null(), Ok)
             }
             FakeValue::Assoc(entries) => entries
                 .iter()
-                .find_map(|(entry_key, value)| (entry_key == &key).then_some(*value))
-                .map_or_else(|| self.null(), Ok),
-            _ => self.null(),
-        }?;
-        self.retain(result)
+                .find_map(|(entry_key, value)| (entry_key == &key).then_some(*value)),
+            _ => None,
+        };
+        match result {
+            Some(value) => self.retain(value),
+            None => self.null(),
+        }
+    }
+    /// Resolves a checked read once without confusing present null with a missing cell.
+    pub(super) fn runtime_array_get_checked(&mut self, array: RuntimeCellHandle,
+        index: RuntimeCellHandle, preserve_reference: bool,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        if self.type_tag(array)? == EVAL_TAG_STRING {
+            let bytes = self.string_bytes(array)?;
+            let key = self.key(index)?;
+            let offset = match key { FakeKey::Int(value) => value,
+                FakeKey::String(value) => match std::str::from_utf8(&value).ok().and_then(|value| value.trim().parse::<i64>().ok()) {
+                    Some(value) => value, None => return self.null().map(Some),
+                },
+            };
+            let offset = if offset < 0 { (bytes.len() as i128) + i128::from(offset) } else { i128::from(offset) };
+            return match usize::try_from(offset).ok().and_then(|offset| bytes.get(offset)).copied() {
+                Some(byte) => self.string_bytes_value(&[byte]).map(Some), None => Ok(None),
+            };
+        }
+        let key = self.key(index)?;
+        let result = match self.get(array) {
+            FakeValue::Array(elements) => match key {
+                FakeKey::Int(index) => usize::try_from(index).ok().and_then(|index| elements.get(index)).copied(),
+                _ => None,
+            },
+            FakeValue::Assoc(entries) => entries.iter().find_map(|(entry, value)| (entry == &key).then_some(*value)),
+            _ => return self.array_get(array, index).map(Some),
+        };
+        let Some(value) = result else { return Ok(None); };
+        if !preserve_reference && self.is_reference(value)? { self.copy_value(value).map(Some) }
+        else { self.retain(value).map(Some) }
     }
     /// Checks whether a fake array has the requested key without reading its value.
     pub(super) fn runtime_array_key_exists(
@@ -207,15 +240,10 @@ impl FakeOps {
         };
         match slot {
             FakeValue::Array(elements) => match key {
-                FakeKey::Int(index) => {
-                    if index < 0 {
-                        return Err(EvalStatus::UnsupportedConstruct);
-                    }
+                FakeKey::Int(index) if index >= 0 && index as usize <= elements.len() => {
                     let index = index as usize;
-                    while elements.len() <= index {
-                        elements.push(RuntimeCellHandle::from_raw(std::ptr::null_mut()));
-                    }
-                    elements[index] = value;
+                    if index == elements.len() { elements.push(value); }
+                    else { elements[index] = value; }
                 }
                 key => {
                     let mut entries = std::mem::take(elements)
@@ -264,5 +292,43 @@ impl FakeOps {
             self.get(value),
             FakeValue::Array(_) | FakeValue::Assoc(_)
         ))
+    }
+}
+
+/// Sparse and negative integer writes retain PHP entry count, key order and readable values.
+#[test]
+fn fake_sparse_array_key_writes_preserve_count_order_and_values() {
+    let mut values = FakeOps::default();
+    let mut array = values.array_new(0).unwrap();
+    let value = values.int(9).unwrap();
+    for key in [1, -2, 5] {
+        let key = values.int(key).unwrap();
+        array = values.array_set(array, key, value).unwrap();
+        values.release(key).unwrap();
+    }
+    assert_eq!(values.array_len(array).unwrap(), 3);
+    for (position, expected) in [1, -2, 5].into_iter().enumerate() {
+        let key = values.array_iter_key(array, position).unwrap();
+        assert_eq!(values.get(key), FakeValue::Int(expected));
+        let read = values.array_get(array, key).unwrap();
+        assert_eq!(values.get(read), FakeValue::Int(9));
+        values.release(read).unwrap(); values.release(key).unwrap();
+    }
+    values.release(value).unwrap(); values.release(array).unwrap();
+    assert!(values.cell_owners.values().all(|owners| *owners == 0));
+}
+
+/// A missing read creates one null owner; only existing container elements need retaining.
+#[test]
+fn fake_array_missing_reads_transfer_single_null_owners() {
+    for kind in 0..3 {
+        let mut values = FakeOps::default();
+        let array = match kind { 0 => values.array_new(0), 1 => values.assoc_new(0), _ => values.null() }.unwrap();
+        let key = values.int(0).unwrap();
+        let result = values.array_get(array, key).unwrap();
+        assert_eq!(values.get(result), FakeValue::Null);
+        assert_eq!(values.cell_owners[&(result.as_ptr() as usize)], 1);
+        for value in [result, key, array] { values.release(value).unwrap(); }
+        assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
     }
 }

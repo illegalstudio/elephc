@@ -10,19 +10,19 @@
 use super::*;
 
 /// Rewrites foldable static builtin calls in a program to integer literals.
-pub(super) fn fold_static_builtin_calls_in_program(program: Program, strict_php: bool) -> Program {
+pub(super) fn fold_static_builtin_calls_in_program(program: Program, profile: EvalSourceProfile) -> Program {
     program
         .into_iter()
-        .map(|stmt| fold_static_builtin_calls_in_stmt(stmt, strict_php))
+        .map(|stmt| fold_static_builtin_calls_in_stmt(stmt, profile))
         .collect()
 }
 
 /// Rewrites foldable static builtin calls inside one statement.
-pub(super) fn fold_static_builtin_calls_in_stmt(stmt: Stmt, strict_php: bool) -> Stmt {
+pub(super) fn fold_static_builtin_calls_in_stmt(stmt: Stmt, profile: EvalSourceProfile) -> Stmt {
     let fold_static_builtin_calls_in_expr =
-        |expr| fold_static_builtin_calls_in_expr(expr, strict_php);
+        |expr| fold_static_builtin_calls_in_expr(expr, profile);
     let fold_static_builtin_calls_in_program =
-        |program| fold_static_builtin_calls_in_program(program, strict_php);
+        |program| fold_static_builtin_calls_in_program(program, profile);
     let kind = match stmt.kind {
         StmtKind::Echo(expr) => StmtKind::Echo(fold_static_builtin_calls_in_expr(expr)),
         StmtKind::Assign { name, value } => StmtKind::Assign {
@@ -62,9 +62,9 @@ pub(super) fn fold_static_builtin_calls_in_stmt(stmt: Stmt, strict_php: bool) ->
             update,
             body,
         } => StmtKind::For {
-            init: init.map(|stmt| Box::new(fold_static_builtin_calls_in_stmt(*stmt, strict_php))),
+            init: init.map(|stmt| Box::new(fold_static_builtin_calls_in_stmt(*stmt, profile))),
             condition: condition.map(fold_static_builtin_calls_in_expr),
-            update: update.map(|stmt| Box::new(fold_static_builtin_calls_in_stmt(*stmt, strict_php))),
+            update: update.map(|stmt| Box::new(fold_static_builtin_calls_in_stmt(*stmt, profile))),
             body: fold_static_builtin_calls_in_program(body),
         },
         StmtKind::Switch {
@@ -103,11 +103,16 @@ pub(super) fn fold_static_builtin_calls_in_stmt(stmt: Stmt, strict_php: bool) ->
 }
 
 /// Rewrites foldable static builtin calls inside one expression.
-pub(super) fn fold_static_builtin_calls_in_expr(expr: Expr, strict_php: bool) -> Expr {
+pub(super) fn fold_static_builtin_calls_in_expr(expr: Expr, profile: EvalSourceProfile) -> Expr {
     let fold_static_builtin_calls_in_expr =
-        |expr| fold_static_builtin_calls_in_expr(expr, strict_php);
+        |expr| fold_static_builtin_calls_in_expr(expr, profile);
     let span = expr.span;
+    let source_profile = expr.source_profile;
+    let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
+        ExprKind::UnaryPlus(inner) => {
+            ExprKind::UnaryPlus(Box::new(fold_static_builtin_calls_in_expr(*inner)))
+        }
         ExprKind::Negate(inner) => {
             ExprKind::Negate(Box::new(fold_static_builtin_calls_in_expr(*inner)))
         }
@@ -189,13 +194,13 @@ pub(super) fn fold_static_builtin_calls_in_expr(expr: Expr, strict_php: bool) ->
             if let Some(kind) = fold_static_call_user_func_call(
                 name.as_str().trim_start_matches('\\'),
                 &folded_args,
-                strict_php,
+                profile,
             ) {
                 kind
             } else if let Some(kind) = fold_static_builtin_call(
                 name.as_str().trim_start_matches('\\'),
                 &folded_args,
-                strict_php,
+                profile,
             )
             {
                 kind
@@ -208,26 +213,26 @@ pub(super) fn fold_static_builtin_calls_in_expr(expr: Expr, strict_php: bool) ->
         }
         other => other,
     };
-    Expr { kind, span }
+    Expr { kind, span, source_profile, producer_binding }
 }
 
 /// Folds `call_user_func*()` when the callback is a pure foldable builtin.
 pub(super) fn fold_static_call_user_func_call(
     short_name: &str,
     args: &[Expr],
-    strict_php: bool,
+    profile: EvalSourceProfile,
 ) -> Option<ExprKind> {
     match php_symbol_key(short_name).as_str() {
         "call_user_func" => {
             let (callback, callback_args) = args.split_first()?;
-            fold_static_callback_call(callback, callback_args, strict_php)
+            fold_static_callback_call(callback, callback_args, profile)
         }
         "call_user_func_array" => {
             let [callback, arg_array] = args else {
                 return None;
             };
             let callback_args = static_call_user_func_array_args(arg_array)?;
-            fold_static_callback_call(callback, &callback_args, strict_php)
+            fold_static_callback_call(callback, &callback_args, profile)
         }
         _ => None,
     }
@@ -237,7 +242,7 @@ pub(super) fn fold_static_call_user_func_call(
 pub(super) fn fold_static_callback_call(
     callback: &Expr,
     callback_args: &[Expr],
-    strict_php: bool,
+    profile: EvalSourceProfile,
 ) -> Option<ExprKind> {
     let ExprKind::StringLiteral(callback_name) = &callback.kind else {
         return None;
@@ -248,6 +253,6 @@ pub(super) fn fold_static_callback_call(
     fold_static_builtin_call(
         callback_name.trim_start_matches('\\'),
         callback_args,
-        strict_php,
+        profile,
     )
 }

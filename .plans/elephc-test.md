@@ -210,7 +210,7 @@ Flow, all inside the compiler process:
 2. **Test files.** Every regular file under `PATH` whose name ends in `Test.php` or
    `Test.lfc` (PHPUnit's default suffix), sorted by path; a `PATH` that is a file is
    taken as is. The entry is one `require_once` per file, with absolute paths.
-   `.php` files keep their tagged profile and `--strict-php` semantics, `.lfc` files
+   `.php` files keep their tagged profile and `--php-only` semantics, `.lfc` files
    are extension-enabled, through the normal per-file source profile.
 3. **Compile-time discovery** runs as a pipeline pass after `autoload::run`, when
    every class the tests reference, including base classes autoloaded from `src/`,
@@ -241,7 +241,7 @@ Flow, all inside the compiler process:
    exit code. A child killed by a signal exits with `128 + signal` and a one-line
    diagnostic. Zero discovered tests is a compile-time error (`no tests found under
    PATH`), exit code 1, matching PHPUnit's "No tests executed".
-7. **Compile options** after the path are the ordinary compile flags (`--strict-php`,
+7. **Compile options** after the path are the ordinary compile flags (`--php-only`,
    `--with-<crate>`, `--heap-size`, `--php-version`, `--define`, `--ini`,
    `--quiet`, ...). Output-mode flags (`--emit-*`, `--check`, `--emit-asm`,
    `--target` other than the host) are rejected: the runner always builds and runs

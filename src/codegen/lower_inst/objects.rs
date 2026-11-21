@@ -41,6 +41,7 @@ use super::{
     emit_loaded_assoc_array_to_mixed,
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
+    materialize_constructor_call_args_with_receiver_reg_and_refs,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
     property_values, store_if_result, store_method_call_result, RefArgCellLifetime,
 };
@@ -180,6 +181,7 @@ mod dynamic_pdo;
 mod dynamic_class_flags;
 mod property_defaults;
 mod known_property_reads;
+mod property_hash_reads;
 mod mixed_property_reads;
 mod runtime_magic_reads;
 mod dynamic_property_read_entry;

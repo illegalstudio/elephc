@@ -19,20 +19,70 @@ builtin! {
     contract: "settype",
     check: check,
     lazy_check: true,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::Settype,
-    ),
+    semantics: semantics(),
+}
+
+/// Shares checked conversion graphs while retaining permissive scalar storage specialization.
+const fn semantics() -> crate::builtins::semantics::BuiltinSemantics {
+    use crate::builtins::semantics::*;
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::Settype);
+    semantics.requirements = BuiltinRequirements::Static(&[
+        BuiltinRequirement::PreludeHelper(crate::object_cast_prelude::CAST_HELPER),
+        BuiltinRequirement::PreludeHelper(crate::object_cast_prelude::DYNAMIC_CAST_HELPER),
+    ]);
+    semantics.target_strategy = BuiltinTargetStrategy::EirGraph;
+    semantics.effects = BuiltinEffects::Shared(effects);
+    semantics.callable = BuiltinCallablePolicy::Prepared(callable_accepts_any_source);
+    semantics.lowering = BuiltinLowering::Eir(lower);
+    semantics
+}
+
+/// Conversion or displaced-value retirement may invoke user code before returning.
+fn effects(_input: &crate::builtins::semantics::BuiltinSemanticInput<'_>) -> crate::ir::Effects {
+    crate::ir::Effects::php_conversion()
+}
+
+/// Shares evaluated original values and reference storage between direct and callable checked paths.
+fn lower(ctx: &mut dyn crate::builtins::semantics::BuiltinLoweringContext,
+    call: &crate::builtins::semantics::NormalizedBuiltinCall<'_>)
+    -> Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+    if crate::semantics::conversions::checked_references(call.semantic_profile, call.source_mode)
+        || ctx.uses_prepared_builtin_semantics() {
+        return ctx.emit_settype_conversion(call.operand(0)?, call.operand(1)?, call.source_mode, call.span);
+    }
+    let target = crate::ir::RuntimeFnId::Settype;
+    Ok(ctx.emit_runtime_call(crate::ir::RuntimeCallTarget::Function(target), call.operands.to_vec(),
+        call.result_type.clone(), target.effects(), Some(call.span)))
 }
 
 /// Validates the `settype` arguments: infers both in source order and rejects a non-string type.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    cx.checker.infer_type(&cx.args[0], cx.env)?;
+    let source = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    if let crate::parser::ast::ExprKind::Variable(name) = &cx.args[0].kind {
+        // The selected target can be runtime-only. Record membership without changing the
+        // caller's value view before the conversion and its ordinary publication succeed.
+        cx.checker.check_local_binding_store(name, &PhpType::Mixed, cx.span, cx.env, None)?;
+        cx.checker.record_local_reference_contract(name, &source, cx.args[0].span);
+    }
     if ty != PhpType::Str {
         return Err(CompileError::new(
             cx.span,
             "settype() second argument must be a string",
         ));
+    }
+    if let crate::parser::ast::ExprKind::StringLiteral(name) = &cx.args[1].kind {
+        if crate::semantics::conversions::checked_casts(cx.checker.semantic_profile, cx.source_mode) {
+            elephc_semantics::settype_target::SettypeTarget::parse(name)
+                .map_err(|failure| CompileError::new(cx.span, failure.message()))?;
+        }
+        if let Some(target) = elephc_semantics::numeric_cast::NumericCastTarget::from_type_name(name) {
+            let target = match target {
+                elephc_semantics::numeric_cast::NumericCastTarget::Int => crate::parser::ast::CastType::Int,
+                elephc_semantics::numeric_cast::NumericCastTarget::Float => crate::parser::ast::CastType::Float,
+            };
+            cx.checker.validate_explicit_numeric_cast(cx.source_mode, &target, &source, cx.span)?;
+        }
     }
     Ok(PhpType::Bool)
 }

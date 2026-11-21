@@ -26,6 +26,11 @@ use numeric_string::impl_fake_numeric_string_ops;
 use reflection::impl_fake_reflection_ops;
 
 impl RuntimeValueOps for FakeOps {
+    /// Models either a fixed native runtime or the policy-independent fake primitive adapter.
+    fn fixed_semantic_profile(&self) -> Result<Option<elephc_semantics::SemanticProfile>, EvalStatus> {
+        Ok(self.fixed_profile)
+    }
+
     /// Models nested native bridge authorization independently of interpreter context identity.
     fn replace_native_class_scope(&mut self, scope: Option<String>) -> Option<String> {
         std::mem::replace(&mut self.native_class_scope, scope)
@@ -42,6 +47,22 @@ impl RuntimeValueOps for FakeOps {
     /// Transfers an exception produced by the test bridge to the eval catch context.
     fn take_pending_runtime_throwable(&mut self) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         Ok(self.pending_runtime_throwable.take())
+    }
+
+    /// Models the explicitly checked scalar callback without changing PHP fake primitives.
+    fn checked_numeric(
+        &mut self, op: elephc_semantics::numeric::CheckedNumericOp,
+        left: RuntimeCellHandle, right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_checked_numeric(op, left, right)
+    }
+
+    /// Models the exact unary bridge, including independent result ownership and pending failures.
+    fn numeric_unary(
+        &mut self, op: elephc_semantics::numeric_unary::NumericUnaryOp,
+        policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy, value: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_numeric_unary(op, policy, value)
     }
 
     impl_fake_collection_call_ops!();

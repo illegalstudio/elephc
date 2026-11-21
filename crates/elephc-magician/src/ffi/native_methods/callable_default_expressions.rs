@@ -70,7 +70,8 @@ unsafe fn register_expression(
     std::panic::catch_unwind(|| unsafe {
         let Ok(source) = abi_name_to_string(source, source_len) else { return 0; };
         let Ok(name) = abi_name_to_string(key, key_len) else { return 0; };
-        let Ok(program) = crate::parser::parse_fragment(source.as_bytes()) else { return 0; };
+        let Some(context) = ctx.as_ref() else { return 0; };
+        let Ok(program) = crate::parser::parse_fragment_with_semantics(source.as_bytes(), context.semantic_profile()) else { return 0; };
         let mut statements = program.into_statements();
         if statements.len() != 1 { return 0; }
         let Some(crate::eval_ir::EvalStmt::Return(Some(mut expression))) = statements.pop()

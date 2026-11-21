@@ -2773,7 +2773,7 @@ mod catalog_tests {
                         }
                         PhpType::Str => {
                             assert!(asm.contains("__rt_mixed_from_value"), "{target:?}: {asm}");
-                            assert!(asm.contains("__rt_heap_alloc"), "{target:?}: {asm}");
+                            assert!(asm.contains("__rt_mixed_from_owned_string"), "{target:?}: {asm}");
                         }
                         _ => unreachable!(),
                     }

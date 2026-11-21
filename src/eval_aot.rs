@@ -19,6 +19,7 @@ use crate::parser::ast::{
     StmtKind,
 };
 use crate::span::Span;
+use crate::source::EvalSourceProfile;
 use crate::types::call_args::{has_named_args, plan_call_args};
 use crate::types::{builtin_call_sig, is_php_integer_array_key, FunctionSig, PhpType};
 
@@ -27,8 +28,11 @@ const MAX_STATIC_STRING_FOLD_BYTES: usize = 1_048_576;
 
 /// Static call support available while classifying eval fragments for EIR AOT.
 trait EirStaticCallSupport {
-    /// Returns whether the literal fragment uses the strict PHP builtin surface.
-    fn strict_php(&self) -> bool;
+    /// Returns whether the literal fragment uses the PHP-only builtin surface.
+    fn php_only(&self) -> bool;
+
+    /// Returns the immutable semantic policy used by every static argument plan.
+    fn semantic_profile(&self) -> elephc_semantics::SemanticProfile;
 
     /// Returns true when a function call can be lowered inside an EIR AOT fragment.
     fn function_supported(&self, name: &str, args: &[Expr]) -> bool;
@@ -46,7 +50,7 @@ trait EirStaticCallSupport {
 struct EirStaticCallPredicates<'a, F, M> {
     function: &'a F,
     static_method: &'a M,
-    strict_php: bool,
+    profile: EvalSourceProfile,
 }
 
 impl<F, M> EirStaticCallSupport for EirStaticCallPredicates<'_, F, M>
@@ -55,9 +59,12 @@ where
     M: Fn(&StaticReceiver, &str, &[Expr]) -> bool,
 {
     /// Returns the literal fragment's builtin visibility profile.
-    fn strict_php(&self) -> bool {
-        self.strict_php
+    fn php_only(&self) -> bool {
+        self.profile.php_only()
     }
+
+    /// Shares semantic guarantees independently from PHP-only visibility.
+    fn semantic_profile(&self) -> elephc_semantics::SemanticProfile { self.profile.semantics() }
 
     /// Delegates function-call eligibility to the caller-provided predicate.
     fn function_supported(&self, name: &str, args: &[Expr]) -> bool {
@@ -77,6 +84,7 @@ where
 
 /// Compile-time plan for one literal eval fragment.
 pub(crate) struct EvalAotPlan {
+    profile: EvalSourceProfile,
     function_name: Option<String>,
     eir_program: Option<Program>,
     scope_function_name: Option<String>,
@@ -107,6 +115,7 @@ impl EvalAotPlan {
     /// Returns true when the scope-read EIR body can receive reads as direct parameters.
     pub(crate) fn uses_scope_read_params(&self) -> bool {
         self.scope_eir_program.is_some()
+            && !self.profile.semantics().contains(elephc_semantics::StrictFeature::Initialization)
             && !self.reads.is_empty()
             && self.writes.is_empty()
             && self.scope_direct_writes.is_empty()

@@ -27,7 +27,7 @@ pub(super) enum EvalNativeUserConstantValue {
         word: i64,
         string_value: Option<String>,
     },
-    /// A recursively nested array constant with explicit PHP-normalized keys.
+    /// A recursively nested array constant with explicit profile-selected keys.
     Array(Vec<EvalNativeCallableArrayDefaultElement>),
 }
 
@@ -42,8 +42,9 @@ pub(super) enum EvalNativeUserConstantValue {
 pub(super) fn eval_native_user_constant_value(
     value: &ExprKind,
     ty: &PhpType,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<EvalNativeUserConstantValue> {
-    if let Some(elements) = eval_native_user_constant_array(value, 0) {
+    if let Some(elements) = eval_native_user_constant_array(value, 0, profile) {
         return Some(EvalNativeUserConstantValue::Array(elements));
     }
     let (kind, word, string_value) = eval_native_global_constant_abi_value(value, ty).ok()?;
@@ -62,6 +63,7 @@ pub(super) fn eval_native_user_constant_value(
 fn eval_native_user_constant_array(
     value: &ExprKind,
     depth: usize,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<Vec<EvalNativeCallableArrayDefaultElement>> {
     if depth > MAX_NATIVE_DEFAULT_CONSTANT_DEPTH {
         return None;
@@ -75,12 +77,13 @@ fn eval_native_user_constant_array(
                     &ExprKind::IntLiteral(index as i64),
                     &item.kind,
                     depth,
+                    profile,
                 )
             })
             .collect(),
         ExprKind::ArrayLiteralAssoc(items) => items
             .iter()
-            .map(|(key, item)| eval_native_user_constant_element(&key.kind, &item.kind, depth))
+            .map(|(key, item)| eval_native_user_constant_element(&key.kind, &item.kind, depth, profile))
             .collect(),
         _ => None,
     }
@@ -91,10 +94,11 @@ fn eval_native_user_constant_element(
     key: &ExprKind,
     value: &ExprKind,
     depth: usize,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<EvalNativeCallableArrayDefaultElement> {
     Some(EvalNativeCallableArrayDefaultElement {
-        key: Some(eval_native_user_constant_key(key)?),
-        default: eval_native_user_constant_element_value(value, depth + 1)?,
+        key: Some(eval_native_user_constant_key(key, profile)?),
+        default: eval_native_user_constant_element_value(value, depth + 1, profile)?,
     })
 }
 
@@ -105,6 +109,7 @@ fn eval_native_user_constant_element(
 fn eval_native_user_constant_element_value(
     value: &ExprKind,
     depth: usize,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<EvalNativeCallableDefault> {
     if depth > MAX_NATIVE_DEFAULT_CONSTANT_DEPTH {
         return None;
@@ -122,13 +127,15 @@ fn eval_native_user_constant_element_value(
         }
         // AOT negates with wrapping semantics, so `-PHP_INT_MIN` stays `PHP_INT_MIN`
         // here too instead of dropping the whole constant.
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| eval_native_user_constant_element_value(&number.kind, depth, profile)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => Some(eval_native_int_default(value.wrapping_neg())),
             ExprKind::FloatLiteral(value) => Some(eval_native_float_default(-value)),
             _ => None,
         },
         ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => {
-            eval_native_user_constant_array(value, depth).map(EvalNativeCallableDefault::Array)
+            eval_native_user_constant_array(value, depth, profile).map(EvalNativeCallableDefault::Array)
         }
         _ => None,
     }
@@ -136,23 +143,25 @@ fn eval_native_user_constant_element_value(
 
 /// Converts one constant array key into eval bridge metadata.
 ///
-/// Mirrors AOT's `emit_constant_array_key`: integer-like keys become integer keys, `null`
-/// becomes the empty string key, and string keys go through PHP's numeric-string collapsing
-/// exactly as the `__rt_hash_normalize_key` runtime helper does. Float keys are rejected
-/// because AOT rejects them too.
-fn eval_native_user_constant_key(key: &ExprKind) -> Option<EvalNativeCallableArrayDefaultKey> {
+/// Original strings share the native default classifier. Exact mode declines scalar
+/// conversions; float keys retain the existing unsupported compact metadata subset.
+fn eval_native_user_constant_key(key: &ExprKind, profile: elephc_semantics::SemanticProfile) -> Option<EvalNativeCallableArrayDefaultKey> {
+    if profile.contains(elephc_semantics::StrictFeature::ArrayKeys)
+        && matches!(key, ExprKind::BoolLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::Null) { return None; }
     match key {
         ExprKind::IntLiteral(value) => Some(EvalNativeCallableArrayDefaultKey::Int(*value)),
         ExprKind::BoolLiteral(value) => {
             Some(EvalNativeCallableArrayDefaultKey::Int(i64::from(*value)))
         }
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| eval_native_user_constant_key(&number.kind, profile)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => Some(EvalNativeCallableArrayDefaultKey::Int(
                 value.wrapping_neg(),
             )),
             _ => None,
         },
-        ExprKind::StringLiteral(value) => eval_native_string_array_default_key(value),
+        ExprKind::StringLiteral(value) => eval_native_string_array_default_key(value, profile),
         ExprKind::Null => Some(EvalNativeCallableArrayDefaultKey::String(String::new())),
         _ => None,
     }
@@ -183,18 +192,18 @@ mod tests {
         let mut module = Module::new(target);
         module.global_constants.insert(
             "USER_TEXT".to_string(),
-            (ExprKind::StringLiteral("seeded".to_string()), PhpType::Str),
+            (Expr::string_lit("seeded"), PhpType::Str),
         );
         module.global_constants.insert(
             "USER_LIST".to_string(),
             (
-                ExprKind::ArrayLiteral(vec![Expr::int_lit(1), Expr::int_lit(2)]),
+                Expr::new(ExprKind::ArrayLiteral(vec![Expr::int_lit(1), Expr::int_lit(2)]), crate::span::Span::dummy()),
                 PhpType::Int,
             ),
         );
         module.global_constants.insert(
             "PHP_INT_SIZE".to_string(),
-            (ExprKind::IntLiteral(8), PhpType::Int),
+            (Expr::int_lit(8), PhpType::Int),
         );
         module.user_defined_constants = vec!["USER_LIST".to_string(), "USER_TEXT".to_string()];
         module
@@ -229,7 +238,7 @@ mod tests {
     /// Returns the encoded array-spec byte length the array registration must pass as its length.
     fn user_list_spec_len() -> usize {
         let value = ExprKind::ArrayLiteral(vec![Expr::int_lit(1), Expr::int_lit(2)]);
-        match eval_native_user_constant_value(&value, &PhpType::Int) {
+        match eval_native_user_constant_value(&value, &PhpType::Int, elephc_semantics::SemanticProfile::PERMISSIVE) {
             Some(EvalNativeUserConstantValue::Array(elements)) => {
                 encode_eval_native_array_default_elements(&elements).len()
             }
@@ -321,4 +330,30 @@ mod tests {
             assert_eq!(exact_instruction_count(&asm, &expected[0]), 2, "{name}:\n{asm}");
         }
     }
+
+    /// Eval registration metadata retains original string kinds under the exact key profile.
+    #[test]
+    fn user_constant_metadata_preserves_exact_key_kinds_and_domains() {
+        use elephc_semantics::{SemanticProfile, StrictFeature};
+        let expr = |kind| Expr::new(kind, crate::span::Span::dummy());
+        let source = ExprKind::ArrayLiteralAssoc(vec![
+            (expr(ExprKind::IntLiteral(1)), expr(ExprKind::IntLiteral(10))),
+            (expr(ExprKind::StringLiteral("1".into())), expr(ExprKind::IntLiteral(20))),
+        ]);
+        for exact in [false, true] {
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact);
+            let Some(EvalNativeUserConstantValue::Array(elements)) =
+                eval_native_user_constant_value(&source, &PhpType::Mixed, profile)
+                else { panic!("constant array metadata"); };
+            assert!(elements[0].key == Some(EvalNativeCallableArrayDefaultKey::Int(1)));
+            let expected = if exact { EvalNativeCallableArrayDefaultKey::String("1".into()) }
+                else { EvalNativeCallableArrayDefaultKey::Int(1) };
+            assert!(elements[1].key == Some(expected));
+            for key in [ExprKind::BoolLiteral(false), ExprKind::Null] {
+                let value = ExprKind::ArrayLiteralAssoc(vec![(expr(key), expr(ExprKind::IntLiteral(1)))]);
+                assert_eq!(eval_native_user_constant_value(&value, &PhpType::Mixed, profile).is_none(), exact);
+            }
+        }
+    }
+
 }

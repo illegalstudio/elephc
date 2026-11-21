@@ -262,6 +262,7 @@ pub(crate) fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stm
 /// propagation and computing the output environment for each statement variant.
 /// Returns the rewritten statement and the constant environment after the statement.
 pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
+    let _semantics = crate::optimize::semantic_context::scoped_source_mode(stmt.source_mode);
     let profile = stmt.profile();
     crate::source::with_parse_mode(profile, || propagate_stmt_in_source_mode(stmt, env))
 }

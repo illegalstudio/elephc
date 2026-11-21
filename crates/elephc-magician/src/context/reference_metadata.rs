@@ -193,11 +193,11 @@ pub enum EvalReferenceTarget {
     ArrayElement {
         scope: *mut ElephcEvalScope,
         array_name: String,
-        index: RuntimeCellHandle,
+        index: EvalArrayReferenceKey,
     },
     NestedArrayElement {
         array_target: Box<EvalReferenceTarget>,
-        index: RuntimeCellHandle,
+        index: EvalArrayReferenceKey,
     },
     ObjectProperty {
         object: RuntimeCellHandle,
@@ -228,6 +228,7 @@ pub enum EvalArrayReferenceKey {
 /// Reference metadata that is valid only while its original boxed array allocation is live.
 #[derive(Clone)]
 pub(crate) struct EvalArrayReferenceAliases {
+    pub(super) contracts: Vec<crate::eval_ir::EvalParameterType>,
     pub(super) targets: HashMap<EvalArrayReferenceKey, EvalReferenceTarget>,
     pub(super) lifetime: crate::ffi::array_references::ArrayReferenceCellLifetime,
 }

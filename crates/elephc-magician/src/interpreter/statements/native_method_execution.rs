@@ -37,7 +37,7 @@ pub(in crate::interpreter) fn eval_native_method_with_positional_values_unchecke
 fn positional_native_method_args(values: Vec<RuntimeCellHandle>) -> Vec<EvaluatedCallArg> {
     values
         .into_iter()
-        .map(|value| EvaluatedCallArg {
+        .map(|value| EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value,
@@ -241,6 +241,7 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
     let bound_args =
         bind_native_callable_bound_args_with_mode(signature, evaluated_args, Some(&callee), by_ref_mode, context, values)?;
     let result = with_runtime_owners(&bound_args, || {
+        context.invalidate_member_source_views();
         let result = if let Some(scope) = bridge_scope {
             eval_native_method_call_with_scope(
                 scope,
@@ -444,6 +445,7 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     let normalized = normalize_tokenizer_native_arguments(
         signature_owner, method_name, &mut bound_args, context, values);
     let result = with_runtime_owners(&bound_args, || {
+        context.invalidate_member_source_views();
         let result = (|| {
             normalized?;
             if let Some(result) = eval_tokenizer_static_method(signature_owner, method_name,

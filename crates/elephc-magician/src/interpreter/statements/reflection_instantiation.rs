@@ -123,7 +123,7 @@ pub(super) fn eval_reflection_constructor_by_value_args(
 ) -> Vec<EvaluatedCallArg> {
     evaluated_args
         .into_iter()
-        .map(|arg| EvaluatedCallArg {
+        .map(|arg| EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: arg.name,
             value: arg.value,
@@ -264,7 +264,7 @@ pub(super) fn eval_reflection_attribute_evaluated_args(
     };
     args.iter()
         .map(|arg| {
-            Ok(EvaluatedCallArg {
+            Ok(EvaluatedCallArg { source_type: None,
                 evaluation_owner: None,
                 name: arg.name().map(str::to_string),
                 value: eval_reflection_attribute_arg_value(arg.value(), values)?,

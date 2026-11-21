@@ -22,16 +22,23 @@ pub(super) fn eval_closure_expr(
     let mut bindings = Vec::with_capacity(captures.len());
     let mut owners = Vec::with_capacity(captures.len());
     for capture in captures {
+        let origin = local_producer_contract(&EvalExpr::LoadVar(capture.name().to_string()), context, scope);
+        let source = local_binding_origins::source_view(&EvalExpr::LoadVar(capture.name().to_string()), context, scope);
         let binding = match eval_closure_capture(capture, context, scope, values) {
             Ok(binding) => binding,
             Err(status) => return finish_eval_argument_values(Err(status), owners, context, values),
         };
         owners.push(binding.value());
+        if let Some(origin) = &origin {
+            if let Err(status) = local_binding_origins::refresh_value_sources(binding.value(), std::slice::from_ref(origin), context, values) {
+                return finish_eval_argument_values(Err(status), owners, context, values);
+            }
+        }
         // Metadata borrows the runtime edge acquired below. Keeping this retain in the
         // context registry would strand every captured value after its Closure is freed.
         bindings.push(EvalClosureCaptureBinding::new(
             binding.name(), binding.value().borrowed(), binding.by_ref_target().cloned(),
-        ));
+        ).with_binding_type(origin).with_source_view(source, context.source_view_epoch()));
     }
     let creating_class = context.current_class_scope().map(str::to_string);
     let closure = EvalClosure::new(function.clone(), bindings, is_static).with_creating_class(creating_class.as_deref());
@@ -96,7 +103,7 @@ fn eval_closure_capture(
         ));
     }
     let value = if let Some(value) = visible_scope_cell(context, scope, capture.name()) {
-        if values.is_reference(value)? { values.copy_value(value)? } else { values.retain(value)? }
+        copy_scope_value(value, context, values)?
     } else {
         values.null()?
     };

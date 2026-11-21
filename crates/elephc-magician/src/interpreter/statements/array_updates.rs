@@ -13,11 +13,15 @@ use super::*;
 pub(in crate::interpreter) fn eval_inc_dec_value(
     current: RuntimeCellHandle,
     increment: bool,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !elephc_semantics::arithmetic_policy::ArithmeticPolicy::from_profile(context.semantic_profile()).is_permissive() {
+        return crate::interpreter::checked_numeric::update(current, increment, context, values);
+    }
     if !increment && values.is_null(current)? {
         values.warning(
-            "Warning: Decrement on type null has no effect, this will change in the next major version of PHP\n",
+            elephc_semantics::numeric::NULL_DECREMENT_WARNING,
         )?;
         return values.retain(current);
     }
@@ -73,7 +77,7 @@ pub(super) fn eval_static_property_inc_dec_result(
 ) -> Result<(), EvalStatus> {
     let current = eval_static_property_get_result(class_name, property, context, values)?;
     with_eval_value_lease(current, context, values, |current, context, values| {
-        let value = eval_inc_dec_value(current, increment, values)?;
+        let value = eval_inc_dec_value(current, increment, context, values)?;
         with_eval_value_lease(value, context, values, |value, context, values| {
             eval_static_property_set_result(class_name, property, value, context, values)
         })
@@ -88,7 +92,10 @@ pub(in crate::interpreter) fn eval_release_value(
 ) -> Result<(), EvalStatus> {
     let destructor = values.final_object_identity_for_release(value).and_then(|identity| {
         match identity {
-            Some(identity) => eval_dynamic_destructor_for_release(identity, value, context, values),
+            Some(identity) => {
+                context.invalidate_member_source_views();
+                eval_dynamic_destructor_for_release(identity, value, context, values)
+            },
             None => Ok(()),
         }
     });
@@ -251,7 +258,8 @@ pub(super) fn eval_array_unset_target_result(
     }
     let index = eval_owned_array_set_index(index, context, scope, values)?;
     let result = (|| {
-        let key = eval_array_reference_key(index, values)?;
+        checked_array_keys::for_receiver(array, index, context, values)?;
+        let key = eval_array_reference_key(index, context.semantic_profile(), values)?;
         let replacement = eval_array_without_key_result(array, index, values)?;
         context.clone_array_element_aliases(array, replacement, key.as_ref());
         Ok(replacement)
@@ -334,7 +342,7 @@ pub(super) fn eval_array_element_reference_write(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let Some(key) = eval_array_reference_key(index, values)? else { return Ok(()); };
+    let Some(key) = eval_array_reference_key(index, context.semantic_profile(), values)? else { return Ok(()); };
     let Some(target) = context.array_element_alias(array, &key).cloned() else { return Ok(()); };
     match target {
         EvalReferenceTarget::Variable { scope, name } => {
@@ -361,11 +369,11 @@ fn eval_owned_array_set_index(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_operands(&[index], context, scope, values, |args, _, _, values| {
+    with_eval_operands(&[index], context, scope, values, |args, context, _, values| {
         let index = args[0];
         if values.type_tag(index)? == EVAL_TAG_STRING {
             let bytes = values.string_bytes(index)?;
-            if let Some(key) = eval_numeric_string_array_key(&bytes) {
+            if let Some(key) = eval_numeric_string_array_key(&bytes, context.semantic_profile()) {
                 return values.int(key);
             }
         }

@@ -37,6 +37,7 @@ builtin! {
         target_strategy: BuiltinTargetStrategy::EirGraph,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::StaticOnly(
             "get_class_vars() requires a statically resolved callable target in AOT mode",

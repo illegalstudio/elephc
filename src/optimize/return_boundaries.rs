@@ -1,5 +1,5 @@
 //! Purpose:
-//! Models the runtime verification at declared int and callable return boundaries.
+//! Models runtime verification at declared scalar and callable return boundaries.
 //!
 //! Called from:
 //! - Callable effect and exception summaries, DCE body scopes, and checker body scopes.
@@ -63,9 +63,23 @@ impl ReturnBoundaryFacts {
 
     /// Tests the same representation predicate used by EIR, with unknown values treated as boxed.
     fn may_throw(&self, expr: &Expr) -> bool {
-        self.declared_callable
-            || (self.declared_int
-                && declared_int_return_requires_validation(true, &PhpType::Int, &self.source_type(expr)))
+        let source = self.source_type(expr);
+        self.declared_callable || self.implicit_may_throw(&source)
+            || self.declared_int && declared_int_return_requires_validation(true, &PhpType::Int, &source)
+    }
+
+    /// Retains an exact-kind failure independently of ordinary PHP return verification.
+    fn implicit_may_throw(&self, source: &PhpType) -> bool {
+        if super::semantic_context::enabled(elephc_semantics::StrictFeature::Nullability)
+            && crate::semantics::nullability::non_null_contract(&self.declared_result) {
+            // A useful static heap type can still carry a logical null from its producer.
+            return true;
+        }
+        matches!(crate::semantics::conversions::implicit(
+            super::semantic_context::active_profile(), super::semantic_context::active_source_mode(),
+            &self.declared_result, source),
+            elephc_semantics::conversions::ConversionPlan::Guard { .. }
+                | elephc_semantics::conversions::ConversionPlan::Reject(_))
     }
 
     /// Recognizes native values without assuming a mutable local keeps its original hint.
@@ -82,7 +96,7 @@ impl ReturnBoundaryFacts {
                 CastType::Int => PhpType::Int,
                 CastType::Float => PhpType::Float,
                 CastType::Bool => PhpType::Bool,
-                CastType::String => PhpType::Str,
+                CastType::String | CastType::StringFormat => PhpType::Str,
                 _ => PhpType::Mixed,
             },
             ExprKind::FunctionCall { name, .. } => with_active_function_effects(|functions|
@@ -111,17 +125,8 @@ impl ReturnBoundaryFacts {
 }
 
 /// Resolves only representations whose syntax is authoritative before checker specialization.
-fn parameter_type(hint: Option<&TypeExpr>) -> PhpType {
-    match hint {
-        Some(TypeExpr::Int) => PhpType::Int,
-        Some(TypeExpr::Float) => PhpType::Float,
-        Some(TypeExpr::Bool) => PhpType::Bool,
-        Some(TypeExpr::False) => PhpType::False,
-        Some(TypeExpr::Str) => PhpType::Str,
-        Some(TypeExpr::Nullable(inner)) => PhpType::Union(vec![parameter_type(Some(inner)), PhpType::Void]),
-        Some(TypeExpr::Union(members)) => PhpType::Union(members.iter().map(|hint| parameter_type(Some(hint))).collect()),
-        _ => PhpType::Mixed,
-    }
+pub(super) fn parameter_type(hint: Option<&TypeExpr>) -> PhpType {
+    hint.and_then(crate::semantics::conversions::implicit_hint).unwrap_or(PhpType::Mixed)
 }
 
 /// Installs one lexical return contract and restores the caller's context afterwards.
@@ -142,7 +147,7 @@ pub(super) fn active_return_boundary_may_throw(expr: &Expr) -> bool {
 /// Uses the checker's source-point type once inference has established the current read view.
 pub(crate) fn active_return_boundary_checks_source(source: &PhpType) -> bool {
     ACTIVE_RETURN_BOUNDARY.with(|slot| slot.borrow().as_ref().is_some_and(|facts|
-        facts.declared_callable
+        facts.implicit_may_throw(source) || facts.declared_callable
             || declared_int_return_requires_validation(facts.declared_int, &PhpType::Int, source)))
 }
 

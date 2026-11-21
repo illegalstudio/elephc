@@ -94,7 +94,7 @@ pub(super) fn lower_reflection_property_get_value(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let object_arg = reflection_property_get_value_arg(args)?;
+    let object_arg = reflection_property_get_value_arg(args, ctx.semantic_profile)?;
     if !reflection_property_physical_receiver_is_compatible(ctx, &object_arg, declaring_class) {
         return None;
     }
@@ -125,7 +125,7 @@ pub(super) fn lower_reflection_property_set_value(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let (object_arg, value_arg) = reflection_property_set_value_args(args)?;
+    let (object_arg, value_arg) = reflection_property_set_value_args(args, ctx.semantic_profile)?;
     if !reflection_property_physical_receiver_is_compatible(ctx, &object_arg, declaring_class) {
         return None;
     }
@@ -200,6 +200,9 @@ fn reflection_property_physical_ref(
     Some(Immediate::ReflectionPropertyRef {
         class: u32::try_from(info.class_id).ok()?,
         property: u32::try_from(index).ok()?,
+        profile: crate::ir_lower::initialization::enabled(ctx).then(||
+            crate::source::EvalSourceProfile::new(crate::php_only::is_enabled(), ctx.semantic_profile))
+            .unwrap_or_default(),
     })
 }
 
@@ -216,7 +219,7 @@ fn reflection_property_physical_receiver_is_compatible(
 ) -> bool {
     let object_ty = match &object.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
-        _ => infer_expr_type_syntactic(object),
+        _ => infer_expr_type_syntactic(object, ctx.semantic_profile),
     };
     let PhpType::Object(receiver_class) = object_ty.codegen_repr() else {
         return false;
@@ -231,7 +234,7 @@ pub(super) fn lower_reflection_property_is_initialized(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let object_arg = reflection_property_get_value_arg(args)?;
+    let object_arg = reflection_property_get_value_arg(args, ctx.semantic_profile)?;
     let object = lower_expr(ctx, &object_arg);
     let data = ctx.intern_string(property);
     let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
@@ -257,7 +260,7 @@ pub(super) fn lower_reflection_property_get_static_value(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    if let Some(ignored_object) = reflection_property_static_get_value_ignored_arg(args)? {
+    if let Some(ignored_object) = reflection_property_static_get_value_ignored_arg(args, ctx.semantic_profile)? {
         lower_ignored_reflection_argument(ctx, &ignored_object);
     }
     Some(lower_reflection_static_property_get_by_class_name(
@@ -277,7 +280,7 @@ pub(super) fn lower_reflection_property_static_is_initialized(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    if let Some(ignored_object) = reflection_property_static_get_value_ignored_arg(args)? {
+    if let Some(ignored_object) = reflection_property_static_get_value_ignored_arg(args, ctx.semantic_profile)? {
         lower_ignored_reflection_argument(ctx, &ignored_object);
     }
     Some(lower_reflection_static_property_initialized_by_class_name(
@@ -296,7 +299,7 @@ pub(super) fn lower_reflection_property_set_static_value(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let (ignored_object, value_arg) = reflection_property_static_set_value_args(args)?;
+    let (ignored_object, value_arg) = reflection_property_static_set_value_args(args, ctx.semantic_profile)?;
     lower_ignored_reflection_argument(ctx, &ignored_object);
     let value = lower_expr(ctx, &value_arg);
     let value = retype_reflection_static_property_value(ctx, declaring_class, property, value, expr.span);
@@ -319,12 +322,12 @@ pub(super) fn lower_ignored_reflection_argument(ctx: &mut LoweringContext<'_, '_
 }
 
 /// Returns the explicit object argument passed to `ReflectionProperty::getValue()`.
-pub(super) fn reflection_property_get_value_arg(args: &[Expr]) -> Option<Expr> {
-    let args = reflection_class_new_instance_args(args);
+pub(super) fn reflection_property_get_value_arg(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Option<Expr> {
+    let args = reflection_class_new_instance_args(args, profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
-    let object = if !crate::types::call_args::has_named_args(&args) {
+    let object = if !crate::types::call_args::has_named_args(&args, profile) {
         match args.as_slice() {
             [object] => object.clone(),
             _ => return None,
@@ -336,13 +339,13 @@ pub(super) fn reflection_property_get_value_arg(args: &[Expr]) -> Option<Expr> {
 }
 
 /// Returns the explicit object and value arguments passed to `ReflectionProperty::setValue()`.
-pub(super) fn reflection_property_set_value_args(args: &[Expr]) -> Option<(Expr, Expr)> {
-    let args = reflection_class_new_instance_args(args);
+pub(super) fn reflection_property_set_value_args(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Option<(Expr, Expr)> {
+    let args = reflection_class_new_instance_args(args, profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
     let (object, value) =
-        reflection_class_static_property_regular_args(&args, "object", Some("value"))?;
+        reflection_class_static_property_regular_args(&args, "object", Some("value"), profile)?;
     let object = object?;
     if matches!(&object.kind, ExprKind::Null) {
         return None;
@@ -351,12 +354,12 @@ pub(super) fn reflection_property_set_value_args(args: &[Expr]) -> Option<(Expr,
 }
 
 /// Returns the optional ignored object argument for static `ReflectionProperty::getValue()`.
-pub(super) fn reflection_property_static_get_value_ignored_arg(args: &[Expr]) -> Option<Option<Expr>> {
-    let args = reflection_class_new_instance_args(args);
+pub(super) fn reflection_property_static_get_value_ignored_arg(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Option<Option<Expr>> {
+    let args = reflection_class_new_instance_args(args, profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
-    if !crate::types::call_args::has_named_args(&args) {
+    if !crate::types::call_args::has_named_args(&args, profile) {
         return match args.as_slice() {
             [] => Some(None),
             [object] => Some(Some(object.clone())),
@@ -367,13 +370,13 @@ pub(super) fn reflection_property_static_get_value_ignored_arg(args: &[Expr]) ->
 }
 
 /// Returns the ignored object and value arguments for static `ReflectionProperty::setValue()`.
-pub(super) fn reflection_property_static_set_value_args(args: &[Expr]) -> Option<(Expr, Expr)> {
-    let args = reflection_class_new_instance_args(args);
+pub(super) fn reflection_property_static_set_value_args(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Option<(Expr, Expr)> {
+    let args = reflection_class_new_instance_args(args, profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
     let (object, value) =
-        reflection_class_static_property_regular_args(&args, "object", Some("value"))?;
+        reflection_class_static_property_regular_args(&args, "object", Some("value"), profile)?;
     Some((object?, value?))
 }
 

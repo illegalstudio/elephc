@@ -21,18 +21,17 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     fn php_object_handle(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         self.runtime_object_identity(object)
     }
-    /// Returns fake object identity only when the last explicit cell owner is released.
+    /// Returns object identity only when no other live activation or container owns its value.
     fn final_object_identity_for_release(
         &mut self,
         value: RuntimeCellHandle,
     ) -> Result<Option<u64>, EvalStatus> {
-        if self.cell_owners.get(&(value.as_ptr() as usize)) == Some(&1)
-            && self.runtime_type_tag(value)? == EVAL_TAG_OBJECT
-        {
-            self.runtime_object_identity(value).map(Some)
-        } else {
-            Ok(None)
-        }
+        let mut projected = value;
+        while let Some(child) = self.references.get(&(projected.as_ptr() as usize)) { projected = *child; }
+        if self.reference_owner_count(value) == 1 && self.reference_owner_count(projected) == 1
+            && self.runtime_type_tag(projected)? == EVAL_TAG_OBJECT {
+            self.runtime_object_identity(projected).map(Some)
+        } else { Ok(None) }
     }
     /// Records fake releases without freeing handles needed for assertions.
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
@@ -84,6 +83,10 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     }
     /// Models runtime-owned references without borrowing a test scope address.
     fn supports_persistent_references(&self) -> bool { true }
+    /// Retired fake graph nodes stay inspectable but cannot contribute live source constraints.
+    fn reference_source_is_live(&self, value: RuntimeCellHandle) -> bool {
+        self.reference_owner_count(value) != 0
+    }
     /// Recognizes a fake reference independently from its current concrete PHP value.
     fn is_reference(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         Ok(self.references.contains_key(&(value.as_ptr() as usize)))
@@ -91,6 +94,18 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     /// Counts physical owners from activation leases and live container storage.
     fn reference_is_shared(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         Ok(self.references.contains_key(&(value.as_ptr() as usize)) && self.reference_owner_count(value) > 1)
+    }
+
+    /// Pins the actual fake child so replacing its wrapper preserves a distinct old identity.
+    fn retain_value_cell(&mut self, mut value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        while let Some(child) = self.references.get(&(value.as_ptr() as usize)) { value = *child; }
+        self.retain(value)
+    }
+
+    /// Models native closure and callable edges without adding fake activation owners.
+    fn retain_object_children(&mut self, object: RuntimeCellHandle, children: &[RuntimeCellHandle]) -> Result<(), EvalStatus> {
+        self.object_children.entry(object.as_ptr() as usize).or_default().extend_from_slice(children);
+        Ok(())
     }
     /// Creates a stable fake reference holding one detached value.
     fn reference_new(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -100,6 +115,32 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
         self.transfer_reference_value_owner(value);
         Ok(reference)
     }
+    /// Models the native previous-chain tail append with borrowed operands and cycle prevention.
+    fn chain_throwables(&mut self, mut current: RuntimeCellHandle, previous: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        let mut older = std::collections::HashSet::new();
+        let mut cursor = previous;
+        loop {
+            if !older.insert(cursor.as_ptr() as usize) { return Ok(()); }
+            let FakeValue::Object(properties) = self.get(cursor) else { return Err(EvalStatus::RuntimeFatal); };
+            let Some(next) = Self::object_property(&properties, "previous") else { break; };
+            if self.is_null(next)? { break; }
+            cursor = next;
+        }
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            let id = current.as_ptr() as usize;
+            if older.contains(&id) || !seen.insert(id) { return Ok(()); }
+            let FakeValue::Object(properties) = self.get(current) else { return Err(EvalStatus::RuntimeFatal); };
+            if let Some(next) = Self::object_property(&properties, "previous") {
+                if !self.is_null(next)? { current = next; continue; }
+            }
+            let Some(FakeValue::Object(properties)) = self.values.get_mut(&id) else { return Err(EvalStatus::RuntimeFatal); };
+            if let Some((_, value)) = properties.iter_mut().find(|(name, _)| name == "previous") { *value = previous; }
+            else { properties.push(("previous".into(), previous)); }
+            return Ok(());
+        }
+    }
+
     /// Replaces the fake current value and returns its previous owner for explicit release.
     fn reference_replace(&mut self, reference: RuntimeCellHandle, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         let value = self.copy_value(value)?;

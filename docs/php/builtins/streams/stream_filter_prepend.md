@@ -6,7 +6,7 @@ description: "Attaches a filter to a stream (prepend)."
 ## stream_filter_prepend()
 
 ```php
-function stream_filter_prepend(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed
+function stream_filter_prepend(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): resource|false
 ```
 
 Attaches a filter to a stream (prepend).
@@ -17,7 +17,7 @@ Attaches a filter to a stream (prepend).
 - `$read_write` (`int`), default `3`, optional
 - `$params` (`mixed`), default `null`, optional
 
-**Returns**: `mixed`
+**Returns**: `resource|false`
 
 ## Availability
 

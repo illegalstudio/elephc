@@ -7,7 +7,7 @@
 //! Key details:
 //! - `check` validates that the argument is a `buffer<T>` and returns `PhpType::Int`,
 //!   preserving the legacy checker-resident arm's message verbatim.
-//! - `extension: true`: buffers have no PHP equivalent, so `--strict-php` hides this
+//! - `extension: true`: buffers have no PHP equivalent, so `--php-only` hides this
 //!   builtin from user programs.
 
 use crate::builtins::spec::BuiltinCheckCtx;

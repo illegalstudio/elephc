@@ -50,12 +50,16 @@ pub(in crate::interpreter) fn eval_private_scope_shadow_bridge_scope(
 pub(in crate::interpreter) fn bind_method_scope_args(
     method_scope: &mut ElephcEvalScope,
     params: &[String],
+    parameter_types: &[Option<EvalParameterType>],
+    parameter_is_variadic: &[bool],
     parameter_is_by_ref: &[bool],
     bound_args: &[BoundMethodArg],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for (position, (name, bound_arg)) in params.iter().zip(bound_args.iter()).enumerate() {
+        bind_parameter_origin(method_scope, name, parameter_types.get(position).and_then(Option::as_ref),
+            parameter_is_variadic.get(position).copied().unwrap_or(false), context)?;
         if parameter_is_by_ref.get(position).copied().unwrap_or(false) {
             method_scope.set_reference(
                 name.clone(),
@@ -82,6 +86,23 @@ pub(in crate::interpreter) fn bind_method_scope_args(
             let value = copy_scope_value(bound_arg.value, context, values)?;
             method_scope.set(name.clone(), value, ScopeCellOwnership::Owned);
         }
+        if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
+            || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) {
+            let declared = parameter_types.get(position).and_then(Option::as_ref);
+            let supplied = if declared.is_none()
+                && parameter_is_by_ref.get(position).copied().unwrap_or(false) {
+                bound_arg.source_type.as_ref()
+            } else { None };
+            let source = declared.map(crate::eval_ir::generic_type)
+                .or_else(|| supplied.map(|source| crate::eval_ir::generic_type(&source.ty)))
+                .unwrap_or_else(|| elephc_generics::Type::atom("mixed"));
+            let source = if parameter_is_variadic.get(position).copied().unwrap_or(false) {
+                elephc_generics::Type::Apply("array".to_string(), vec![elephc_generics::Type::atom("int"), source])
+            } else { source };
+            let epoch = supplied.map_or_else(|| context.source_view_epoch(), |source| source.write_epoch);
+            method_scope.record_local_source_view(name.clone(), crate::eval_ir::parameter_type(&source), epoch);
+            if let Some(source) = supplied { method_scope.record_local_argument_source(name.clone(), source.clone()); }
+        }
     }
     alias_duplicate_method_ref_args(method_scope, params, bound_args, context, values)
 }
@@ -105,7 +126,7 @@ pub(super) fn alias_duplicate_method_ref_args(
             let Some(previous_target) = bound_args[previous_position].ref_target.as_ref() else {
                 continue;
             };
-            if !same_method_ref_target(target, previous_target, values)? {
+            if !same_method_ref_target(target, previous_target) {
                 continue;
             }
             if let Some(previous_param) = params.get(previous_position) {
@@ -124,8 +145,10 @@ pub(super) fn alias_duplicate_method_ref_args(
 }
 
 /// Returns true when two evaluated arguments target the same caller-side variable.
-pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalReferenceTarget, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
-    Ok(match (left, right) {
+pub(super) fn same_method_ref_target(
+    left: &EvalReferenceTarget, right: &EvalReferenceTarget,
+) -> bool {
+    match (left, right) {
         (
             EvalReferenceTarget::Variable {
                 scope: left_scope,
@@ -147,7 +170,7 @@ pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalRef
                 array_name: right_name,
                 index: right_index,
             },
-        ) => left_scope == right_scope && left_name == right_name && same_reference_index(*left_index, *right_index, values)?,
+        ) => left_scope == right_scope && left_name == right_name && left_index == right_index,
         (
             EvalReferenceTarget::NestedArrayElement {
                 array_target: left_target,
@@ -157,7 +180,7 @@ pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalRef
                 array_target: right_target,
                 index: right_index,
             },
-        ) => same_reference_index(*left_index, *right_index, values)? && same_method_ref_target(left_target, right_target, values)?,
+        ) => left_index == right_index && same_method_ref_target(left_target, right_target),
         (
             EvalReferenceTarget::ObjectProperty {
                 object: left_object,
@@ -205,16 +228,7 @@ pub(super) fn same_method_ref_target(left: &EvalReferenceTarget, right: &EvalRef
                 && left_access_scope == right_access_scope
         }
         _ => false,
-    })
-}
-
-/// Compares normalized PHP array keys instead of the identity of their temporary boxes.
-fn same_reference_index(left: RuntimeCellHandle, right: RuntimeCellHandle, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
-    if left == right { return Ok(true); }
-    Ok(match (eval_array_reference_key(left, values)?, eval_array_reference_key(right, values)?) {
-        (Some(left), Some(right)) => left == right,
-        _ => false,
-    })
+    }
 }
 
 /// Writes completed by-reference method parameter values back to their caller-side variables.
@@ -230,17 +244,24 @@ pub(in crate::interpreter) fn write_back_method_ref_args(
             continue;
         };
         if let Some(target) = bound_arg.ref_target.as_ref() {
-            let Some(entry) = method_scope
-                .entry(param)
-                .filter(|entry| entry.flags().is_visible() && entry.flags().by_ref)
-            else {
-                continue;
-            };
-            write_back_method_ref_target(target, entry.cell(), context, values)?;
+            write_back_live_reference_binding(method_scope, param, target, context, values)?;
         }
         write_back_method_variadic_ref_args(param, bound_arg, method_scope, context, values)?;
     }
     Ok(())
+}
+
+/// Writes only the original alias, excluding a name unset and recreated as another reference.
+pub(in crate::interpreter) fn write_back_live_reference_binding(
+    scope: &ElephcEvalScope, name: &str, original: &EvalReferenceTarget,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(entry) = scope.entry(name).filter(|entry|
+        entry.flags().is_visible() && entry.flags().by_ref) else { return Ok(()); };
+    if !scope.reference_target(name).is_some_and(|target| same_method_ref_target(target, original)) {
+        return Ok(());
+    }
+    write_back_method_ref_target(original, entry.cell(), context, values)
 }
 
 /// Writes element-level changes from a by-reference variadic method parameter back to callers.
@@ -327,20 +348,16 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             let Some(scope) = (unsafe { scope.as_mut() }) else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            write_back_method_array_element_ref_target(
-                scope, array_name, *index, value, context, values,
-            )
+            super::super::reference_keys::with_key(index, context, values, |index, context, values| {
+                write_back_method_array_element_ref_target(scope, array_name, index, value, context, values)
+            })
         }
         EvalReferenceTarget::NestedArrayElement {
             array_target,
             index,
-        } => write_back_method_nested_array_element_ref_target(
-            array_target,
-            *index,
-            value,
-            context,
-            values,
-        ),
+        } => super::super::reference_keys::with_key(index, context, values, |index, context, values| {
+            write_back_method_nested_array_element_ref_target(array_target, index, value, context, values)
+        }),
         EvalReferenceTarget::ObjectProperty {
             object,
             property,
@@ -368,13 +385,20 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
         EvalReferenceTarget::Cell { cell } => {
             for declared in context.local_reference_types(*cell) { validate_generic_local(&declared, "reference", value, context, values)?; }
             if *cell != value && values.is_reference(*cell)? {
-                let previous = values.reference_replace(*cell, value)?;
+                let previous = eval_replace_reference_value(*cell, value, context, values)?;
                 context.copy_array_metadata(value, *cell);
                 eval_release_value(context, values, previous)?;
             }
             Ok(())
         },
         EvalReferenceTarget::InvokerSlot { slot, source_tag } => {
+            if *source_tag == EVAL_TAG_MIXED {
+                let current = RuntimeCellHandle::from_raw(unsafe { *(*slot as *const *mut crate::value::RuntimeCell) });
+                if values.is_reference(current)? {
+                    let previous = eval_replace_reference_value(current, value, context, values)?;
+                    return values.release(previous);
+                }
+            }
             write_back_invoker_slot_ref_target(*slot, *source_tag, value, values)
         }
     }
@@ -518,7 +542,7 @@ pub(super) fn write_back_method_array_element_ref_target(
 ) -> Result<(), EvalStatus> {
     let mut ownership = ScopeCellOwnership::Owned;
     if let Some(current) = visible_scope_cell(context, scope, array_name) {
-        for declared in generic_local_contracts(scope, array_name, context) {
+        for declared in generic_local_element_contracts(scope, array_name, context) {
             validate_generic_local_element(Some(&declared), current, index, value, context, values)?;
         }
     }
@@ -601,7 +625,15 @@ pub(super) fn write_back_method_static_property_ref_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let previous_scope = context.replace_execution_scope(access_scope);
-    let result = eval_static_property_set_result(class_name, property, value, context, values);
+    let result = (|| {
+        if values.supports_persistent_references() && values.is_reference(value)?
+            && values.reference_is_shared(value)?
+            && super::property_reference_owners::bind_escaped_static_cell(class_name, property, value, context, values)?
+        {
+            return Ok(());
+        }
+        eval_static_property_set_result(class_name, property, value, context, values)
+    })();
     context.replace_execution_scope(previous_scope);
     result
 }

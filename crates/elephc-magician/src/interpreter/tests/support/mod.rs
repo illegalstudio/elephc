@@ -23,6 +23,7 @@ mod conversions;
 mod lifecycle_ops;
 mod reference_owners;
 mod numeric_ops;
+mod checked_numeric;
 mod object_ops;
 mod runtime_ops;
 
@@ -66,6 +67,8 @@ pub(super) const FAKE_STD_STREAM_MAX_PAYLOAD: i64 = 2;
 /// Test runtime hooks that allocate stable fake handles and record echo output.
 #[derive(Default)]
 pub(super) struct FakeOps {
+    /// Optional fixed native policy for compatibility tests; ordinary fake primitives are policy-independent.
+    pub(super) fixed_profile: Option<elephc_semantics::SemanticProfile>,
     pub(super) next_id: usize,
     pub(super) native_class_scope: Option<String>,
     pub(super) values: HashMap<usize, FakeValue>,
@@ -123,6 +126,8 @@ pub(super) struct FakeOps {
     pub(super) retains: Vec<RuntimeCellHandle>,
     /// Explicit owners; reference-sharing queries also count edges from live fake containers.
     pub(super) cell_owners: HashMap<usize, usize>,
+    /// Hidden GC children contribute stored reference edges without arena activation owners.
+    pub(super) object_children: HashMap<usize, Vec<RuntimeCellHandle>>,
     pub(super) warnings: Vec<String>,
     pub(super) pending_runtime_throwable: Option<RuntimeCellHandle>,
     pub(super) fail_array_set_call: Option<usize>,
@@ -259,10 +264,10 @@ impl FakeOps {
         let value = self.get(handle);
         match value {
             FakeValue::Int(value) => Ok(FakeKey::Int(value)),
-            FakeValue::String(value) => eval_numeric_string_array_key(value.as_bytes())
+            FakeValue::String(value) => eval_numeric_string_array_key(value.as_bytes(), self.fixed_profile.unwrap_or_default())
                 .map(FakeKey::Int)
                 .map_or_else(|| Ok(FakeKey::String(value.into_bytes())), Ok),
-            FakeValue::Bytes(value) => eval_numeric_string_array_key(&value)
+            FakeValue::Bytes(value) => eval_numeric_string_array_key(&value, self.fixed_profile.unwrap_or_default())
                 .map(FakeKey::Int)
                 .map_or_else(|| Ok(FakeKey::String(value)), Ok),
             FakeValue::Null => Ok(FakeKey::String(Vec::new())),

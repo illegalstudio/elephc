@@ -70,9 +70,9 @@ still work with any tagged-PHP suffix as before. The default observable value
 of `spl_autoload_extensions()` remains `.inc,.php`; LFC support does not alter
 PHP's runtime-facing default.
 
-## `--strict-php`
+## `--php-only`
 
-`--strict-php` is requested for the compilation but enforced per physical
+`--php-only` is requested for the compilation but enforced per physical
 PHP-mode user file:
 
 - tagged PHP rejects elephc syntax and hides extension builtins;
@@ -87,7 +87,7 @@ dispatch, and `eval()` all observe that call site's PHP or LFC builtin profile.
 The compiler therefore supports strict PHP and LFC call sites in the same
 binary without leaking one profile into the other.
 
-`--strict-php` can be combined with `--define`. An LFC `ifdef` consumes the
+`--php-only` can be combined with `--define`. An LFC `ifdef` consumes the
 defined symbol normally. A PHP-mode `ifdef` is rejected by the strict audit
 before its branch can be removed, including when the symbol is not defined.
 

@@ -316,13 +316,7 @@ pub(in crate::codegen) fn is_stream_registration_builtin(inst: &crate::ir::Instr
 
 /// Returns the typed builtin target carried by an EIR runtime call.
 pub(in crate::codegen) fn typed_builtin_target(inst: &crate::ir::Instruction) -> Option<crate::ir::RuntimeFnId> {
-    match inst.immediate {
-        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => Some(target),
-        Some(Immediate::RuntimeCall(
-            crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
-        )) => Some(target),
-        _ => None,
-    }
+    inst.runtime_function()
 }
 
 /// Returns the literal string payload produced by a `ConstStr` value.

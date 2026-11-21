@@ -35,7 +35,7 @@ pub(super) fn lower_enum_interface_call(
     let reference_assignment = ctx.reference_call_context.as_ref()
         .is_some_and(|context| context.depth == ctx.expression_depth);
     let dynamic_unpack = args.iter().any(is_spread_arg)
-        && crate::types::call_args::expand_planned_positional_spreads(args).is_none();
+        && crate::types::call_args::expand_planned_positional_spreads(args, ctx.semantic_profile).is_none();
     let result_needs_owner = Ownership::php_type_needs_lifetime_tracking(&result_type)
         && !matches!(result_type.codegen_repr(), PhpType::Buffer(_));
     let result = if reference_assignment { None } else {

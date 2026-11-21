@@ -15,8 +15,22 @@ use crate::ir::{Op, Ownership};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::span::Span;
 
+/// Borrows a tracked lease while leaving ordinary scalar values in their plain ownership state.
+pub(crate) fn borrow_value(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Option<Span>,
+) -> LoweredValue {
+    let ty = ctx.builder.value_php_type(value.value);
+    if !crate::ir::Ownership::php_type_needs_lifetime_tracking(&ty) { return value; }
+    let borrowed = ctx.emit_value(Op::Borrow, vec![value.value], None, ty,
+        Op::Borrow.default_effects(), span);
+    ctx.builder.set_value_ownership(borrowed.value, crate::ir::Ownership::Borrowed);
+    borrowed
+}
+
 /// Detaches a mutable Mixed value box for a by-value assignment and consumes an owned RHS.
 /// Array payloads retain COW sharing, while objects and resources preserve their PHP identity.
+/// Provisional local-load boxes use the existing deferred cleanup, which finalization removes
+/// if later storage decisions make the load borrow the frame's existing box.
 pub(crate) fn copy_assignment_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -28,7 +42,7 @@ pub(crate) fn copy_assignment_value(
     }
     let copied = ctx.emit_owned_value(Op::MixedClone, vec![value.value], None, php_type,
         Op::MixedClone.default_effects(), span);
-    if ctx.value_is_owning_temporary(value) { release_if_owned(ctx, value, span); }
+    if ctx.value_needs_release_after_use(value) { release_if_owned(ctx, value, span); }
     copied
 }
 

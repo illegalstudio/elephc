@@ -28,6 +28,7 @@ mod atoi;
 mod grapheme_strrev;
 mod strcopy;
 mod str_inc_dec;
+mod strict_inc_dec;
 mod str_new_owned;
 mod str_persist;
 mod strtolower;

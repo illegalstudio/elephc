@@ -33,6 +33,7 @@ def run(family, target, shard, count, root, env):
               "--archive-file", root / "nextest-archive.tar.zst", "--workspace-remap", ".",
               "--extract-to", extracted, "--extract-overwrite"]
     env = dict(env)
+    env["ELEPHC_TEST_PREBUILT_BRIDGES"] = "1"
     macos = target == "macos-aarch64"
     if family == "pdo":
         env.update(CARGO_NET_OFFLINE="true", ELEPHC_TEST_PREBUILT_BRIDGES="1")

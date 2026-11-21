@@ -443,6 +443,11 @@ impl Checker {
         if existing == new_ty {
             return Some(existing.clone());
         }
+        if self.semantic_source_mode != crate::source::SourceMode::Internal
+            && self.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayTypes)
+            && self.array_component_accepts(existing, new_ty) {
+            return Some(existing.clone());
+        }
         if matches!(existing, PhpType::Never) {
             return Some(new_ty.clone());
         }

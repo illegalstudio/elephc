@@ -172,10 +172,9 @@ mod tests {
         signature.return_type = PhpType::Object("Generator".into());
         signature.declared_return = false;
         signature.deprecation = Some("use another generator".into());
-        signature.defaults[0] = Some(crate::parser::ast::Expr {
-            kind: crate::parser::ast::ExprKind::IntLiteral(7),
-            span: crate::span::Span::new(1, 1),
-        });
+        signature.defaults[0] = Some(crate::parser::ast::Expr::new(
+            crate::parser::ast::ExprKind::IntLiteral(7), crate::span::Span::new(1, 1),
+        ));
         signature.param_type_exprs[0] = Some(crate::parser::ast::TypeExpr::Int);
         function.signature = Some(signature);
         function.params.push(crate::ir::FunctionParam {

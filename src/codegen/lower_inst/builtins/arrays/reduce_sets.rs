@@ -54,7 +54,7 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                 vec![elem_ty.clone()],
                 PhpType::Void,
-                super::super::super::instruction_strict_php_profile(inst),
+                super::super::super::instruction_php_only_profile(inst),
                 "array_walk",
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);

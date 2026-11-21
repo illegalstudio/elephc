@@ -8,6 +8,7 @@
 //! - Direct calls stay on the source-sensitive by-reference path.
 
 use super::super::super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 eval_builtin! {
     contract: "usort",
@@ -43,10 +44,7 @@ pub(in crate::interpreter) fn eval_user_sort_value_result(
 }
 
 /// One source array entry used by eval user-comparator sort routines.
-pub(in crate::interpreter) struct EvalUserSortEntry {
-    source_key: RuntimeCellHandle,
-    value: RuntimeCellHandle,
-}
+pub(in crate::interpreter) type EvalUserSortEntry = super::sort::EvalArraySortEntry<()>;
 
 /// Builds the sorted replacement array for user-comparator sort builtins.
 pub(in crate::interpreter) fn eval_user_sort_replacement(
@@ -70,28 +68,12 @@ pub(in crate::interpreter) fn eval_user_sort_replacement_from_scope(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callback = eval_callable_with_optional_scope(callback, context, lexical_scope, values)?;
     callback.with_values(context, values, |callback, context, values| {
-        let mut entries = eval_user_sort_entries(array, values)?;
-        eval_user_sort_entries_in_place(name, &callback, &mut entries, context, values)?;
-        if name == "usort" {
-            return eval_user_sort_reindex_result(entries, values);
-        }
-        eval_user_sort_preserve_key_result(entries, values)
+        let entries = super::sort::owners::collect(array, context, values, |_, _, _| Ok(()))?;
+        super::sort::owners::with_entries(entries, context, values, |entries, context, values| {
+            eval_user_sort_entries_in_place(name, &callback, entries, context, values)?;
+            super::sort::owners::build_result(entries, name != "usort", context, values)
+        })
     })
-}
-
-/// Collects source keys and values from one eval array for user sorting.
-pub(in crate::interpreter) fn eval_user_sort_entries(
-    array: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<EvalUserSortEntry>, EvalStatus> {
-    let len = values.array_len(array)?;
-    let mut entries = Vec::with_capacity(len);
-    for position in 0..len {
-        let source_key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, source_key)?;
-        entries.push(EvalUserSortEntry { source_key, value });
-    }
-    Ok(entries)
 }
 
 /// Sorts entries by repeatedly invoking the PHP comparator callback.
@@ -135,33 +117,19 @@ pub(in crate::interpreter) fn eval_user_sort_compare(
     } else {
         vec![left.value, right.value]
     };
-    let result = eval_evaluated_callable_with_values(callback, args, context, values)?;
-    eval_int_value(result, values)
-}
-
-/// Builds the reindexed result for `usort()`.
-pub(in crate::interpreter) fn eval_user_sort_reindex_result(
-    entries: Vec<EvalUserSortEntry>,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(entries.len())?;
-    for (index, entry) in entries.into_iter().enumerate() {
-        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        result = values.array_set(result, key, entry.value)?;
-    }
-    Ok(result)
-}
-
-/// Builds the key-preserving result for `uksort()` and `uasort()`.
-pub(in crate::interpreter) fn eval_user_sort_preserve_key_result(
-    entries: Vec<EvalUserSortEntry>,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(entries.len())?;
-    for entry in entries {
-        result = values.array_set(result, entry.source_key, entry.value)?;
-    }
-    Ok(result)
+    let result = RuntimeOwnerSlot::new(eval_evaluated_callable_with_values(callback, args, context, values)?);
+    with_runtime_owners(&result, || {
+        let comparison = (|| {
+            if context.semantic_profile().contains(elephc_semantics::StrictFeature::Comparisons)
+                && values.type_tag(result.borrowed())? != EVAL_TAG_INT
+            {
+                return eval_throw_type_error(elephc_semantics::comparisons::COMPARATOR_MESSAGE, context, values);
+            }
+            eval_int_value(result.borrowed(), values)
+        })();
+        let released = release_expr_result(result.take(), context, values);
+        comparison.and_then(|comparison| released.map(|()| comparison))
+    })
 }
 
 /// Evaluates direct by-reference user-comparator sort calls and writes back the array.
@@ -174,17 +142,21 @@ pub(in crate::interpreter) fn eval_user_sort_declared_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (array, target, callback) = eval_user_sort_direct_args(args, context, scope, values)?;
 
-    let replacement = eval_user_sort_replacement_from_scope(
-        name,
-        array,
-        callback,
-        Some(scope),
-        context,
-        values,
-    )?;
-    let result = values.bool_value(true)?;
-    eval_write_direct_ref_target(&target, replacement, context, values, None)?;
-    Ok(result)
+    let callback = RuntimeOwnerSlot::new(callback);
+    with_runtime_owners(&callback, || {
+        let result = super::super::ref_targets::with_direct_ref_target(target, context, values,
+            |target, context, values| {
+                let replacement = eval_user_sort_replacement_from_scope(
+                    name, array, callback.borrowed(), Some(scope), context, values)?;
+                let result = values.bool_value(true);
+                match result {
+                    Ok(result) => super::super::ref_targets::finish_owned_direct_ref_replacement(
+                        target, replacement, result, context, values),
+                    Err(status) => finish_eval_argument_values(Err(status), [replacement], context, values),
+                }
+            });
+        finish_eval_argument_values(result, [callback.take()], context, values)
+    })
 }
 
 /// Evaluates and binds direct user-sort arguments while preserving source order.

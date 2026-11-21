@@ -116,6 +116,9 @@ pub(super) fn eval_native_property_get_for_container(
             values,
         );
     }
+    if !initialized && context.semantic_profile().contains(elephc_semantics::StrictFeature::Initialization) {
+        return initialization::missing_property(property, context, values);
+    }
     eval_with_native_bridge_scope(declaring_class, context, values, |values| {
         values.property_get(object, property)
     })

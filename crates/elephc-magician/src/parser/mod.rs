@@ -28,7 +28,7 @@ mod tests;
 
 use crate::errors::EvalParseError;
 use crate::eval_ir::EvalProgram;
-use crate::lexer::tokenize;
+use crate::lexer::tokenize_with_semantics;
 use state::Parser;
 
 pub(crate) use cursor::is_reserved_class_like_name as is_reserved_word;
@@ -45,10 +45,16 @@ const PARSER_STACK_BYTES: usize = 16 * 1024 * 1024;
 /// `<?php` met in code lexes as `<` then `?`, which the grammar refuses as PHP does
 /// (`eval('<?php echo 1;')` is a parse error there too).
 pub fn parse_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseError> {
+    parse_fragment_with_semantics(code, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Parses runtime source without discarding profile-dependent literal evidence.
+pub fn parse_fragment_with_semantics(code: &[u8], profile: elephc_semantics::SemanticProfile) -> Result<EvalProgram, EvalParseError> {
     with_parser_stack(|| {
         let source = std::str::from_utf8(code).map_err(|_| EvalParseError::InvalidUtf8)?;
-        let tokens = tokenize(source)?;
-        Parser::new(tokens, code.len()).parse_program()
+        let tokens = tokenize_with_semantics(source, profile)?;
+        validate_semantic_tokens(&tokens, profile)?;
+        Parser::new(tokens, code.len()).parse_program().map(|program| program.with_semantic_profile(profile))
     })
 }
 
@@ -57,11 +63,34 @@ pub fn parse_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseError> {
 /// An included file's stream is built from several blocks and the inline HTML between them
 /// (`crate::script_cache::segments::parse_script`), and has to reach the grammar as one
 /// program so that a block may span the tags. `source_len` is the whole file's length.
+#[cfg(test)]
 pub(crate) fn parse_tokens(
     tokens: Vec<crate::lexer::Token>,
     source_len: usize,
 ) -> Result<EvalProgram, EvalParseError> {
-    with_parser_stack(|| Parser::new(tokens, source_len).parse_program())
+    parse_tokens_with_semantics(tokens, source_len, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Parses already-profiled script tokens while retaining their normalization provenance.
+pub(crate) fn parse_tokens_with_semantics(
+    tokens: Vec<crate::lexer::Token>, source_len: usize, profile: elephc_semantics::SemanticProfile,
+) -> Result<EvalProgram, EvalParseError> {
+    with_parser_stack(|| {
+        validate_semantic_tokens(&tokens, profile)?;
+        Parser::new(tokens, source_len).parse_program().map(|program| program.with_semantic_profile(profile))
+    })
+}
+
+/// Rejects forbidden equality syntax before branch pruning or declaration execution.
+fn validate_semantic_tokens(tokens: &[crate::lexer::Token], profile: elephc_semantics::SemanticProfile)
+    -> Result<(), EvalParseError> {
+    use crate::lexer::TokenKind;
+    if profile.contains(elephc_semantics::StrictFeature::Comparisons)
+        && (tokens.iter().any(|token| matches!(token.kind(), TokenKind::EqualEqual | TokenKind::NotEqual))
+            || tokens.windows(2).any(|pair| matches!((pair[0].kind(), pair[1].kind()),
+                (TokenKind::Less, TokenKind::Greater))))
+    { return Err(EvalParseError::StrictComparisonSyntax); }
+    Ok(())
 }
 
 /// Uses an explicit stack because native coroutine switches do not update OS-thread stack bounds.

@@ -45,12 +45,12 @@ fn emit_mixed_cast_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #1");                                          // allocate capacity for the scalar element at index zero
     emitter.instruction("mov x1, #8");                                          // boxed Mixed indexed arrays use pointer-sized slots
     emitter.instruction("bl __rt_array_new");                                   // allocate fresh COW indexed storage for the scalar cast
-    emitter.instruction("str x0, [sp, #32]");                                   // preserve the array pointer across source retention
+    emitter.instruction("str x0, [sp, #32]");                                   // preserve the array pointer across scalar value cloning
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source Mixed cell that becomes element zero
-    emitter.instruction("bl __rt_incref");                                      // give the destination array its own Mixed-cell reference
+    emitter.instruction("bl __rt_mixed_clone");                                 // snapshot the scalar payload independently from its reference wrapper
+    emitter.instruction("mov x2, x0");                                          // transfer the owned scalar snapshot into element zero
     emitter.instruction("ldr x0, [sp, #32]");                                   // pass the fresh indexed array to its consuming writer
     emitter.instruction("mov x1, #0");                                          // scalar casts always use integer key zero
-    emitter.instruction("ldr x2, [sp, #0]");                                    // transfer the retained source cell into element zero
     emitter.instruction("bl __rt_array_set_mixed");                             // install the scalar cell while preserving COW metadata
     emitter.instruction("b __rt_mixed_cast_array_box_indexed");                 // box the resulting indexed array for dynamic consumers
 
@@ -121,12 +121,12 @@ fn emit_mixed_cast_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, 1");                                          // allocate capacity for the scalar element at index zero
     emitter.instruction("mov rsi, 8");                                          // boxed Mixed indexed arrays use pointer-sized slots
     emitter.instruction("call __rt_array_new");                                 // allocate fresh COW indexed storage for the scalar cast
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the array pointer across source retention
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the array pointer across scalar value cloning
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the source Mixed cell that becomes element zero
-    emitter.instruction("call __rt_incref");                                    // give the destination array its own Mixed-cell reference
+    emitter.instruction("call __rt_mixed_clone");                               // snapshot the scalar payload independently from its reference wrapper
+    emitter.instruction("mov rdx, rax");                                        // transfer the owned scalar snapshot into element zero
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // pass the fresh indexed array to its consuming writer
     emitter.instruction("xor esi, esi");                                        // scalar casts always use integer key zero
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // transfer the retained source cell into element zero
     emitter.instruction("call __rt_array_set_mixed");                           // install the scalar cell while preserving COW metadata
     emitter.instruction("jmp __rt_mixed_cast_array_box_indexed_x");             // box the resulting indexed array for dynamic consumers
     emitter.label("__rt_mixed_cast_array_null_x");

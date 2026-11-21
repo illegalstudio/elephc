@@ -172,12 +172,12 @@ fn test_error_bitwise_and_string() {
     );
 }
 
-/// Tests that unary `~` on a string rejects it with the
+/// Tests that unary `~` on a float rejects it with the
 /// "Bitwise NOT requires integer operand" error.
 #[test]
-fn test_error_bitwise_not_string() {
+fn test_error_bitwise_not_float() {
     expect_error(
-        r#"<?php echo ~"hello";"#,
+        r#"<?php echo ~1.5;"#,
         "Bitwise NOT requires integer operand",
     );
 }

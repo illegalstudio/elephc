@@ -277,6 +277,15 @@ iterator classes and interface metadata for `Iterator`/`IteratorAggregate`
 typed values. The `iterable` pseudo-type accepts arrays and these Traversable
 objects.
 
+`key()` is requested only when the loop binds a key variable. Both callbacks
+finish before either loop variable is replaced. If `key()` throws, both previous
+bindings remain available to the catch. Successful binding assigns the value
+before the key, so displaced-value destructors observe that order.
+
+The iterable and an iterator returned by `getIterator()` stay alive through the
+body, including `break`, `return`, and exceptions. If their cleanup throws during
+a pending return, the return value is discarded and the exception propagates.
+
 ## break / continue
 
 ```php

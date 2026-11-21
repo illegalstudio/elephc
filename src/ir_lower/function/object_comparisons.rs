@@ -35,8 +35,8 @@ pub(in crate::ir_lower) fn lower_object_comparison_dispatch(module: &mut Module)
         variadic: None, deprecation: None, is_generator: false,
     };
     let mut function = if has_handlers {
-        super::builtin_wrappers::lower_builtin_callable_body(
-            module, "__elephc_internal_object_compare", &signature, false, statements,
+        super::builtin_wrappers::lower_operator_callable_body(
+            module, "__elephc_internal_object_compare", &signature, crate::source::SourceMode::Internal, statements,
         )
     } else {
         lower_no_handler_stub(&signature)

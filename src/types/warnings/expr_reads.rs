@@ -41,7 +41,7 @@ pub(super) fn collect_expr_reads(
             collect_expr_reads(value, scope, warnings);
             collect_instanceof_target_reads(target, scope, warnings);
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

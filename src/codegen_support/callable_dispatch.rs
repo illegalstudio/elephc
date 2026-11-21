@@ -61,7 +61,8 @@ pub(crate) fn runtime_builtin_wrapper_supported_at_arity(
         return false;
     };
     match def.spec.semantics.callable {
-        crate::builtins::semantics::BuiltinCallablePolicy::Dynamic(accepts) => {
+        crate::builtins::semantics::BuiltinCallablePolicy::Dynamic(accepts)
+        | crate::builtins::semantics::BuiltinCallablePolicy::Prepared(accepts) => {
             accepts(source_arg_ty)
         }
         crate::builtins::semantics::BuiltinCallablePolicy::DynamicRuntime(target) => {

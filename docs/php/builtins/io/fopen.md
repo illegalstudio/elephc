@@ -6,7 +6,7 @@ description: "Opens file or URL."
 ## fopen()
 
 ```php
-function fopen(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): mixed
+function fopen(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): resource|false
 ```
 
 Opens file or URL.
@@ -17,7 +17,7 @@ Opens file or URL.
 - `$use_include_path` (`bool`), default `false`, optional
 - `$context` (`mixed`), default `null`, optional
 
-**Returns**: `mixed`
+**Returns**: `resource|false`
 
 ## Availability
 

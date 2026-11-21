@@ -72,6 +72,20 @@ macro_rules! impl_collection_call_ops {
         }
     }
 
+    /// Receives the runtime's missing marker without unwinding through a Rust frame.
+    fn array_get_checked(&mut self, array: RuntimeCellHandle, index: RuntimeCellHandle,
+        preserve_reference: bool,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let pointer = unsafe { __elephc_eval_value_array_get_checked(array.as_ptr(), index.as_ptr()) };
+        if pointer.is_null() { return Ok(None); }
+        let value = Self::handle(pointer)?;
+        if !preserve_reference && self.is_reference(value)? {
+            let result = self.copy_value(value);
+            self.release(value)?;
+            result.map(Some)
+        } else { Ok(Some(value)) }
+    }
+
     /// Retains the stored boxed slot for argument binding without detaching its reference identity.
     fn array_get_preserving_references(
         &mut self,
@@ -249,6 +263,15 @@ macro_rules! impl_collection_call_ops {
         }
     }
 
+    /// Preserves arbitrary PHP property bytes when converting an array to stdClass.
+    fn property_set_bytes(&mut self, object: RuntimeCellHandle, property: &[u8],
+        value: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let ok = unsafe { __elephc_eval_value_property_set(object.as_ptr(), property.as_ptr(),
+            property.len() as u64, value.as_ptr(), scope_ptr, scope_len) };
+        if ok == 0 { Err(EvalStatus::RuntimeFatal) } else { Ok(()) }
+    }
+
     /// Shares eval magic-set recursion state with native property-write lowering.
     fn native_magic_set_guard_push(
         &mut self,
@@ -273,6 +296,19 @@ macro_rules! impl_collection_call_ops {
     ) -> Result<(), EvalStatus> {
         unsafe { __elephc_eval_magic_set_guard_pop(node.as_mut_ptr()); }
         Ok(())
+    }
+
+    /// Tags an aligned native getter identity in the existing Fiber-local accessor chain.
+    fn native_magic_get_guard_push(&mut self, object_identity: u64, property: &str,
+        node: &mut [u64; 4],
+    ) -> Result<bool, EvalStatus> {
+        debug_assert_eq!(object_identity & 1, 0);
+        self.native_magic_set_guard_push(object_identity | 1, property, node)
+    }
+
+    /// Removes the exact getter node without changing the native guard ABI.
+    fn native_magic_get_guard_pop(&mut self, node: &mut [u64; 4]) -> Result<(), EvalStatus> {
+        self.native_magic_set_guard_pop(node)
     }
 
     /// Uninitializes a native typed slot without assigning a coerced PHP null value.
@@ -348,6 +384,24 @@ macro_rules! impl_collection_call_ops {
         }
     }
 
+    /// Replaces native binding storage instead of writing through its previous PHP reference.
+    fn static_property_reference_bind(
+        &mut self, class_name: &str, property: &str, reference: RuntimeCellHandle,
+    ) -> Result<bool, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let binding = unsafe { __elephc_eval_value_static_property_binding(
+            class_name.as_ptr(), class_name.len() as u64, property.as_ptr(), property.len() as u64,
+            scope_ptr, scope_len) };
+        if binding.is_null() { return Ok(false); }
+        let mut thrown = std::ptr::null_mut();
+        let status = unsafe { __elephc_eval_value_static_rebind_v1(binding, reference.as_ptr(), 0, &mut thrown) };
+        if status == 0 { return Ok(true); }
+        if !thrown.is_null() {
+            self.schedule_pending_throw(RuntimeCellHandle::from_raw(thrown))?;
+            Err(EvalStatus::UncaughtThrowable)
+        } else { Err(EvalStatus::RuntimeFatal) }
+    }
+
     /// Checks an AOT static property initialization marker through the generated helper.
     fn static_property_is_initialized(
         &mut self,
@@ -376,8 +430,9 @@ macro_rules! impl_collection_call_ops {
         value: RuntimeCellHandle,
     ) -> Result<bool, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
-        let ok = unsafe {
-            __elephc_eval_value_static_property_set(
+        let mut thrown = std::ptr::null_mut();
+        let status = unsafe {
+            __elephc_eval_value_static_property_set_v2(
                 class_name.as_ptr(),
                 class_name.len() as u64,
                 property.as_ptr(),
@@ -385,9 +440,40 @@ macro_rules! impl_collection_call_ops {
                 value.as_ptr(),
                 scope_ptr,
                 scope_len,
+                &mut thrown,
             )
         };
-        Ok(ok != 0)
+        match status {
+            0 => Ok(false),
+            1 => Ok(true),
+            2 if !thrown.is_null() => {
+                self.schedule_pending_throw(RuntimeCellHandle::from_raw(thrown))?;
+                Err(EvalStatus::UncaughtThrowable)
+            }
+            _ => Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
+    /// Shares native class-setter conversion and exact source retirement with compiled Reflection.
+    fn static_property_class_set(
+        &mut self, class_name: &str, property: &str, argument: RuntimeCellHandle,
+    ) -> Result<bool, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let binding = unsafe { __elephc_eval_value_static_property_binding(
+            class_name.as_ptr(), class_name.len() as u64, property.as_ptr(), property.len() as u64,
+            scope_ptr, scope_len) };
+        if binding.is_null() {
+            let result = self.static_property_set(class_name, property, argument);
+            let cleanup = self.release(argument);
+            return match result { Err(status) => Err(status), Ok(updated) => cleanup.map(|()| updated) };
+        }
+        let mut thrown = std::ptr::null_mut();
+        let status = unsafe { __elephc_eval_value_static_class_store_v1(binding, argument.as_ptr(), 0, &mut thrown) };
+        if status == 0 { return Ok(true); }
+        if !thrown.is_null() {
+            self.schedule_pending_throw(RuntimeCellHandle::from_raw(thrown))?;
+            Err(EvalStatus::UncaughtThrowable)
+        } else { Err(EvalStatus::RuntimeFatal) }
     }
 
     /// Reads an AOT class-like constant through the generated user helper.

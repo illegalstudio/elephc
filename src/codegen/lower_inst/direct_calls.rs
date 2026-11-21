@@ -156,6 +156,26 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
     borrowed_stack_mixed_args: &[BorrowedStackMixedArg],
     ref_cell_lifetime: RefArgCellLifetime,
 ) -> Result<CallArgMaterialization> {
+    materialize_direct_call_args_with_conversion_policy(ctx, args, param_types, ref_params,
+        track_mixed_temp_cleanups, borrowed_stack_mixed_args, ref_cell_lifetime, false)
+}
+
+/// Tracks every constructor conversion owner while its externally visible result stays independent.
+pub(super) fn materialize_constructor_call_args_with_refs(
+    ctx: &mut FunctionContext<'_>, args: &[ValueId], param_types: &[PhpType],
+    ref_params: &[bool], ref_cell_lifetime: RefArgCellLifetime,
+) -> Result<CallArgMaterialization> {
+    materialize_direct_call_args_with_conversion_policy(ctx, args, param_types, ref_params,
+        true, &[], ref_cell_lifetime, true)
+}
+
+/// Shares ABI placement while keeping constructor string owners separate from result alias rules.
+fn materialize_direct_call_args_with_conversion_policy(
+    ctx: &mut FunctionContext<'_>, args: &[ValueId], param_types: &[PhpType],
+    ref_params: &[bool], track_mixed_temp_cleanups: bool,
+    borrowed_stack_mixed_args: &[BorrowedStackMixedArg],
+    ref_cell_lifetime: RefArgCellLifetime, constructor: bool,
+) -> Result<CallArgMaterialization> {
     if args.len() != param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
             "direct call materialization received {} args for {} params",
@@ -193,13 +213,11 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
         abi::emit_reserve_temporary_stack(ctx.emitter, borrowed_stack_arg_bytes);
     }
     let cleanup_slots = if track_mixed_temp_cleanups {
-        plan_call_arg_temp_cleanups(
-            ctx,
-            args,
-            param_types,
-            ref_params,
-            borrowed_stack_mixed_args,
-        )?
+        if constructor {
+            plan_constructor_arg_temp_cleanups(ctx, args, param_types, ref_params, borrowed_stack_mixed_args)?
+        } else {
+            plan_call_arg_temp_cleanups(ctx, args, param_types, ref_params, borrowed_stack_mixed_args)?
+        }
     } else {
         Vec::new()
     };
@@ -427,6 +445,13 @@ pub(super) fn materialize_plain_call_arg(
     }
     let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
     if let Some(cleanup) = cleanup {
+        if cleanup.ty == PhpType::Str {
+            // Read the return marker before owner-slot addressing can overwrite its register.
+            let owned = ctx.next_label("constructor_string_conversion_owned");
+            abi::emit_branch_if_php_return_owned(ctx.emitter, &owned);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            ctx.emitter.label(&owned);
+        }
         save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
     }
     Ok(push_ty)

@@ -33,6 +33,7 @@ struct StaticLocalSlot {
     php_type: PhpType,
     symbol: String,
     init_symbol: String,
+    managed_reference: bool,
 }
 
 /// Lowers a static-local read into the current result register(s).
@@ -45,6 +46,15 @@ pub(super) fn lower_load_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     abi::emit_load_symbol_to_result(ctx.emitter, &slot.symbol, &slot.php_type);
     let result_ty = ctx.value_php_type(result)?;
     coerce_loaded_local_to_result_type(ctx, &slot.php_type, &result_ty)?;
+    ctx.store_result_value(result)
+}
+
+/// Borrows a persistent managed cell while the static symbol keeps its lifetime owner.
+pub(super) fn lower_load_static_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let slot = resolve_static_local_slot(ctx, inst)?;
+    ensure_static_local_type_supported(&slot, inst)?;
+    let result = inst.result.ok_or_else(|| CodegenIrError::invalid_module("static reference missing result"))?;
+    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.symbol, 0);
     ctx.store_result_value(result)
 }
 
@@ -126,6 +136,14 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     let done_label = ctx.next_label("static_local_init_done");
     abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &initialized_label);
+    if slot.managed_reference {
+        initialize_managed_static(ctx, &slot, value)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&initialized_label);
+        super::ownership::release_value_if_owned(ctx, value)?;
+        ctx.emitter.label(&done_label);
+        return Ok(());
+    }
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
     let mut loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
@@ -173,6 +191,31 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     Ok(())
 }
 
+/// Transfers the initializer into a canonical cell before publishing successful initialization.
+fn initialize_managed_static(ctx: &mut FunctionContext<'_>, slot: &StaticLocalSlot, value: ValueId) -> Result<()> {
+    let source = ctx.mixed_box_type(value)?;
+    ctx.load_value_to_result(value)?;
+    if ctx.value_can_own_mixed_box_source(value)? {
+        crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &source);
+    } else if source.codegen_repr() == PhpType::Mixed {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    } else {
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &source);
+    }
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 7);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_new");
+    let boxed = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_pop_reg(ctx.emitter, boxed);
+    abi::emit_store_to_address(ctx.emitter, boxed, result, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_promote_mixed");
+    abi::emit_store_reg_to_symbol(ctx.emitter, result, &slot.symbol, 0);
+    abi::emit_load_int_immediate(ctx.emitter, result, 1);
+    abi::emit_store_reg_to_symbol(ctx.emitter, result, &slot.init_symbol, 0);
+    Ok(())
+}
+
 /// Resolves a local-slot immediate into static-local symbol metadata.
 fn resolve_static_local_slot(
     ctx: &mut FunctionContext<'_>,
@@ -195,12 +238,14 @@ fn resolve_static_local_slot(
         symbol: symbol.clone(),
         init_symbol: init_symbol.clone(),
         php_type: php_type.clone(),
+        managed_reference: !ctx.function.flags.is_main,
     });
     Ok(StaticLocalSlot {
         name,
         php_type,
         symbol,
         init_symbol,
+        managed_reference: !ctx.function.flags.is_main,
     })
 }
 
@@ -241,6 +286,7 @@ fn ensure_static_local_value_supported(
     value: ValueId,
     inst: &Instruction,
 ) -> Result<()> {
+    if slot.managed_reference { return Ok(()); }
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
     let slot_ty = slot.php_type.codegen_repr();
     if static_local_value_type_matches(&value_ty, &slot_ty) {

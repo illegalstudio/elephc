@@ -166,8 +166,9 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
 ) -> Result<()> {
     let class_name_value = expect_operand(inst, 0)?;
     let reflection_construction =
-        matches!(inst.immediate, Some(Immediate::ReflectionConstruction));
-    let uses_runtime_arg_container = matches!(inst.immediate, Some(Immediate::Bool(true)));
+        matches!(inst.immediate, Some(Immediate::ReflectionConstruction { .. }));
+    let uses_runtime_arg_container = matches!(inst.immediate, Some(Immediate::Bool(true)
+        | Immediate::ReflectionConstruction { uses_runtime_arg_container: true }));
     let constructor_arg_container = if uses_runtime_arg_container {
         Some(*inst.operands.get(1).ok_or_else(|| {
             CodegenIrError::invalid_module(

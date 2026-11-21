@@ -25,7 +25,7 @@ pub(super) fn zero_arity_call_signature(name: &str, sig: Option<&FunctionSig>) -
     if let Some(sig) = sig {
         return is_zero_arity_signature(sig);
     }
-    builtin_call_signature(name)
+    crate::types::builtin_call_sig(name)
         .as_ref()
         .is_some_and(is_zero_arity_signature)
 }
@@ -80,11 +80,27 @@ pub(super) fn lower_static_settype(
     {
         ctx.promote_local_mixed_ref_cell(local_name, Some(var_arg.span));
     }
+    if ctx.source_mode != crate::source::SourceMode::Internal
+        && ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)
+    {
+        // A target literal cannot establish a success-only type after a rejected mutation.
+        let sig = call_signature(ctx, name, source_prefers_extension_builtin(name));
+        let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
+        return Some(emit_builtin_call_value(ctx, name, operands, PhpType::Bool, expr.span, None));
+    }
     // A narrowed value view still occupies its boxed slot after an earlier conversion.
     // Every replacement must publish an EIR store and retire the previous occupant.
     let boxed_storage = ctx.local_slots.get(local_name)
         .is_some_and(|slot| ctx.builder.local_php_type(*slot).codegen_repr() == PhpType::Mixed);
-    if ctx.local_type(local_name).codegen_repr() == PhpType::Mixed || boxed_storage {
+    let checked_numeric = crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
+        && matches!(target_ty, PhpType::Int | PhpType::Float);
+    let checked_storage = checked_numeric && !ctx.is_ref_bound_local(local_name);
+    if checked_storage {
+        // A catch can still observe the original kind. Keep both possible values in tagged
+        // storage instead of reading the failed conversion through its success-only type.
+        super::builtin_settype::preserve_binding(ctx, local_name);
+    }
+    if ctx.local_type(local_name).codegen_repr() == PhpType::Mixed || boxed_storage || checked_numeric {
         if boxed_storage {
             ctx.set_local_logical_type(local_name, PhpType::Mixed);
         }
@@ -95,6 +111,7 @@ pub(super) fn lower_static_settype(
             PhpType::Bool => CastType::Bool,
             _ => unreachable!("static settype targets are scalar"),
         };
+        let checked_local = checked_storage.then(|| local_name.clone());
         let cast = Expr::new(ExprKind::Cast { target, expr: Box::new(var_arg.clone()) }, expr.span);
         let assignment = Expr::new(ExprKind::Assignment {
             target: Box::new(var_arg), value: Box::new(cast), result_target: None,
@@ -104,6 +121,7 @@ pub(super) fn lower_static_settype(
         if ctx.value_needs_release_after_use(value) {
             crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
         }
+        if let Some(name) = checked_local { ctx.set_local_logical_type(&name, PhpType::Mixed); }
         return Some(emit_bool_literal(ctx, true, Some(expr.span)));
     }
     let sig = call_signature(ctx, name, source_prefers_extension_builtin(name));
@@ -122,7 +140,7 @@ pub(super) fn static_settype_arg_exprs(
     if args.len() != 2 || args.iter().any(is_spread_arg) {
         return None;
     }
-    if !crate::types::call_args::has_named_args(args) {
+    if !crate::types::call_args::has_named_args(args, ctx.semantic_profile) {
         return Some((args[0].clone(), args[1].clone()));
     }
     let sig = call_signature(ctx, name, source_prefers_extension_builtin(name))?;
@@ -139,6 +157,7 @@ pub(super) fn static_settype_arg_exprs(
         false,
         true,
         &assoc_spread_sources(ctx, args),
+        ctx.semantic_profile,
     )
     .ok()?;
     if plan.has_spread_args() || plan.regular_args.len() != 2 {
@@ -165,11 +184,12 @@ pub(super) fn static_settype_target_type(arg: &Expr) -> Option<PhpType> {
     let ExprKind::StringLiteral(name) = &arg.kind else {
         return None;
     };
-    match php_symbol_key(name).as_str() {
-        "int" | "integer" => Some(PhpType::Int),
-        "float" | "double" => Some(PhpType::Float),
-        "string" => Some(PhpType::Str),
-        "bool" | "boolean" => Some(PhpType::Bool),
+    use elephc_semantics::settype_target::SettypeTarget;
+    match SettypeTarget::parse(name).ok()? {
+        SettypeTarget::Int => Some(PhpType::Int),
+        SettypeTarget::Float => Some(PhpType::Float),
+        SettypeTarget::String => Some(PhpType::Str),
+        SettypeTarget::Bool => Some(PhpType::Bool),
         _ => None,
     }
 }
@@ -251,12 +271,12 @@ pub(super) fn lower_xml_handler_setter_call(
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
     let expanded = if has_static_call_spread_args(args) {
-        Some(expand_static_call_spread_args(args))
+        Some(expand_static_call_spread_args(args, ctx.semantic_profile))
     } else {
         None
     };
     let args = expanded.as_deref().unwrap_or(args);
-    let has_named = crate::types::call_args::has_named_args(args);
+    let has_named = crate::types::call_args::has_named_args(args, ctx.semantic_profile);
     let has_spread = args.iter().any(is_spread_arg);
     if !has_named && !has_spread {
         lower_xml_handler_setter_args(ctx, name, sig, args)
@@ -324,6 +344,7 @@ pub(super) fn lower_xml_handler_setter_named_args(
         false,
         true,
         &assoc_spread_sources(ctx, args),
+        ctx.semantic_profile,
     ) else {
         return lower_args_with_signature(ctx, Some(sig), args);
     };
@@ -492,7 +513,7 @@ pub(super) fn lower_date_args(
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
     if args.len() != 2
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return lower_args_with_signature(ctx, sig, args);
@@ -509,7 +530,7 @@ pub(super) fn lower_json_source_args(
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
     if args.is_empty()
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         let mut operands = lower_args_with_signature(ctx, sig, args);
@@ -536,6 +557,12 @@ pub(super) fn lower_json_source_args(
     for arg in &args[1..] {
         let value = lower_expr(ctx, arg);
         operands.push(root_evaluated_call_argument(ctx, value, arg.span).value);
+    }
+    if ctx.builtin_source_mode() != crate::source::SourceMode::Internal
+        && (ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+            || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Nullability))
+    {
+        if let Some(sig) = sig { operands = coerce_operands_to_params(ctx, sig, operands); }
     }
     own_json_source_conversion(ctx, &mut operands, Some(args[0].span));
     operands

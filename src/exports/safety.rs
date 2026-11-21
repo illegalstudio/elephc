@@ -144,7 +144,8 @@ fn validate_call_graph(
                     }
                     if matches!(instruction.op, Op::PromoteLocalRefCell | Op::AliasLocalRefCell
                         | Op::LoadArrayElemRefCell | Op::LoadArrayElemRefCellExisting
-                        | Op::BindRefCellPtr | Op::AdoptRefCellPtr | Op::AcquireRefCell) {
+                        | Op::BindRefCellPtr | Op::AdoptRefCellPtr | Op::AcquireRefCell)
+                        && !is_persistent_static_ref_bind(function, instruction) {
                         return Err(CompileError::new(instruction.span.unwrap_or(export.span),
                             &format!("PHP export '{}' reaches reference construction through {}; native reference graphs are not supported by --emit phpext", export.name, path.join(" -> "))));
                     }
@@ -501,12 +502,29 @@ fn validate_runtime_call<'a>(
 /// Returns the typed runtime function id carried by one `RuntimeCall` instruction.
 fn runtime_function_id(immediate: Option<&Immediate>) -> Option<RuntimeFnId> {
     match immediate? {
-        Immediate::RuntimeCall(RuntimeCallTarget::Function(target))
-        | Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target, .. }) => {
-            Some(*target)
-        }
+        Immediate::RuntimeCall(target) => target.function_id(),
         _ => None,
     }
+}
+
+/// Accepts the managed activation lease created for one canonical function-static cell.
+fn is_persistent_static_ref_bind(
+    function: &Function,
+    instruction: &crate::ir::Instruction,
+) -> bool {
+    if instruction.op != Op::BindRefCellPtr {
+        return false;
+    }
+    let Some(source) = instruction.operands.first() else {
+        return false;
+    };
+    let Some(ValueDef::Instruction { inst, .. }) = function.value(*source).map(|value| value.def)
+    else {
+        return false;
+    };
+    function
+        .instruction(inst)
+        .is_some_and(|producer| producer.op == Op::LoadStaticLocalRefCell)
 }
 
 /// Reports one runtime-call safety failure with export, builtin, and path context.

@@ -15,6 +15,7 @@ use crate::parser::ast::Program;
 use crate::types::CheckResult;
 
 pub mod graph;
+mod checked_callables;
 pub mod inventory;
 mod prune;
 mod reconcile;

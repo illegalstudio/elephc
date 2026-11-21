@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Bound receivers/scopes and by-reference captures remain explicit runtime metadata.
+//! - Captured producer types own only metadata, independently of borrowed PHP value edges.
 //! - Foreign PCNTL handler closures retain the eval context that owns their callable metadata.
 
 use super::*;
@@ -72,6 +73,9 @@ pub struct EvalClosureCaptureBinding {
     pub(super) name: String,
     pub(super) value: RuntimeCellHandle,
     pub(super) by_ref_target: Option<EvalReferenceTarget>,
+    binding_type: Option<EvalParameterType>,
+    source_view: Option<EvalParameterType>,
+    source_view_epoch: u64,
 }
 
 impl EvalClosureCaptureBinding {
@@ -85,7 +89,35 @@ impl EvalClosureCaptureBinding {
             name: name.into(),
             value,
             by_ref_target,
+            binding_type: None,
+            source_view: None,
+            source_view_epoch: 0,
         }
+    }
+
+    /// Attaches an immutable producer contract without retaining its captured PHP value.
+    pub(crate) fn with_binding_type(mut self, binding_type: Option<EvalParameterType>) -> Self {
+        self.binding_type = binding_type;
+        self
+    }
+
+    /// Copies a current source view separately from the captured binding's enforcing contract.
+    pub(crate) fn with_source_view(mut self, source_view: Option<EvalParameterType>, epoch: u64) -> Self {
+        self.source_view = source_view;
+        self.source_view_epoch = epoch;
+        self
+    }
+
+    /// Borrows captured source alternatives only while a shared capture has not received an intervening write.
+    pub(crate) fn source_view(&self, context: &ElephcEvalContext) -> Option<&EvalParameterType> {
+        if self.by_ref_target.is_some()
+            && !context.source_view_is_current(self.value, self.source_view_epoch) { return None; }
+        self.source_view.as_ref()
+    }
+
+    /// Returns the producer alternatives copied from the defining activation.
+    pub(crate) fn binding_type(&self) -> Option<&EvalParameterType> {
+        self.binding_type.as_ref()
     }
 
     /// Returns the captured variable name without the leading `$`.

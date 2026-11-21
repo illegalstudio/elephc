@@ -1,0 +1,20 @@
+<?php
+function nullableLocalConsumer(int $value): void { echo 'bad'; }
+$rows = [7];
+try { int $first = $rows[$argc + 20]; echo 'bad'; }
+catch (TypeError $error) { echo 'I|'; }
+int $kept = 4;
+try { $kept = $rows[$argc + 20]; echo 'bad'; }
+catch (TypeError $error) { echo 'S:'; }
+echo $kept, '|';
+$copy = $rows[$argc + 20];
+try { nullableLocalConsumer($copy); }
+catch (TypeError $error) { echo 'C|'; }
+$alias =& $copy;
+try { nullableLocalConsumer($alias); }
+catch (TypeError $error) { echo 'A|'; }
+?int $optional = null;
+mixed $open = null;
+$free = 1;
+$free = null;
+echo gettype($optional), ':', gettype($open), ':', gettype($free);

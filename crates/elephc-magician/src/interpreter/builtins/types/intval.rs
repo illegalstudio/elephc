@@ -11,6 +11,7 @@
 //!   plain `(int)` cast, which is why the base path is guarded by the cell's runtime tag.
 //! - The base parser mirrors `strtol()` plus php-src's extra `0b` prefix, including its
 //!   `PHP_INT_MAX`/`PHP_INT_MIN` saturation and its `0` answer for an out-of-range base.
+//! - Checked profiles use the exact shared kernel and release source-order operand leases.
 
 use super::super::super::*;
 use crate::interpreter::runtime_ops::EVAL_TAG_STRING;
@@ -34,12 +35,10 @@ pub(in crate::interpreter) fn eval_builtin_intval(
         [value, base] => (value, Some(base)),
         _ => return Err(EvalStatus::RuntimeFatal),
     };
-    let value = eval_expr(value, context, scope, values)?;
-    let base = match base {
-        Some(base) => Some(eval_expr(base, context, scope, values)?),
-        None => None,
-    };
-    eval_intval_result(value, base, values)
+    let mut args = vec![value]; if let Some(base) = base { args.push(base); }
+    with_eval_operands(&args, context, scope, values, |args, context, _, values| {
+        eval_intval_result(args[0], args.get(1).copied(), context, values)
+    })
 }
 
 /// Applies PHP `intval()` to one already evaluated value and optional base.
@@ -49,8 +48,20 @@ pub(in crate::interpreter) fn eval_builtin_intval(
 pub(in crate::interpreter) fn eval_intval_result(
     value: RuntimeCellHandle,
     base: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Casts) {
+        let base = match base { Some(base) => eval_int_value(base, values)?, None => 10 };
+        if base == 10 || values.type_tag(value)? != EVAL_TAG_STRING {
+            return eval_cast_value(&EvalCastType::Int, value, context, values);
+        }
+        let bytes = values.string_bytes(value)?;
+        return match elephc_semantics::integer_cast_base::checked_string_to_int_base(&bytes, base) {
+            Ok(value) => values.int(value),
+            Err(failure) => eval_throw_builtin_exception("ValueError", failure.message(), context, values),
+        };
+    }
     let Some(base) = base else {
         return values.cast_int(value);
     };

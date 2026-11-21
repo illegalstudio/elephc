@@ -269,4 +269,29 @@ function nativeDetachedMutationLayout(string &$text, mixed $replacement): void {
             assert!(!raw.contains("__rt_mixed_clone"), "{name}: the new raw box already owns its value");
         }
     }
+
+    /// Mutating receiver reloads authenticate the canonical child instead of reloading a raw wrapper word.
+    #[test]
+    fn generic_reference_receiver_reload_probes_canonical_payload_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let module = Module::new(target);
+            let mut function = helper_function("generic_reference_reload", PhpType::Void);
+            function.params[0].by_ref = true;
+            let slot = function.add_local(Some("value".into()), function.params[0].ir_type,
+                PhpType::Mixed, crate::ir::LocalKind::PhpLocal);
+            let layout = frame::layout_for_function(&function, target, false, false, false);
+            let mut emitter = Emitter::new(target);
+            let mut data = DataSection::new();
+            let mut shared = SharedCodegenState::default();
+            {
+                let mut context = FunctionContext::new(&module, &function, &mut emitter, &mut data,
+                    &mut shared, layout, false, false, false, None);
+                assert_eq!(context.load_local_to_result(slot).unwrap(), PhpType::Mixed);
+            }
+            let assembly = emitter.output();
+            assert!(assembly.contains("__rt_reference_cell_canonical"), "{name}: probe before interpreting the payload");
+            assert!(assembly.contains("__rt_mixed_deref"), "{name}: expose the live child rather than the wrapper");
+        }
+    }
 }

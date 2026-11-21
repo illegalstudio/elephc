@@ -553,7 +553,8 @@ pub(crate) fn insert_enum_metadata(
     for constant in user_constants {
         constants.insert(
             constant.name.clone(),
-            resolve_lexical_class_value(&constant.value, name, None)?,
+            crate::types::constant_binding::bind_declared_value(
+                resolve_lexical_class_value(&constant.value, name, None)?, constant.type_expr.as_ref()),
         );
         if let Some(type_expr) = &constant.type_expr {
             constant_types.insert(

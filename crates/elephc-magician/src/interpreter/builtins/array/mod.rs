@@ -57,6 +57,7 @@ mod krsort;
 mod ksort;
 mod mutating_dispatch;
 mod mutation;
+mod numeric_domain_aggregate;
 mod natcasesort;
 mod natsort;
 mod next;
@@ -84,3 +85,5 @@ pub(in crate::interpreter) use mutating_dispatch::eval_builtin_array_mutating_de
 pub(in crate::interpreter) use sort::eval_array_sort_replacement;
 pub(in crate::interpreter) use usort::eval_user_sort_replacement;
 pub(in crate::interpreter) use values_dispatch::eval_array_declared_values_result;
+
+mod key_inputs;

@@ -97,14 +97,16 @@ fn specialize(function: &mut Function, candidate: InstId) -> bool {
     call.immediate = Some(Immediate::RuntimeCall(match &call.immediate {
         Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
             arguments,
-            strict_php,
+            php_only,
             strict_types,
+            strict_comparisons,
             ..
         })) => RuntimeCallTarget::ProfiledFunction {
             target: RuntimeFnId::InetPtonLen,
             arguments: *arguments,
-            strict_php: *strict_php,
+            php_only: *php_only,
             strict_types: *strict_types,
+            strict_comparisons: *strict_comparisons,
         },
         _ => RuntimeCallTarget::Function(RuntimeFnId::InetPtonLen),
     }));

@@ -117,6 +117,8 @@ fn static_preserve_keys(expr: &Expr) -> Option<bool> {
         ExprKind::FloatLiteral(value) => Some(*value != 0.0),
         ExprKind::StringLiteral(value) => Some(!value.is_empty() && value != "0"),
         ExprKind::Null => Some(false),
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| static_preserve_keys(&number)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => Some(*value != 0),
             ExprKind::FloatLiteral(value) => Some(*value != 0.0),
@@ -229,6 +231,7 @@ pub(crate) fn check_iterator_apply_dynamic_callback(
     if let ExprKind::FirstClassCallable(target) = &callback.kind {
         let sig = checker.resolve_first_class_callable_sig(target, span, env)?;
         reject_dynamic_ref_args(&sig, span)?;
+        checker.require_boolean_type(&sig.return_type, callback.span)?;
         specialize_iterator_apply_dynamic_assoc_variadic_target(
             checker,
             target,
@@ -246,6 +249,7 @@ pub(crate) fn check_iterator_apply_dynamic_callback(
                 .closure_return_types
                 .insert(var_name.clone(), sig.return_type.clone());
             reject_dynamic_ref_args(&sig, span)?;
+            checker.require_boolean_type(&sig.return_type, callback.span)?;
             specialize_iterator_apply_dynamic_assoc_variadic_target(
                 checker,
                 &target,
@@ -257,6 +261,7 @@ pub(crate) fn check_iterator_apply_dynamic_callback(
         if let Some(target) = checker.callable_array_targets.get(var_name).cloned() {
             let sig = checker.resolve_first_class_callable_sig(&target, span, env)?;
             reject_dynamic_ref_args(&sig, span)?;
+            checker.require_boolean_type(&sig.return_type, callback.span)?;
             specialize_iterator_apply_dynamic_assoc_variadic_target(
                 checker,
                 &target,
@@ -271,12 +276,14 @@ pub(crate) fn check_iterator_apply_dynamic_callback(
         if let Some(extern_name) = checker.canonical_extern_function_name_folded(cb_name) {
             if let Some(sig) = checker.functions.get(extern_name.as_str()).cloned() {
                 reject_dynamic_ref_args(&sig, span)?;
+                checker.require_boolean_type(&sig.return_type, callback.span)?;
                 return Ok(());
             }
         }
         if let Some(builtin_name) = super::canonical_builtin_function_name(cb_name) {
-            if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_name) {
+            if let Some(sig) = crate::types::first_class_callable_builtin_sig_with_semantics(&builtin_name, checker.semantic_profile) {
                 reject_dynamic_ref_args(&sig, span)?;
+                checker.require_boolean_type(&sig.return_type, callback.span)?;
                 return Ok(());
             }
         }
@@ -285,6 +292,7 @@ pub(crate) fn check_iterator_apply_dynamic_callback(
             .unwrap_or_else(|| cb_name.clone());
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
             reject_dynamic_ref_args(&sig, span)?;
+            checker.require_boolean_type(&sig.return_type, callback.span)?;
             if associative_args && sig.variadic.is_some() {
                 super::callables::specialize_dynamic_assoc_variadic_user_callback(
                     checker,
@@ -301,6 +309,7 @@ pub(crate) fn check_iterator_apply_dynamic_callback(
 
     if let Some(sig) = checker.resolve_expr_callable_sig(callback, env)? {
         reject_dynamic_ref_args(&sig, span)?;
+        checker.require_boolean_type(&sig.return_type, callback.span)?;
         return Ok(());
     }
 
@@ -337,7 +346,7 @@ pub(crate) fn check_iterator_apply_static_callback(
         env,
         "iterator_apply() callback",
     ) {
-        Ok(_) => Ok(()),
+        Ok(result) => checker.require_boolean_type(&result, callback.span),
         Err(error) if error.message == ITERATOR_APPLY_UNKNOWN_STATIC_CALLBACK_SIG => {
             let callback_ty = checker.infer_type(callback, env)?;
             if !callback_ty.is_callable_like() && callback_ty != PhpType::Str {
@@ -388,7 +397,7 @@ fn is_static_callback_arg_literal(expr: &Expr) -> bool {
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null => true,
-        ExprKind::Negate(inner) => matches!(
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) => matches!(
             inner.kind,
             ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
         ),

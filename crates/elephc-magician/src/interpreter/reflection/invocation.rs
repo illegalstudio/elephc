@@ -35,6 +35,7 @@ pub(super) fn eval_reflection_method_invoke_args(
 /// Converts a variadic `invoke()` argument into a by-value forwarded method argument.
 pub(super) fn eval_reflection_method_forwarded_value_arg(arg: EvaluatedCallArg) -> EvaluatedCallArg {
     EvaluatedCallArg {
+        source_type: arg.source_type,
         evaluation_owner: arg.evaluation_owner,
         name: arg.name,
         value: arg.value,
@@ -45,19 +46,20 @@ pub(super) fn eval_reflection_method_forwarded_value_arg(arg: EvaluatedCallArg) 
 /// Binds `ReflectionMethod::invokeArgs()` without extracting owned argument cells yet.
 pub(super) fn eval_reflection_method_invoke_args_array(
     evaluated_args: Vec<EvaluatedCallArg>,
-) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
-    let args = bind_evaluated_function_args(
-        &[String::from("object"), String::from("args")], evaluated_args,
-    )?;
-    Ok((args[0], args[1]))
+) -> Result<(RuntimeCellHandle, RuntimeCellHandle, Option<ArgumentSource>), EvalStatus> {
+    let (args, _) = bind_evaluated_ref_builtin_args(&["object", "args"], &evaluated_args, false)?;
+    let object = required_evaluated_ref_arg(&args, 0)?;
+    let array = required_evaluated_ref_arg(&args, 1)?;
+    Ok((object.value, array.value, array.source_type.clone()))
 }
 
-/// Binds the borrowed argument array for `ReflectionFunction::invokeArgs()`.
+/// Binds the argument array and its source entries without acquiring new PHP owners.
 pub(super) fn eval_reflection_function_invoke_args_array(
     evaluated_args: Vec<EvaluatedCallArg>,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let args = bind_evaluated_function_args(&[String::from("args")], evaluated_args)?;
-    Ok(args[0])
+) -> Result<(RuntimeCellHandle, Option<ArgumentSource>), EvalStatus> {
+    let (args, _) = bind_evaluated_ref_builtin_args(&["args"], &evaluated_args, false)?;
+    let array = required_evaluated_ref_arg(&args, 0)?;
+    Ok((array.value, array.source_type.clone()))
 }
 
 /// Dispatches one reflected function invocation through eval or registered native functions.

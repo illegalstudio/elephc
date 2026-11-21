@@ -127,6 +127,7 @@ pub(in crate::optimize::control::dce) fn known_condition_value_inner(
     guards: &GuardState,
     visiting: &mut Vec<Expr>,
 ) -> Option<bool> {
+    if crate::optimize::semantic_context::boolean_guard_may_throw(condition) { return None; }
     if visiting.iter().any(|known| known == condition) {
         return None;
     }
@@ -240,7 +241,7 @@ fn expr_contains_subexpr(expr: &Expr, target: &Expr) -> bool {
     }
 
     match &expr.kind {
-        ExprKind::Not(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
+        ExprKind::Not(inner) | ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
             expr_contains_subexpr(inner, target)
         }
         ExprKind::BinaryOp { left, right, .. } => {

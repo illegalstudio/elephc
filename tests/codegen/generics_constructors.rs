@@ -78,7 +78,7 @@ new Printer(8);
 new Printer("eight");
 echo $number->value + 1, "|", strtoupper($text->value);
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "8|eight|8|SEVEN");
     }
 }
@@ -113,7 +113,7 @@ class Box {
 }
 echo (new Box("seven"))->value;
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         let warnings = compile_cli_file_with_flags_capturing_stderr(source, flags);
         assert!(
             warnings.contains("<T>") && warnings.contains("does not satisfy its bound int"),

@@ -69,7 +69,7 @@ pub(in crate::interpreter) fn clone_native_storage(
 }
 
 /// Calls a typed arithmetic adapter with operands in their original source order.
-pub(super) fn arithmetic(
+pub(in crate::interpreter) fn arithmetic(
     values: &mut (impl RuntimeValueOps + ?Sized), operation: ObjectArithmetic,
     left: RuntimeCellHandle, right: RuntimeCellHandle,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
@@ -79,7 +79,7 @@ pub(super) fn arithmetic(
 }
 
 /// Calls a typed bitwise adapter with operands in their original source order.
-pub(super) fn bitwise(
+pub(in crate::interpreter) fn bitwise(
     values: &mut (impl RuntimeValueOps + ?Sized), op: EvalBinOp,
     left: RuntimeCellHandle, right: RuntimeCellHandle,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
@@ -95,7 +95,7 @@ pub(super) fn bitwise(
 }
 
 /// Calls a typed shift adapter with operands in their original source order.
-pub(super) fn shift(
+pub(in crate::interpreter) fn shift(
     values: &mut (impl RuntimeValueOps + ?Sized), op: EvalBinOp,
     left: RuntimeCellHandle, right: RuntimeCellHandle,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
@@ -151,7 +151,7 @@ pub(super) fn bitwise_result(
 }
 
 /// Applies PHP's internal-class `~$value` identity as `0 - value - 1`.
-pub(super) fn bit_not(
+pub(in crate::interpreter) fn bit_not(
     values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let Some(class) = operator_class(values, value)? else { return Ok(None) };
@@ -205,6 +205,15 @@ pub(super) fn truthy(
     let truthy = values.truthy_raw(result);
     let released = values.release(result);
     truthy.and_then(|truthy| released.map(|()| Some(truthy)))
+}
+
+/// Selects original numeric text only for a reviewed internal-class projection.
+pub(in crate::interpreter) fn checked_numeric_projection(
+    values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
+    cast: elephc_builtin_contract::ObjectCast,
+) -> Result<Option<elephc_builtin_contract::CheckedNumericProjection>, EvalStatus> {
+    Ok(operator_class(values, value)?.and_then(|class| class.operators)
+        .and_then(|operators| operators.checked_numeric_projection(cast)))
 }
 
 /// Applies an internal numeric conversion through the same instance adapter as AOT.

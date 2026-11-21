@@ -95,9 +95,27 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
     index: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
+    let (array_value, owner) = if ctx.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys) {
+        root_owned_call_operand(ctx, array_value, expr.span)
+    } else { (array_value, None) };
+    // The root owns this lease through key evaluation and the guard. The probe borrows it;
+    // retiring both the probe operand and the root would release the receiver twice.
+    let probe_receiver = if owner.is_some() {
+        crate::ir_lower::ownership::borrow_value(ctx, array_value, Some(expr.span))
+    } else { array_value };
+    let result = lower_native_isset_offset_probe_with_key(ctx, probe_receiver, index, expr);
+    if let Some(owner) = owner { retire_owned_call_operand(ctx, owner, expr.span); }
+    result
+}
+
+/// Shares probe dispatch while its caller keeps an owning receiver alive through key evaluation.
+fn lower_native_isset_offset_probe_with_key(
+    ctx: &mut LoweringContext<'_, '_>, array_value: LoweredValue, index: &Expr, expr: &Expr,
+) -> LoweredValue {
     match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             let mut index_value = lower_expr(ctx, index);
+            index_value = crate::ir_lower::array_key_guards::for_receiver(ctx, array_value, index_value, index.span);
             let index_ty = isset_index_expr_key_type(ctx, index, index_value.value);
             let result = if index_ty == PhpType::Int {
                 index_value = coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false);
@@ -162,6 +180,7 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
         }
         IrType::Heap(IrHeapKind::Hash) => {
             let index_value = lower_expr(ctx, index);
+            let index_value = crate::ir_lower::array_key_guards::for_receiver(ctx, array_value, index_value, index.span);
             let result = ctx.emit_value(
                 Op::HashIsset,
                 vec![array_value.value, index_value.value],
@@ -200,14 +219,14 @@ pub(super) fn array_access_expr_supports_native_isset_probe(
             .local_types
             .get(name)
             .cloned()
-            .unwrap_or_else(|| infer_expr_type_syntactic(array)),
+            .unwrap_or_else(|| infer_expr_type_syntactic(array, ctx.semantic_profile)),
         ExprKind::PropertyAccess { object, property } => {
             property_access_expr_type_for_ir(ctx, object, property)
-                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+                .unwrap_or_else(|| infer_expr_type_syntactic(array, ctx.semantic_profile))
         }
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, array),
         ExprKind::ArrayLiteralAssoc(pairs) => assoc_array_literal_type_for_ir(ctx, pairs, array),
-        _ => infer_expr_type_syntactic(array),
+        _ => infer_expr_type_syntactic(array, ctx.semantic_profile),
     }
     .codegen_repr();
     matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Int
@@ -222,7 +241,7 @@ pub(super) fn lower_lazy_property_isset_operand(
     arg: &Expr,
 ) -> Option<LoweredValue> {
     if needs_native_xml_property_dispatch(ctx, object, property) {
-        let object = lower_member_receiver(ctx, object, arg);
+        let object = lower_member_probe_receiver(ctx, object, arg);
         return Some(lower_boxed_xml_property_isset(ctx, object, property, arg));
     }
     match property_isset_action(ctx, object, property, arg)? {
@@ -238,15 +257,15 @@ pub(super) fn lower_lazy_property_isset_operand(
             Some(probe_value_is_set(ctx, probed, arg))
         }
         IssetPropertyAction::Magic => {
-            let object = lower_member_receiver(ctx, object, arg);
+            let object = lower_member_probe_receiver(ctx, object, arg);
             Some(lower_magic_property_isset(ctx, object, property, arg))
         }
         IssetPropertyAction::AlwaysFalse => {
-            lower_member_receiver(ctx, object, arg);
+            lower_member_probe_receiver(ctx, object, arg);
             Some(emit_bool_literal(ctx, false, Some(arg.span)))
         }
         IssetPropertyAction::Initialized => {
-            let object = lower_member_receiver(ctx, object, arg);
+            let object = lower_member_probe_receiver(ctx, object, arg);
             Some(lower_initialized_property_isset(ctx, object, property, arg))
         }
     }
@@ -346,8 +365,8 @@ fn isset_object_expr_type(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Optio
             .functions
             .get(name.as_str())
             .map(|sig| sig.return_type.clone())
-            .unwrap_or_else(|| infer_expr_type_syntactic(object)),
-        _ => infer_expr_type_syntactic(object),
+            .unwrap_or_else(|| infer_expr_type_syntactic(object, ctx.semantic_profile)),
+        _ => infer_expr_type_syntactic(object, ctx.semantic_profile),
     })
 }
 

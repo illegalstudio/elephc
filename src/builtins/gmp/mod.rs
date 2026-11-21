@@ -109,6 +109,7 @@ pub(crate) const HELPERS: &[&str] = &[
     "__elephc_gmp_import",
     "__elephc_gmp_init",
     "__elephc_gmp_intval",
+    "__elephc_gmp_checked_intval",
     "__elephc_gmp_intval_cast",
     "__elephc_gmp_intval_cast_string",
     "__elephc_gmp_invert",
@@ -170,6 +171,7 @@ const fn semantics_for(
         target_strategy: BuiltinTargetStrategy::EirGraph,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::PreserveUncoerced,
         callable: BuiltinCallablePolicy::Dynamic(
             crate::builtins::semantics::callable_accepts_any_source,
@@ -276,6 +278,16 @@ fn lower(
     ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+    let helper = format!("__elephc_gmp_{}", call.name.trim_start_matches("gmp_"));
+    lower_with_helper(ctx, call, &helper)
+}
+
+/// Shares raw operand boxing, hidden parameters and exception-safe ownership with specialized helpers.
+fn lower_with_helper(
+    ctx: &mut dyn BuiltinLoweringContext,
+    call: &NormalizedBuiltinCall<'_>,
+    helper: &str,
+) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
     let strict = ctx.emit_value(
         Op::ConstBool,
         Vec::new(),
@@ -319,8 +331,7 @@ fn lower(
         boxes.push(boxed.value);
         operands.push(boxed.value);
     }
-    let helper = format!("__elephc_gmp_{}", call.name.trim_start_matches("gmp_"));
-    let result = ctx.emit_user_call(&helper, operands, call.result_type.clone(), Some(call.span));
+    let result = ctx.emit_user_call(helper, operands, call.result_type.clone(), Some(call.span));
     for boxed in boxes {
         ctx.emit_void(
             Op::Release,
@@ -387,6 +398,8 @@ mod tests {
     #[test]
     fn result_type_families_are_distinct() {
         let empty = BuiltinSemanticInput {
+            semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
+            source_mode: crate::source::SourceMode::Php,
             name: "gmp_add",
             args: &[],
             arg_types: &[],

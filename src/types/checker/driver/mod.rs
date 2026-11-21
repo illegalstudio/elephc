@@ -89,7 +89,11 @@ pub(super) fn check_types_impl(
     generics: &crate::generics::GenericContext,
 ) -> Result<(Checker, TypeEnv), CompileError> {
     let mut checker = Checker::new(target);
-    checker.strict_locals = options.strict_locals;
+    checker.semantic_profile = options.semantic_profile.with(
+        elephc_semantics::StrictFeature::Locals,
+        options.strict_locals || options.semantic_profile.contains(elephc_semantics::StrictFeature::Locals),
+    );
+    checker.strict_locals = checker.semantic_profile.contains(elephc_semantics::StrictFeature::Locals);
     // Installed BEFORE any body is walked, because `new Box(5)` is resolved while walking one.
     // Empty on every path that does not run `generics::monomorphize`, which is what makes those
     // paths behave exactly as they did before this feature.
@@ -202,7 +206,7 @@ pub(super) fn check_types_impl(
     // computed here and reused at their own injection sites below.
     let register_spl = crate::types::checker::builtin_spl_classes::program_may_reference_spl(program);
     let register_reflection = program_may_reference_reflection(program);
-    let mut wanted_throwables = throwables_to_register(program, register_spl, register_reflection);
+    let mut wanted_throwables = throwables_to_register(program, register_spl, register_reflection, checker.semantic_profile);
     // Fiber and FiberError ride in the same set because `inject_builtin_throwables` owns their
     // declarations. Nothing raises a FiberError without a Fiber, so one answer covers both.
     if program_may_reference_fiber(program) {
@@ -288,6 +292,7 @@ pub(super) fn check_types_impl(
         &mut class_map,
         &declared_traits,
         register_reflection,
+        checker.semantic_profile,
     ) {
         errors.extend(error.flatten());
     }
@@ -459,6 +464,10 @@ pub(super) fn check_types_impl(
         &flattened_enums,
         program,
     ));
+    errors.extend(super::schema::validate_noncoercive_defaults(&mut checker, program));
+    for class in checker.classes.values_mut() {
+        crate::types::constant_binding::bind_property_defaults(class);
+    }
     // All class/interface/enum metadata now exists, so deferred symbolic
     // attribute-argument references can be checked for resolvability. Drop any
     // the EIR backend cannot lower (e.g. built-in `Attribute::TARGET_CLASS`) so
@@ -756,3 +765,6 @@ var_dump((new Mw())->check(new Req()));
         );
     }
 }
+
+#[cfg(test)]
+mod strict_abs_tests;

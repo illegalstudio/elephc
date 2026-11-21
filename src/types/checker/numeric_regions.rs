@@ -124,7 +124,7 @@ fn expression(expr: &Expr, active: &HashSet<String>, facts: &mut Facts) {
         | ExprKind::IncludeValue { .. } => facts.veto = true,
         ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::StringLiteral(_)
         | ExprKind::BoolLiteral(_) | ExprKind::Null | ExprKind::This | ExprKind::ConstRef(_)
-        | ExprKind::BinaryOp { .. } | ExprKind::InstanceOf { .. } | ExprKind::Negate(_)
+        | ExprKind::BinaryOp { .. } | ExprKind::InstanceOf { .. } | ExprKind::UnaryPlus(_) | ExprKind::Negate(_)
         | ExprKind::Not(_) | ExprKind::BitNot(_) | ExprKind::Throw(_) | ExprKind::ErrorSuppress(_)
         | ExprKind::Print(_) | ExprKind::NullCoalesce { .. } | ExprKind::FunctionCall { .. }
         | ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_)
@@ -183,7 +183,7 @@ fn numeric_expression(checker: &super::Checker, expr: &Expr, env: &crate::types:
                     && checker.numeric_region_sites.values().any(|names| names.contains(name)))
         }),
         ExprKind::Cast { target: CastType::Int | CastType::Float, .. } => true,
-        ExprKind::Negate(value) => numeric_expression(checker, value, env),
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value) => numeric_expression(checker, value, env),
         ExprKind::BinaryOp { left, op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow, right } => {
             numeric_expression(checker, left, env) && numeric_expression(checker, right, env)
         }

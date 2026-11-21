@@ -84,7 +84,7 @@ pub(super) fn lower_single_array_callback_builtin(
                 Some(source_arg_ty),
                 visible_arg_types,
                 return_ty,
-                super::super::super::instruction_strict_php_profile(inst),
+                super::super::super::instruction_php_only_profile(inst),
                 name,
                 |ctx, wrapper_label, env_bytes| {
                     emit_single_array_callback_call(

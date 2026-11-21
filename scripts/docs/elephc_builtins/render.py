@@ -238,6 +238,13 @@ def _semantic_descriptor_section(b: dict) -> str:
         "- **Target support**: "
         + (", ".join(f"`{target}`" for target in target_support) or "_none declared_"),
     ]
+    key_input = semantics.get("array_key_input")
+    if key_input:
+        argument = key_input["argument"] + 1
+        detail = f"values of argument #{argument}" if key_input["kind"] == "values" else f"argument #{argument}"
+        if key_input.get("nullable"):
+            detail += " (null selects complete rows)"
+        lines.append(f"- **Original array key input**: {detail}; validated before key conversion.")
     return "\n".join(lines)
 
 
@@ -309,9 +316,9 @@ def _availability_section(b: dict) -> str:
             )
     if b.get("is_extension"):
         notes.append(
-            "Hidden in strict PHP mode: this builtin is an elephc extension with no "
+            "Hidden in PHP-only mode: this builtin is an elephc extension with no "
             "PHP equivalent, so programs compiled with "
-            "[`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) "
+            "[`--php-only`](../../../compiling/cli-reference.md#php-only-mode) "
             "treat the name as nonexistent, in compiled code and inside eval'd code."
         )
     if notes:

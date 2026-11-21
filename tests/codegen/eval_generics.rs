@@ -151,7 +151,7 @@ try { bad(); } catch (TypeError $e) { echo '|return'; }
 
 /// PHPDoc templates stay portable in strict PHP mode, including promoted constructor slots.
 #[test]
-fn test_eval_generics_docblocks_in_strict_php() {
+fn test_eval_generics_docblocks_in_php_only() {
     let source = dynamic_eval(r#"
 /** @template T */
 class Box {
@@ -175,7 +175,7 @@ class Item {
 function identity($value) { return $value; }
 echo (new Box(7))->get(), '|', identity('ok'), '|', (new Item('item'))->value;
 "#);
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(&source, flags), "7|ok|item");
     }
 }
@@ -309,7 +309,7 @@ class Child extends \Ns\Foo implements \Other\Foo {
 }
 $child = new Child(7); echo $child->get(), '|', $child->label();
 "#);
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(&source, flags), "7|label");
     }
 }

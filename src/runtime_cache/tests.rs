@@ -10,6 +10,20 @@
 
 use super::*;
 
+/// Every strict guarantee partitions cached runtime objects and equivalent profiles reuse them.
+#[test]
+fn strict_profile_runtime_cache_identity_covers_all_features() {
+    use elephc_semantics::{SemanticProfile, FEATURES};
+    let base = identity::partition_semantic_profile(42, SemanticProfile::PERMISSIVE);
+    let mut keys = std::collections::HashSet::from([base]);
+    for feature in FEATURES {
+        let profile = SemanticProfile::PERMISSIVE.with(feature.feature, true);
+        let key = identity::partition_semantic_profile(42, profile);
+        assert!(keys.insert(key), "{} must partition runtime entries", feature.flag);
+        assert_eq!(key, identity::partition_semantic_profile(42, profile));
+    }
+}
+
     /// Verifies the cache key changes with runtime-emitter build identity even
     /// when compiler version, target, heap, features, and PIC mode are identical.
     #[test]
@@ -418,12 +432,36 @@ use super::*;
             .find("cache_path.exists()")
             .expect("runtime cache lookup remains explicit");
         let generation = source
-            .find("generate_runtime_with_features_mode")
+            .find("generate_runtime_with_semantics")
             .expect("runtime assembly generator remains explicit");
 
         assert!(
             lookup < generation,
             "a warm cache hit must not regenerate the complete runtime assembly"
+        );
+    }
+
+    /// Verifies a post-publish lease retry preserves the caller's semantic profile.
+    #[test]
+    fn post_publish_lease_retry_preserves_semantic_profile() {
+        let source = include_str!("../runtime_cache.rs");
+        let retry_start = source
+            .rfind("let Some(prepared) = lease_runtime_object")
+            .expect("post-publish lease retry remains explicit");
+        let retry_tail = &source[retry_start..];
+        let retry_end = retry_tail
+            .find("prune_runtime_cache_objects")
+            .expect("lease retry precedes cache pruning");
+        let retry = &retry_tail[..retry_end];
+
+        assert!(
+            retry.contains("prepare_runtime_object_with_semantics(")
+                && retry.contains("semantic_profile"),
+            "a lost strict runtime lease must rebuild with the same semantic profile"
+        );
+        assert!(
+            !retry.contains("prepare_runtime_object_with_mode("),
+            "the permissive compatibility wrapper must not handle a strict retry"
         );
     }
 

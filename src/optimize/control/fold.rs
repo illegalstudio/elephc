@@ -21,6 +21,7 @@ use super::*;
 /// - `stmt`: The statement to process.
 /// Returns a new `Stmt` with all nested expressions folded via `fold_expr`.
 pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
+    let _semantics = crate::optimize::semantic_context::scoped_source_mode(stmt.source_mode);
     let span = stmt.span;
     let source_mode = stmt.source_mode;
     let strict_types = stmt.strict_types;

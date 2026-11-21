@@ -97,7 +97,7 @@ impl Checker {
         // static type as before; only an unbounded integer, boxed or counter key qualifies.
         let key_qualifies = (matches!(normalized_idx_ty, PhpType::Int)
             && !matches!(idx_ty, PhpType::Union(_))
-            && !crate::types::nonempty_array_key_stays_in_range(index))
+            && !crate::types::nonempty_array_key_stays_in_range(index, self.semantic_profile))
             || promotable_read_key(idx_ty);
         // A `?int` value keeps the slots typed too: codegen stores an integer in its slot and
         // PHP's `null` as a null entry of the promoted hash.
@@ -651,7 +651,7 @@ impl PromotableCandidates {
 /// takes the position by value: a by-reference parameter, an unknown or conditionally declared
 /// function, and a builtin outside the read-only list all disqualify it.
 pub(crate) fn find_candidates(checker: &Checker, body: &[Stmt]) -> PromotableCandidates {
-    let mut scan = Scan::default();
+    let mut scan = Scan { semantic_profile: checker.semantic_profile, ..Scan::default() };
     scan.stmts(body);
     let mut disqualified = scan.disqualified;
     for (callee, position, local) in scan.user_call_args {
@@ -714,6 +714,8 @@ fn value_may_stay_int(value: &Expr) -> bool {
 /// What one walk of a body collects.
 #[derive(Default)]
 struct Scan {
+    /// Immutable semantics used by key storage classification.
+    semantic_profile: elephc_semantics::SemanticProfile,
     /// Locals written through a statement-form element write or append.
     written: HashSet<String>,
     /// Locals with an element write that can make a candidate promotable: its key may skip a
@@ -743,7 +745,7 @@ impl Scan {
     /// or a concatenation, which always take a hash), and not a `foreach` key (routed to the
     /// tagged writer).
     fn key_may_skip(&self, index: &Expr) -> bool {
-        !crate::types::nonempty_array_key_stays_in_range(index)
+        !crate::types::nonempty_array_key_stays_in_range(index, self.semantic_profile)
             && !matches!(
                 &index.kind,
                 ExprKind::StringLiteral(_)

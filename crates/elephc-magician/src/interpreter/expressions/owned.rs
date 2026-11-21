@@ -30,6 +30,7 @@ pub(in crate::interpreter) fn eval_output_value(
 ) -> Result<(), EvalStatus> {
     let mut converted = None;
     let mut result = (|| {
+        super::super::checked_strings::formatting(original, context, values)?;
         let value = eval_string_context_value(original, context, values)?;
         if value != original { converted = Some(value); }
         values.echo(value)
@@ -101,7 +102,7 @@ pub(super) fn eval_property_get_with_result_ownership(
 }
 
 /// Selects an ordinary or owned static-property read without changing access checks.
-pub(super) fn eval_static_property_get_with_result_ownership(
+pub(in crate::interpreter) fn eval_static_property_get_with_result_ownership(
     class_name: &str,
     property: &str,
     context: &mut ElephcEvalContext,

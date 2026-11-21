@@ -267,8 +267,9 @@ pub(super) fn lower_closure_with_context(
                 // widening metadata first leaves a raw array, object, or string in storage that
                 // `PromoteLocalRefCell` then interprets as a boxed Mixed pointer.
                 ctx.promote_local_mixed_ref_cell(capture, Some(expr.span));
-            } else if by_ref && !ctx.is_ref_bound_local(capture) {
-                // Keep a local cell owner independent of the descriptor's capture lease.
+            } else if by_ref {
+                // A conditional unset can detach a conservatively aliased local at runtime.
+                // Idempotent promotion republishes its frame owner before the descriptor retains it.
                 ctx.promote_local_ref_cell(capture, Some(expr.span));
             }
             let captured = if by_ref { ctx.load_local(capture, Some(expr.span)) }
@@ -296,6 +297,14 @@ pub(super) fn lower_closure_with_context(
         };
         capture_params.push((capture.clone(), physical_php_type, by_ref));
         logical_capture_params.push((capture.clone(), php_type, by_ref));
+        if let Some(descriptor) = crate::ir_lower::captured_binding_origins::freeze(ctx, capture, expr.span) {
+            let hidden = crate::names::captured_contract_local_name(capture);
+            ctx.emit_void(Op::ClosureCapture, vec![descriptor.value], None,
+                Op::ClosureCapture.default_effects(), Some(expr.span));
+            captured_values.push(ClosureCapture { value: descriptor.value, by_ref_local: None });
+            capture_params.push((hidden.clone(), PhpType::Int, false));
+            logical_capture_params.push((hidden, PhpType::Int, false));
+        }
     }
     if ctx.current_class.is_some()
         && (ctx.local_slots.contains_key(CALLED_CLASS_ID_CAPTURE)
@@ -352,14 +361,17 @@ pub(super) fn lower_closure_with_context(
     let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
     let source_is_generator = ctx.closure_generator_spans.contains(&expr.span);
     let hinted_param_types = if contextual_arg_types.is_empty() {
-        crate::ir_lower::closure_param_hints::param_hints(expr.span)
+        crate::ir_lower::closure_hints::param_hints(expr.span)
     } else {
         None
     };
     let contextual_arg_types = hinted_param_types
         .as_deref()
         .unwrap_or(contextual_arg_types);
-    let signature = if contextual_arg_types.is_empty() && bound_this_context.is_none() {
+    let checked_return = crate::ir_lower::closure_hints::result_type(
+        ctx.semantic_profile, ctx.source_mode, &ctx.loop_storage_scope, expr.span);
+    let return_context = bound_this_context.or(checked_return.as_ref());
+    let signature = if contextual_arg_types.is_empty() && return_context.is_none() {
         function::lower_closure_function(
             ctx,
             &name,
@@ -389,7 +401,7 @@ pub(super) fn lower_closure_with_context(
             &logical_capture_params,
             &signature_capture_params,
             contextual_arg_types,
-            bound_this_context,
+            return_context,
             self_ref_callable_capture,
             by_ref_return,
             loop_storage_scope,
@@ -623,7 +635,7 @@ fn expr_writes_local(expr: &Expr, name: &str) -> bool {
         ExprKind::InstanceOf { value, target } => {
             expr_writes_local(value, name) || instance_of_target_writes_local(target, name)
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -879,7 +891,7 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
         ExprKind::InstanceOf { value, target } => {
             expr_contains_eval_call(value) || instance_of_target_contains_eval_call(target)
         }
-        ExprKind::Negate(expr)
+        ExprKind::UnaryPlus(expr) | ExprKind::Negate(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)

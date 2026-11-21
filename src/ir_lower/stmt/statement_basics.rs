@@ -66,6 +66,7 @@ pub(super) fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: S
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
+    let value = crate::ir_lower::expr::string_contracts::formatting(ctx, value, expr.span);
     ctx.emit_void(
         Op::EchoValue,
         vec![value.value],

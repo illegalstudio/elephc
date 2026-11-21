@@ -23,7 +23,7 @@ use crate::codegen::{
 };
 use crate::ir::{Function, Immediate, Instruction, LocalKind, LocalSlotId, Module, Op, ValueId};
 use crate::names::{function_symbol, ir_global_symbol, php_symbol_key};
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Visibility};
 use crate::types::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, FunctionSig, InterfaceInfo, PhpType,
     PropertyHookContract,
@@ -68,6 +68,7 @@ const EVAL_SCOPE_FLAG_DIRTY: i64 = 1 << 2;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 const EVAL_SCOPE_FLAG_NATIVE_SNAPSHOT: i64 = 1 << 5;
 const EVAL_SCOPE_FLAG_NATIVE_DETACHED: i64 = 1 << 6;
+const EVAL_SCOPE_FLAG_ASSIGN_REFERENCE: i64 = 1 << 7;
 const EVAL_CLASS_LOOKUP_GET_CLASS: i64 = 0;
 const EVAL_CLASS_LOOKUP_GET_PARENT_CLASS: i64 = 1;
 const EVAL_MEMBER_LOOKUP_METHOD_EXISTS: i64 = 0;
@@ -279,6 +280,8 @@ mod scope_context;
 #[cfg(test)]
 mod scope_native_snapshot_tests;
 mod sync_inventory;
+mod native_local_contracts;
+mod native_copy_origins;
 mod scope_io;
 mod scope_reload;
 mod scope_reload_checks;
@@ -371,7 +374,10 @@ pub(super) use introspection::{
     lower_eval_object_class_name, lower_eval_object_is_a, lower_eval_object_is_a_dynamic,
 };
 pub(in crate::codegen::lower_inst) use introspection::lower_callable_parameter_is_by_ref;
-pub(super) use scope_access::{lower_eval_scope_get, lower_eval_scope_set};
+pub(in crate::codegen::lower_inst) use introspection::emit_object_relation_target;
+pub(super) use scope_access::{lower_eval_scope_get, lower_eval_scope_set, lower_eval_scope_contains};
+pub(super) use native_local_contracts::{lower_eval_scope_bind_local_type, lower_eval_scope_end_binding};
+pub(super) use native_copy_origins::{lower_eval_scope_copy_binding_type, lower_eval_scope_binding_type};
 pub(super) use symbol_queries::{
     has_eval_context, lower_eval_class_constant_fetch, lower_eval_class_exists,
     lower_eval_constant_exists, lower_eval_constant_fetch, lower_eval_function_exists,

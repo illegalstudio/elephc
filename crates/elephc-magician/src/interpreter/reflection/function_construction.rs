@@ -117,7 +117,7 @@ pub(super) fn eval_reflection_function_new(
         })
         .map(Some);
     }
-    if eval_builtin_uses_owned_arguments(&lookup_name) {
+    if eval_declared_builtin_exists(&lookup_name) {
         let object = values.new_object("ReflectionFunction")?;
         let result = eval_native_constructor_with_evaluated_args(
             "ReflectionFunction", object, positional_args(args), context, values,

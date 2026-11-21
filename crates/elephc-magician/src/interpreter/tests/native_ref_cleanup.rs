@@ -23,7 +23,7 @@ fn native_argument_evaluation_owners_transfer_and_cleanup_exact_leases() {
             let first = values.retain(reference).unwrap();
             let second = values.retain(reference).unwrap();
             let scalar = values.int(3).unwrap();
-            let arguments = vec![first, second, scalar].into_iter().map(|value| EvaluatedCallArg {
+            let arguments = vec![first, second, scalar].into_iter().map(|value| EvaluatedCallArg { source_type: None,
                 evaluation_owner: None, name: None, value, ref_target: None,
             }).collect();
             let (arguments, owners) = own_evaluated_call_arguments(arguments, |_, index| index < 2);
@@ -120,14 +120,14 @@ fn variadic_reference_writeback_releases_owned_element_reads() {
         let array = values.array_new(1).unwrap();
         let array = values.array_set(array, key, replacement).unwrap();
         let target_scope: *mut ElephcEvalScope = if reject { std::ptr::null_mut() } else { &mut caller };
-        let bound = BoundMethodArg {
+        let bound = BoundMethodArg { source_type: None,
             value: array,
             ref_target: None,
             variadic_ref_targets: vec![(key, EvalReferenceTarget::Variable {
                 scope: target_scope, name: "target".into(),
             })],
         };
-        bind_method_scope_args(&mut callee, &["values".into()], &[true],
+        bind_method_scope_args(&mut callee, &["values".into()], &[], &[], &[true],
             std::slice::from_ref(&bound), &mut context, &mut values).unwrap();
         let before = values.cell_owners[&(replacement.as_ptr() as usize)];
         let result = write_back_method_ref_args(&["values".into()], std::slice::from_ref(&bound),
@@ -154,7 +154,7 @@ fn native_nullable_integer_reference_staging_preserves_payload_and_tag() {
         assert!(function.set_param_type(0, EvalParameterType::new(vec![EvalParameterTypeVariant::Int], true)));
         assert!(function.set_param_by_ref(0, true));
         assert!(function.set_param_tagged_scalar_ref(0, true));
-        let mut bound = bind_evaluated_native_function_args(&function, vec![EvaluatedCallArg {
+        let mut bound = bind_evaluated_native_function_args(&function, vec![EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None, value: original.borrowed(),
             ref_target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: "value".into() }),
@@ -196,7 +196,7 @@ fn native_scalar_reference_staging_reserves_a_full_marker_slot() {
     assert!(function.set_param_by_ref(0, true));
     let mut bound = bind_evaluated_native_function_args(
         &function,
-        vec![EvaluatedCallArg {
+        vec![EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value: original.borrowed(),
@@ -239,7 +239,7 @@ fn native_iterable_reference_staging_reserves_a_full_marker_slot() {
     assert!(function.set_param_by_ref(0, true));
     let mut bound = bind_evaluated_native_function_args(
         &function,
-        vec![EvaluatedCallArg {
+        vec![EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None,
             value: original.borrowed(),
@@ -307,7 +307,7 @@ fn native_array_reference_staging_owns_a_boxed_slot() {
     assert!(function.set_param_by_ref(0, true));
     let bound = bind_evaluated_native_function_args(
         &function,
-        vec![EvaluatedCallArg {
+        vec![EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: None, value: array.borrowed(),
             ref_target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: "items".into() }),
@@ -366,7 +366,7 @@ fn native_function_binding_releases_defaults_and_coercions_after_dispatch() {
     assert!(function.set_param_default(1, NativeCallableDefault::Int(8)));
     assert!(function.set_param_default(2, NativeCallableDefault::String("default".into())));
     let bound = bind_evaluated_native_function_args(
-        &function, vec![EvaluatedCallArg { evaluation_owner: None, name: None, value: caller, ref_target: None }],
+        &function, vec![EvaluatedCallArg { source_type: None, evaluation_owner: None, name: None, value: caller, ref_target: None }],
         &mut context, &mut values,
     ).unwrap();
     assert!(bound.values.iter().all(|value| !value.is_borrowed()));
@@ -389,12 +389,15 @@ fn native_function_binding_releases_partial_type_conversions() {
     let outcome = bind_evaluated_native_function_args(
         &function,
         vec![
-            EvaluatedCallArg { evaluation_owner: None, name: None, value: caller, ref_target: None },
-            EvaluatedCallArg { evaluation_owner: None, name: None, value: invalid, ref_target: None },
+            EvaluatedCallArg { source_type: None, evaluation_owner: None, name: None, value: caller, ref_target: None },
+            EvaluatedCallArg { source_type: None, evaluation_owner: None, name: None, value: invalid, ref_target: None },
         ],
         &mut context, &mut values,
     );
-    assert!(matches!(outcome, Err(EvalStatus::RuntimeFatal)));
+    assert_eq!(outcome.err(), Some(EvalStatus::UncaughtThrowable));
+    let thrown = context.take_pending_throw().expect("a refused binding owns its TypeError");
+    assert_eq!(values.object_classes.get(&(thrown.as_ptr() as usize)).map(String::as_str), Some("TypeError"));
+    values.release(thrown).unwrap();
     assert_eq!(values.cell_owners[&(caller.as_ptr() as usize)], 1);
     assert_eq!(values.cell_owners[&(invalid.as_ptr() as usize)], 1);
     assert_eq!(values.cell_owners.values().sum::<usize>(), 2);
@@ -418,7 +421,7 @@ fn native_function_binding_releases_partial_default_materialization() {
     values.fail_array_set_call(0);
     let outcome = bind_evaluated_native_function_args(
         &function,
-        vec![EvaluatedCallArg {
+        vec![EvaluatedCallArg { source_type: None,
             evaluation_owner: None,
             name: Some("third".into()),
             value: supplied,
@@ -447,7 +450,7 @@ fn native_function_binding_releases_named_args_when_an_earlier_required_slot_is_
     assert!(function.set_param_name(1, "b"));
     let outcome = bind_evaluated_native_function_args(
         &function,
-        vec![EvaluatedCallArg { evaluation_owner: None, name: Some("b".into()), value: caller, ref_target: None }],
+        vec![EvaluatedCallArg { source_type: None, evaluation_owner: None, name: Some("b".into()), value: caller, ref_target: None }],
         &mut context, &mut values,
     );
     assert!(matches!(outcome, Err(EvalStatus::UncaughtThrowable)));
@@ -470,7 +473,7 @@ fn variadic_native_function_binding_releases_named_args_with_an_earlier_required
     assert!(function.set_variadic_index(2));
     let outcome = bind_evaluated_native_function_args(
         &function,
-        vec![EvaluatedCallArg { evaluation_owner: None, name: Some("b".into()), value: caller, ref_target: None }],
+        vec![EvaluatedCallArg { source_type: None, evaluation_owner: None, name: Some("b".into()), value: caller, ref_target: None }],
         &mut context,
         &mut values,
     );
@@ -506,7 +509,7 @@ fn native_function_staging_releases_partial_markers_and_payloads() {
             } else { values.string("keep").unwrap() };
             assert!(function.set_param_type(position, EvalParameterType::new(vec![variant.clone()], false)));
             assert!(function.set_param_by_ref(position, true));
-            arguments.push(EvaluatedCallArg {
+            arguments.push(EvaluatedCallArg { source_type: None,
                 evaluation_owner: None,
                 name: None, value,
                 ref_target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: position.to_string() }),
@@ -700,7 +703,7 @@ fn native_reference_staging_preserves_typed_alias_on_rejection() {
     let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 1);
     function.set_param_type(0, EvalParameterType::new(vec![EvalParameterTypeVariant::Array], false));
     function.set_param_by_ref(0, true);
-    let mut bound = bind_evaluated_native_function_args(&function, vec![EvaluatedCallArg {
+    let mut bound = bind_evaluated_native_function_args(&function, vec![EvaluatedCallArg { source_type: None,
         evaluation_owner: None,
         name: None, value: original.borrowed(),
         ref_target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: "b".into() }),
@@ -743,7 +746,7 @@ fn native_reference_staging_keeps_duplicate_persistent_aliases_shared() {
     }
     let mut arguments = Vec::new();
     for name in ["a", "b"] {
-        arguments.push(EvaluatedCallArg { evaluation_owner: None, name: None, value: original.borrowed(),
+        arguments.push(EvaluatedCallArg { source_type: None, evaluation_owner: None, name: None, value: original.borrowed(),
             ref_target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: name.into() }) });
     }
     let mut bound = bind_evaluated_native_function_args(&function, arguments, &mut context, &mut values).unwrap();
@@ -777,7 +780,7 @@ fn native_by_value_reference_staging_detaches_persistent_caller() {
     let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 1);
     function.set_param_by_ref(0, true);
     let mut bound = bind_evaluated_native_function_args_for_call_user_func("change", &function,
-        vec![EvaluatedCallArg { evaluation_owner: None, name: None, value: reference.borrowed(), ref_target: None }],
+        vec![EvaluatedCallArg { source_type: None, evaluation_owner: None, name: None, value: reference.borrowed(), ref_target: None }],
         &mut context, &mut values).unwrap();
     let BoundNativeFunctionRefSlot::Mixed { slot, target, .. } = &mut bound.ref_slots[0] else {
         panic!("untyped reference must use boxed staging");

@@ -92,12 +92,13 @@ fn unset_value(
             Ok(None)
         }
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
+            checked_array_keys::for_receiver(array, index, context, values)?;
             let normalized = if values.type_tag(index)? == EVAL_TAG_STRING {
-                eval_numeric_string_array_key(&values.string_bytes(index)?).map(|key| values.int(key)).transpose()?
+                eval_numeric_string_array_key(&values.string_bytes(index)?, context.semantic_profile()).map(|key| values.int(key)).transpose()?
             } else { None };
             let index = normalized.unwrap_or(index);
             let result = (|| {
-                let key = eval_array_reference_key(index, values)?;
+                let key = eval_array_reference_key(index, context.semantic_profile(), values)?;
                 let replacement = eval_array_without_key_result(array, index, values)?;
                 context.clone_array_element_aliases(array, replacement, key.as_ref());
                 Ok(replacement)

@@ -93,7 +93,7 @@ fn bind_constants(
                     || matches!(constant.value, elephc_builtin_contract::ConstValue::StreamResource(_))
                 { return None; }
                 crate::types::predefined_constants::literal_of(constant.value)
-                    .map(|kind| Expr::new(kind, expr.span))
+                    .map(|kind| expr.with_kind(kind))
             }).map(|value| (owner.to_string(), value)),
         ExprKind::ScopedConstantAccess { receiver, name } => {
             let class = match receiver.written_class_receiver() {
@@ -135,7 +135,7 @@ fn bind_constants(
             if let Some(default) = default { visit(default); }
         }
         ExprKind::ArrayAccess { array, index } => { visit(array); visit(index); }
-        ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
         | ExprKind::NamedArg { value, .. } | ExprKind::Spread(value) | ExprKind::Cast { expr: value, .. } => visit(value),
         _ => {}
     }

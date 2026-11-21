@@ -145,6 +145,11 @@ fn static_default_enum_class_names(module: &Module) -> HashSet<String> {
 
 /// Adds builtin throwable classes that runtime helpers can materialize without EIR class references.
 pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, names: &mut HashSet<String>) {
+    // Checked dimension reads synthesize this class without a source class-name reference.
+    if module.semantic_profile.contains(elephc_semantics::StrictFeature::Indexing)
+        && module.class_infos.contains_key("OutOfBoundsException") {
+        names.insert("OutOfBoundsException".to_string());
+    }
     if names.contains("Fiber") && module.class_infos.contains_key("FiberError") {
         names.insert("FiberError".to_string());
     }
@@ -199,8 +204,9 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
     // the throwable hierarchy, so narrowing one alone changes nothing — measured, after gating
     // only the other: 7,990 lines before, 7,990 after.
     //
-    // The condition matches that one exactly: these five are thrown by id from SPL container
-    // helpers only. RuntimeException is one of them and has no other producer — it used to come
+    // These five are also thrown by id from SPL container helpers. Checked indexing above
+    // independently retains OutOfBoundsException without an SPL surface. RuntimeException also
+    // arrives as its ancestor; before checked reads, its other implicit producer was SPL. It came
     // back through the ancestor expansion because `JsonException extends RuntimeException`, which
     // was elephc's own invention; reference PHP puts JsonException directly under Exception. See
     // `emitted_classes` for the full reasoning and for why getting it wrong is loud rather than

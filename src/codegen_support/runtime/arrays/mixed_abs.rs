@@ -20,6 +20,7 @@ use crate::codegen_support::platform::Arch;
 /// Output: a freshly boxed Mixed pointer (int- or float-tagged) in the same register.
 /// Dispatches to the x86_64 variant on Linux/x86_64; otherwise emits the ARM64 variant.
 pub fn emit_mixed_abs(emitter: &mut Emitter) {
+    super::strict_abs::emit(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_abs_linux_x86_64(emitter);
         return;

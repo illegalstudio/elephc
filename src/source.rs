@@ -2,6 +2,7 @@
 //! Defines the per-file source profile: the language mode selected from a physical input path
 //! plus the `declare(strict_types=1)` state that file opted into.
 //! Centralizes `.lfc` classification so every file loader agrees on tag and strict-mode semantics.
+//! Carries independent eval visibility and semantic guarantees into source-sensitive EIR data.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` for the entry source.
@@ -81,6 +82,37 @@ impl SourceProfile {
     }
 }
 
+/// Immutable policy attached to a literal eval source or a source-sensitive EIR value.
+/// PHP-only visibility is lexical; semantic guarantees belong to the compilation.
+/// The compact word keeps recursive EIR instructions within their stack-size budget.
+/// The constructor refuses unrepresentable future semantic bits; it never truncates them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct EvalSourceProfile(u32);
+
+impl EvalSourceProfile {
+    const PHP_ONLY_BIT: u32 = 1 << 31;
+
+    /// Joins independently resolved visibility and guarantees without truncating any bits.
+    pub const fn new(php_only: bool, semantics: elephc_semantics::SemanticProfile) -> Self {
+        assert!(semantics.bits() < Self::PHP_ONLY_BIT as u64);
+        Self(semantics.bits() as u32 | if php_only { Self::PHP_ONLY_BIT } else { 0 })
+    }
+
+    /// Returns the lexical builtin visibility without changing semantic guarantees.
+    pub const fn php_only(self) -> bool { self.0 & Self::PHP_ONLY_BIT != 0 }
+
+    /// Recovers the validated neutral profile stored by the constructor.
+    pub fn semantics(self) -> elephc_semantics::SemanticProfile {
+        elephc_semantics::SemanticProfile::from_bits(u64::from(self.0 & !Self::PHP_ONLY_BIT))
+            .expect("source profiles contain only validated semantic bits")
+    }
+
+    /// Makes conservative declaration scans explicit about their permissive parser policy.
+    pub const fn permissive(php_only: bool) -> Self {
+        Self::new(php_only, elephc_semantics::SemanticProfile::PERMISSIVE)
+    }
+}
+
 thread_local! {
     /// Source mode inherited by AST nodes created during one parser invocation.
     static CURRENT_PARSE_MODE: Cell<SourceMode> = const { Cell::new(SourceMode::Internal) };
@@ -109,7 +141,7 @@ impl SourceMode {
     }
 
     /// Returns whether an invocation-level strict-PHP request applies to this source.
-    pub fn strict_php_is_effective(self, requested: bool) -> bool {
+    pub fn php_only_is_effective(self, requested: bool) -> bool {
         requested && matches!(self, Self::Php)
     }
 }
@@ -189,6 +221,7 @@ pub(crate) fn declare_strict_types(enabled: bool) {
 /// program, and conditional compilation runs after it so inactive extension syntax in a
 /// PHP file cannot evade the audit. `goto` lowering closes the sequence, so no later pass
 /// ever sees a jump.
+#[allow(dead_code)] // Default-profile compatibility entry point for library callers and tests.
 pub fn finalize_physical_program(
     program: Program,
     source: &str,
@@ -196,11 +229,26 @@ pub fn finalize_physical_program(
     mode: SourceMode,
     defines: &HashSet<String>,
 ) -> Result<Program, CompileError> {
+    finalize_physical_program_with_semantics(program, source, path, mode, defines,
+        elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Finalizes physical source with immutable semantic validation before any source pruning.
+pub fn finalize_physical_program_with_semantics(
+    program: Program,
+    source: &str,
+    path: &Path,
+    mode: SourceMode,
+    defines: &HashSet<String>,
+    semantic_profile: elephc_semantics::SemanticProfile,
+) -> Result<Program, CompileError> {
     let program = crate::magic_constants::substitute_file_and_scope_constants(program, path);
-    crate::strict_php::check_file_with_mode(&program, &path.display().to_string(), mode)?;
+    crate::php_only::check_file_with_mode(&program, &path.display().to_string(), mode)?;
+    crate::semantics::validate_source(&program, semantic_profile)
+        .map_err(|error| error.with_file(path.display().to_string()))?;
     // Generic doc-comment annotations are applied AFTER the strict audit, and that order is the
     // whole point of the surface: a `@template` file is valid PHP — the annotations are
-    // comments — so `--strict-php` must keep accepting it. Applying them first made the audit
+    // comments - so `--php-only` must keep accepting it. Applying them first made the audit
     // see the injected `<T>` and `array<T>` and reject a file php-src parses happily.
     //
     // Per physical file, because the lexer discards comments and they are recovered from the
@@ -213,6 +261,10 @@ pub fn finalize_physical_program(
     // statement list once the branch is spliced in.
     crate::goto_lowering::lower_program(program, &path.display().to_string())
 }
+
+#[cfg(test)]
+#[path = "source/expression_origins.rs"]
+mod expression_origins;
 
 #[cfg(test)]
 mod tests {
@@ -280,10 +332,10 @@ mod tests {
 
     /// Verifies strict PHP applies only to PHP-mode user source.
     #[test]
-    fn strict_php_is_source_mode_aware() {
-        assert!(SourceMode::Php.strict_php_is_effective(true));
-        assert!(!SourceMode::Php.strict_php_is_effective(false));
-        assert!(!SourceMode::Lfc.strict_php_is_effective(true));
-        assert!(!SourceMode::Internal.strict_php_is_effective(true));
+    fn php_only_is_source_mode_aware() {
+        assert!(SourceMode::Php.php_only_is_effective(true));
+        assert!(!SourceMode::Php.php_only_is_effective(false));
+        assert!(!SourceMode::Lfc.php_only_is_effective(true));
+        assert!(!SourceMode::Internal.php_only_is_effective(true));
     }
 }

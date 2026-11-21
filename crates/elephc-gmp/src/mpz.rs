@@ -133,7 +133,7 @@ impl Mpz {
         unsafe { __gmpz_get_ui(&self.raw) as u64 }
     }
 
-    /// Returns the nearest f64, matching libgmp's `mpz_get_d`.
+    /// Returns an f64 with libgmp's truncation toward zero.
     pub fn to_f64(&self) -> f64 {
         unsafe { __gmpz_get_d(&self.raw) }
     }

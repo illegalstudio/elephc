@@ -28,11 +28,11 @@ pub(in crate::interpreter) fn eval_array_combine_declared_call(
 /// Dispatches evaluated-argument eval calls for the `array_combine` array builtin.
 pub(in crate::interpreter) fn eval_array_combine_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [keys, values_array] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
-    eval_array_combine_result(*keys, *values_array, values)
+    eval_array_combine_result(*keys, *values_array, context, values)
 }
 
 /// Evaluates PHP `array_combine()` over key and value array expressions.
@@ -47,13 +47,14 @@ pub(in crate::interpreter) fn eval_builtin_array_combine(
     };
     let keys = eval_expr(keys, context, scope, values)?;
     let values_array = eval_expr(values_array, context, scope, values)?;
-    eval_array_combine_result(keys, values_array, values)
+    eval_array_combine_result(keys, values_array, context, values)
 }
 
 /// Builds the associative result for `array_combine()` from two eval arrays.
 pub(in crate::interpreter) fn eval_array_combine_result(
     keys: RuntimeCellHandle,
     values_array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(keys)?;
@@ -61,14 +62,10 @@ pub(in crate::interpreter) fn eval_array_combine_result(
         return Err(EvalStatus::RuntimeFatal);
     }
 
-    let mut result = values.assoc_new(len)?;
+    let mut result = super::super::collection_builder::EvalArrayBuilder::assoc(values, len)?;
     for position in 0..len {
-        let source_key = values.array_iter_key(keys, position)?;
-        let target_key = values.array_get(keys, source_key)?;
-        let target_key = values.cast_string(target_key)?;
-        let value_key = values.array_iter_key(values_array, position)?;
-        let value = values.array_get(values_array, value_key)?;
-        result = values.array_set(result, target_key, value)?;
+        result.entry_key_first(|values| super::key_inputs::key_at(keys, position, true, context, values),
+            |values, _| super::key_inputs::value_at(values_array, position, values))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

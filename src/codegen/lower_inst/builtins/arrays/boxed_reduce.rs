@@ -43,7 +43,7 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
         PhpType::Str => {
             callables::emit_runtime_string_descriptor_value_with_type_error(
                 ctx, callback, result, "array_reduce",
-                super::super::instruction_strict_php_profile(inst),
+                super::super::instruction_php_only_profile(inst),
                 "array_reduce(): Argument #2 ($callback) must be a valid callback",
             )?;
             callable_descriptor::emit_retain_current_descriptor(ctx.emitter);

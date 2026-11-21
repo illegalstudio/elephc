@@ -77,7 +77,7 @@ Worker::register(new Application());
         &fixture,
         source,
         "app",
-        &["--web-lifecycle=application", "--strict-php"],
+        &["--web-lifecycle=application", "--php-only"],
     );
     let path = uds_path();
     let server = spawn_server_unix(&binary, &path, "1", &[]);
@@ -414,7 +414,7 @@ Worker::register(new Application());
         &fixture,
         source,
         "app",
-        &["--web-lifecycle=application", "--strict-php"],
+        &["--web-lifecycle=application", "--php-only"],
     );
 
     let trusted_path = uds_path();
