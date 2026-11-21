@@ -590,7 +590,7 @@ pub(crate) struct TableGate {
 /// The gate word's reset flag.
 pub(crate) const GATE_RESETTING: u64 = 1 << 63;
 /// How long a user waits for a reset to finish, and a reset for the users.
-const GATE_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
+pub(crate) const GATE_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 /// How long a reset waits for another process's reset before taking the
 /// flag over as left by a dead process. A live reset clears a table in well
 /// under a millisecond.
