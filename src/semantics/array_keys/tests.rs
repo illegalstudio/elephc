@@ -108,6 +108,9 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php function guarded_keys(): void { $values = []; if (PHP_OS_FAMILY === 'Windows') { $values[false] = 2; } }",
         "<?php function guarded_typed_key(array $values, bool $key): void { if (PHP_OS_FAMILY === 'Windows') { $values[$key] = 2; } }",
         "<?php accept_key_writer(function(array $values): void { if (PHP_OS_FAMILY === 'Windows') { $values[false] = 2; } });",
+        "<?php function returned_key_write(array $values): int { if (PHP_OS_FAMILY === 'Windows') { return $values[false] = 2; } return 1; }",
+        "<?php function chained_key_write(array $values): void { if (PHP_OS_FAMILY === 'Windows') { $ignored = $values[false] = 2; } }",
+        "<?php accept_key_writer(function(array $values): int { if (PHP_OS === 'Linux') { return $values[false] = 2; } return 1; });",
     ] {
         let error = crate::semantics::validate_source(
             &parse(source, SourceMode::Php),

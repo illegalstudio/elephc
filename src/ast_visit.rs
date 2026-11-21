@@ -23,6 +23,8 @@ pub trait AstVisitor {
     fn expression_end(&mut self, _expr: &Expr) {}
     /// Observes one statement, including generated nested statement lists.
     fn statement(&mut self, _stmt: &Stmt) {}
+    /// Selects whether traversal should enter this statement's expressions and nested syntax.
+    fn descend_statement(&mut self, _stmt: &Stmt) -> bool { true }
     /// Observes the end of a statement after all nested syntax has been visited.
     fn statement_end(&mut self, _stmt: &Stmt) {}
     /// Observes one type annotation with its enclosing source span.

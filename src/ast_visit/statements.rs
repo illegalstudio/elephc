@@ -32,6 +32,10 @@ pub(super) fn walk_attribute_groups(groups: &[AttributeGroup], visitor: &mut imp
 /// statement's own attribute arguments.
 pub(super) fn walk_stmt(stmt: &Stmt, visitor: &mut impl AstVisitor) {
     visitor.statement(stmt);
+    if !visitor.descend_statement(stmt) {
+        visitor.statement_end(stmt);
+        return;
+    }
     let span = stmt.span;
     walk_attribute_groups(&stmt.attributes, visitor);
     match &stmt.kind {

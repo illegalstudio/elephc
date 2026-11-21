@@ -136,6 +136,89 @@ impl AstVisitor for ClosureWriteValidator<'_> {
     }
 }
 
+/// Audits assignment expressions belonging directly to one statement's expression tree.
+fn validate_expression_writes(
+    stmt: &Stmt,
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&str>,
+) -> Result<(), CompileError> {
+    let mut visitor = ExpressionWriteValidator {
+        locals,
+        properties,
+        profile,
+        current_class,
+        source: SourcePolicy::default(),
+        statement_depth: 0,
+        error: None,
+    };
+    ast_visit::walk_statements(std::slice::from_ref(stmt), &mut visitor);
+    visitor.error.map_or(Ok(()), Err)
+}
+
+/// Keeps nested statement bodies on their own flow-sensitive validation pass.
+struct ExpressionWriteValidator<'a> {
+    locals: &'a LocalFacts,
+    properties: &'a PropertyFacts,
+    profile: SemanticProfile,
+    current_class: Option<&'a str>,
+    source: SourcePolicy,
+    statement_depth: usize,
+    error: Option<CompileError>,
+}
+
+impl AstVisitor for ExpressionWriteValidator<'_> {
+    /// Tracks the root statement separately from nested control-flow and closure bodies.
+    fn statement(&mut self, stmt: &Stmt) {
+        self.source.enter_statement(stmt);
+        self.statement_depth += 1;
+    }
+
+    /// Leaves nested statement bodies to their own flow-sensitive validation call.
+    fn descend_statement(&mut self, _stmt: &Stmt) -> bool {
+        self.statement_depth == 1
+    }
+
+    /// Restores the enclosing statement depth and source policy.
+    fn statement_end(&mut self, _stmt: &Stmt) {
+        self.statement_depth -= 1;
+        self.source.leave_statement();
+    }
+
+    /// Validates array targets kept in expression form before target pruning can erase them.
+    fn expression(&mut self, expr: &Expr) {
+        let source = self.source.enter_expression(expr);
+        if self.error.is_some()
+            || self.statement_depth != 1
+            || source.mode == crate::source::SourceMode::Internal
+        {
+            return;
+        }
+        let ExprKind::Assignment { target, .. } = &expr.kind else {
+            return;
+        };
+        let ExprKind::ArrayAccess { array, index } = &target.kind else {
+            return;
+        };
+        let receiver = infer_expr(array, self.locals, self.properties, self.current_class);
+        self.error = validate_index(
+            self.profile,
+            &receiver,
+            index,
+            self.locals,
+            self.properties,
+            self.current_class,
+        )
+        .err();
+    }
+
+    /// Restores the enclosing expression producer policy.
+    fn expression_end(&mut self, _expr: &Expr) {
+        self.source.leave_expression();
+    }
+}
+
 /// Collects declared property contracts independently of executable source order.
 fn collect_properties(program: &[Stmt], facts: &mut PropertyFacts) {
     for stmt in program {
@@ -218,6 +301,7 @@ fn validate_stmt(
     if stmt.source_mode == crate::source::SourceMode::Internal {
         return Ok(());
     }
+    validate_expression_writes(stmt, locals, properties, profile, current_class)?;
     match &stmt.kind {
         StmtKind::Assign { name, value } => {
             locals.set(name, infer_expr(value, locals, properties, current_class));
