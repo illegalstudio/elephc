@@ -51,6 +51,213 @@ fn adopted() -> &'static Mutex<HashSet<PathBuf>> {
     ADOPTED.get_or_init(|| Mutex::new(HashSet::default()))
 }
 
+/// What reading a file's annotations changed: lowercase simple names of the class-likes and
+/// functions whose declaration differs (`box`, `box::get`), and the class-likes changed only in
+/// their header (no method differs).
+#[derive(Default)]
+struct Changed {
+    names: HashSet<String>,
+    header_only: HashSet<String>,
+    /// The functions among `names`.
+    functions: HashSet<String>,
+    /// Per file and class (lowercase simple name), every method as (start line, lowercase name):
+    /// the member an error's position falls in.
+    members: HashMap<(PathBuf, String), Vec<(u32, String)>>,
+}
+
+fn changed() -> &'static Mutex<Changed> {
+    static CHANGED: OnceLock<Mutex<Changed>> = OnceLock::new();
+    CHANGED.get_or_init(|| Mutex::new(Changed::default()))
+}
+
+/// The debug text of a declaration and of each of its methods.
+type DeclarationText = (String, Vec<(String, String)>);
+
+/// Indexes the declarations of `program` by lowercase simple name.
+fn declaration_index(
+    program: &Program,
+    out: &mut HashMap<String, DeclarationText>,
+    functions: &mut HashSet<String>,
+    lines: &mut HashMap<String, Vec<(u32, String)>>,
+) {
+    use crate::parser::ast::StmtKind;
+    for stmt in program {
+        let (name, methods) = match &stmt.kind {
+            StmtKind::NamespaceBlock { body, .. } => {
+                declaration_index(body, out, functions, lines);
+                continue;
+            }
+            StmtKind::FunctionDecl { name, .. } => (name, None),
+            StmtKind::ClassDecl { name, methods, .. }
+            | StmtKind::EnumDecl { name, methods, .. }
+            | StmtKind::InterfaceDecl { name, methods, .. }
+            | StmtKind::TraitDecl { name, methods, .. } => (name, Some(methods)),
+            _ => continue,
+        };
+        let key = simple(name.strip_suffix(crate::generics::DOC_TWIN_SUFFIX).unwrap_or(name));
+        if methods.is_none() {
+            functions.insert(key.clone());
+        }
+        if let Some(methods) = methods {
+            lines.insert(
+                key.clone(),
+                methods
+                    .iter()
+                    .map(|method| (method.span.line, method.name.to_ascii_lowercase()))
+                    .collect(),
+            );
+        }
+        let methods: Vec<(String, String)> = methods
+            .map(|methods| {
+                methods
+                    .iter()
+                    .map(|method| (method.name.to_ascii_lowercase(), format!("{method:?}")))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let text = format!("{stmt:?}");
+        // A twin function shares its original's key: both texts count.
+        match out.get_mut(&key) {
+            Some(entry) => entry.0.push_str(&text),
+            None => {
+                out.insert(key, (text, methods));
+            }
+        }
+    }
+}
+
+/// Records which declarations of a file its annotations changed.
+fn record_changed(path: &Path, before: &Program, after: &Program) {
+    let mut was = HashMap::default();
+    let mut now = HashMap::default();
+    let mut functions = HashSet::default();
+    let mut ignored = HashMap::default();
+    let mut lines = HashMap::default();
+    declaration_index(before, &mut was, &mut functions, &mut ignored);
+    declaration_index(after, &mut now, &mut functions, &mut lines);
+    let mut changed = changed().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    for (class, members) in lines {
+        changed.members.insert((path.to_path_buf(), class), members);
+    }
+    for (key, (text, methods)) in &now {
+        let Some((old_text, old_methods)) = was.get(key) else {
+            changed.names.insert(key.clone());
+            if functions.contains(key) {
+                changed.functions.insert(key.clone());
+            }
+            continue;
+        };
+        if old_text == text {
+            continue;
+        }
+        changed.names.insert(key.clone());
+        if functions.contains(key) {
+            changed.functions.insert(key.clone());
+        }
+        let mut any_method = false;
+        for (method, body) in methods {
+            if !old_methods.iter().any(|(name, old)| name == method && old == body) {
+                changed.names.insert(format!("{key}::{method}"));
+                any_method = true;
+            }
+        }
+        if !any_method {
+            changed.header_only.insert(key.clone());
+        }
+    }
+}
+
+/// The lowercase simple name of a possibly qualified one.
+fn simple(name: &str) -> String {
+    name.trim_matches('\\')
+        .rsplit('\\')
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase()
+}
+
+/// Whether a refusal can be the consequence of an adopted annotation.
+///
+/// Erasing a file only changes the declarations its annotations changed, so a refusal that sits
+/// in no such declaration and names none (a `__toString` override, a `return $failed` whose
+/// union php would check when it runs) is the same with the written types: re-running the whole
+/// compiler on it is waste, and the normal refusal path (class-file deferral) takes it.
+fn can_be_caused_by_adoption(error: &CompileError) -> bool {
+    let changed = changed().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut known = false;
+    // The member the error's position falls in, when the file and class are known: a refusal in
+    // a method no annotation touched is independent of them, whatever else the class holds.
+    let positioned_member = error.span.source_path().and_then(|path| {
+        let path = canonical(Path::new(&path));
+        let declaration = error.declaration.as_deref()?;
+        let class = simple(declaration.split_once("::").map_or(declaration, |(class, _)| class));
+        let members = changed.members.get(&(path, class.clone()))?;
+        let line = error.span.line;
+        let owner = members.iter().filter(|(start, _)| *start <= line).max_by_key(|(start, _)| *start)?;
+        Some((class, owner.1.clone()))
+    });
+    if let Some((class, method)) = &positioned_member {
+        known = true;
+        if changed.names.contains(&format!("{class}::{method}")) || changed.header_only.contains(class) {
+            return true;
+        }
+        // Only the member itself is in question; names the message mentions still count below.
+    } else if let Some(declaration) = error.declaration.as_deref() {
+        known = true;
+        match declaration.split_once("::") {
+            Some((class, method)) => {
+                let class = simple(class);
+                if changed.names.contains(&format!("{class}::{}", method.to_ascii_lowercase()))
+                    || changed.header_only.contains(&class)
+                {
+                    return true;
+                }
+            }
+            None => {
+                if changed.names.contains(&simple(declaration)) {
+                    return true;
+                }
+            }
+        }
+    }
+    // A quoted member (`'Ns\\Box::get'`, `'Ns\\Box<int>::get'`) names that member only: the class
+    // around it can hold other methods an annotation rewrote.
+    let mut member_classes: HashSet<String> = HashSet::default();
+    for quoted in error.message.split('\'').skip(1).step_by(2) {
+        let Some((class, method)) = quoted.split_once("::") else { continue; };
+        let class_end = class.find('<').unwrap_or(class.len());
+        let class = simple(&class[..class_end]);
+        let method: String = method
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect::<String>()
+            .to_ascii_lowercase();
+        known = true;
+        if changed.names.contains(&format!("{class}::{method}")) || changed.header_only.contains(&class) {
+            return true;
+        }
+        member_classes.insert(class);
+    }
+    for name in class_names_in(&error.message) {
+        known = true;
+        let class = simple(&name);
+        if member_classes.contains(&class) {
+            continue;
+        }
+        if changed.names.contains(&class) {
+            return true;
+        }
+    }
+    // A function a message names without quotes or arguments.
+    for word in error.message.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '\\')) {
+        if !word.is_empty() && changed.functions.contains(&simple(word)) {
+            return true;
+        }
+    }
+    // An error that names nothing at all cannot be told apart: it keeps the re-run.
+    !known
+}
+
 /// The entry program, which keys the memo; set once per compile before any file is parsed.
 static ENTRY: OnceLock<PathBuf> = OnceLock::new();
 
@@ -150,9 +357,11 @@ pub fn apply_for_file(program: Program, source: &str, path: &Path) -> Program {
     // whose templates exist only in its docblock is a non-destructive `DocView` overlay: its
     // file reads the same with or without adoption, so a re-run that erased it would fix nothing
     // and cost a whole extra compile.
+    let before_program = program.clone();
     let before = format!("{program:?}");
     let program = super::apply(program, source);
     if format!("{program:?}") != before {
+        record_changed(&path, &before_program, &program);
         adopted().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(path);
     }
     program
@@ -196,7 +405,12 @@ pub fn implicated_files(
         .flat_map(|error| paths_of(error, false))
         .collect();
     let mut out: Vec<PathBuf> = Vec::new();
+    let mut gated = false;
     for error in flattened.iter().filter(|error| !error.message.contains(MISSING_PARENT_REFUSAL)) {
+        if !can_be_caused_by_adoption(error) {
+            gated = true;
+            continue;
+        }
         for path in paths_of(error, true) {
             if adopted.contains(&path)
                 && !leaving.contains(&path)
@@ -206,6 +420,9 @@ pub fn implicated_files(
                 out.push(path);
             }
         }
+    }
+    if out.is_empty() && gated {
+        crate::generics::stats::record_erasure_skipped();
     }
     with_dependents(out)
 }

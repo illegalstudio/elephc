@@ -16,7 +16,7 @@
 //!   program again from scratch; `erasure_reruns` is the docblock-erasure round of this process
 //!   (a re-run is a new process, so it does not accumulate here).
 //! - The line is `[elephc-generics] templates= doc_templates= instances= doc_class_instances=
-//!   rounds= checks= erasure_reruns= check_ms= instantiate_ms=`, and each instantiation round
+//!   rounds= checks= erasure_reruns= erasure_rerun_skipped= check_ms= instantiate_ms=`, and each instantiation round
 //!   prints a `[elephc-generics] round N check_ms= instantiate_ms=` line.
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -28,8 +28,14 @@ static INSTANCES: AtomicU64 = AtomicU64::new(0);
 static DOC_INSTANCES: AtomicU64 = AtomicU64::new(0);
 static ROUNDS: AtomicU64 = AtomicU64::new(0);
 static CHECKS: AtomicU64 = AtomicU64::new(0);
+static ERASURE_SKIPPED: AtomicU64 = AtomicU64::new(0);
 static CHECK_US: AtomicU64 = AtomicU64::new(0);
 static INSTANTIATE_US: AtomicU64 = AtomicU64::new(0);
+
+/// Records a refusal no adopted annotation can have caused, so no erasure re-run was started.
+pub(crate) fn record_erasure_skipped() {
+    ERASURE_SKIPPED.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Whether the diagnostic is switched on.
 pub(crate) fn enabled() -> bool {
@@ -102,7 +108,7 @@ pub(crate) fn report() {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0);
     eprintln!(
-        "[elephc-generics] templates={} doc_templates={} instances={} doc_class_instances={} rounds={} checks={} erasure_reruns={} check_ms={} instantiate_ms={}",
+        "[elephc-generics] templates={} doc_templates={} instances={} doc_class_instances={} rounds={} checks={} erasure_reruns={} erasure_rerun_skipped={} check_ms={} instantiate_ms={}",
         TEMPLATES.load(Ordering::Relaxed),
         DOC_TEMPLATES.load(Ordering::Relaxed),
         INSTANCES.load(Ordering::Relaxed),
@@ -110,6 +116,7 @@ pub(crate) fn report() {
         ROUNDS.load(Ordering::Relaxed),
         CHECKS.load(Ordering::Relaxed),
         reruns,
+        ERASURE_SKIPPED.load(Ordering::Relaxed),
         CHECK_US.load(Ordering::Relaxed) / 1000,
         INSTANTIATE_US.load(Ordering::Relaxed) / 1000,
     );
