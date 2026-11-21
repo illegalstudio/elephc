@@ -17,7 +17,7 @@ pub(super) fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    lower_static_method_call_impl(ctx, receiver, method, args, expr, None)
+    lower_static_method_call_bound(ctx, receiver, method, args, expr, None, StaticCallBinding::Lexical)
 }
 
 /// Lowers `$object->staticMethod()` through the statically named `receiver`.
@@ -32,17 +32,31 @@ pub(super) fn lower_object_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    lower_static_method_call_impl(ctx, receiver, method, args, expr, Some(object))
+    lower_static_method_call_bound(
+        ctx, receiver, method, args, expr, Some(object), StaticCallBinding::Lexical,
+    )
+}
+
+/// How a static call binds its receiver class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StaticCallBinding {
+    /// The receiver as written; a late-bound call to a private method may still dispatch.
+    Lexical,
+    /// The receiver's own method, already chosen by a called-class dispatch.
+    Resolved,
+    /// The named receiver's method, with `static` forwarded from the caller's called class.
+    Forwarded,
 }
 
 /// Shared static-call lowering with an optional object receiver for late static binding.
-fn lower_static_method_call_impl(
+pub(super) fn lower_static_method_call_bound(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     method: &str,
     args: &[Expr],
     expr: &Expr,
     object_receiver: Option<crate::ir::ValueId>,
+    binding: StaticCallBinding,
 ) -> LoweredValue {
     // `Closure::bind($closure, $newThis [, $scope])` is the static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
@@ -59,6 +73,13 @@ fn lower_static_method_call_impl(
         }
     }
 
+    if binding == StaticCallBinding::Lexical {
+        if let Some(call) = super::private_late_static_calls::try_lower_private_late_static_call(
+            ctx, receiver, method, args, expr, object_receiver,
+        ) {
+            return call;
+        }
+    }
     let magic_args;
     let (dispatch_method, call_args) = if let Some(args) =
         magic_static_call_dispatch_args(ctx, receiver, method, args, expr.span)
@@ -152,9 +173,12 @@ fn lower_static_method_call_impl(
         }
     }
     emit_deprecated_enum_case_notice(ctx, receiver, dispatch_method);
-    let name = match object_receiver {
-        Some(_) => format!("@object@{}::{}", receiver_name(receiver), dispatch_method),
-        None => format!("{}::{}", receiver_name(receiver), dispatch_method),
+    let name = match (object_receiver, binding) {
+        (Some(_), _) => format!("@object@{}::{}", receiver_name(receiver), dispatch_method),
+        (None, StaticCallBinding::Forwarded) => {
+            format!("@forward@{}::{}", receiver_name(receiver), dispatch_method)
+        }
+        (None, _) => format!("{}::{}", receiver_name(receiver), dispatch_method),
     };
     let data = ctx.intern_string(&name);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);

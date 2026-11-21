@@ -189,6 +189,8 @@ pub(in crate::codegen) fn resolve_static_method_metadata_class(
     class_name: &str,
 ) -> Option<String> {
     let class_name = class_name.trim_start_matches('\\');
+    // A forwarded late-static call names the class whose method it runs.
+    let class_name = class_name.strip_prefix("@forward@").unwrap_or(class_name);
     match class_name {
         "self" | "static" => current_function_class(function).map(str::to_string),
         "parent" => {
