@@ -23,9 +23,26 @@ fn source(exact: bool) -> (String, String) {
             ] {
                 source.push_str(&format!("placeWrite({static_parent}, {false_parent}, {key}, 0);\n"));
                 expected.push_str("K|R|");
-                if false_parent { expected.push_str("F|array:0|"); }
-                if legacy_invalid || exact && invalid { expected.push_str("T|array:0|"); }
-                else { expected.push_str(&format!("ok|array:1|integer:{text}:9|")); }
+                let strict_rejected = exact && invalid;
+                if false_parent && !strict_rejected {
+                    expected.push_str("F|array:0|");
+                }
+                if legacy_invalid || strict_rejected {
+                    expected.push_str("T|");
+                    if strict_rejected {
+                        expected.push_str(if false_parent {
+                            "boolean:-1|"
+                        } else if static_parent {
+                            "NULL:-1|"
+                        } else {
+                            "absent|"
+                        });
+                    } else {
+                        expected.push_str("array:0|");
+                    }
+                } else {
+                    expected.push_str(&format!("ok|array:1|integer:{text}:9|"));
+                }
             }
         }
         source.push_str(&format!("placeWrite({static_parent}, true, 0, 3);\n"));
@@ -41,11 +58,17 @@ fn source(exact: bool) -> (String, String) {
         for (key, text) in [("0", "0"), ("true", "1")] {
             source.push_str(&format!("placeWrite(false, true, {key}, {mutation});\n"));
             let rejected = exact && key == "true";
-            expected.push_str("K|R|F|array:0|");
-            expected.push_str(if rejected { "T|absent|" } else { "ok|absent|" });
-            if mutation == 6 {
-                if rejected { expected.push_str("array:0|"); }
-                else { expected.push_str(&format!("array:1|integer:{text}:9|")); }
+            expected.push_str("K|R|");
+            if rejected {
+                expected.push_str("T|boolean:-1|");
+                if mutation == 6 {
+                    expected.push_str("boolean:-1|");
+                }
+            } else {
+                expected.push_str("F|array:0|ok|absent|");
+                if mutation == 6 {
+                    expected.push_str(&format!("array:1|integer:{text}:9|"));
+                }
             }
         }
     }
@@ -61,6 +84,11 @@ fn array_parent_places_emit_on_every_target() {
         let module = super::semantic_sources::lower_capturing_arguments(&source, Target::parse(name).unwrap(),
             profile, false, SourceMode::Php);
         crate::ir::validate_module(&module).unwrap();
+        let write = module.functions.iter().find(|function| function.name == "placeWrite").unwrap();
+        assert!(write.instructions.iter().any(|instruction| {
+            instruction.op == crate::ir::Op::PropGetForWrite
+                && instruction.result_php_type == crate::types::PhpType::Mixed
+        }), "{name}: a mixed property write fetch must retain its dynamic contract");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

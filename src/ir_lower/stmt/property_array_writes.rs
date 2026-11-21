@@ -1104,11 +1104,13 @@ fn lower_php_array_property_write(
     key_already_diagnosed: bool,
 ) {
     let data = ctx.intern_string(property);
+    let property_ty = object_property_type(ctx, object.value, property)
+        .unwrap_or_else(PhpType::php_array);
     let array = ctx.emit_value(
         Op::PropGetForWrite,
         vec![object.value],
         Some(Immediate::Data(data)),
-        PhpType::php_array(),
+        property_ty,
         Op::PropGetForWrite.default_effects(),
         Some(span),
     );
