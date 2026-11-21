@@ -203,6 +203,17 @@ pub(crate) fn lower_referenced_builtin_datetime_methods(
     }
 }
 
+/// Whether any lowered body can hold a date/time object: it constructs or calls one, or it runs
+/// eval, whose fragments can build one the module never names.
+///
+/// The ordering comparator asks this before it spends a branch on `DateTimeInterface`: that
+/// branch calls `getTimestamp()`/`format()` on two untyped operands, and lowering such a call
+/// demands the bodies of every class that declares the method (plus every `__call` class), which
+/// is a whole SPL/date runtime for a program that merely compares two mixed integers.
+pub(crate) fn module_may_hold_datetimes(module: &Module) -> bool {
+    module_uses_eval(module) || !referenced_builtin_datetime_methods(module).is_empty()
+}
+
 /// Lowers DateTime-family methods that runtime eval aliases may call dynamically.
 fn lower_eval_date_alias_methods_if_needed(
     module: &mut Module,

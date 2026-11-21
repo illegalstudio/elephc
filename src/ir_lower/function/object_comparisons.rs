@@ -75,7 +75,9 @@ pub(in crate::ir_lower) fn lower_order_comparison_dispatch(module: &mut Module) 
         return;
     }
     let mut statements = Vec::new();
-    if module.interface_infos.contains_key("DateTimeInterface") {
+    if module.interface_infos.contains_key("DateTimeInterface")
+        && crate::ir_lower::builtin_datetime::module_may_hold_datetimes(module)
+    {
         let instant = |side: &str, method: &str| {
             e_method_call(e_var(side), method, vec![])
         };
