@@ -166,14 +166,19 @@ pub(super) fn append_prepared(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, value: LoweredValue, span: Span,
 ) {
     let exact_array = super::array_write_core::boxed_receiver_has_array_contract(ctx, parent);
-    let parent = resolve_parent_for_write(ctx, parent, span);
-    let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
     if exact_array {
-        ctx.emit_void(Op::MixedArrayAppend, vec![parent.value, value.value], None,
-            Op::MixedArrayAppend.default_effects(), Some(span));
-        retire_owner(ctx, parent_owner, span);
+        let parent = super::array_write_core::direct_boxed_array_receiver(ctx, parent);
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![parent.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
         return;
     }
+    let parent = resolve_parent_for_write(ctx, parent, span);
+    let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
     let pending = super::nested_false_errors::capture(ctx, parent, span);
     super::nested_false_errors::handle_pending(ctx, pending, None, span, |ctx| {
         emit_append(ctx, parent, value, span);
@@ -187,6 +192,13 @@ pub(super) fn append_prepared(
 fn resolve_parent_for_write(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span,
 ) -> LoweredValue {
+    let published = super::array_write_core::direct_published_boxed_receiver(ctx, parent);
+    if matches!(
+        ctx.builder.value_defining_op(published.value),
+        Some(Op::PropGetForWrite | Op::LoadRefCell)
+    ) {
+        return published;
+    }
     if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {
         return parent;
     }
@@ -234,6 +246,7 @@ fn emit_append(
     branch_to(ctx, done);
     ctx.builder.position_at_end(array_append);
     ctx.restore_initialized_slots(initialized.clone());
+    let parent = super::array_write_core::direct_published_boxed_receiver(ctx, parent);
     ctx.emit_void(Op::MixedArrayAppend, vec![parent.value, value.value], None,
         Op::MixedArrayAppend.default_effects(), Some(span));
     branch_to(ctx, done);

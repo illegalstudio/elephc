@@ -631,6 +631,68 @@ pub(super) fn boxed_receiver_has_array_contract(
     ctx.builder.value_php_type(receiver.value).is_php_array()
 }
 
+/// Peels identity-only wrappers while preserving the published boxed array cell.
+pub(super) fn direct_boxed_array_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+) -> LoweredValue {
+    let value = wrapped_source(
+        ctx,
+        receiver.value,
+        |op| matches!(op, Op::Borrow | Op::Move),
+        |source| ctx.builder.value_php_type(source).is_php_array(),
+    );
+    LoweredValue {
+        value,
+        ir_type: ctx.builder.value_type(value),
+    }
+}
+
+/// Restores a published property or reference cell after lifetime-only wrappers.
+pub(super) fn direct_published_boxed_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+) -> LoweredValue {
+    let source = wrapped_source(
+        ctx,
+        receiver.value,
+        |op| matches!(op, Op::Acquire | Op::Borrow | Op::Move),
+        |_| true,
+    );
+    if matches!(
+        ctx.builder.value_defining_op(source),
+        Some(Op::PropGetForWrite | Op::LoadRefCell)
+    ) {
+        return LoweredValue {
+            value: source,
+            ir_type: ctx.builder.value_type(source),
+        };
+    }
+    receiver
+}
+
+/// Follows caller-approved wrappers while each source preserves the required contract.
+fn wrapped_source(
+    ctx: &LoweringContext<'_, '_>,
+    mut value: crate::ir::ValueId,
+    peels: impl Fn(Op) -> bool,
+    accepts: impl Fn(crate::ir::ValueId) -> bool,
+) -> crate::ir::ValueId {
+    while let Some(instruction) = ctx.builder.value_defining_instruction(value) {
+        if !peels(instruction.op) {
+            break;
+        }
+        let Some(source) = instruction.operands.first().copied() else {
+            break;
+        };
+        if !accepts(source) {
+            break;
+        }
+        value = source;
+    }
+    value
+}
+
 /// Routes impossible integer/float stores through the existing boxed PHP error path.
 fn boxed_invalid_scalar_receiver(
     ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, span: Span,
