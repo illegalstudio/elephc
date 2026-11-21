@@ -456,14 +456,19 @@ fn apply_expression_facts(
     properties: &PropertyFacts,
     profile: SemanticProfile,
     current_class: Option<&str>,
-) {
+) -> ValueFact {
     let mut visitor = ExpressionFactUpdater {
         locals,
         properties,
         profile,
         current_class,
+        expression_values: HashMap::new(),
     };
     ast_visit::walk_expression(expr, &mut visitor);
+    visitor
+        .expression_values
+        .remove(&expression_id(expr))
+        .unwrap_or(ValueFact::Unknown)
 }
 
 /// Records nested assignment results after their operands have produced their side effects.
@@ -472,19 +477,21 @@ struct ExpressionFactUpdater<'a> {
     properties: &'a PropertyFacts,
     profile: SemanticProfile,
     current_class: Option<&'a str>,
+    expression_values: HashMap<usize, ValueFact>,
 }
 
 impl AstVisitor for ExpressionFactUpdater<'_> {
     /// Applies lazy expression effects through independent branch states.
     fn expression(&mut self, expr: &Expr) {
         if is_lazy_flow_expression(expr) {
-            apply_lazy_expression_facts(
+            let value = apply_lazy_expression_facts(
                 expr,
                 self.locals,
                 self.properties,
                 self.profile,
                 self.current_class,
             );
+            self.expression_values.insert(expression_id(expr), value);
         }
     }
 
@@ -500,31 +507,131 @@ impl AstVisitor for ExpressionFactUpdater<'_> {
 
     /// Commits one assignment result after nested RHS assignments have updated the flow state.
     fn expression_end(&mut self, expr: &Expr) {
-        let ExprKind::Assignment {
-            target,
-            value,
-            prelude,
-            ..
-        } = &expr.kind
-        else {
+        if self.expression_values.contains_key(&expression_id(expr)) {
             return;
+        }
+        let value = match &expr.kind {
+            ExprKind::Assignment {
+                target,
+                value,
+                prelude,
+                ..
+            } => {
+                apply_prelude_facts(
+                    prelude,
+                    self.locals,
+                    self.properties,
+                    self.profile,
+                    self.current_class,
+                );
+                let value = self.expression_value(value);
+                record_assignment_fact(
+                    target,
+                    value.clone(),
+                    self.locals,
+                    self.properties,
+                    self.profile,
+                    self.current_class,
+                );
+                value
+            }
+            ExprKind::ArrayLiteral(values) => self.evaluated_indexed_array_fact(values),
+            ExprKind::ArrayLiteralAssoc(entries) => self.evaluated_assoc_array_fact(entries),
+            ExprKind::ArrayLiteralMixed(entries) => self.evaluated_mixed_array_fact(entries),
+            _ => infer_expr(
+                expr,
+                self.locals,
+                self.properties,
+                self.profile,
+                self.current_class,
+            ),
         };
-        apply_prelude_facts(
-            prelude,
-            self.locals,
-            self.properties,
-            self.profile,
-            self.current_class,
-        );
-        record_assignment_fact(
-            target,
-            value,
-            self.locals,
-            self.properties,
-            self.profile,
-            self.current_class,
-        );
+        self.expression_values.insert(expression_id(expr), value);
     }
+}
+
+impl ExpressionFactUpdater<'_> {
+    /// Returns the value captured when one child finished evaluating.
+    fn expression_value(&self, expr: &Expr) -> ValueFact {
+        self.expression_values
+            .get(&expression_id(expr))
+            .cloned()
+            .unwrap_or_else(|| {
+                infer_expr(
+                    expr,
+                    self.locals,
+                    self.properties,
+                    self.profile,
+                    self.current_class,
+                )
+            })
+    }
+
+    /// Builds an indexed literal from the value captured for each ordered element.
+    fn evaluated_indexed_array_fact(&self, values: &[Expr]) -> ValueFact {
+        let mut array = ArrayFact::empty();
+        for expr in values {
+            let value = self.expression_value(expr);
+            let success = if matches!(&expr.kind, ExprKind::Spread(_)) {
+                let ValueFact::Array(source) = value else {
+                    return ValueFact::Known(PhpType::php_array());
+                };
+                array.spread(&source)
+            } else {
+                array.append(value)
+            };
+            if success.is_none() {
+                return ValueFact::Known(PhpType::php_array());
+            }
+        }
+        ValueFact::Array(array)
+    }
+
+    /// Builds an associative literal from values captured before later entries execute.
+    fn evaluated_assoc_array_fact(&self, entries: &[(Expr, Expr)]) -> ValueFact {
+        let mut array = ArrayFact::empty();
+        for (key, value) in entries {
+            let Some(key) = source_array_key(key, self.profile) else {
+                return ValueFact::Known(PhpType::php_array());
+            };
+            array.insert(key, self.expression_value(value));
+        }
+        ValueFact::Array(array)
+    }
+
+    /// Builds a mixed literal from ordered snapshots of keyed, implicit, and spread entries.
+    fn evaluated_mixed_array_fact(&self, entries: &[ArrayEntry]) -> ValueFact {
+        let mut array = ArrayFact::empty();
+        for entry in entries {
+            let success = match entry {
+                ArrayEntry::Spread(source) => {
+                    let ValueFact::Array(source) = self.expression_value(source) else {
+                        return ValueFact::Known(PhpType::php_array());
+                    };
+                    array.spread(&source)
+                }
+                ArrayEntry::Value(value) | ArrayEntry::Reference(value) => {
+                    array.append(self.expression_value(value))
+                }
+                ArrayEntry::Keyed(key, value) | ArrayEntry::KeyReference(key, value) => {
+                    let Some(key) = source_array_key(key, self.profile) else {
+                        return ValueFact::Known(PhpType::php_array());
+                    };
+                    array.insert(key, self.expression_value(value));
+                    Some(())
+                }
+            };
+            if success.is_none() {
+                return ValueFact::Known(PhpType::php_array());
+            }
+        }
+        ValueFact::Array(array)
+    }
+}
+
+/// Identifies one borrowed expression while its source tree remains alive.
+fn expression_id(expr: &Expr) -> usize {
+    std::ptr::from_ref(expr).addr()
 }
 
 /// Reports whether an expression contains operands that PHP may skip at runtime.
@@ -547,7 +654,7 @@ fn apply_lazy_expression_facts(
     properties: &PropertyFacts,
     profile: SemanticProfile,
     current_class: Option<&str>,
-) {
+) -> ValueFact {
     match &expr.kind {
         ExprKind::BinaryOp { left, op, right }
             if matches!(
@@ -570,6 +677,7 @@ fn apply_lazy_expression_facts(
                 profile,
                 current_class,
             );
+            ValueFact::Known(PhpType::Bool)
         }
         ExprKind::Ternary {
             condition,
@@ -578,36 +686,32 @@ fn apply_lazy_expression_facts(
         } => {
             apply_expression_facts(condition, locals, properties, profile, current_class);
             match crate::types::deferred_defaults::literal_truthiness(condition) {
-                Some(true) => {
-                    apply_expression_facts(
-                        then_expr,
-                        locals,
-                        properties,
-                        profile,
-                        current_class,
-                    );
-                }
-                Some(false) => {
-                    apply_expression_facts(
-                        else_expr,
-                        locals,
-                        properties,
-                        profile,
-                        current_class,
-                    );
-                }
+                Some(true) => apply_expression_facts(
+                    then_expr,
+                    locals,
+                    properties,
+                    profile,
+                    current_class,
+                ),
+                Some(false) => apply_expression_facts(
+                    else_expr,
+                    locals,
+                    properties,
+                    profile,
+                    current_class,
+                ),
                 None => {
                     let entry = locals.clone();
                     let mut then_exit = entry.clone();
                     let mut else_exit = entry;
-                    apply_expression_facts(
+                    let then_value = apply_expression_facts(
                         then_expr,
                         &mut then_exit,
                         properties,
                         profile,
                         current_class,
                     );
-                    apply_expression_facts(
+                    let else_value = apply_expression_facts(
                         else_expr,
                         &mut else_exit,
                         properties,
@@ -615,24 +719,31 @@ fn apply_lazy_expression_facts(
                         current_class,
                     );
                     *locals = merge_exits(&[then_exit, else_exit]);
+                    merge_value_facts(then_value, else_value)
                 }
             }
         }
         ExprKind::ShortTernary { value, default } => {
-            apply_expression_facts(value, locals, properties, profile, current_class);
+            let value_fact =
+                apply_expression_facts(value, locals, properties, profile, current_class);
             let default_runs = crate::types::deferred_defaults::literal_truthiness(value)
                 .map(|truthy| !truthy);
-            apply_optional_expression_facts(
+            match apply_optional_expression_facts(
                 default,
                 default_runs,
                 locals,
                 properties,
                 profile,
                 current_class,
-            );
+            ) {
+                Some(default_fact) if default_runs == Some(true) => default_fact,
+                Some(default_fact) => merge_value_facts(value_fact, default_fact),
+                None => value_fact,
+            }
         }
         ExprKind::NullCoalesce { value, default } => {
-            apply_expression_facts(value, locals, properties, profile, current_class);
+            let value_fact =
+                apply_expression_facts(value, locals, properties, profile, current_class);
             let default_runs = match &value.kind {
                 ExprKind::Null => Some(true),
                 ExprKind::BoolLiteral(_)
@@ -644,14 +755,18 @@ fn apply_lazy_expression_facts(
                 | ExprKind::ArrayLiteralMixed(_) => Some(false),
                 _ => None,
             };
-            apply_optional_expression_facts(
+            match apply_optional_expression_facts(
                 default,
                 default_runs,
                 locals,
                 properties,
                 profile,
                 current_class,
-            );
+            ) {
+                Some(default_fact) if default_runs == Some(true) => default_fact,
+                Some(default_fact) => merge_value_facts(value_fact, default_fact),
+                None => value_fact,
+            }
         }
         _ => unreachable!("only lazy expressions reach the lazy fact updater"),
     }
@@ -665,16 +780,20 @@ fn apply_optional_expression_facts(
     properties: &PropertyFacts,
     profile: SemanticProfile,
     current_class: Option<&str>,
-) {
+) -> Option<ValueFact> {
     match runs {
-        Some(true) => {
-            apply_expression_facts(expr, locals, properties, profile, current_class);
-        }
-        Some(false) => {}
+        Some(true) => Some(apply_expression_facts(
+            expr,
+            locals,
+            properties,
+            profile,
+            current_class,
+        )),
+        Some(false) => None,
         None => {
             let skipped = locals.clone();
             let mut evaluated = skipped.clone();
-            apply_expression_facts(
+            let value = apply_expression_facts(
                 expr,
                 &mut evaluated,
                 properties,
@@ -682,6 +801,7 @@ fn apply_optional_expression_facts(
                 current_class,
             );
             *locals = merge_exits(&[skipped, evaluated]);
+            Some(value)
         }
     }
 }
@@ -689,13 +809,12 @@ fn apply_optional_expression_facts(
 /// Updates a plain local or a statically projected local array assignment target.
 fn record_assignment_fact(
     target: &Expr,
-    value: &Expr,
+    value: ValueFact,
     locals: &mut LocalFacts,
     properties: &PropertyFacts,
     profile: SemanticProfile,
     current_class: Option<&str>,
 ) {
-    let value = infer_expr(value, locals, properties, profile, current_class);
     if let ExprKind::Variable(name) = &target.kind {
         locals.set(name, value);
         return;
@@ -844,11 +963,9 @@ fn validate_stmt(
     }
     match &stmt.kind {
         StmtKind::Assign { name, value } => {
-            apply_expression_facts(value, locals, properties, profile, current_class);
-            locals.set(
-                name,
-                infer_expr(value, locals, properties, profile, current_class),
-            );
+            let value =
+                apply_expression_facts(value, locals, properties, profile, current_class);
+            locals.set(name, value);
         }
         StmtKind::TypedAssign {
             type_expr,
@@ -887,7 +1004,8 @@ fn validate_stmt(
             index,
             value,
         } => {
-            apply_expression_facts(value, locals, properties, profile, current_class);
+            let value =
+                apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = locals.get(array);
             validate_index(
                 profile,
@@ -898,17 +1016,17 @@ fn validate_stmt(
                 current_class,
             )?;
             let index = infer_expr(index, locals, properties, profile, current_class);
-            let value = infer_expr(value, locals, properties, profile, current_class);
             locals.set(array, array_write_fact(receiver, index, value));
         }
         StmtKind::ArrayPush { array, value } => {
-            apply_expression_facts(value, locals, properties, profile, current_class);
+            let value =
+                apply_expression_facts(value, locals, properties, profile, current_class);
             let receiver = locals.get(array);
-            let value = infer_expr(value, locals, properties, profile, current_class);
             locals.set(array, array_push_fact(receiver, value));
         }
         StmtKind::NestedArrayAssign { target, value } => {
-            apply_expression_facts(value, locals, properties, profile, current_class);
+            let value =
+                apply_expression_facts(value, locals, properties, profile, current_class);
             validate_array_access_chain(
                 profile,
                 target,
@@ -922,7 +1040,6 @@ fn validate_stmt(
                     .into_iter()
                     .map(|index| infer_expr(index, locals, properties, profile, current_class))
                     .collect();
-                let value = infer_expr(value, locals, properties, profile, current_class);
                 locals.set(
                     array,
                     nested_array_write_fact(locals.get(array), &indices, value),
