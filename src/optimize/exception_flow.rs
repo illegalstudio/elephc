@@ -115,6 +115,8 @@ pub(super) struct ExceptionFlowAnalysis {
     function_returns: HashMap<String, PhpType>,
     static_method_returns: HashMap<String, PhpType>,
     instance_method_returns: HashMap<String, PhpType>,
+    /// String binding and return boundaries may dispatch user code before or after the body.
+    string_bindings: HashSet<String>,
     /// Throws any destructor reachable in this program may raise, for the current round.
     ///
     /// Derived from `instance_method_throws` plus the hierarchy's destructor-enumeration
@@ -188,6 +190,30 @@ fn by_ref_param_checks_boxed_argument(signature: &FunctionSig, index: usize, ty:
                 if !name.as_str().eq_ignore_ascii_case("mixed")
         ),
         _ => false,
+    }
+}
+
+/// Records callable boundaries whose string parameters may dispatch user code.
+fn collect_string_bindings(stmts: &[Stmt], out: &mut HashSet<String>) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, params, variadic_type, variadic_by_ref, return_type, body, .. } => {
+                if super::effect_analysis::callable_binds_string(params, variadic_type.as_ref(), *variadic_by_ref)
+                    || super::return_binding_effects::may_throw(params, return_type, body) {
+                    out.insert(name.clone());
+                }
+            }
+            StmtKind::ClassDecl { name, methods, .. } => {
+                for method in methods.iter().filter(|method| method.has_body) {
+                    if super::effect_analysis::callable_binds_string(&method.params, method.variadic_type.as_ref(), method.variadic_by_ref)
+                        || super::return_binding_effects::may_throw(&method.params, &method.return_type, &method.body) {
+                        out.insert(method_effect_key(name, &method.name));
+                    }
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_string_bindings(body, out),
+            _ => {}
+        }
     }
 }
 
@@ -473,6 +499,10 @@ impl ExceptionFlowAnalysis {
             method_defaults::collect_unresolved(program,
                 &mut static_method_unresolved_defaults, &mut instance_method_unresolved_defaults);
         }
+        // Body-only throw summaries omit entry-time Stringable dispatch. Keep
+        // these bindings open until argument-specific type proofs are available.
+        let mut string_bindings = HashSet::new();
+        collect_string_bindings(program, &mut string_bindings);
         let mut analysis = Self {
             checker_retirement_types: None,
             reference_parameters,
@@ -513,6 +543,7 @@ impl ExceptionFlowAnalysis {
             function_returns,
             static_method_returns,
             instance_method_returns,
+            string_bindings,
             destructor_throws: ThrownTypes::default(),
             scalar_frame_callables: HashSet::new(),
         };
@@ -575,6 +606,9 @@ impl ExceptionFlowAnalysis {
                         self.reference_parameters.get(name).cloned().unwrap_or_default(), ||
                         with_return_boundary_facts(self.return_boundaries.get(name), ||
                             self.block_throws(body.body, &HashMap::new(), body.class_context)))
+                        .combined(if self.string_bindings.contains(name) {
+                            ThrownTypes::unknown()
+                        } else { ThrownTypes::default() })
                         .combined(self.scope_cleanup_throws(name)),
                 )
             })
@@ -1250,7 +1284,7 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
         match &callee.kind {
-            ExprKind::Closure { params, return_type, body, variadic, variadic_by_ref,
+            ExprKind::Closure { params, return_type, body, variadic, variadic_by_ref, variadic_type,
                 captures, capture_refs, by_ref_return, .. } => {
                 let mut references = reference_parameter_names(params, variadic.as_deref(), *variadic_by_ref);
                 references.extend(capture_refs.iter().cloned());
@@ -1265,9 +1299,13 @@ impl ExceptionFlowAnalysis {
                     callee_analysis.checker_retirement_types = None;
                     &callee_analysis
                 } else { self };
-                with_return_boundary_facts(Some(&facts), || with_reference_value_scope(values, ||
+                let thrown = with_return_boundary_facts(Some(&facts), || with_reference_value_scope(values, ||
                     with_reference_parameter_scope(*by_ref_return, references, ||
-                        analysis.block_throws(body, bindings, class_context))))
+                        analysis.block_throws(body, bindings, class_context))));
+                if super::effect_analysis::callable_binds_string(params, variadic_type.as_ref(), *variadic_by_ref)
+                    || super::return_binding_effects::may_throw(params, return_type, body) {
+                    thrown.combined(ThrownTypes::unknown())
+                } else { thrown }
             }
             ExprKind::FirstClassCallable(CallableTarget::Function(name)) => self
                 .function_throws

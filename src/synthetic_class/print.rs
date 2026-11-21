@@ -307,14 +307,27 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             out.push_str(&format!("{indent}}}"));
             out
         }
-        StmtKind::EnumDecl { name, generics, backing_type, cases, implements, trait_uses, methods, constants } => {
-            assert!(generics.is_none() && backing_type.is_none(), "only plain unit enums are modelled");
-            assert!(implements.is_empty() && trait_uses.is_empty() && methods.is_empty() && constants.is_empty(),
-                "enum members other than cases are not modelled");
-            let mut out = format!("{indent}enum {name} {{\n");
+        StmtKind::EnumDecl {
+            name, generics, backing_type, cases, implements, trait_uses, methods, constants,
+        } => {
+            assert!(generics.is_none(), "generic enums are not modelled");
+            assert!(trait_uses.is_empty(), "enum trait uses are not modelled");
+            assert!(methods.is_empty(), "enum methods are not modelled");
+            assert!(constants.is_empty(), "enum constants are not modelled");
+            let mut head = format!("{indent}enum {name}");
+            if let Some(ty) = backing_type {
+                head.push_str(&format!(": {}", type_expr(ty)));
+            }
+            if !implements.is_empty() {
+                let names: Vec<String> = implements.iter().map(name_source).collect();
+                head.push_str(&format!(" implements {}", names.join(", ")));
+            }
+            let mut out = format!("{head} {{\n");
             for case in cases {
-                assert!(case.value.is_none() && case.attributes.is_empty(), "only plain unit cases are modelled");
-                out.push_str(&format!("{}case {};\n", pad(depth + 1), case.name));
+                assert!(case.attributes.is_empty(), "enum case attributes are not modelled");
+                let value = case.value.as_ref()
+                    .map(|value| format!(" = {}", expression(value))).unwrap_or_default();
+                out.push_str(&format!("{}case {}{value};\n", pad(depth + 1), case.name));
             }
             out.push_str(&format!("{indent}}}"));
             out
@@ -1246,6 +1259,20 @@ mod tests {
         let reads = crate::synthetic_class::reads_of(&program);
         assert!(reads.contains(&"entries".to_string()));
         assert!(reads.contains(&"value".to_string()));
+    }
+
+    /// Unit and backed enum cases retain their namespace, names and scalar values after printing.
+    #[test]
+    fn task_execution_and_backed_enums_round_trip() {
+        round_trip("task execution enum", &crate::task_prelude::task_declarations());
+        let program = crate::synthetic_class::internal_declarations(|| vec![
+            crate::synthetic_class::enum_decl("Phase")
+                .backed(TypeExpr::Str)
+                .case_value("Ready", crate::synthetic_class::e_str("ready"))
+                .case_value("Done", crate::synthetic_class::e_str("done"))
+                .build(),
+        ]);
+        round_trip("backed enum cases", &program);
     }
 
     /// THE PROPERTY THAT MAKES THIS TOOL USABLE AS AN ORACLE: printing a built prelude and

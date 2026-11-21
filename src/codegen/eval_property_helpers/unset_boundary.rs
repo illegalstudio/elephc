@@ -120,7 +120,8 @@ mod tests {
             let boxed = asm.find("__rt_mixed_from_value").unwrap();
             let released = asm.find("__rt_decref_any").unwrap();
             assert!(enter < unset && unset < caught && caught < boxed && boxed < released, "{name}");
-            assert!(asm.matches("_exc_value").count() >= 4, "{name}");
+            let exc_value = crate::codegen_support::runtime::ctx::test_field_ref(target.arch, crate::codegen_support::runtime::ctx::CTX_EXC_VALUE_OFFSET);
+            assert!(asm.matches(&exc_value).count() >= 4, "{name}");
         }
     }
 }

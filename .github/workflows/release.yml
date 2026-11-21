@@ -251,6 +251,7 @@ jobs:
             libelephc_image.a \
             libelephc_probe.a \
             libelephc_instr.a \
+            libelephc_parallel.a \
             libelephc_web.a \
             libelephc_pcntl.a \
             libelephc_xml.a \
@@ -456,6 +457,7 @@ jobs:
               lib.install "libelephc_image.a"
               lib.install "libelephc_probe.a"
               lib.install "libelephc_instr.a"
+              lib.install "libelephc_parallel.a"
               lib.install "libelephc_web.a"
               lib.install "libelephc_pcntl.a"
               lib.install "libelephc_xml.a"

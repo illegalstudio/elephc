@@ -36,11 +36,26 @@ fn mbstring_native_throw_publication_ownership() {
     emit(&mut emitter);
     arrays::emit_mixed_unbox(&mut emitter);
     emit_incref_fixture(&mut emitter);
+    // The publication helper reaches the pending exception through the context register.
+    emitter.label_global("fixture_publish");
+    if target.arch == Arch::X86_64 {
+        emitter.instruction("push r14");                                        // preserve the host's callee-saved register and align the nested call
+        crate::codegen_support::abi::emit_symbol_address(&mut emitter, "r14", "fixture_ctx");
+        emitter.instruction("call __rt_mbstring_publish_throw");                // run the real publication with the fixture context installed
+        emitter.instruction("pop r14");                                         // hand the host register back
+    } else {
+        emitter.instruction("stp x28, x30, [sp, #-16]!");                       // preserve the host's callee-saved register and linkage
+        crate::codegen_support::abi::emit_symbol_address(&mut emitter, "x28", "fixture_ctx");
+        emitter.instruction("bl __rt_mbstring_publish_throw");                  // run the real publication with the fixture context installed
+        emitter.instruction("ldp x28, x30, [sp], #16");                         // hand the host register back
+    }
+    emitter.instruction("ret");                                                 // return the publication status to the C assertions
     if target.platform == Platform::Linux { emitter.raw(".section .note.GNU-stack,\"\",@progbits"); }
     std::fs::write(directory.join("publication.s"), emitter.output()).unwrap();
     std::fs::write(directory.join("publication.c"), include_str!("native_publication.c")).unwrap();
     let binary = directory.join("publication");
     let output = Command::new("cc").current_dir(&directory)
+        .arg(format!("-DFIXTURE_EXC_VALUE_OFFSET={}", crate::codegen_support::runtime::ctx::CTX_EXC_VALUE_OFFSET))
         .args(["-fPIC", "-Wall", "-Wextra", "-Werror", "publication.c", "publication.s", "-o"])
         .arg(&binary).output().unwrap();
     assert!(output.status.success(), "publication build failed: {}", String::from_utf8_lossy(&output.stderr));

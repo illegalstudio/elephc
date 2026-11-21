@@ -24,6 +24,7 @@ mod locals_retype_fixtures;
 
 mod codegen {
     mod include_paths;
+    mod closed_stream_resources;
     mod curl;
     pub(crate) mod io;
     mod mysqli;

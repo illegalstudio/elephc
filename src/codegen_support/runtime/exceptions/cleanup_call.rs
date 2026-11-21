@@ -150,7 +150,7 @@ mod tests {
             let chain = asm.find("__rt_exception_chain").unwrap();
             assert!(enter < invoke && invoke < caught && caught < chain, "{name}");
             assert!(!asm.contains("__rt_throw_current"), "{name}");
-            assert!(asm.matches("_exc_handler_top").count() >= 3, "{name}");
+            assert!(asm.matches(&crate::codegen_support::runtime::test_slot_ref(target.arch, "_exc_handler_top")).count() >= 3, "{name}");
             let caught_flag = match target.arch {
                 Arch::AArch64 => "ldur x0, [x29, #-40]",
                 Arch::X86_64 => "mov rax, QWORD PTR [rbp - 40]",
@@ -171,7 +171,11 @@ mod tests {
                 let asm = emitter.output();
                 let (fast, protected) = asm.split_once("__rt_cleanup_invoke_protected:").unwrap();
                 assert!(fast.contains("__rt_decref_any"), "{name}, pic={pic}");
-                assert!(fast.contains("_heap_buf") && fast.contains("_heap_off"), "{name}, pic={pic}");
+                assert!(
+                    fast.contains(&crate::codegen_support::runtime::ctx::test_field_ref(target.arch, crate::codegen_support::runtime::ctx::CTX_HEAP_BASE_OFFSET))
+                        && fast.contains(&crate::codegen_support::runtime::ctx::test_field_ref(target.arch, crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET)),
+                    "{name}, pic={pic}"
+                );
                 assert!(!fast.contains("_exc_value") && !fast.contains("_exc_handler_top"), "{name}, pic={pic}");
                 assert!(!fast.contains("setjmp"), "{name}, pic={pic}");
                 let callback = if target.arch == Arch::AArch64 {
@@ -207,7 +211,11 @@ mod tests {
                 let asm = emitter.output();
                 let (_, probe) = asm.split_once(&format!("{}:", empty_array::CANDIDATE)).unwrap();
                 assert!(probe.contains("__rt_decref_array"), "{name}, pic={pic}");
-                assert!(probe.contains("_heap_buf") && probe.contains("_heap_off"), "{name}, pic={pic}");
+                assert!(
+                    probe.contains(&crate::codegen_support::runtime::ctx::test_field_ref(target.arch, crate::codegen_support::runtime::ctx::CTX_HEAP_BASE_OFFSET))
+                        && probe.contains(&crate::codegen_support::runtime::ctx::test_field_ref(target.arch, crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET)),
+                    "{name}, pic={pic}"
+                );
                 assert!(!probe.contains("_exc_value") && !probe.contains("setjmp"), "{name}, pic={pic}");
                 assert!(probe.contains(scalar_mixed::PROTECTED) && probe.contains(scalar_mixed::DIRECT),
                     "{name}, pic={pic}");
@@ -243,8 +251,7 @@ mod tests {
                 // -- resolving the bump offset must not overwrite the live base in x9 --
                 let mut bounds = Emitter::new(target);
                 bounds.pic_data_refs = pic;
-                abi::emit_symbol_address(&mut bounds, "x10", "_heap_off");
-                bounds.instruction("ldr x10, [x10]");                           // read the bump offset through its own address register
+                crate::codegen_support::runtime::ctx::emit_heap_off_load(&mut bounds, "x10");                        // read the bump offset through its own address register
                 bounds.instruction("add x10, x9, x10");                         // combine the offset with the preserved heap base
                 bounds.instruction("cmp x1, x10");                              // bound the payload before any header access
                 bounds.instruction("b.hs __rt_cleanup_invoke_protected");        // foreign pointers must take the protected fallback

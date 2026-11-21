@@ -23,6 +23,10 @@ mod support;
 mod locals_retype_fixtures;
 
 mod codegen {
+    mod async_scheduler;
+    mod parallel_transfer;
+    mod parallel_execution;
+    mod task_reflection;
     mod buffers;
     mod buffer_ptr;
     mod buffer_arrays;

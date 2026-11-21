@@ -30,7 +30,7 @@ fn reset_cache() {
 }
 
 /// Supplies an inert descriptor ABI callback; catalog tests never invoke it.
-unsafe extern "C" fn invoker(_: *mut c_void, _: *mut RuntimeCell, _: i64) -> *mut RuntimeCell {
+unsafe extern "C" fn invoker(_: *mut c_void, _: *mut RuntimeCell, _: i64, _: u64) -> *mut RuntimeCell {
     std::ptr::null_mut()
 }
 

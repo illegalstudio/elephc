@@ -61,6 +61,29 @@ fn ownership_forwarding_source(
     }
 }
 
+/// Traces a staged evaluation load through its preceding store and ownership-only forwarding.
+fn evaluation_operand_source(
+    function: &crate::ir::Function,
+    mut value: crate::ir::ValueId,
+) -> crate::ir::ValueId {
+    use crate::ir::{Immediate, Op, ValueDef};
+    let mut visited = std::collections::HashSet::new();
+    while visited.insert(value) {
+        let ValueDef::Instruction { inst, .. } = function.value(value).unwrap().def else { break; };
+        let producer = function.instruction(inst).unwrap();
+        if matches!(producer.op, Op::Acquire | Op::Borrow | Op::Move) {
+            value = producer.operands[0];
+        } else if producer.op == Op::LoadLocal {
+            let Some(Immediate::LocalSlot(slot)) = producer.immediate else { break; };
+            let Some(store) = function.instructions[..inst.as_raw() as usize].iter().rev().find(|candidate| {
+                candidate.op == Op::StoreLocal && candidate.immediate == Some(Immediate::LocalSlot(slot))
+            }) else { break; };
+            value = store.operands[0];
+        } else { break; }
+    }
+    value
+}
+
 /// Verifies that one final root slot protects an ownership-equivalent operand across its call.
 fn assert_final_operand_root_spans_call(
     function: &crate::ir::Function,
@@ -669,7 +692,8 @@ $callback();
                 "{target}: raw callable passthrough must retain its transfer contract");
             if name == "laterCallbackCaller" {
                 let callback = function.instructions[call].operands[1];
-                let ValueDef::Instruction { inst, .. } = function.value(callback).unwrap().def else {
+                let source = evaluation_operand_source(function, callback);
+                let ValueDef::Instruction { inst, .. } = function.value(source).unwrap().def else {
                     panic!("missing callback source");
                 };
                 assert_eq!(function.instruction(inst).unwrap().op, Op::ClosureNew, "{target}");
@@ -809,9 +833,9 @@ echo coercionCaller($argc);
             "{target}: construction retires its own published root before call evaluation");
         let arguments = &caller.instructions[construction_end + 1..];
         assert_eq!(arguments.iter().filter(|inst| inst.op == Op::PushCallOperandOwner).count(),
-            3, "{target}: the earlier source array has an evaluation root and both have final roots");
+            4, "{target}: the source array has an evaluation root, republished after binding, and both boxes have final roots");
         assert_eq!(arguments.iter().filter(|inst| inst.op == Op::PopCallOperandOwner).count(),
-            3, "{target}: source evaluation and final roots must be detached");
+            4, "{target}: every publication, including rebinding, must be balanced");
         let call_index = caller.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
         let operands = &caller.instructions[call_index].operands;
         assert_eq!(operands.len(), 2, "{target}: both source array operands reach the call");
@@ -829,10 +853,10 @@ echo coercionCaller($argc);
             (line.starts_with("bl ") || line.starts_with("call ")) && line.contains("coercionTarget")
         }).unwrap_or_else(|| panic!("{target}: missing native call in {body}"));
         let (before, after) = body.split_once(invoke).unwrap();
-        // One evaluation root protects the earlier source argument, two final EIR roots span
-        // the call, and two backend roots protect the implicit Mixed boxes.
-        assert_eq!(before.matches("publish temporary call operand owner").count(), 5, "{target}: {body}");
-        assert_eq!(after.matches("detach temporary call operand owner").count(), 4, "{target}: {body}");
+        // Boxing is explicit EIR: two final boxed roots and a republished source pin replace the
+        // former opaque backend boxing frames.
+        assert_eq!(before.matches("publish temporary call operand owner").count(), 4, "{target}: {body}");
+        assert_eq!(after.matches("detach temporary call operand owner").count(), 3, "{target}: {body}");
         assert!(!after.contains("publish temporary call operand owner"),
             "{target}: every temporary owner must already be published before the call");
     }

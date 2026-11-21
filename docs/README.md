@@ -99,6 +99,8 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
 - [Transaction monitoring](beyond-php/apm.md) - `--apm` counts every `--web` request per route from startup, and every run of a script launched through `monitor`; `elephc monitor --apm` shows throughput, latency percentiles and error rates as a table, live terminal trends and histograms, a daily on-disk history, and a Transactions view on the monitor page next to the profile, with Prometheus `/metrics`
 - [Profiling](beyond-php/profiling.md) - PHP-level profiling with one command in every environment: a launched program reports exact wall time, allocations, retained objects, database and outgoing-network wait, SQL queries, network operations and calls; a running service is sampled by default and exact only for a requested completed request. Includes per-`--web`-route tags, `.elephc` performance budgets, automatic curl trace propagation, W3C distributed traces, and a self-contained interactive call-graph page
+- [Structured Async Tasks](beyond-php/async.md) — cooperative Fiber tasks with structured root scopes, child ownership, and awaitable results
+- [Structured Parallel Tasks](beyond-php/parallel.md) — isolated native workers, transferable values, blocking Futures, and cooperative cancellation
 
 ## Compiler Internals
 
@@ -113,6 +115,7 @@ How elephc works under the hood — from lexing to code generation and runtime s
 - [The Code Generator](internals/the-codegen.md) — checked AST to EIR, then target assembly
 - [The EIR Design](internals/the-ir.md) — PHP-shaped intermediate representation used by codegen and `--emit-ir`
 - [The Runtime](internals/the-runtime.md) — hand-written assembly routines
+- [Runtime Context Register (spike)](internals/runtime-ctx-register.md) — reserved x28/r14 for per-context runtime state, `--rt-ctx`, measured cost, fiber trap, M0 path
 - [Eval Runtime Architecture](internals/eval-runtime.md) — literal AOT planning, scope synchronization, Magician fallback, and bridge ABI
 - [Memory Model](internals/memory-model.md) — stack frames, heap, reference counting
 - [Architecture](internals/architecture.md) — module map, calling conventions

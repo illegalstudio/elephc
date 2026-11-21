@@ -170,16 +170,18 @@ mod tests {
             let begin = assembly.find(&format!("{}:\n", target.extern_symbol("elephc_web_application_request_begin"))).unwrap();
             let end = assembly.find(&format!("{}:\n", target.extern_symbol("elephc_web_application_shutdown_cleanup"))).unwrap();
             let request = &assembly[begin..end];
-            assert!(!request.contains("_heap_off"), "{name}");
-            assert!(!request.contains("_heap_free_list"), "{name}");
-            assert!(!request.contains("_gc_live"), "{name}");
+            // The heap and live-block counters are context slots now; the boundary must not touch them.
+            let field = |offset| format!("{}]", crate::codegen_support::runtime::ctx::test_field_ref(target.arch, offset));
+            assert!(!request.contains(&field(crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET)), "{name}");
+            assert!(!request.contains(&field(crate::codegen_support::runtime::ctx::CTX_HEAP_FREE_LIST_OFFSET)), "{name}");
+            assert!(!request.contains(&field(crate::codegen_support::runtime::ctx::CTX_GC_LIVE_OFFSET)), "{name}");
             assert!(request.contains("__rt_cleanup_call"), "{name}");
             assert!(request.find("__rt_decref_hash").unwrap() < request.find("__rt_gc_collect_cycles_explicit").unwrap(), "{name}");
             assert!(request.contains("__rt_web_inventory_prune"), "{name}");
             let cleanup = assembly.find(&format!("{}:\n", target.extern_symbol("elephc_web_application_request_end"))).unwrap();
             let cleanup = &assembly[cleanup..end];
-            let capture = &cleanup[cleanup.find("_print_r_ptr").unwrap()..];
-            assert!(capture.find("__rt_heap_free_safe").unwrap() < capture.find("_print_r_cap").unwrap(),
+            let capture = &cleanup[cleanup.find(&format!("{}]", crate::codegen_support::runtime::ctx::test_symbol_ref(target.arch, "_print_r_ptr"))).unwrap()..];
+            assert!(capture.find("__rt_heap_free_safe").unwrap() < capture.find(&format!("{}]", crate::codegen_support::runtime::ctx::test_symbol_ref(target.arch, "_print_r_cap"))).unwrap(),
                 "{name}: the growable capture must be freed before resetting its capacity");
             assert!(!cleanup.contains("_print_r_base"), "{name}: removed print_r buffer symbol");
         }

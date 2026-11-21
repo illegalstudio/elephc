@@ -406,10 +406,11 @@ mod tests {
         // the internal nl_langinfo helper join the internal eval inventory, as does the
         // random prelude's `__elephc_call_strict_types` reader and the tokenizer prelude's
         // two line-aware diagnostic helpers and the internal memory limit setter.
-        assert_eq!(eval_internal, 145);
+        // +4 from the Async/Parallel internal helpers the scheduler preludes call.
+        assert_eq!(eval_internal, 149);
         // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 381);
+        assert_eq!(eval_pending, 383);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -424,11 +425,12 @@ mod tests {
         // the random prelude's `__elephc_call_strict_types` reader join the AOT registry,
         // with two line-aware tokenizer helpers, two PCRE error readers, and
         // `__elephc_set_memory_limit`.
-        assert_eq!(aot_registry, 844);
+        // +4 from the Async/Parallel internal helpers.
+        assert_eq!(aot_registry, 848);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
         // The two PHP-visible locale functions are prelude-provided.
-        assert_eq!(aot_external, 477 + curl_surface);
+        assert_eq!(aot_external, 479 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -488,7 +490,8 @@ mod tests {
         // the internal nl_langinfo helper, the random prelude's
         // `__elephc_call_strict_types` reader, and the tokenizer prelude's two line-aware
         // diagnostic helpers, and `__elephc_set_memory_limit`.
-        assert_eq!(unsupported, 526);
+        // +6 from the Async/Task internal helpers and prelude entries.
+        assert_eq!(unsupported, 532);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

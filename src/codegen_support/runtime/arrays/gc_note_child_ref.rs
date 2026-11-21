@@ -47,11 +47,10 @@ pub fn emit_gc_note_child_ref(emitter: &mut Emitter) {
 
     // -- null and heap-range checks --
     emitter.instruction("cbz x0, __rt_gc_note_child_ref_done");                 // ignore null child pointers
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // is the child below the heap buffer?
     emitter.instruction("b.lo __rt_gc_note_child_ref_done");                    // only heap pointers participate in cycle accounting
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // load the current heap offset
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x10"); // x10 = current heap offset (ctx-relative in ctx mode)
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("cmp x0, x10");                                         // is the child at or beyond the current heap end?
     emitter.instruction("b.hs __rt_gc_note_child_ref_done");                    // invalid pointers contribute nothing
@@ -98,11 +97,11 @@ fn emit_gc_note_child_ref_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r11");                                            // preserve the source iteration index
     emitter.instruction("test rax, rax");                                       // null edges cannot name a heap candidate
     emitter.instruction("jz __rt_gc_note_child_ref_done");                      // skip an absent child before touching a header
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r8");
     emitter.instruction("lea r9, [r8 + 16]");                                   // the first payload follows the uniform header
     emitter.instruction("cmp rax, r9");                                         // reject static, sentinel, and header addresses
     emitter.instruction("jb __rt_gc_note_child_ref_done");                      // only managed payloads can receive incoming edges
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r9", "_heap_off", 0);
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r9");
     emitter.instruction("add r9, r8");                                          // derive the current managed heap end
     emitter.instruction("cmp rax, r9");                                         // reject addresses beyond allocated heap storage
     emitter.instruction("jae __rt_gc_note_child_ref_done");                     // out-of-range children contribute no edge

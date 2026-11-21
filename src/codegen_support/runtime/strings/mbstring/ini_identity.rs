@@ -119,7 +119,9 @@ fn x86_64(emitter: &mut Emitter, operation: &str) {
         emitter.instruction(&format!("movdqu xmm{register}, XMMWORD PTR [rsp + {}]", register * 16));// restore floating-point and vector temporaries exactly
     }
     emitter.instruction("lea rsp, [rbp - 112]");                                // recover the integer-save frame without assuming incoming alignment
-    for register in registers.into_iter().rev() { emitter.instruction(&format!("pop {register}")); }// restore every saved integer register in reverse order
+    for register in registers.into_iter().skip(1).rev() { emitter.instruction(&format!("pop {register}")); }// restore every saved integer register but rax in reverse order
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the caller's rax from its named save slot rather than a pop into the return register
+    emitter.instruction("add rsp, 8");                                          // release the rax save slot now that its value is back
     emitter.instruction("pop rbp");                                             // restore original linkage and the caller's exact stack pointer
     if dormant_gate(operation) { emitter.label(&format!("{label}_inactive")); }
     emitter.instruction("ret");                                                 // preserve the complete native value convention on every exit

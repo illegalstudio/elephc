@@ -11,14 +11,16 @@ struct eval_result { uint32_t kind; struct cell *value, *error; };
 struct name { const unsigned char *bytes; uint64_t len; };
 typedef void (*prepare_fn)(uint32_t, uint32_t, const struct input *, uint32_t, struct result *);
 typedef void (*release_fn)(struct result *);
-extern int describe(void *, const struct cell *, struct input *, void **) __asm__("__rt_mbstring_input");
+extern int describe(void *, const struct cell *, struct input *, void **) __asm__("fixture_describe");
+/* The request's catalog identity lives in the per-context block the emitted trampoline installs. */
+HIDDEN _Alignas(4096) uint64_t fixture_ctx[FIXTURE_CTX_SIZE / 8] __asm__("fixture_ctx");
+#define fixture_catalog (*(void **)&fixture_ctx[FIXTURE_CATALOG / 8])
 HIDDEN uint64_t class_count __asm__("_class_name_count") = 3;
 HIDDEN struct name class_names[] __asm__("_class_name_entries") = {{(const unsigned char *)"Plain", 5}, {(const unsigned char *)"Text\0\xff", 6}, {0, 0}};
 HIDDEN uint64_t tostring_count __asm__("_class_tostring_count") = 2;
 HIDDEN uintptr_t tostring_methods[] __asm__("_class_tostring_ptrs") = {0, 1};
 HIDDEN const unsigned char closure_name[] __asm__("_sprintf_closure_class_name") = "Closure";
 HIDDEN const unsigned char tostring_name[] __asm__("_mbstring_tostring_name") = "__toString";
-HIDDEN void *fixture_catalog __asm__("_mbstring_catalog_array") = 0;
 static int context_marker, live, name_calls, method_calls, failure;
 static const unsigned char dynamic_name[] = "Dynamic\0\xff";
 

@@ -363,6 +363,10 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
     // User bodies can contain host-boundary notifications in addition to the separately
     // generated runtime object, so they need the output profile before EIR lowering begins.
     emitter.phpext_output = emit == Emit::Phpext;
+    // The ctx-register mode is a required runtime feature by the time user
+    // codegen runs (published by `--rt-ctx` in the backend), so the user emitter
+    // branches on the same addressing mode as the runtime emitter.
+    emitter.ctx_register = module.required_runtime_features.ctx_register;
     if module.target.arch == Arch::X86_64 {
         emitter.emit_text_prelude();
     }

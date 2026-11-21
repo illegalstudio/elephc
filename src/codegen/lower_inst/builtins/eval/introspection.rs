@@ -29,10 +29,13 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_callable_call_array(
     abi::emit_load_temporary_stack_slot(ctx.emitter, arg_array_arg, EVAL_CALLABLE_ARG_ARRAY_OFFSET);
     let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let arena_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    let arena_reg = crate::codegen_support::runtime::ctx::ctx_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, arena_arg, arena_reg);
     let symbol = ctx
         .emitter
         .target
-        .extern_symbol("__elephc_eval_callable_call_array");
+        .extern_symbol("__elephc_eval_callable_call_array_in_context_v1");
     abi::emit_call_label(ctx.emitter, &symbol);
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -78,7 +81,10 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_is_callable(
     let symbol = ctx
         .emitter
         .target
-        .extern_symbol("__elephc_eval_is_callable");
+        .extern_symbol("__elephc_eval_is_callable_in_context_v1");
+    let arena_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let arena_reg = crate::codegen_support::runtime::ctx::ctx_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, arena_arg, arena_reg);
     abi::emit_call_label(ctx.emitter, &symbol);
     retire_eval_metadata_operand_boxes(ctx, &[(callback, EVAL_TEMP_CELL_OFFSET)])?;
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);

@@ -9,7 +9,10 @@
 //! - Effect summaries must account for globals, heap/runtime state, output, throws, and by-reference mutation.
 
 use super::*;
-use super::calls::{callable_target_call_effect, closure_alias_effect, merge_callable_value_effects};
+use super::calls::{
+    callable_string_effect, callable_target_call_effect, closure_alias_effect,
+    merge_callable_value_effects,
+};
 
 /// Extracts the callable alias effect from an expression, if the expression can resolve to a callable.
 ///
@@ -42,6 +45,7 @@ pub(super) fn callable_alias_from_expr(expr: &Expr) -> Option<Effect> {
                 .chain(default.iter().map(|value| callable_alias_from_expr(value))),
         ),
         ExprKind::NamedArg { value, .. } => callable_alias_from_expr(value),
+        ExprKind::StringLiteral(name) => callable_string_effect(name),
         ExprKind::Variable(name) => ACTIVE_CALLABLE_ALIAS_EFFECTS.with(|slot| {
             slot.borrow()
                 .as_ref()

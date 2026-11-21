@@ -602,10 +602,11 @@ mod tests {
     #[test]
     fn unmanaged_reference_escape_guard_is_target_complete() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
             emit_reference_cells(&mut emitter, false);
             let assembly = emitter.output();
-            assert!(assembly.contains("_rt_unmanaged_ref_borrow_top"), "{name}");
+            assert!(assembly.contains(&crate::codegen_support::runtime::test_slot_ref(target.arch, "_rt_unmanaged_ref_borrow_top")), "{name}");
             assert!(assembly.contains("_unmanaged_reference_escape_msg"), "{name}");
             assert!(assembly.contains("_spl_error_class_id"), "{name}");
             assert!(assembly.contains("__rt_object_handle_acquire"), "{name}");

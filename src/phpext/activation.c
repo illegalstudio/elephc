@@ -6,8 +6,11 @@ extern unsigned char elephc_state_begin[], elephc_state_end[];
 extern unsigned char elephc_state_zero_begin[], elephc_state_zero_end[];
 extern const uintptr_t ep_class_name_count __asm__("_class_name_count");
 extern const uintptr_t ep_class_name_entries[] __asm__("_class_name_entries");
-extern uintptr_t ep_native_stack_limit __asm__("_stack_limit");
-extern uintptr_t ep_native_stack_limit_main __asm__("_stack_limit_main");
+/* The stack floors are fields of the main runtime context, which every native call runs on
+   under ep_native_lock. The producer injects their offsets from the compiler's ctx layout. */
+extern unsigned char ep_rt_ctx[] __asm__("_rt_ctx");
+#define ep_native_stack_limit (*(uintptr_t *)(ep_rt_ctx + EP_CTX_STACK_LIMIT_OFFSET))
+#define ep_native_stack_limit_main (*(uintptr_t *)(ep_rt_ctx + EP_CTX_STACK_LIMIT_MAIN_OFFSET))
 extern uintptr_t ep_boundary_status __asm__("_elephc_boundary_status");
 extern uintptr_t ep_replacement_owner_count
     __asm__("_elephc_phpext_replacement_owner_count");

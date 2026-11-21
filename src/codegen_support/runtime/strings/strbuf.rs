@@ -77,7 +77,7 @@ fn emit_publish_offset_aarch64(emitter: &mut Emitter, suffix: &str) {
     let store = format!("__rt_strbuf_{}_store", suffix);
     emitter.instruction(&format!("ldr x11, [x0, #{}]", STRBUF_WRITE));          // load the live write cursor
     emitter.instruction(&format!("ldr x12, [x0, #{}]", STRBUF_START));          // load the buffer start to classify its storage
-    abi::emit_symbol_address(emitter, "x10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x10");
     emitter.instruction("sub x12, x12, x10");                                   // candidate scratch offset of the buffer start
     abi::emit_load_int_immediate(emitter, "x13", emitter.concat_capacity as i64); // load the concat scratch capacity in bytes
     emitter.instruction("cmp x12, x13");                                        // does the buffer live outside the scratch window (unsigned: heap wraps high)?
@@ -100,7 +100,7 @@ fn emit_strbuf_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load the current scratch offset
     emitter.instruction(&format!("str x10, [x0, #{}]", STRBUF_OFF0));           // remember where the buffer was opened
-    abi::emit_symbol_address(emitter, "x12", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x12");
     abi::emit_load_int_immediate(emitter, "x13", emitter.concat_capacity as i64); // load the concat scratch capacity in bytes
     emitter.instruction("add x13, x12, x13");                                   // the scratch window ends here
     emitter.instruction("add x11, x12, x10");                                   // the buffer starts at the scratch tail
@@ -130,7 +130,7 @@ fn emit_strbuf_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub x10, x11, x9");                                    // bytes already written
     emitter.instruction("str x10, [sp, #8]");                                   // keep the used byte count
     emitter.instruction("add x2, x10, x1");                                     // the capacity this write needs
-    abi::emit_load_symbol_to_reg(emitter, "x12", "_heap_max", 0);
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "x12");
     emitter.instruction("cmp x2, x12");                                         // can the configured heap hold the result at all?
     emitter.instruction("b.hi __rt_strbuf_ensure_too_large");                   // no: PHP's fatal string-capacity error, exit 255
     emitter.instruction("lsl x2, x2, #1");                                      // double it so a long output grows a logarithmic number of times
@@ -178,7 +178,7 @@ fn emit_strbuf_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x15, x30");                                        // keep the return address across the leaf finish call
     emitter.instruction("bl __rt_strbuf_finish");                               // publish the scratch offset and load the result slice
     emitter.instruction("mov x30, x15");                                        // restore the return address
-    abi::emit_symbol_address(emitter, "x10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x10");
     emitter.instruction("sub x10, x1, x10");                                    // candidate scratch offset of the result
     abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64); // load the concat scratch capacity in bytes
     emitter.instruction("cmp x10, x11");                                        // does the result live in the scratch window?
@@ -193,7 +193,7 @@ fn emit_strbuf_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: strbuf_release ---");
     emitter.label_global("__rt_strbuf_release");
     emitter.instruction(&format!("ldr x9, [x0, #{}]", STRBUF_START));           // load the buffer start to classify its storage
-    abi::emit_symbol_address(emitter, "x10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x10");
     emitter.instruction("sub x10, x9, x10");                                    // candidate scratch offset of the buffer start
     abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64); // load the concat scratch capacity in bytes
     emitter.instruction("cmp x10, x11");                                        // does the buffer live outside the scratch window?
@@ -258,13 +258,13 @@ fn emit_strbuf_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strbuf_reserve_temp ---");
     emitter.label_global("__rt_strbuf_reserve_temp");
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_heap_max", 0);
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "x9");
     emitter.instruction("cmp x0, x9");                                          // can the configured heap hold the result at all?
     emitter.instruction("b.hi __rt_strbuf_reserve_temp_too_large");             // no: PHP's fatal string-capacity error, exit 255
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the frame pointer and return address across the reservation
     emitter.instruction("mov x29, sp");                                         // establish the reservation frame
     emitter.instruction("bl __rt_concat_reserve");                              // scratch when it fits, an owned heap block otherwise
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x9");
     emitter.instruction("sub x10, x0, x9");                                     // candidate scratch offset of the reservation
     abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64); // load the concat scratch capacity in bytes
     emitter.instruction("cmp x10, x11");                                        // did the reservation land in the scratch window?
@@ -286,7 +286,7 @@ fn emit_publish_offset_x86_64(emitter: &mut Emitter, suffix: &str) {
     let store = format!("__rt_strbuf_{}_store_x86", suffix);
     emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", STRBUF_WRITE)); // load the live write cursor
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", STRBUF_START)); // load the buffer start to classify its storage
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");
     emitter.instruction("sub r10, r9");                                         // candidate scratch offset of the buffer start
     emitter.instruction(&format!("cmp r10, {}", emitter.concat_capacity));      // does the buffer live outside the scratch window (unsigned: heap wraps high)?
     emitter.instruction(&format!("jae {}", heap));                              // a heap buffer holds no scratch
@@ -309,7 +309,7 @@ fn emit_strbuf_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r8", "_concat_off");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the current scratch offset
     emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r8", STRBUF_OFF0)); // remember where the buffer was opened
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");
     emitter.instruction(&format!("lea r10, [r9 + {}]", emitter.concat_capacity));   // the scratch window ends here
     emitter.instruction("lea r11, [r9 + r8]");                                  // the buffer starts at the scratch tail
     emitter.instruction(&format!("mov QWORD PTR [rdi + {}], r11", STRBUF_START)); // record the buffer start
@@ -339,7 +339,7 @@ fn emit_strbuf_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10, rax");                                        // bytes already written
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // keep the used byte count
     emitter.instruction("add rsi, r10");                                        // the capacity this write needs
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_heap_max", 0);
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "r8");
     emitter.instruction("cmp rsi, r8");                                         // can the configured heap hold the result at all?
     emitter.instruction("ja __rt_concat_overflow");                             // no: PHP's fatal string-capacity error, exit 255
     emitter.instruction("add rsi, rsi");                                        // double it so a long output grows a logarithmic number of times
@@ -382,7 +382,7 @@ fn emit_strbuf_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: strbuf_finish_owned ---");
     emitter.label_global("__rt_strbuf_finish_owned");
     emitter.instruction("call __rt_strbuf_finish");                             // publish the scratch offset and load the result slice
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");
     emitter.instruction("mov r10, rax");                                        // copy the result pointer before turning it into an offset
     emitter.instruction("sub r10, r9");                                         // candidate scratch offset of the result
     emitter.instruction(&format!("cmp r10, {}", emitter.concat_capacity));      // does the result live in the scratch window?
@@ -397,7 +397,7 @@ fn emit_strbuf_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: strbuf_release ---");
     emitter.label_global("__rt_strbuf_release");
     emitter.instruction(&format!("mov rax, QWORD PTR [rdi + {}]", STRBUF_START)); // load the buffer start to classify its storage
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");
     emitter.instruction("mov r10, rax");                                        // copy the start before turning it into an offset
     emitter.instruction("sub r10, r9");                                         // candidate scratch offset of the buffer start
     emitter.instruction(&format!("cmp r10, {}", emitter.concat_capacity));      // does the buffer live outside the scratch window?
@@ -462,13 +462,13 @@ fn emit_strbuf_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strbuf_reserve_temp ---");
     emitter.label_global("__rt_strbuf_reserve_temp");
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_heap_max", 0);
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "r8");
     emitter.instruction("cmp rax, r8");                                         // can the configured heap hold the result at all?
     emitter.instruction("ja __rt_concat_overflow");                             // no: PHP's fatal string-capacity error, exit 255
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer and realign the stack
     emitter.instruction("mov rbp, rsp");                                        // establish the reservation frame
     emitter.instruction("call __rt_concat_reserve");                            // scratch when it fits, an owned heap block otherwise
-    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r8");
     emitter.instruction("mov r9, rax");                                         // copy the reservation before turning it into an offset
     emitter.instruction("sub r9, r8");                                          // candidate scratch offset of the reservation
     emitter.instruction(&format!("cmp r9, {}", emitter.concat_capacity));       // did the reservation land in the scratch window?

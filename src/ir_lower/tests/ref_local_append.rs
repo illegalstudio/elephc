@@ -132,8 +132,14 @@ touchUnknown($items); echo count($items);
             .chain(module.closures.iter())
         {
             if function.name == "AppendTarget::build" {
-                assert!(!function.instructions.iter().any(|inst| inst.op == Op::MixedClone),
-                    "{target}: appending after reference promotion must not clone the boxed array");
+                // By-value call arguments (`count($items)`) snapshot their operand with a clone,
+                // so only append receivers are constrained: they must never be a cloned array.
+                assert!(!function.instructions.iter().any(|inst| {
+                    matches!(inst.op, Op::ArrayPush | Op::HashAppend | Op::MixedArrayAppend)
+                        && matches!(function.value(inst.operands[0]).unwrap().def,
+                            crate::ir::ValueDef::Instruction { inst: producer, .. }
+                                if function.instruction(producer).unwrap().op == Op::MixedClone)
+                }), "{target}: appending after reference promotion must not clone the boxed array");
                 let conversion = function.instructions.iter().find(|inst| {
                     inst.op == Op::ArrayToMixed
                 }).expect("the checked product widens the array element layout");

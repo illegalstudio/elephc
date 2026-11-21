@@ -42,17 +42,15 @@ pub fn emit_heap_grow_tail(emitter: &mut Emitter) {
 
     // -- prove tail ownership and available heap capacity --
     emitter.instruction("add x10, x0, x9");                                     // compute the current block end from its user pointer and payload size
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_buf");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_off");
-    emitter.instruction("ldr x13, [x12]");                                      // load the current bump offset before checking tail ownership
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x11");
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x13");   // load the current bump offset before checking tail ownership
     emitter.instruction("add x14, x11, x13");                                   // derive the current live heap end from its base and bump offset
     emitter.instruction("cmp x10, x14");                                        // does this block end exactly at the current bump tail?
     emitter.instruction("b.ne __rt_heap_grow_tail_fail");                       // non-tail blocks must use allocate-copy-free growth
     emitter.instruction("sub x10, x1, x9");                                     // compute the extra payload bytes needed by this extension
     emitter.instruction("adds x14, x13, x10");                                  // compute the tentative new bump offset with overflow detection
     emitter.instruction("b.cs __rt_heap_grow_tail_fail");                       // a wrapped bump offset cannot fit the configured heap
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_max");
-    emitter.instruction("ldr x15, [x15]");                                      // load the reserved arena capacity for the extension check
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "x15"); // load the reserved arena capacity for the extension check
     emitter.instruction("cmp x14, x15");                                        // does the extended tail remain inside the reserved arena?
     emitter.instruction("b.hi __rt_heap_grow_tail_fail");                       // preserve fallback allocation when the arena has insufficient room
     // -- the extension also has to fit the live memory_limit budget, not just the arena --
@@ -65,7 +63,7 @@ pub fn emit_heap_grow_tail(emitter: &mut Emitter) {
     emitter.instruction("b.hi __rt_heap_grow_tail_fail");                       // no — fall back to an allocation that enforces the limit
 
     // -- publish the extension and update live-byte accounting --
-    emitter.instruction("str x14, [x12]");                                      // publish the advanced bump offset after every guard has passed
+    crate::codegen_support::runtime::ctx::emit_heap_off_store(emitter, "x14");  // publish the advanced bump offset after every guard has passed
     emitter.instruction("str w1, [x0, #-16]");                                  // publish the extended payload size in the existing block header
     crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_gc_live");
     emitter.instruction("ldr x13, [x12]");                                      // load live-byte accounting before adding only the extension delta
@@ -107,9 +105,8 @@ fn emit_heap_grow_tail_x86_64(emitter: &mut Emitter) {
 
     // -- prove tail ownership and available heap capacity --
     emitter.instruction("lea r11, [rdi + r10]");                                // compute the current block end from its user pointer and payload size
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_off");
-    emitter.instruction("mov rcx, QWORD PTR [r9]");                             // load the current bump offset before checking tail ownership
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r8");
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "rcx");   // load the current bump offset before checking tail ownership
     emitter.instruction("lea r8, [r8 + rcx]");                                  // derive the current live heap end from its base and bump offset
     emitter.instruction("cmp r11, r8");                                         // does this block end exactly at the current bump tail?
     emitter.instruction("jne __rt_heap_grow_tail_fail");                        // non-tail blocks must use allocate-copy-free growth
@@ -117,8 +114,7 @@ fn emit_heap_grow_tail_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, r10");                                        // compute the extra payload bytes needed by this extension
     emitter.instruction("add rcx, rdx");                                        // compute the tentative new bump offset with overflow detection
     emitter.instruction("jc __rt_heap_grow_tail_fail");                         // a wrapped bump offset cannot fit the configured heap
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_max");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the reserved arena capacity for the extension check
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "r8"); // load the reserved arena capacity for the extension check
     emitter.instruction("cmp rcx, r8");                                         // does the extended tail remain inside the reserved arena?
     emitter.instruction("ja __rt_heap_grow_tail_fail");                         // preserve fallback allocation when the arena has insufficient room
     // -- the extension also has to fit the live memory_limit budget, not just the arena --
@@ -131,7 +127,7 @@ fn emit_heap_grow_tail_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ja __rt_heap_grow_tail_fail");                         // no — fall back to an allocation that enforces the limit
 
     // -- publish the extension and update live-byte accounting --
-    emitter.instruction("mov QWORD PTR [r9], rcx");                             // publish the advanced bump offset after every guard has passed
+    crate::codegen_support::runtime::ctx::emit_heap_off_store(emitter, "rcx");  // publish the advanced bump offset after every guard has passed
     emitter.instruction("mov DWORD PTR [rdi - 16], eax");                       // publish the extended payload size in the existing block header
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_live");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load live-byte accounting before adding only the extension delta
@@ -215,12 +211,16 @@ mod tests {
                 emit_heap_grow_tail(&mut emitter);
                 let assembly = emitter.output();
 
-                assert!(assembly.contains("_heap_off"), "{name}, pic={pic}");
+                assert!(
+                    assembly.contains(&crate::codegen_support::runtime::ctx::test_field_ref(target.arch, crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET)),
+                    "{name}, pic={pic}"
+                );
                 assert!(assembly.contains("_heap_limit"), "{name}, pic={pic}");
-                assert!(assembly.contains("_gc_live"), "{name}, pic={pic}");
-                assert!(assembly.contains("_gc_peak"), "{name}, pic={pic}");
-                assert!(!assembly.contains("_gc_allocs"), "{name}, pic={pic}");
-                assert!(!assembly.contains("_gc_frees"), "{name}, pic={pic}");
+                let slot = |symbol: &str| crate::codegen_support::runtime::test_slot_ref(target.arch, symbol);
+                assert!(assembly.contains(&slot("_gc_live")), "{name}, pic={pic}");
+                assert!(assembly.contains(&slot("_gc_peak")), "{name}, pic={pic}");
+                assert!(!assembly.contains(&slot("_gc_allocs")), "{name}, pic={pic}");
+                assert!(!assembly.contains(&slot("_gc_frees")), "{name}, pic={pic}");
                 if target.arch == Arch::X86_64 {
                     assert!(assembly.contains("mov DWORD PTR [rdi - 16], eax"));
                 } else {

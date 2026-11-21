@@ -124,7 +124,7 @@ pub fn emit_itoa(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x13", emitter.concat_capacity as i64); // concat scratch capacity in bytes
     emitter.instruction("cmp x12, x13");                                        // would the window cross the end of _concat_buf?
     emitter.instruction("b.hi __rt_itoa_spill");                                // a full scratch formats into the spill ring instead
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x7");
     emitter.instruction("add x9, x7, x8");                                      // compute write position: buf + offset
     emitter.instruction("b __rt_itoa_window_ready");                            // the scratch window is reserved
     emitter.label("__rt_itoa_spill");
@@ -182,7 +182,7 @@ pub fn emit_itoa(emitter: &mut Emitter) {
     // -- finalize: update concat_buf offset and return ptr/len --
     emitter.label("__rt_itoa_done");
     emitter.instruction("add x8, x8, #21");                                     // advance concat_off by scratch area size
-    emitter.instruction("str x8, [x6]");                                        // store updated offset back to _concat_off
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x8"); // store updated offset back (ctx-relative in ctx mode)
     emitter.instruction("add x1, x9, #1");                                      // result ptr = one past last written position
     emitter.instruction("mov x2, x10");                                         // result length = digit count
 
@@ -217,7 +217,7 @@ fn emit_itoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [r9 + 21]");                                  // offset after reserving the 21-byte scratch window
     emitter.instruction(&format!("cmp rsi, {}", emitter.concat_capacity));      // would the window cross the end of _concat_buf?
     emitter.instruction("ja __rt_itoa_spill");                                  // a full scratch formats into the spill ring instead
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("add r10, r9");                                         // compute the current concat buffer write position
     emitter.instruction("jmp __rt_itoa_window_ready");                          // the scratch window is reserved
     emitter.label("__rt_itoa_spill");
@@ -275,7 +275,7 @@ fn emit_itoa_linux_x86_64(emitter: &mut Emitter) {
     // -- finalize: update concat_buf offset and return ptr/len --
     emitter.label("__rt_itoa_done");
     emitter.instruction("add r9, 21");                                          // advance concat_off by the fixed scratch area size
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // store the updated concat buffer offset back to global storage
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r9"); // store the updated concat buffer offset back (ctx-relative in ctx mode)
     emitter.instruction("lea rax, [r10 + 1]");                                  // return the string pointer as one byte past the last decremented position
     emitter.instruction("mov rdx, rcx");                                        // return the string length in the second string-result register
 

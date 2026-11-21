@@ -554,6 +554,11 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
     "io": ("fileinfo_prelude/build.rs", "fileinfo", "crates/elephc-builtin-contract/src/catalog_surfaces.rs"),
     "tokenizer": ("tokenizer_prelude.rs", "tokenizer", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+    "callables": (
+        "async_prelude/source.php",
+        "Async scheduler",
+        "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+    ),
     "curl": (
         "curl_prelude.rs",
         "curl",
@@ -653,12 +658,27 @@ def find_prelude_declaration(source: str, canonical: str):
     ``None`` when neither form declares it — which the caller turns into a loud failure
     rather than an anchor pointing at an unrelated place in the file.
     """
+    declaration = canonical
+    if "\\" in canonical:
+        namespace, declaration = canonical.rsplit("\\", 1)
+        namespace_decl = re.search(
+            rf"^namespace\s+{re.escape(namespace)}\s*(?:;|\{{)",
+            source,
+            re.MULTILINE | re.IGNORECASE,
+        )
+        if namespace_decl is None:
+            return None
+
     built = re.search(
-        rf"(?<![A-Za-z0-9_])function\(\s*\"{re.escape(canonical)}\"\s*\)", source
+        rf"(?<![A-Za-z0-9_])function\(\s*\"{re.escape(declaration)}\"\s*\)", source
     )
     if built is not None:
         return built
-    return re.search(rf"^function\s+{re.escape(canonical)}\s*\(", source, re.MULTILINE)
+    return re.search(
+        rf"^function\s+{re.escape(declaration)}\s*\(",
+        source,
+        re.MULTILINE | re.IGNORECASE,
+    )
 
 
 def resolve_non_registry_lowering(

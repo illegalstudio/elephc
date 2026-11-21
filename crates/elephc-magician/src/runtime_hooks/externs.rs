@@ -696,8 +696,8 @@ unsafe extern "C" {
     #[link_name = "__elephc_eval_install_object_clone_hook_v1"]
     pub(super) fn __elephc_eval_install_dynamic_object_clone_hook(callback: usize);
 
-    /// Installs the callback `__rt_closure_bind` uses to rebind an eval closure's `$this`.
-    #[link_name = "__elephc_eval_install_closure_bind_hook_v1"]
+    /// Installs the five-argument callback that rebinds an eval closure under its caller arena.
+    #[link_name = "__elephc_eval_install_closure_bind_hook_v2"]
     pub(super) fn __elephc_eval_install_closure_bind_hook(callback: usize);
 
     /// Reports whether one natively built array entry still belongs to a live PHP reference set.

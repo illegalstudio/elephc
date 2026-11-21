@@ -22,6 +22,8 @@ use crate::types::PhpType;
 use super::super::super::context::FunctionContext;
 use super::super::expect_operand;
 
+mod named_arguments;
+
 const DEBUG_BACKTRACE_IGNORE_ARGS: i64 = 2;
 const DEBUG_BACKTRACE_PROVIDE_OBJECT: i64 = 1;
 const TRACE_STATE_BYTES: usize = 48;
@@ -583,17 +585,24 @@ fn capture_callback_argument_count(ctx: &mut FunctionContext<'_>) -> Result<()> 
         let collector = ctx
             .local_slot_by_name(crate::func_args::HIDDEN_ARGS_PARAM)
             .expect("optional argument-count metadata requires a hidden collector");
-        ctx.load_local_to_result(collector)?;
+        let (_, owned_snapshot) = load_positional_collector(ctx, collector)?;
+        if owned_snapshot {
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        }
         match ctx.emitter.target.arch {
             Arch::AArch64 => ctx.emitter.instruction("ldr x0, [x0, #24]"),      // load the hidden caller argument count
             Arch::X86_64 => ctx.emitter.instruction("mov rax, QWORD PTR [rax + 24]"), // load the hidden caller argument count
         }
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         match ctx.emitter.target.arch {
-            Arch::AArch64 => abi::emit_store_to_sp(ctx.emitter, "x1", CALLBACK_ARG_COUNT_OFFSET),
+            Arch::AArch64 => abi::emit_store_to_sp(ctx.emitter, "x1", CALLBACK_ARG_COUNT_OFFSET + usize::from(owned_snapshot) * 16),
             Arch::X86_64 => {
-                abi::emit_store_to_sp(ctx.emitter, "rdi", CALLBACK_ARG_COUNT_OFFSET)
+                abi::emit_store_to_sp(ctx.emitter, "rdi", CALLBACK_ARG_COUNT_OFFSET + usize::from(owned_snapshot) * 16)
             }
+        }
+        if owned_snapshot {
+            abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
         }
         return Ok(());
     }
@@ -651,10 +660,7 @@ fn insert_callback_arguments(ctx: &mut FunctionContext<'_>) -> Result<()> {
     );
     emit_branch_if_bit_set(ctx, DEBUG_BACKTRACE_IGNORE_ARGS, &skip);
     emit_argument_array_from_live_locals(ctx)?;
-    emit_box_current_owned_value_as_mixed(
-        ctx.emitter,
-        &PhpType::Array(Box::new(PhpType::Mixed)),
-    );
+    named_arguments::box_argument_array(ctx);
     insert_current_boxed_hash_value(ctx, "args");
     ctx.emitter.label(&skip);
     Ok(())
@@ -701,16 +707,7 @@ fn emit_argument_array_from_live_locals(ctx: &mut FunctionContext<'_>) -> Result
         append_box_to_saved_array(ctx, sensitive || !borrowed_box);
     }
     if let Some(hidden_args) = ctx.local_slot_by_name(crate::func_args::HIDDEN_ARGS_PARAM) {
-        let hidden_ty = ctx.local_php_type(hidden_args)?;
-        let element_ty = match hidden_ty {
-            PhpType::Array(element_ty) => *element_ty,
-            other => {
-                return Err(crate::codegen::CodegenIrError::unsupported(format!(
-                    "backtrace hidden argument collector PHP type {other:?}"
-                )));
-            }
-        };
-        ctx.load_local_to_result(hidden_args)?;
+        let (element_ty, owned_snapshot) = load_positional_collector(ctx, hidden_args)?;
         let starts_with_count = ctx
             .local_slot_by_name(crate::func_args::HIDDEN_ARGC_PARAM)
             .is_some()
@@ -718,11 +715,34 @@ fn emit_argument_array_from_live_locals(ctx: &mut FunctionContext<'_>) -> Result
                 .as_ref()
                 .is_some_and(crate::func_args::sig_collects_optional_arg_count);
         let sensitive = source_variadic.as_ref().is_some_and(|name| super::backtrace_sensitive::is_sensitive(ctx, name));
-        append_argument_array_range(ctx, usize::from(starts_with_count), &element_ty, sensitive)?;
+        append_argument_array_range(ctx, usize::from(starts_with_count), &element_ty, sensitive, owned_snapshot)?;
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     trim_argument_array_to_actual_count(ctx);
+    named_arguments::append_named_arguments(ctx)?;
     Ok(())
+}
+
+/// Loads the internal positional-only introspection collector, copying Hash values when needed.
+/// This does not normalize a user variadic: func_args creates this snapshot without named keys.
+fn load_positional_collector(
+    ctx: &mut FunctionContext<'_>,
+    slot: crate::ir::LocalSlotId,
+) -> Result<(PhpType, bool)> {
+    let ty = ctx.local_php_type(slot)?.codegen_repr();
+    ctx.load_local_to_result(slot)?;
+    match ty {
+        PhpType::Array(element) => Ok((*element, false)),
+        PhpType::AssocArray { value, .. } => {
+            crate::codegen::lower_inst::builtins::arrays::values::emit_loaded_assoc_array_values(
+                ctx, &value.codegen_repr(),
+            )?;
+            Ok((*value, true))
+        }
+        other => Err(crate::codegen::CodegenIrError::unsupported(format!(
+            "backtrace hidden argument collector PHP type {other:?}"
+        ))),
+    }
 }
 
 /// Appends an indexed-array range into the boxed-Mixed destination saved on the stack.
@@ -731,6 +751,7 @@ fn append_argument_array_range(
     start: usize,
     element_ty: &PhpType,
     sensitive: bool,
+    owned_source: bool,
 ) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
     abi::emit_push_reg(ctx.emitter, &result_reg);
@@ -757,8 +778,13 @@ fn append_argument_array_range(
     abi::emit_jump(ctx.emitter, &loop_label);
     ctx.emitter.label(&done);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
-    let discard = abi::secondary_scratch_reg(ctx.emitter);
-    abi::emit_pop_reg(ctx.emitter, discard);
+    if owned_source {
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    } else {
+        let discard = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_pop_reg(ctx.emitter, discard);
+    }
     Ok(())
 }
 
@@ -1132,21 +1158,12 @@ fn emit_printed_live_arguments(ctx: &mut FunctionContext<'_>) -> Result<()> {
                     .as_ref()
                     .is_some_and(|name| super::backtrace_sensitive::is_sensitive(ctx, name));
                 ctx.load_local_to_result(variadic_slot)?;
-                emit_printed_argument_array_range(ctx, 0, &element_ty, &done, sensitive)?;
+                emit_printed_argument_array_range(ctx, 0, &element_ty, &done, sensitive, false)?;
             }
         }
     }
     if let Some(hidden_args) = ctx.local_slot_by_name(crate::func_args::HIDDEN_ARGS_PARAM) {
-        let hidden_ty = ctx.local_php_type(hidden_args)?;
-        let element_ty = match hidden_ty {
-            PhpType::Array(element_ty) => *element_ty,
-            other => {
-                return Err(crate::codegen::CodegenIrError::unsupported(format!(
-                    "backtrace hidden argument collector PHP type {other:?}"
-                )));
-            }
-        };
-        ctx.load_local_to_result(hidden_args)?;
+        let (element_ty, owned_snapshot) = load_positional_collector(ctx, hidden_args)?;
         let starts_with_count = ctx
             .local_slot_by_name(crate::func_args::HIDDEN_ARGC_PARAM)
             .is_some()
@@ -1159,9 +1176,11 @@ fn emit_printed_live_arguments(ctx: &mut FunctionContext<'_>) -> Result<()> {
             &element_ty,
             &done,
             source_variadic.as_ref().is_some_and(|name| super::backtrace_sensitive::is_sensitive(ctx, name)),
+            owned_snapshot,
         )?;
     }
     ctx.emitter.label(&done);
+    named_arguments::print_named_arguments(ctx)?;
     ctx.emitter.label(&skip);
     Ok(())
 }
@@ -1265,6 +1284,7 @@ fn emit_printed_argument_array_range(
     element_ty: &PhpType,
     all_done: &str,
     sensitive: bool,
+    owned_source: bool,
 ) -> Result<()> {
     let source_reg = abi::int_result_reg(ctx.emitter).to_string();
     abi::emit_push_reg(ctx.emitter, &source_reg);
@@ -1305,8 +1325,13 @@ fn emit_printed_argument_array_range(
     abi::emit_jump(ctx.emitter, &loop_label);
     ctx.emitter.label(&range_done);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
-    let discard = abi::secondary_scratch_reg(ctx.emitter);
-    abi::emit_pop_reg(ctx.emitter, discard);
+    if owned_source {
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    } else {
+        let discard = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_pop_reg(ctx.emitter, discard);
+    }
     emit_printed_actual_count_guard(ctx, 0, all_done);
     Ok(())
 }

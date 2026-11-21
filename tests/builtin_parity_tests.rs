@@ -70,9 +70,9 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     // Five language constructs, one dedicated-syntax surface, three compiler transforms,
     // the prelude-provided functions outside `ext/curl` (including XML, SimpleXML,
     // fileinfo, tidy, the tokenizer surface, the random surface, the full mysqli
-    // procedural surface, and `preg_grep`), and the 54 date/calendar functions the
-    // name resolver rewrites.
-    assert_eq!(exceptional.len(), 477);
+    // procedural surface, `preg_grep`, and Async::run), and the 54 date/calendar
+    // functions the name resolver rewrites.
+    assert_eq!(exceptional.len(), 478);
 
     let mut language_constructs = 0;
     let mut dedicated_syntax = 0;
@@ -114,8 +114,9 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
         BTreeSet::from(["func_get_arg", "func_get_args", "func_num_args"])
     );
     assert_eq!(rewrites, 54);
-    assert_eq!(preludes.len(), 414);
+    assert_eq!(preludes.len(), 415);
     for name in [
+        "elephc\\async\\run",
         "hash_copy",
         "hash_final",
         "hash_init",
@@ -125,6 +126,15 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     ] {
         assert!(preludes.contains(name), "{name} must keep its prelude route");
     }
+    let async_run = contracts()
+        .iter()
+        .find(|contract| contract.name == "elephc\\async\\run")
+        .expect("Async run contract must exist");
+    assert!(async_run.extension, "Async run is an Elephc-only surface");
+    assert_eq!(async_run.params.len(), 1);
+    assert_eq!(async_run.params[0].name, "body");
+    assert_eq!(async_run.params[0].ty, elephc_builtin_contract::TypeSpec::Callable);
+    assert_eq!(async_run.returns, elephc_builtin_contract::TypeSpec::Mixed);
 
     let hash_init = contracts()
         .iter()

@@ -82,12 +82,33 @@ fn native_hash_owned_growth_preserves_identity_and_entries() {
         emitter.instruction("ldp x29, x30, [sp], #16");                         // restore caller linkage
     }
     emitter.instruction("ret");                                                 // return the borrowed matching entry
-    emitter.raw(&crate::codegen_support::data_section::comm_directive("_exc_value", 8, target));
+    // Insertion, append, and next-index failures publish an Error through the context register:
+    // lend each real entry point the fixture's context.
+    for (wrapper, entry) in [
+        ("fixture_append", "__rt_hash_append"), ("fixture_insert", "__rt_hash_insert_owned"),
+        ("fixture_set", "__rt_hash_set"), ("fixture_try_next_index", "__rt_hash_try_next_index"),
+        ("fixture_next_index", "__rt_hash_next_index"),
+    ] {
+        emitter.label_global(wrapper);
+        if target.arch == Arch::X86_64 {
+            emitter.instruction("push r14");                                    // preserve the host's callee-saved register and align the nested call
+            crate::codegen_support::abi::emit_symbol_address(&mut emitter, "r14", "fixture_ctx");
+            emitter.instruction(&format!("call {entry}"));                      // run the real helper with the fixture context installed
+            emitter.instruction("pop r14");                                     // hand the host register back
+        } else {
+            emitter.instruction("stp x28, x30, [sp, #-16]!");                   // preserve the host's callee-saved register and linkage
+            crate::codegen_support::abi::emit_symbol_address(&mut emitter, "x28", "fixture_ctx");
+            emitter.instruction(&format!("bl {entry}"));                        // run the real helper with the fixture context installed
+            emitter.instruction("ldp x28, x30, [sp], #16");                     // hand the host register back
+        }
+        emitter.instruction("ret");                                             // return the helper's result to the C assertion
+    }
     if target.platform == Platform::Linux { emitter.raw(".section .note.GNU-stack,\"\",@progbits"); }
     std::fs::write(directory.join("hash.s"), emitter.output()).unwrap();
     std::fs::write(directory.join("fixture.c"), include_str!("native_growth.c")).unwrap();
     let executable = directory.join("fixture");
     let built = Command::new("cc").current_dir(&directory)
+        .arg(format!("-DFIXTURE_EXC_VALUE_OFFSET={}", crate::codegen_support::runtime::ctx::CTX_EXC_VALUE_OFFSET))
         .args(["-O2", "-Wall", "-Wextra", "-Werror", "fixture.c", "hash.s", "-o"])
         .arg(&executable).output().unwrap();
     assert!(built.status.success(), "hash fixture build failed: {}", String::from_utf8_lossy(&built.stderr));

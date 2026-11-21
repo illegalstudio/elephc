@@ -394,4 +394,7 @@ fn error_handler_fields() -> [(usize, &'static str); 6] {
 /// Emits a platform-C global label for one generated eval wrapper.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
     emitter.label_global(&module.target.extern_symbol(name));
+    if module.required_runtime_features.eval_bridge {
+        crate::codegen_support::runtime::emit_eval_foreign_context_gateway(emitter, name);
+    }
 }

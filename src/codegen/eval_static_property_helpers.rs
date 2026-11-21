@@ -1294,4 +1294,7 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
     let symbol = module.target.extern_symbol(name);
     emitter.label_global(&symbol);
+    if module.required_runtime_features.eval_bridge {
+        crate::codegen_support::runtime::emit_eval_foreign_context_gateway(emitter, name);
+    }
 }

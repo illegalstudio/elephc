@@ -170,8 +170,16 @@ mod tests {
             emit_gc_collect_budget(&mut emitter);
             let asm = emitter.output();
             let candidates = asm.find("_gc_candidates_enabled").expect("candidate mode check");
-            let credit = asm.find("_gc_safe_point_credit").expect("saved scan credit");
-            let heap = asm.find("_heap_off").expect("heap extent");
+            // Per-context state is reached through the ctx register, so look for its field.
+            let ctx = crate::codegen_support::runtime::ctx::per_context_symbol_offset;
+            let field = |symbol: &str| crate::codegen_support::runtime::ctx::test_field_ref(
+                target.arch,
+                ctx(&Emitter::new(target), symbol).unwrap_or_else(|| panic!("{symbol} is per-context")),
+            );
+            let credit = asm.find(&field("_gc_safe_point_credit")).expect("saved scan credit");
+            let heap = asm.find(&crate::codegen_support::runtime::ctx::test_field_ref(
+                target.arch, crate::codegen_support::runtime::ctx::CTX_HEAP_OFF_OFFSET,
+            )).expect("heap extent");
             assert!(candidates < credit && credit < heap, "{target:?}\n{asm}");
             assert!(asm.contains("__rt_gc_collect_cycles_budget_collect:"), "{target:?}\n{asm}");
             assert!(asm.contains(&GC_SAFE_POINT_SCAN_CREDIT.to_string()), "{target:?}\n{asm}");
@@ -180,12 +188,14 @@ mod tests {
                 Arch::X86_64 => "call __rt_gc_collect_cycles\n",
             };
             let collect = asm.find(call).expect("nested automatic collector call");
-            let live = asm.find("_gc_live").expect("live-byte check");
-            let limit = asm.rfind("_gc_safe_point_live_limit").expect("limit update");
+            let live = asm.find(&field("_gc_live")).expect("live-byte check");
+            let limit = asm.rfind(&field("_gc_safe_point_live_limit")).expect("limit update");
             assert!(heap < live && live < collect && collect < limit, "{target:?}\n{asm}");
-            assert!(asm.contains("_heap_max"), "{target:?}\n{asm}");
+            assert!(asm.contains(&crate::codegen_support::runtime::ctx::test_field_ref(
+                target.arch, crate::codegen_support::runtime::ctx::CTX_HEAP_MAX_OFFSET,
+            )), "{target:?}\n{asm}");
             for flag in ["_gc_enabled", "_gc_collecting", "_gc_release_suppressed"] {
-                let check = asm.find(flag).unwrap_or_else(|| panic!("{flag} check"));
+                let check = asm.find(&field(flag)).unwrap_or_else(|| panic!("{flag} check"));
                 assert!(check < collect, "{flag} must be checked before collecting on {target:?}");
             }
             // Apple's assembler rejects conditional branches to external symbols.

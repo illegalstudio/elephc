@@ -16,6 +16,7 @@ unsafe extern "C" fn queue_bytecode_signal(
     descriptor: *mut std::ffi::c_void,
     _args: *mut crate::value::RuntimeCell,
     _argc: i64,
+    _arena: u64,
 ) -> *mut crate::value::RuntimeCell {
     unsafe { libc::raise(libc::SIGUSR1); }
     descriptor.cast()

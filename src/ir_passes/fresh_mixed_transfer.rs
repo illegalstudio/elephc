@@ -7,7 +7,8 @@
 //!
 //! Key details:
 //! - Checked integer and dynamic numeric add/sub/mul return independent numeric cells.
-//! - The source must be used only by the clone and its adjacent release.
+//! - The source must be used only by the clone and its release, separated at most by the
+//!   binding's old-value slot release and the store of the clone.
 //! - No integer-sink specialization runs after this ownership-only rewrite.
 
 use std::collections::{HashMap, HashSet};
@@ -75,8 +76,14 @@ impl IrPass for FreshMixedTransfer {
                 {
                     continue;
                 }
+                // The cleanup directly follows the clone, or follows the local binding that
+                // consumes the clone: the old value's slot release and the store itself cannot
+                // observe or alias the fresh source cell.
                 let next = block.instructions[position + 1..].iter().copied().find(|id| {
-                    function.instructions[id.as_raw() as usize].op != Op::Nop
+                    let inst = &function.instructions[id.as_raw() as usize];
+                    inst.op != Op::Nop && !(inst.immediate.is_some()
+                        && (inst.op == Op::ReleaseLocalSlot
+                            || (inst.op == Op::StoreLocal && inst.operands == [result])))
                 });
                 let Some(release_id) = next else { continue };
                 let release = &function.instructions[release_id.as_raw() as usize];

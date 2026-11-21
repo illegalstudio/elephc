@@ -155,6 +155,62 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the inline fclose dispatch site
 }
 
+/// Releases wrapper objects still owned by the active context during fatal unwinding.
+pub fn emit_user_wrapper_abandon_all(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_user_wrapper_abandon_all_x86_64(emitter);
+        return;
+    }
+    emitter.blank();
+    emitter.comment("--- runtime: user_wrapper_abandon_all ---");
+    emitter.label_global("__rt_user_wrapper_abandon_all");
+    emitter.instruction("sub sp, sp, #48");                                     // preserve scan state across object releases
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve frame pointer and return address
+    emitter.instruction("str x19, [sp, #16]");                                  // preserve the wrapper-slot index
+    emitter.instruction("add x29, sp, #32");                                    // establish the fatal cleanup frame
+    emitter.instruction("mov x19, #0");                                         // begin at the first wrapper slot
+    emitter.label("__rt_user_wrapper_abandon_loop");
+    emitter.instruction("cmp x19, #256");                                       // scanned every wrapper handle slot?
+    emitter.instruction("b.hs __rt_user_wrapper_abandon_done");                 // finish after the final slot
+    abi::emit_symbol_address(emitter, "x9", "_user_wrapper_handles");
+    emitter.instruction("ldr x0, [x9, x19, lsl #3]");                           // load one table-owned wrapper object
+    emitter.instruction("str xzr, [x9, x19, lsl #3]");                          // detach the slot before a destructor can re-enter fatal flow
+    emitter.instruction("bl __rt_decref_any");                                  // deep-release the detached wrapper object
+    emitter.instruction("add x19, x19, #1");                                    // advance to the next wrapper slot
+    emitter.instruction("b __rt_user_wrapper_abandon_loop");                    // continue the bounded wrapper scan
+    emitter.label("__rt_user_wrapper_abandon_done");
+    emitter.instruction("ldr x19, [sp, #16]");                                  // restore the wrapper-slot index register
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore caller frame state
+    emitter.instruction("add sp, sp, #48");                                     // release the fatal cleanup frame
+    emitter.instruction("ret");                                                 // return after all wrapper owners are detached
+}
+
+/// Detaches all x86_64 wrapper-table owners before deep release can re-enter fatal cleanup.
+fn emit_user_wrapper_abandon_all_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: user_wrapper_abandon_all ---");
+    emitter.label_global("__rt_user_wrapper_abandon_all");
+    emitter.instruction("push rbp");                                            // preserve caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the fatal cleanup frame
+    emitter.instruction("push r12");                                            // preserve the wrapper-slot index
+    emitter.instruction("sub rsp, 8");                                          // pad the frame so the release call below is 16-byte aligned
+    emitter.instruction("xor r12d, r12d");                                      // begin at the first wrapper slot
+    emitter.label("__rt_user_wrapper_abandon_loop_x86");
+    emitter.instruction("cmp r12, 256");                                        // scanned every wrapper handle slot?
+    emitter.instruction("jae __rt_user_wrapper_abandon_done_x86");              // finish after the final slot
+    abi::emit_symbol_address(emitter, "r9", "_user_wrapper_handles");          // load the context-owned wrapper table
+    emitter.instruction("mov rax, QWORD PTR [r9 + r12 * 8]");                   // load one table-owned wrapper object
+    emitter.instruction("mov QWORD PTR [r9 + r12 * 8], 0");                     // detach the slot before a destructor can re-enter fatal flow
+    emitter.instruction("call __rt_decref_any");                                // deep-release the detached wrapper object
+    emitter.instruction("inc r12");                                             // advance to the next wrapper slot
+    emitter.instruction("jmp __rt_user_wrapper_abandon_loop_x86");              // continue the bounded wrapper scan
+    emitter.label("__rt_user_wrapper_abandon_done_x86");
+    emitter.instruction("add rsp, 8");                                          // drop the alignment pad
+    emitter.instruction("pop r12");                                             // restore the wrapper-slot index register
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return after all wrapper owners are detached
+}
+
 /// `__rt_user_wrapper_fread`: invoke the wrapper's `stream_read($count)`
 /// and return its declared string result (x1/x2 on ARM64, rax/rdx on x86_64).
 /// When the method is absent, returns the empty string.

@@ -97,8 +97,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     // there (e.g. an enclosing assoc/array encoder's `{"key":` bytes).
     // Persist the caller's prefix to heap, run jsonSerialize, then copy the
     // prefix back before re-establishing concat_off and encoding the result.
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // capture the caller-visible concat-buffer offset before the user method runs
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "x10");
     emitter.instruction("str x10, [sp, #24]");                                  // save the captured offset (= prefix length) across the user method invocation
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_json_last_error");
     emitter.instruction("ldr x10, [x9]");                                       // capture the outer JSON error state before user code can run nested JSON calls
@@ -118,7 +117,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #40]");                                  // default the saved prefix heap pointer to null for empty prefixes
     emitter.instruction("ldr x10, [sp, #24]");                                  // recover the prefix length after saving unrelated JSON state
     emitter.instruction("cbz x10, __rt_json_obj_jsonserialize_invoke");         // skip the prefix copy when there is no caller-visible prefix to preserve
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x1");
     emitter.instruction("mov x2, x10");                                         // copy the prefix length into the str_persist length register
     emitter.instruction("bl __rt_str_persist");                                 // duplicate the caller prefix into a heap-owned buffer
     emitter.instruction("str x1, [sp, #40]");                                   // remember the heap-owned prefix pointer for the post-call restore
@@ -132,7 +131,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("cbz x10, __rt_json_obj_jsonserialize_after_restore");  // skip the prefix restore when no prefix was preserved
     emitter.instruction("ldr x11, [sp, #40]");                                  // reload the heap-owned prefix pointer
     emitter.instruction("cbz x11, __rt_json_obj_jsonserialize_after_restore");  // defensive null guard for the heap-owned prefix pointer
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x12");
     emitter.instruction("mov x13, #0");                                         // initialize the prefix copy index
     emitter.label("__rt_json_obj_prefix_restore");
     emitter.instruction("cmp x13, x10");                                        // have we copied every prefix byte back?
@@ -146,7 +145,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_any");                                  // release the temporary string copy, including the null-prefix case
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved pre-call concat-buffer offset
-    emitter.instruction("str x10, [x9]");                                       // restore the concat-buffer offset so encode_mixed appends at our intended slot
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "x10"); // restore the concat-buffer offset so encode_mixed appends at our intended slot (ctx-relative in ctx mode)
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_json_last_error");
     emitter.instruction("ldr x10, [sp, #80]");                                  // reload the outer JSON error state after user code returns
     emitter.instruction("str x10, [x9]");                                       // restore _json_last_error before encoding the serialized value
@@ -509,7 +508,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     // beginning of concat_buf, which would trash any caller prefix already
     // there. Persist the caller's prefix to heap, run jsonSerialize, then
     // copy the prefix back before re-establishing concat_off and encoding.
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // capture the caller-visible concat-buffer offset before the user method runs
+    crate::codegen_support::runtime::ctx::emit_concat_off_load(emitter, "r10");             // capture the caller-visible concat-buffer offset before the user method runs
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save the captured offset (= prefix length) across the user method invocation
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_last_error", 0);        // capture the outer JSON error state before user code can run nested JSON calls
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save _json_last_error across jsonSerialize()
@@ -525,7 +524,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // recover the prefix length after saving unrelated JSON state
     emitter.instruction("test r10, r10");                                       // is there any caller-visible prefix to preserve?
     emitter.instruction("jz __rt_json_obj_jsonserialize_invoke_x");             // skip the prefix copy when the prefix is empty
-    abi::emit_symbol_address(emitter, "rax", "_concat_buf");                    // materialize the concat-buffer base for the str_persist input
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "rax");                    // materialize the concat-buffer base for the str_persist input
     emitter.instruction("mov rdx, r10");                                        // copy the prefix length into the str_persist length register
     emitter.instruction("call __rt_str_persist");                               // duplicate the caller prefix into a heap-owned buffer
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // remember the heap-owned prefix pointer for the post-call restore
@@ -541,7 +540,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 64]");                       // reload the heap-owned prefix pointer
     emitter.instruction("test r11, r11");                                       // defensive null guard for the heap-owned prefix pointer
     emitter.instruction("jz __rt_json_obj_jsonserialize_after_restore_x");      // skip restore when no heap copy was made
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");                     // materialize the concat-buffer base for the prefix restore loop
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r9");                     // materialize the concat-buffer base for the prefix restore loop
     emitter.instruction("xor rcx, rcx");                                        // initialize the prefix copy index
     emitter.label("__rt_json_obj_prefix_restore_x");
     emitter.instruction("cmp rcx, r10");                                        // have we copied every prefix byte back?
@@ -554,7 +553,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the owned prefix copy after its bytes have been restored
     emitter.instruction("call __rt_decref_any");                                // release the temporary string copy, including the null-prefix case
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the saved pre-call concat-buffer offset
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // restore the concat-buffer offset so encode_mixed appends at our intended slot
+    crate::codegen_support::runtime::ctx::emit_concat_off_store(emitter, "r10");            // restore the concat-buffer offset so encode_mixed appends at our intended slot
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the outer JSON error state after user code returns
     abi::emit_store_reg_to_symbol(emitter, "r10", "_json_last_error", 0);       // restore _json_last_error before encoding the serialized value
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the outer JSON flag bitmask after user code returns

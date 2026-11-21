@@ -37,7 +37,8 @@ pub(super) fn emit_eval_array_reference_retirement(emitter: &mut Emitter) {
             emitter.instruction("push rax");                                    // preserve the dying payload and align the SysV call from entry parity
             emitter.instruction("mov rdi, rax");                                // pass the validated cell address as the first C argument
             emitter.instruction("call r10");                                    // invalidate observers before the allocator recycles this address
-            emitter.instruction("pop rax");                                     // restore the allocator input after the Rust callback
+            emitter.instruction("mov rax, QWORD PTR [rsp]");                    // restore the allocator input from its save slot after the Rust callback
+            emitter.instruction("add rsp, 8");                                  // release the allocator-input save slot
         }
     }
     emitter.label("__rt_heap_free_eval_references_done");
@@ -60,7 +61,7 @@ mod tests {
             assert!(output.contains("_elephc_eval_array_reference_retire_fn"), "{name}");
             let required: &[&str] = match target.arch {
                 Arch::AArch64 => &["ldrb w9, [x0, #-8]", "cmp w9, #5", "blr x10", "ldp x0, x30, [sp], #16"],
-                Arch::X86_64 => &["cmp BYTE PTR [rax - 8], 5", "push rax", "mov rdi, rax", "call r10", "pop rax"],
+                Arch::X86_64 => &["cmp BYTE PTR [rax - 8], 5", "push rax", "mov rdi, rax", "call r10", "mov rax, QWORD PTR [rsp]", "add rsp, 8"],
             };
             for instruction in required { assert!(output.contains(instruction), "{name}: {instruction}"); }
             let retirement = output.find("__rt_heap_free_eval_references_done:").unwrap();

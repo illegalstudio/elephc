@@ -107,6 +107,19 @@ pub(super) fn eval_reflection_method_invoke_dispatch(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let lookup_method_name = eval_reflection_property_hook_synthetic_method_name(method_name)
         .unwrap_or_else(|| method_name.to_string());
+    if elephc_builtin_contract::reflection_capability_denial(
+        declaring_class, elephc_builtin_contract::ReflectionOperation::Method { public: false },
+    ).is_some() {
+        let public = if let Some((_, method)) = context.class_method(declaring_class, &lookup_method_name) {
+            method.visibility() == EvalVisibility::Public
+        } else {
+            values.reflection_method_flags(declaring_class, &lookup_method_name)?
+                .is_some_and(|flags| flags & EVAL_REFLECTION_MEMBER_FLAG_PUBLIC != 0)
+        };
+        if let Some(message) = elephc_builtin_contract::reflection_capability_denial(
+            declaring_class, elephc_builtin_contract::ReflectionOperation::Method { public },
+        ) { return eval_throw_error(&message, context, values); }
+    }
     if let Some((method_class, method)) = context.class_method(declaring_class, &lookup_method_name)
     {
         if method.is_abstract() {

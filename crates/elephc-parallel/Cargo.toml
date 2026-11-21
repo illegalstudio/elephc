@@ -1,0 +1,13 @@
+[package]
+name = "elephc-parallel"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Native transfer and worker infrastructure for Elephc Parallel contexts"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+elephc-parallel-contract = { path = "../elephc-parallel-contract" }

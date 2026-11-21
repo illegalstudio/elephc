@@ -66,7 +66,13 @@ pub(super) fn lower_closure_bind_method(
         let mut bound = root_descriptor_callback(ctx, bound, PhpType::Mixed, expr.span);
         let arg_container =
             lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut bound, call_args, expr.span);
-        emit_callable_descriptor_invoke(ctx, bound, arg_container, expr.span)
+        // This invocation feeds the outer bind/call cleanup, even when the PHP
+        // statement ignores the final method result. Keep its value live until
+        // that outer layer has adopted it into its own result staging.
+        let discarded_depth = ctx.discarded_result_depth.take();
+        let result = emit_callable_descriptor_invoke(ctx, bound, arg_container, expr.span);
+        ctx.discarded_result_depth = discarded_depth;
+        result
     } else {
         bound
     };
@@ -74,6 +80,7 @@ pub(super) fn lower_closure_bind_method(
     if let Some(slot) = receiver_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
+    let result = discard_result_before_callback(ctx, result_staging.as_ref(), result, closure_owner, expr.span);
     if let Some(slot) = closure_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }

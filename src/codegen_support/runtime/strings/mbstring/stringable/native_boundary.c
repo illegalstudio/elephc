@@ -6,10 +6,13 @@
 
 struct host_string { const unsigned char *bytes; uint64_t len; void *owner; };
 struct host_cell { uint64_t tag, lo, hi; };
-extern int call_stringable(void *, const struct host_cell *, struct host_string *) __asm__("__rt_mbstring_stringable");
-__attribute__((visibility("hidden"))) void *handler_top __asm__("_exc_handler_top");
-__attribute__((visibility("hidden"))) void *call_frame_top __asm__("_exc_call_frame_top");
-__attribute__((visibility("hidden"))) uint64_t suppression __asm__("_rt_diag_suppression");
+extern int call_stringable(void *, const struct host_cell *, struct host_string *) __asm__("fixture_call_stringable");
+/* The runtime reaches its exception chain and diagnostic suppression depth through the context
+ * register, so the fixture owns a context block that the emitted trampoline installs. */
+__attribute__((visibility("hidden"), aligned(4096))) uint64_t fixture_ctx[FIXTURE_CTX_SIZE / 8] __asm__("fixture_ctx");
+#define handler_top (*(void **)&fixture_ctx[FIXTURE_EXC_HANDLER_TOP / 8])
+#define call_frame_top (*(void **)&fixture_ctx[FIXTURE_EXC_CALL_FRAME_TOP / 8])
+#define suppression (fixture_ctx[FIXTURE_DIAG_SUPPRESSION / 8])
 
 static int mode, calls, failure;
 static int context_marker, receiver_marker, previous_handler, previous_frame, nested_frame;

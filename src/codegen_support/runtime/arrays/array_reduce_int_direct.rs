@@ -72,30 +72,31 @@ fn emit_array_reduce_int_direct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // save the raw accumulator
     emitter.instruction("push r12");                                            // save the reducer entry
     emitter.instruction("push r13");                                            // save the packed source array
-    emitter.instruction("push r14");                                            // save the loop cursor
+    emitter.instruction("sub rsp, 8");                                            // reserve the loop-cursor slot (r14 is the reserved ctx register)
     emitter.instruction("push r15");                                            // save the source length
     emitter.instruction("sub rsp, 8");                                          // align the stack before callback calls
     emitter.instruction("mov r12, rdi");                                        // keep the reducer entry
     emitter.instruction("mov r13, rsi");                                        // keep the packed source array
     emitter.instruction("mov rbx, rdx");                                        // seed the raw integer accumulator
     emitter.instruction("mov r15, QWORD PTR [rsi]");                            // read the source length
-    emitter.instruction("xor r14d, r14d");                                      // start at the first source element
+    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                                      // start at the first source element
 
     emitter.label("__rt_array_reduce_int_direct_loop_x86_64");
-    emitter.instruction("cmp r14, r15");                                        // has every source element been reduced?
+    emitter.instruction("cmp QWORD PTR [rbp - 32], r15");                                        // has every source element been reduced?
     emitter.instruction("jge __rt_array_reduce_int_direct_done_x86_64");        // finish once the source is exhausted
-    emitter.instruction("mov rsi, QWORD PTR [r13 + r14 * 8 + 24]");             // pass the current int element as the second parameter
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the loop cursor from its frame slot
+    emitter.instruction("mov rsi, QWORD PTR [r13 + rax * 8 + 24]");             // pass the current int element as the second parameter
     emitter.instruction("mov rdi, rbx");                                        // pass the raw accumulator as the first parameter
     emitter.instruction("call r12");                                            // call the typed int reducer
     emitter.instruction("mov rbx, rax");                                        // keep the returned int accumulator
-    emitter.instruction("inc r14");                                             // advance to the next source element
+    emitter.instruction("inc QWORD PTR [rbp - 32]");                                             // advance to the next source element
     emitter.instruction("jmp __rt_array_reduce_int_direct_loop_x86_64");        // continue reducing
 
     emitter.label("__rt_array_reduce_int_direct_done_x86_64");
     emitter.instruction("mov rax, rbx");                                        // return the final raw int accumulator
     emitter.instruction("add rsp, 8");                                          // release the alignment slot
     emitter.instruction("pop r15");                                             // restore the source length
-    emitter.instruction("pop r14");                                             // restore the loop cursor
+    emitter.instruction("add rsp, 8");                                             // release the loop-cursor slot
     emitter.instruction("pop r13");                                             // restore the packed source array
     emitter.instruction("pop r12");                                             // restore the reducer entry
     emitter.instruction("pop rbx");                                             // restore the raw accumulator

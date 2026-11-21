@@ -54,8 +54,8 @@ fn candidate_gc_subgraphs_assemble_on_all_supported_targets() {
             super::super::emit_gc_frame_slots(&mut emitter);
             crate::codegen_support::runtime::warning_dispatch::emit_warning_dispatch(&mut emitter);
             crate::codegen_support::runtime::error_handlers::emit_error_handler_invoke(&mut emitter);
-            crate::codegen_support::runtime::fibers::force_close::emit(&mut emitter);
-            crate::codegen_support::runtime::fibers::emit_fiber_entry(&mut emitter);
+            crate::codegen_support::runtime::fibers::force_close::emit(&mut emitter, false);
+            crate::codegen_support::runtime::fibers::emit_fiber_entry(&mut emitter, crate::codegen_support::runtime_features::RuntimeFeatures::none());
             crate::codegen_support::runtime::fibers::emit_fiber_start(&mut emitter);
             crate::codegen_support::runtime::fibers::emit_fiber_resume(&mut emitter);
             crate::codegen_support::runtime::fibers::emit_fiber_throw(&mut emitter);

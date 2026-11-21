@@ -34,7 +34,7 @@ pub(crate) const HEAP_BIN_TABLE_BYTES: u64 = HEAP_BIN_MAX;
 /// is caught without walking the bin. Blocks are at least 24 bytes, so two headers never share a
 /// granule. Only guarded programs set marks, so other programs never touch the table's pages.
 pub(crate) fn heap_bin_mark_bytes(heap_size: usize) -> usize {
-    heap_size / 16 + 2
+    elephc_parallel_contract::heap_bin_mark_bytes(heap_size)
 }
 
 /// Kind word stamped on free blocks while a consolidation pass runs. Live headers carry a small
@@ -83,14 +83,13 @@ pub fn emit_heap_consolidate(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // no bin bytes drained yet
     emitter.instruction("mov x1, #0");                                          // nothing changed yet
     emit_mark_constant_aarch64(emitter, "x2");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x3", "_heap_buf");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x4", "_heap_off");
-    emitter.instruction("ldr x4, [x4]");                                        // load the bump offset
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x3");
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "x4"); // load the bump offset
     emitter.instruction("add x4, x3, x4");                                      // x4 = current heap end
     crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_heap_bin_marks");
 
     // -- mark every binned block free and empty its bin --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_small_bins");
+    crate::codegen_support::runtime::ctx::emit_small_bins_address(emitter, "x9");
     emitter.instruction(&format!("add x10, x9, #{}", HEAP_BIN_TABLE_BYTES));    // x10 = end of the bin-head table
     emitter.label("__rt_heap_consolidate_bin");
     emitter.instruction("cmp x9, x10");                                         // have all bin heads been visited?
@@ -121,7 +120,7 @@ pub fn emit_heap_consolidate(emitter: &mut Emitter) {
 
     // -- mark every ordered-list block free and empty the list --
     emitter.label("__rt_heap_consolidate_list");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_free_list");
+    crate::codegen_support::runtime::ctx::emit_free_list_address(emitter, "x9");
     emitter.instruction("ldr x11, [x9]");                                       // x11 = first ordered-list block
     emitter.instruction("str xzr, [x9]");                                       // the list is rebuilt from the walk below
     emitter.label("__rt_heap_consolidate_list_chain");
@@ -181,8 +180,7 @@ pub fn emit_heap_consolidate(emitter: &mut Emitter) {
     emitter.instruction("cmp x7, x4");                                          // does the run end at the bump end?
     emitter.instruction("b.ne __rt_heap_consolidate_publish");                  // no — it becomes a listed free block
     emitter.instruction("sub x12, x6, x3");                                     // x12 = run start as a heap offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_off");
-    emitter.instruction("str x12, [x13]");                                      // give the trailing run back to the bump pointer
+    crate::codegen_support::runtime::ctx::emit_heap_off_store(emitter, "x12");  // give the trailing run back to the bump pointer
     emitter.instruction("mov x1, #1");                                          // lowering the bump end changes the allocator state
     emitter.instruction("b __rt_heap_consolidate_done");                        // nothing lies past the bump end
     emitter.label("__rt_heap_consolidate_publish");
@@ -195,7 +193,7 @@ pub fn emit_heap_consolidate(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_heap_consolidate_append");                   // no — every run is listed
     emitter.instruction(&format!("cmp x12, #{}", HEAP_BIN_MAX));                // does the run fit an exact size-class bin?
     emitter.instruction("b.hi __rt_heap_consolidate_append");                   // no — larger runs are listed
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_small_bins");
+    crate::codegen_support::runtime::ctx::emit_small_bins_address(emitter, "x13");
     emitter.instruction("add x13, x13, x12");                                   // the head for payload n lives at offset n - 8
     emitter.instruction("sub x13, x13, #8");                                    // x13 = this run's bin head
     emitter.instruction("ldr x12, [x13]");                                      // x12 = the bin's current chain
@@ -220,12 +218,11 @@ pub fn emit_heap_consolidate(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: heap_bins_clear ---");
     emitter.label_global("__rt_heap_bins_clear");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_buf");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_max");
-    emitter.instruction("ldr x12, [x12]");                                      // load the heap capacity
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "x11");
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "x12"); // load the heap capacity
     emitter.instruction("add x12, x11, x12");                                   // x12 = end of the heap buffer (the bump end may already be reset)
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_bin_marks");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_small_bins");
+    crate::codegen_support::runtime::ctx::emit_small_bins_address(emitter, "x9");
     emitter.instruction(&format!("add x10, x9, #{}", HEAP_BIN_TABLE_BYTES));    // x10 = end of the bin-head table
     emitter.label("__rt_heap_bins_clear_loop");
     emitter.instruction("cmp x9, x10");                                         // have all bins been emptied?
@@ -267,13 +264,12 @@ fn emit_heap_consolidate_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // no bin bytes drained yet
     emitter.instruction("xor edx, edx");                                        // nothing changed yet
     emitter.instruction(&format!("mov rdi, 0x{:x}", HEAP_CONSOLIDATE_MARK));    // rdi = the free-block mark
-    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_buf");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the bump offset
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "rsi");
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r8"); // load the bump offset
     emitter.instruction("add r8, rsi");                                         // r8 = current heap end
 
     // -- mark every binned block free and empty its bin --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_small_bins");
+    crate::codegen_support::runtime::ctx::emit_small_bins_address(emitter, "r9");
     emitter.instruction(&format!("lea r10, [r9 + {}]", HEAP_BIN_TABLE_BYTES));  // r10 = end of the bin-head table
     emitter.label("__rt_heap_consolidate_bin");
     emitter.instruction("cmp r9, r10");                                         // have all bin heads been visited?
@@ -307,7 +303,7 @@ fn emit_heap_consolidate_x86_64(emitter: &mut Emitter) {
 
     // -- mark every ordered-list block free and empty the list --
     emitter.label("__rt_heap_consolidate_list");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_free_list");
+    crate::codegen_support::runtime::ctx::emit_free_list_address(emitter, "r9");
     emitter.instruction("mov r11, QWORD PTR [r9]");                             // r11 = first ordered-list block
     emitter.instruction("mov QWORD PTR [r9], 0");                               // the list is rebuilt from the walk below
     emitter.label("__rt_heap_consolidate_list_chain");
@@ -365,8 +361,7 @@ fn emit_heap_consolidate_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_heap_consolidate_publish");                   // no — it becomes a listed free block
     emitter.instruction("mov rcx, r9");                                         // rcx = run start
     emitter.instruction("sub rcx, rsi");                                        // as a heap offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov QWORD PTR [r11], rcx");                            // give the trailing run back to the bump pointer
+    crate::codegen_support::runtime::ctx::emit_heap_off_store(emitter, "rcx");  // give the trailing run back to the bump pointer
     emitter.instruction("mov edx, 1");                                          // lowering the bump end changes the allocator state
     emitter.instruction("jmp __rt_heap_consolidate_done");                      // nothing lies past the bump end
     emitter.label("__rt_heap_consolidate_publish");
@@ -380,7 +375,7 @@ fn emit_heap_consolidate_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_heap_consolidate_append");                    // no — every run is listed
     emitter.instruction(&format!("cmp rcx, {}", HEAP_BIN_MAX));                 // does the run fit an exact size-class bin?
     emitter.instruction("ja __rt_heap_consolidate_append");                     // no — larger runs are listed
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_small_bins");
+    crate::codegen_support::runtime::ctx::emit_small_bins_address(emitter, "r8");
     emitter.instruction("lea r8, [r8 + rcx - 8]");                              // r8 = this run's bin head (payload n at offset n - 8)
     emitter.instruction("mov rcx, QWORD PTR [r8]");                             // rcx = the bin's current chain
     emitter.instruction("mov QWORD PTR [r9 + 16], rcx");                        // chain the run in front of it
@@ -389,8 +384,7 @@ fn emit_heap_consolidate_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rcx, rsi");                                        // rcx = run header offset from the heap base
     emitter.instruction("shr rcx, 4");                                          // rcx = 16-byte granule index of the run header
     emitter.instruction("mov BYTE PTR [r12 + rcx], 1");                         // a rebinned run carries the bin mark
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_off");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the bump offset the bin address displaced
+    crate::codegen_support::runtime::ctx::emit_heap_off_load(emitter, "r8"); // reload the bump offset the bin address displaced
     emitter.instruction("add r8, rsi");                                         // r8 = current heap end again
     emitter.instruction("mov r9, r11");                                         // resume the walk after the run
     emitter.instruction("jmp __rt_heap_consolidate_walk");                      // continue the walk
@@ -409,12 +403,11 @@ fn emit_heap_consolidate_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: heap_bins_clear ---");
     emitter.label_global("__rt_heap_bins_clear");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_buf");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_max");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap capacity
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(emitter, "r11");
+    crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "r8"); // load the heap capacity
     emitter.instruction("add r8, r11");                                         // r8 = end of the heap buffer (the bump end may already be reset)
     crate::codegen_support::abi::emit_symbol_address(emitter, "rdx", "_heap_bin_marks");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_small_bins");
+    crate::codegen_support::runtime::ctx::emit_small_bins_address(emitter, "r9");
     emitter.instruction(&format!("lea r10, [r9 + {}]", HEAP_BIN_TABLE_BYTES));  // r10 = end of the bin-head table
     emitter.label("__rt_heap_bins_clear_loop");
     emitter.instruction("cmp r9, r10");                                         // have all bins been emptied?

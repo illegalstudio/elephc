@@ -81,8 +81,8 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
                 emitter.instruction(&format!("mov x0, #{}", code));             // the exit hook is told the exit status
             }
             emit_exit_hook(emitter);
-            emitter.instruction(&format!("mov x0, #{}", code));                 // load the requested process exit code into the ABI return register
-            emitter.syscall(1);
+            emitter.instruction(&format!("mov x0, #{}", code));                 // pass the requested status to the worker-aware exit boundary
+            emitter.instruction("bl __rt_exit_or_parallel_fatal");              // escape a worker or terminate the process; never returns
         }
         (super::super::platform::Platform::Linux, Arch::X86_64) => {
             emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
@@ -91,9 +91,8 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
                 emitter.instruction(&format!("mov edi, {}", code));             // the exit hook is told the exit status
             }
             emit_exit_hook(emitter);
-            emitter.instruction(&format!("mov edi, {}", code));                 // load the requested process exit code into the SysV first-argument register
-            emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
-            emitter.instruction("syscall");                                     // terminate the process through the Linux x86_64 syscall ABI
+            emitter.instruction(&format!("mov edi, {}", code));                 // pass the requested status to the worker-aware exit boundary
+            emitter.instruction("call __rt_exit_or_parallel_fatal");            // escape a worker or terminate the process; never returns
         }
         (super::super::platform::Platform::MacOS, Arch::X86_64) => {
             panic!("process exit emission is not implemented yet for target macos-x86_64");

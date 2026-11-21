@@ -64,20 +64,27 @@ pub(super) fn emit_x86_64_install_dynamic_object_destructor_hook(emitter: &mut E
     emit_install_closure_bind_hook(emitter);
 }
 
-/// Installs the C callback `__rt_closure_bind` rebinds an eval closure's `$this` through.
+/// Installs distinct four-argument legacy and five-argument context-aware rebinding hooks.
+/// Installing either version disables the other, including when the supplied pointer is null.
 fn emit_install_closure_bind_hook(emitter: &mut Emitter) {
-    label_c_global(emitter, "__elephc_eval_install_closure_bind_hook_v1");
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, "x9", "_elephc_eval_closure_bind_fn");
-            emitter.instruction("str x0, [x9]");                                // store the eval closure rebinding callback
+    for (entry, slot, other) in [
+        ("__elephc_eval_install_closure_bind_hook_v1", "_elephc_eval_closure_bind_fn", "_elephc_eval_closure_bind_ctx_fn"),
+        ("__elephc_eval_install_closure_bind_hook_v2", "_elephc_eval_closure_bind_ctx_fn", "_elephc_eval_closure_bind_fn"),
+    ] {
+        label_c_global(emitter, entry);
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_symbol_address(emitter, "x9", slot);
+                emitter.instruction("str x0, [x9]");                            // publish a callback with this entry's exact C signature
+            }
+            Arch::X86_64 => {
+                abi::emit_symbol_address(emitter, "r10", slot);
+                emitter.instruction("mov QWORD PTR [r10], rdi");                // publish the versioned rebinding callback
+            }
         }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(emitter, "r10", "_elephc_eval_closure_bind_fn");
-            emitter.instruction("mov QWORD PTR [r10], rdi");                    // store the eval closure rebinding callback
-        }
+        abi::emit_store_zero_to_symbol(emitter, other, 0);
+        abi::emit_return(emitter);
     }
-    emitter.instruction("ret");                                                 // return after installing the optional eval bind hook
 }
 
 /// Installs C callbacks whose final-release hook returns an owned Throwable box or null.
@@ -123,6 +130,29 @@ fn emit_install_object_clone_hook(emitter: &mut Emitter) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Keeps installer ABI versions distinct and disables stale hooks when replacing a version.
+    #[test]
+    fn post_barrier_bind_installers_clear_the_other_signature_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen_support::platform::Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_install_closure_bind_hook(&mut emitter);
+            let asm = emitter.output();
+            let v1 = format!("{}:", target.extern_symbol("__elephc_eval_install_closure_bind_hook_v1"));
+            let v2 = format!("{}:", target.extern_symbol("__elephc_eval_install_closure_bind_hook_v2"));
+            let legacy = asm.split_once(&v1).unwrap().1.split_once(&v2).unwrap().0;
+            let context = asm.split_once(&v2).unwrap().1;
+            for (body, retired_slot) in [
+                (legacy, "_elephc_eval_closure_bind_ctx_fn"),
+                (context, "_elephc_eval_closure_bind_fn"),
+            ] {
+                let mut expected = Emitter::new(target);
+                abi::emit_store_zero_to_symbol(&mut expected, retired_slot, 0);
+                assert!(body.contains(expected.output().trim()), "{name}: replacing a hook must retire the other ABI, including for null");
+            }
+        }
+    }
 
     /// Callback installers retain platform symbol mangling and all three owner hooks on every target.
     #[test]

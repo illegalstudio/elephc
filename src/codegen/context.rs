@@ -605,9 +605,55 @@ impl<'a> FunctionContext<'a> {
         Some(slot)
     }
 
+    /// Returns whether a logically string-valued load is physically boxed in a Mixed slot.
+    ///
+    /// Loading that shape routes through `__rt_mixed_cast_string`, whose tag-1 arm detaches a
+    /// heap string. Consumers that only borrow the bytes for one runtime call must release the
+    /// detached temporary afterwards; a raw `Str` local instead lends its existing storage.
+    pub(super) fn loaded_string_uses_mixed_storage(&self, value: ValueId) -> Result<bool> {
+        let Some(slot) = self.loaded_local_slot(value) else {
+            return Ok(false);
+        };
+        Ok(matches!(
+            self.local_php_type(slot)?.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        ))
+    }
+
     /// Returns whether this slot is represented as a ref-cell pointer anywhere in the function.
     pub(super) fn local_slot_ever_stores_ref_cell_pointer(&self, slot: LocalSlotId) -> bool {
         self.local_analysis.ever_stores_ref_cell_pointer(slot)
+    }
+
+    /// Returns the hidden cell owner paired with a promoted, bound, adopted or aliased slot.
+    pub(super) fn ref_cell_owner_for_slot(&self, slot: LocalSlotId) -> Option<LocalSlotId> {
+        self.ref_cell_owner_for_slot_inner(slot, &mut std::collections::HashSet::new())
+    }
+
+    /// Follows owner-bearing cell bindings and retained alias leases without cycling through slots.
+    fn ref_cell_owner_for_slot_inner(
+        &self, slot: LocalSlotId, visited: &mut std::collections::HashSet<LocalSlotId>,
+    ) -> Option<LocalSlotId> {
+        if !visited.insert(slot) { return None; }
+        for (index, inst) in self.function.instructions.iter().enumerate() {
+            let Some(Immediate::LocalSlotPair { first, second }) = inst.immediate else { continue; };
+            if first != slot { continue; }
+            if matches!(inst.op, Op::PromoteLocalRefCell | Op::BindRefCellPtr | Op::AdoptRefCellPtr) {
+                return Some(second);
+            }
+            if inst.op == Op::AliasLocalRefCell {
+                let source_owner = self.ref_cell_owner_for_slot_inner(second, visited)?;
+                // Lowering emits this alias's retained owner directly after the binding.
+                // Another alias may retain the same source owner; never select its lease.
+                let retained = self.function.instructions.get(index + 1)?;
+                return match (retained.op, retained.immediate.as_ref()) {
+                    (Op::RetainLocalRefCell, Some(Immediate::LocalSlotPair { first, second }))
+                        if *first == source_owner => Some(*second),
+                    _ => None,
+                };
+            }
+        }
+        None
     }
 
     /// Returns whether this deferred release may execute while the slot stores a ref-cell pointer.
@@ -1782,9 +1828,7 @@ impl<'a> FunctionContext<'a> {
         if operand_owners::has_scoped_cleanup(self.function, value, self.current_inst) {
             return Ok(false);
         }
-        Ok(!self.function.instructions.iter().any(|inst| {
-            inst.op == Op::Release && inst.operands.first().copied() == Some(value)
-        }))
+        Ok(!operand_owners::has_reachable_release(self.function, value, self.current_inst))
     }
 
     /// Reports whether a string result can transfer its heap owner to a retaining consumer.
@@ -1793,9 +1837,7 @@ impl<'a> FunctionContext<'a> {
         value: ValueId,
     ) -> Result<bool> {
         if operand_owners::has_scoped_cleanup(self.function, value, self.current_inst)
-            || self.function.instructions.iter().any(|inst| {
-                inst.op == Op::Release && inst.operands.first().copied() == Some(value)
-            })
+            || operand_owners::has_reachable_release(self.function, value, self.current_inst)
         {
             return Ok(false);
         }

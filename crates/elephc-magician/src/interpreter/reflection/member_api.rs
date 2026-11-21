@@ -104,6 +104,9 @@ pub(in crate::interpreter) fn eval_reflection_property_get_value_result(
         return Ok(None);
     };
     let object = eval_reflection_property_get_value_arg(evaluated_args)?;
+    if let Some(message) = elephc_builtin_contract::reflection_capability_denial(
+        &declaring_class, elephc_builtin_contract::ReflectionOperation::Storage,
+    ) { return eval_throw_error(&message, context, values); }
     if context.eval_reflection_property_is_dynamic(identity) {
         let object = object.ok_or(EvalStatus::RuntimeFatal)?;
         return eval_reflection_dynamic_property_get_value(
@@ -172,6 +175,9 @@ pub(in crate::interpreter) fn eval_reflection_property_set_value_result(
         return Ok(None);
     };
     let (object_or_value, value) = eval_reflection_property_set_value_args(evaluated_args)?;
+    if let Some(message) = elephc_builtin_contract::reflection_capability_denial(
+        &declaring_class, elephc_builtin_contract::ReflectionOperation::Storage,
+    ) { return eval_throw_error(&message, context, values); }
     if context.eval_reflection_property_is_dynamic(identity) {
         let value = value.ok_or(EvalStatus::RuntimeFatal)?;
         eval_reflection_dynamic_property_set_value(
@@ -500,6 +506,14 @@ pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
     else {
         return Ok(None);
     };
+    if method_name.eq_ignore_ascii_case("getRawValue")
+        || method_name.eq_ignore_ascii_case("setRawValue")
+        || method_name.eq_ignore_ascii_case("setRawValueWithoutLazyInitialization")
+    {
+        if let Some(message) = elephc_builtin_contract::reflection_capability_denial(
+            &declaring_class, elephc_builtin_contract::ReflectionOperation::Storage,
+        ) { return eval_throw_error(&message, context, values); }
+    }
     if method_name.eq_ignore_ascii_case("getRawValue") {
         let object = eval_reflection_property_raw_value_arg(evaluated_args)?;
         if context.eval_reflection_property_is_dynamic(identity) {

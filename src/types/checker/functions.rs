@@ -14,4 +14,4 @@ mod param_binding;
 mod reference_outputs;
 mod array_push_values;
 mod resolution;
-mod returns;
+pub(super) mod returns;

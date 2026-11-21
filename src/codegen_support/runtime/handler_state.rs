@@ -118,7 +118,8 @@ mod tests {
     #[test]
     fn handler_cleanup_contains_throws_until_stack_restoration_on_every_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
             emit_handler_state(&mut emitter);
             let asm = emitter.output();
             for kind in ["error", "exception"] {
@@ -128,7 +129,7 @@ mod tests {
                 assert!(release.rfind("__rt_cleanup_invoke").unwrap() < release.find("__rt_throw_current").unwrap(), "{name}");
                 let pop = asm.split_once(&format!("__rt_core_{kind}_handler_pop:\n")).unwrap().1;
                 let guarded = pop.find("__rt_cleanup_invoke").unwrap();
-                let restore = pop.find(&format!("_php_{kind}_handler_stack")).unwrap();
+                let restore = pop.find(&crate::codegen_support::runtime::test_slot_ref(target.arch, &format!("_php_{kind}_handler_stack"))).unwrap();
                 let free = pop.find("__rt_heap_free").unwrap();
                 let propagate = pop.find("__rt_throw_current").unwrap();
                 assert!(guarded < restore && restore < free && free < propagate, "{name}: {kind}");
@@ -152,8 +153,8 @@ mod tests {
             for kind in ["error", "exception"] {
                 let pop = asm.split(&format!("__rt_core_{kind}_handler_pop:")).nth(1).unwrap();
                 assert!(pop.find(&format!("__rt_core_{kind}_handler_release")).unwrap()
-                    < pop.find(&format!("_php_{kind}_handler_stack")).unwrap());
-                assert!(asm.contains(&format!("_php_{kind}_handler_context_release")));
+                    < pop.find(&crate::codegen_support::runtime::test_slot_ref(target.arch, &format!("_php_{kind}_handler_stack"))).unwrap());
+                assert!(asm.contains(&crate::codegen_support::runtime::test_slot_ref(target.arch, &format!("_php_{kind}_handler_context_release"))));
             }
         }
     }

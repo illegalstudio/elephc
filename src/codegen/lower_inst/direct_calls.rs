@@ -266,7 +266,8 @@ pub(super) fn materialize_static_method_call_args_with_refs(
 ) -> Result<CallArgMaterialization> {
     if args.len() != param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
-            "static method call materialization received {} args for {} visible params",
+            "static method call materialization in {} received {} args for {} visible params",
+            ctx.function.name,
             args.len(),
             param_types.len()
         )));

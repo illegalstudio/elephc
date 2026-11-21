@@ -213,6 +213,7 @@ fn lower_reference_return(
             }
             crate::ir_lower::object_boundaries::guard_return(ctx, value, Some(span));
             super::return_coercions::guard_declared_callable_return_value(ctx, value, span);
+            validate_declared_array_reference_value(ctx, value, span);
             acquire_and_return_reference_cell(ctx, value, span);
         }
         Some(ExprKind::PropertyAccess { object, property }) => {
@@ -263,6 +264,19 @@ fn lower_reference_return(
                 Some(span),
             );
             let captured = acquire_reference_return_owner(ctx, cell_ptr, span);
+            if ctx.return_type_is_declared && ctx.return_php_type.is_php_array() {
+                // This operand is the raw cell address, unlike a LoadRefCell's payload view.
+                // A managed temporary alias owns its own cell lease across the throwing guard.
+                let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+                ctx.bind_fresh_owned_ref_cell_view(&alias, captured, PhpType::Mixed, Some(span));
+                let payload = ctx.load_local(&alias, Some(span));
+                validate_declared_array_reference_value(ctx, payload, span);
+                ctx.release_ref_cell_owner(&alias, Some(span));
+                let slot = ctx.local_slots[&alias];
+                ctx.emit_void(Op::ZeroLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+                    Op::ZeroLocalSlot.default_effects(), Some(span));
+                ctx.unmark_ref_bound_local(&alias);
+            }
             if let Some(slot) = receiver_owner {
                 crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
             }
@@ -294,6 +308,26 @@ fn lower_reference_return(
         ctx.set_local_logical_type(&name, ty);
         ctx.unmark_ref_bound_local(&name);
     }
+}
+
+/// Checks the referenced PHP value while preserving the original cell returned to the caller.
+fn validate_declared_array_reference_value(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span,
+) {
+    if !ctx.return_type_is_declared || !ctx.return_php_type.is_php_array() {
+        return;
+    }
+    // Owning the reference CELL never owns the payload read out of it. Expose a borrowed
+    // value to the ordinary boundary so its source-retirement rule cannot consume the cell's
+    // payload owner, including when the temporary property alias itself has an owning lease.
+    let ty = ctx.builder.value_php_type(value.value);
+    let borrowed = ctx.builder.emit_with_effects(
+        Op::Borrow, vec![value.value], None, value.ir_type, ty,
+        crate::ir::Ownership::Borrowed, Op::Borrow.default_effects(), Some(span),
+    ).expect("reference return payload borrow");
+    let checked = super::array_return_boundary::lower(ctx,
+        LoweredValue { value: borrowed, ir_type: value.ir_type }, span);
+    crate::ir_lower::ownership::release_if_owned(ctx, checked, Some(span));
 }
 
 /// Records an unsupported by-reference return and terminates the block without a value.

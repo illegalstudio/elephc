@@ -58,7 +58,7 @@ pub(crate) fn emit_ptoa(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or heap storage for the digits
 
     // -- stamp heap-backed results so __rt_str_persist can take them over in place --
-    abi::emit_symbol_address(emitter, "x9", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "x9");
     emitter.instruction("sub x10, x0, x9");                                     // compute the candidate scratch offset of the reservation
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64); // load the concat scratch capacity in bytes
     emitter.instruction("cmp x10, x11");                                        // is the reservation outside the shared scratch window (unsigned)?
@@ -148,7 +148,7 @@ fn emit_ptoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or heap storage for the digits
 
     // -- stamp heap-backed results so __rt_str_persist can take them over in place --
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");
+    crate::codegen_support::runtime::ctx::emit_concat_buf_address(emitter, "r10");
     emitter.instruction("mov r11, rax");                                        // copy the reservation before deriving its scratch offset
     emitter.instruction("sub r11, r10");                                        // compute the candidate scratch offset of the reservation
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "r9", emitter.concat_capacity as i64); // load the shared scratch capacity

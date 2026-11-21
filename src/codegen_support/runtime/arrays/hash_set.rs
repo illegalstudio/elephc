@@ -454,7 +454,7 @@ fn emit_hash_set_value_aarch64(emitter: &mut Emitter) {
 /// Implements the same linear-probe insert-or-update algorithm as the ARM64
 /// variant using the SystemV AMD64 ABI: rdi=hash_table_ptr, rsi=key_ptr,
 /// rdx=key_len, rcx=value_lo, r8=value_hi, r9=value_tag. Returns the table
-/// pointer (possibly new after grow) in rax. Preserves r12/r13/r14 as
+/// pointer (possibly new after grow) in rax. Preserves r12/r13/r15 as
 /// callee-saved registers; all other caller-saved regs are clobbered.
 fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -474,7 +474,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 96");                                         // reserve local storage plus callee-saved register spills while keeping nested calls 16-byte aligned
     emitter.instruction("mov QWORD PTR [rbp - 72], r12");                       // preserve r12 because SysV requires callees to restore it before returning
     emitter.instruction("mov QWORD PTR [rbp - 80], r13");                       // preserve r13 because the hash probe logic reuses it as a long-lived scratch register
-    emitter.instruction("mov QWORD PTR [rbp - 88], r14");                       // preserve r14 because the insertion-order linker uses it as a callee-saved scratch register
+    emitter.instruction("mov QWORD PTR [rbp - 88], r15");                       // preserve r15 because the insertion-order linker uses it as a callee-saved scratch register
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash-table pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the incoming key pointer across helper calls and probe iterations
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the incoming key length across helper calls and probe iterations
@@ -572,8 +572,8 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r12 + 40], r13");                       // store the runtime value tag into the selected hash entry
     emitter.instruction("mov r13, QWORD PTR [r10 + 32]");                       // load the previous insertion-order tail slot from the hash header
     emitter.instruction("mov QWORD PTR [r12 + 48], r13");                       // link the new entry back to the previous tail slot
-    emitter.instruction("mov r14, -1");                                         // materialize the end-of-chain sentinel for the inserted tail entry
-    emitter.instruction("mov QWORD PTR [r12 + 56], r14");                       // initialize the new entry next-pointer as the tail sentinel
+    emitter.instruction("mov r15, -1");                                         // materialize the end-of-chain sentinel for the inserted tail entry
+    emitter.instruction("mov QWORD PTR [r12 + 56], r15");                       // initialize the new entry next-pointer as the tail sentinel
     emitter.instruction("cmp r13, -1");                                         // detect the first insertion so the hash header head/tail can be initialized together
     emitter.instruction("jne __rt_hash_set_link_tail");                         // existing tables need an extra step to wire the previous tail forward to the inserted slot
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the inserted slot index to seed the insertion-order head pointer
@@ -582,9 +582,9 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_set_bump_count");                        // skip the previous-tail forward-link update on the very first insertion
 
     emitter.label("__rt_hash_set_link_tail");
-    hash_layout::emit_entry_address(emitter, "r14", "r10", "r13");
+    hash_layout::emit_entry_address(emitter, "r15", "r10", "r13");
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the inserted slot index for the previous-tail forward-link store
-    emitter.instruction("mov QWORD PTR [r14 + 56], r11");                       // update the previous tail entry to point at the inserted slot as its logical successor
+    emitter.instruction("mov QWORD PTR [r15 + 56], r11");                       // update the previous tail entry to point at the inserted slot as its logical successor
     emitter.instruction("mov QWORD PTR [r10 + 32], r11");                       // publish the inserted slot as the new insertion-order tail in the hash header
 
     emitter.label("__rt_hash_set_bump_count");
@@ -593,7 +593,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], r11");                            // store the updated live-entry count back into the hash header
     super::hash_next_index::record_insert(emitter, "r10", "r12", "__rt_hash_set");
     emitter.instruction("mov rax, r10");                                        // return the original hash-table pointer after a successful insertion
-    emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the hash-set helper
+    emitter.instruction("mov r15, QWORD PTR [rbp - 88]");                       // restore the caller's r15 before leaving the hash-set helper
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the hash-set helper
     emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12 before leaving the hash-set helper
     emitter.instruction("add rsp, 96");                                         // release the local spill area that held the saved table/key/value tuple
@@ -610,10 +610,10 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r13, QWORD PTR [r12 + 40]");                       // load the overwritten entry's runtime value tag before replacing it
     emitter.instruction("cmp r13, 7");                                          // can this Mixed entry contain an invoker reference marker?
     emitter.instruction("jne __rt_hash_set_check_reference_x");                 // concrete entries cannot contain the boxed marker shape
-    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // load the existing boxed Mixed payload
-    emitter.instruction("test r14, r14");                                       // guard the boxed marker dereference
+    emitter.instruction("mov r15, QWORD PTR [r12 + 24]");                       // load the existing boxed Mixed payload
+    emitter.instruction("test r15, r15");                                       // guard the boxed marker dereference
     emitter.instruction("jz __rt_hash_set_check_reference_x");                  // a null Mixed handle is an ordinary overwrite
-    let boxed_marker_compare = format!("cmp QWORD PTR [r14], {}", INVOKER_ARG_REF_CELL_TAG);
+    let boxed_marker_compare = format!("cmp QWORD PTR [r15], {}", INVOKER_ARG_REF_CELL_TAG);
     emitter.instruction(&boxed_marker_compare);                                 // does this box alias caller storage for a ref argument?
     emitter.instruction("je __rt_hash_set_invoker_reference_write_x");          // preserve the marker and write through to its caller local
     persistent_references::emit_probe(emitter);
@@ -634,22 +634,22 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     // The release can run a destructor that reads, grows or replaces this very table, so the
     // entry must already hold the replacement and nothing may touch the table afterwards.
     emitter.label("__rt_hash_set_release_any_x");
-    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // keep the overwritten heap-backed payload for the release below
+    emitter.instruction("mov r15, QWORD PTR [r12 + 24]");                       // keep the overwritten heap-backed payload for the release below
     emit_publish_replacement_x86_64(emitter);
-    emitter.instruction("mov rax, r14");                                        // pass the overwritten payload to the uniform release dispatcher
+    emitter.instruction("mov rax, r15");                                        // pass the overwritten payload to the uniform release dispatcher
     emitter.instruction("call __rt_decref_any");                                // release the overwritten hash value after storing the replacement
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the entry already holds the replacement
 
     emitter.label("__rt_hash_set_release_callable_x");
-    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // keep the overwritten callable descriptor for the release below
+    emitter.instruction("mov r15, QWORD PTR [r12 + 24]");                       // keep the overwritten callable descriptor for the release below
     emit_publish_replacement_x86_64(emitter);
-    emitter.instruction("mov rax, r14");                                        // pass the overwritten descriptor to the descriptor release helper
+    emitter.instruction("mov rax, r15");                                        // pass the overwritten descriptor to the descriptor release helper
     emitter.instruction("call __rt_callable_descriptor_release");               // release the overwritten callable descriptor after storing the replacement
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the entry already holds the replacement
 
     persistent_references::emit_write(emitter);
     emitter.label("__rt_hash_set_invoker_reference_write_x");
-    emitter.instruction("mov r13, QWORD PTR [r14 + 16]");                       // load the caller storage's runtime representation tag
+    emitter.instruction("mov r13, QWORD PTR [r15 + 16]");                       // load the caller storage's runtime representation tag
     emitter.instruction("cmp r13, 7");                                          // does the caller local hold a boxed Mixed handle?
     emitter.instruction("jne __rt_hash_set_invoker_reference_raw_x");           // concrete caller slots receive their native payload words
     emitter.instruction("cmp QWORD PTR [rbp - 48], 7");                         // is the replacement already an owned boxed Mixed cell?
@@ -663,26 +663,26 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the hash table after optional boxing
     emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // reload the current probe index
     hash_layout::emit_entry_address(emitter, "r12", "r10", "r11");
-    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // reload the boxed invoker marker
-    emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // load the caller's Mixed storage address
+    emitter.instruction("mov r15, QWORD PTR [r12 + 24]");                       // reload the boxed invoker marker
+    emitter.instruction("mov r15, QWORD PTR [r15 + 8]");                        // load the caller's Mixed storage address
     crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
-        emitter, "r14", "r10", "r11", "__rt_hash_set_invoker_phpref_payload_x",
+        emitter, "r15", "r10", "r11", "__rt_hash_set_invoker_phpref_payload_x",
     );
-    emitter.instruction("mov rax, QWORD PTR [r14]");                            // save the previous boxed Mixed owner for release
+    emitter.instruction("mov rax, QWORD PTR [r15]");                            // save the previous boxed Mixed owner for release
     emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // load the owned replacement box
-    emitter.instruction("mov QWORD PTR [r14], r13");                            // publish the replacement before a destructor can throw
+    emitter.instruction("mov QWORD PTR [r15], r13");                            // publish the replacement before a destructor can throw
     emitter.instruction("call __rt_decref_mixed");                              // retire the previous caller-local Mixed owner
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the argument hash still owns the unchanged marker wrapper
 
     emitter.label("__rt_hash_set_invoker_reference_raw_x");
     emitter.instruction(&format!("cmp r13, {INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // source shape12 stores a nullable integer payload and tag
     emitter.instruction("je __rt_hash_set_invoker_reference_tagged_x");         // decode boxed replacements before publishing both words
-    emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // load the concrete caller-storage address
-    emitter.instruction("mov rax, QWORD PTR [r14]");                            // retain the previous low payload for optional release
+    emitter.instruction("mov r15, QWORD PTR [r15 + 8]");                        // load the concrete caller-storage address
+    emitter.instruction("mov rax, QWORD PTR [r15]");                            // retain the previous low payload for optional release
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // load replacement value_lo
-    emitter.instruction("mov QWORD PTR [r14], r11");                            // publish replacement value_lo through the marker
+    emitter.instruction("mov QWORD PTR [r15], r11");                            // publish replacement value_lo through the marker
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // load replacement value_hi
-    emitter.instruction("mov QWORD PTR [r14 + 8], r11");                        // publish replacement value_hi through the marker
+    emitter.instruction("mov QWORD PTR [r15 + 8], r11");                        // publish replacement value_hi through the marker
     emitter.instruction("cmp r13, 1");                                          // strings own their low payload
     emitter.instruction("je __rt_hash_set_invoker_reference_release_any_x");    // release the overwritten string after publication
     emitter.instruction("cmp r13, 10");                                         // callable descriptors use their dedicated release helper
@@ -700,7 +700,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // return the unchanged argument hash
 
     emitter.label("__rt_hash_set_invoker_reference_tagged_x");
-    emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // address the caller's inline tagged-scalar slot
+    emitter.instruction("mov r15, QWORD PTR [r15 + 8]");                        // address the caller's inline tagged-scalar slot
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // inspect the replacement PHP representation
     emitter.instruction("cmp rax, 7");                                          // a Mixed replacement owns a box that must be decoded
     emitter.instruction("je __rt_hash_set_invoker_reference_tagged_box_x");     // preserve the boxed value until both words are published
@@ -715,25 +715,25 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_valid_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // load the direct nullable-integer payload
-    emitter.instruction("mov QWORD PTR [r14], rdi");                            // publish the scalar payload
-    emitter.instruction("mov QWORD PTR [r14 + 8], rax");                        // publish its actual PHP tag
+    emitter.instruction("mov QWORD PTR [r15], rdi");                            // publish the scalar payload
+    emitter.instruction("mov QWORD PTR [r15 + 8], rax");                        // publish its actual PHP tag
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the marker remains owned by the argument hash
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the replacement box owned by this write
-    abi::emit_push_reg_pair(emitter, "rax", "r14");
+    abi::emit_push_reg_pair(emitter, "rax", "r15");
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
     crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_guard(
         emitter, "rax", "__rt_hash_set_invoker_reference_tagged_box_valid_x",
         "__rt_hash_set_invoker_reference_tagged_box_invalid_x",
     );
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_invalid_x");
-    abi::emit_pop_reg_pair(emitter, "rax", "r14");
+    abi::emit_pop_reg_pair(emitter, "rax", "r15");
     super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_valid_x");
-    abi::emit_load_temporary_stack_slot(emitter, "r14", 8);
-    emitter.instruction("mov QWORD PTR [r14], rdi");                            // publish the unboxed scalar payload
-    emitter.instruction("mov QWORD PTR [r14 + 8], rax");                        // publish the unboxed null or integer tag
-    abi::emit_pop_reg_pair(emitter, "rax", "r14");
+    abi::emit_load_temporary_stack_slot(emitter, "r15", 8);
+    emitter.instruction("mov QWORD PTR [r15], rdi");                            // publish the unboxed scalar payload
+    emitter.instruction("mov QWORD PTR [r15 + 8], rax");                        // publish the unboxed null or integer tag
+    abi::emit_pop_reg_pair(emitter, "rax", "r15");
     abi::emit_call_label(emitter, "__rt_decref_mixed");
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // retire the consumed box without changing marker identity
 
@@ -759,7 +759,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax], r13");                            // publish the replacement to every alias in the reference set
     emitter.label("__rt_hash_set_reference_done_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged hash-table pointer after a write-through
-    emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the write-through path
+    emitter.instruction("mov r15, QWORD PTR [rbp - 88]");                       // restore the caller's r15 before leaving the write-through path
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the write-through path
     emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12 before leaving the write-through path
     emitter.instruction("add rsp, 96");                                         // release the local spill area before leaving the write-through path
@@ -769,7 +769,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_write_value_x");
     emit_publish_replacement_x86_64(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged hash-table pointer after an in-place value update
-    emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the update path
+    emitter.instruction("mov r15, QWORD PTR [rbp - 88]");                       // restore the caller's r15 before leaving the update path
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the update path
     emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12 before leaving the update path
     emitter.instruction("add rsp, 96");                                         // release the local spill area before leaving the update path
@@ -781,7 +781,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
 
 /// Writes the saved replacement payload and tag into the x86_64 entry addressed by `r12`.
 ///
-/// Uses only `r13` as scratch so an update can carry the overwritten payload in `r14` across
+/// Uses only `r13` as scratch so an update can carry the overwritten payload in `r15` across
 /// the store and release it only after the entry holds the replacement.
 fn emit_publish_replacement_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r13, QWORD PTR [rbp - 32]");                       // reload the replacement low payload word for the existing key slot
@@ -857,7 +857,7 @@ mod tests {
                 (
                     "je __rt_hash_set_invoker_reference_write_x",
                     "__rt_hash_set_invoker_reference_write_x:",
-                    "mov QWORD PTR [r14], r13",
+                    "mov QWORD PTR [r15], r13",
                     "call __rt_decref_mixed",
                 )
             } else {
@@ -876,7 +876,7 @@ mod tests {
                 "{name}: publish replacement before releasing the previous Mixed owner"
             );
             let (tagged_label, tagged_store) = if name == "linux-x86_64" {
-                ("__rt_hash_set_invoker_reference_tagged_x:", "mov QWORD PTR [r14 + 8], rax")
+                ("__rt_hash_set_invoker_reference_tagged_x:", "mov QWORD PTR [r15 + 8], rax")
             } else {
                 ("__rt_hash_set_invoker_reference_tagged:", "str x0, [x14, #8]")
             };

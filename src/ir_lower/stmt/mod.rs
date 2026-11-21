@@ -79,6 +79,8 @@ mod nested_plain_writes;
 mod nested_spl_writes;
 mod nested_false_errors;
 mod return_coercions;
+mod string_return_boundary;
+mod array_return_boundary;
 mod repr_fixpoint;
 mod static_property_helpers;
 mod string_offset_writes;
@@ -154,12 +156,15 @@ pub(super) use array_write_storage::{
 
 /// Lowers one AST statement into the current EIR insertion block.
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
+    let previous_strict_types = ctx.argument_strict_types;
+    ctx.argument_strict_types = stmt.strict_types;
     let _profile = crate::source::scoped_parse_mode(stmt.profile());
     crate::strict_php::with_source_mode(stmt.source_mode, || {
         if !ctx.builder.insertion_block_is_terminated() {
             repr_fixpoint::lower_stmt_at_type_fixpoint(ctx, stmt);
         }
     });
+    ctx.argument_strict_types = previous_strict_types;
 }
 
 /// Declares the hidden internal-array-pointer cursor slots used inside a loop body before
@@ -320,7 +325,9 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::GotoLabel(_) => {}
         StmtKind::ExprStmt(expr) => {
             let boundary = super::scoped_writes::begin_expression(ctx, expr);
+            let previous = ctx.discarded_result_depth.replace(ctx.expression_depth + 1);
             let value = lower_expr(ctx, expr);
+            ctx.discarded_result_depth = previous;
             if !ctx.builder.insertion_block_is_terminated() {
                 release_expr_statement_result(ctx, value, expr.span);
             }

@@ -164,9 +164,19 @@ mod tests {
             let boxed = asm.find("__rt_mixed_from_value").unwrap();
             let released = asm.find("__rt_decref_any").unwrap();
             assert!(setjmp < collect && collect < catch && catch < boxed && boxed < released, "{name}: {asm}");
-            assert!(asm.contains("_exc_call_frame_top") && asm.contains("_rt_diag_suppression"), "{name}");
-            assert!(asm.matches("_exc_handler_top").count() >= 3, "{name}");
-            assert!(asm.matches("_exc_value").count() >= 4, "{name}");
+            let scratch = if target.arch == Arch::AArch64 { "x10" } else { "r10" };
+            for (symbol, minimum) in [("_exc_call_frame_top", 1), ("_rt_diag_suppression", 2),
+                ("_exc_handler_top", 3), ("_exc_value", 4)] {
+                let mut load = Emitter::new(target);
+                abi::emit_load_symbol_to_reg(&mut load, scratch, symbol, 0);
+                let mut store = Emitter::new(target);
+                abi::emit_store_reg_to_symbol(&mut store, scratch, symbol, 0);
+                let mut clear = Emitter::new(target);
+                abi::emit_store_zero_to_symbol(&mut clear, symbol, 0);
+                let accesses = [load.output(), store.output(), clear.output()];
+                let count: usize = accesses.iter().map(|access| asm.matches(access.trim_end()).count()).sum();
+                assert!(count >= minimum, "{name}: {symbol} needs {minimum} target-aware state accesses, got {count}");
+            }
         }
     }
 }

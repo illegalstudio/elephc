@@ -165,6 +165,13 @@ fn lower_on_compiler_stack(
     if let Some(error) = super::diagnostics::take_first() {
         return Err(LoweringError::Unsupported(error));
     }
+    if module
+        .closures
+        .iter()
+        .any(|function| function.name.ends_with("__parallel_worker"))
+    {
+        ensure_parallel_worker_prepare_extern(&mut module);
+    }
     function::lower_eval_native_default_helpers(
         &mut module,
         check_result,

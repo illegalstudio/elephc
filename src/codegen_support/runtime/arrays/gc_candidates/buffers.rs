@@ -21,6 +21,7 @@ pub(super) fn emit(e: &mut Emitter) {
     emit_append(e, "anchor", "anchors", 20, true);
     emit_note(e);
     emit_realloc(e);
+    emit_release(e);
 }
 
 /// Returns the original payload or null without reading foreign, interior or retired headers.
@@ -29,7 +30,7 @@ fn emit_live(e: &mut Emitter) {
     e.comment("--- runtime: gc_candidate_live ---");
     e.label_global("__rt_gc_candidate_live");
     // -- validate exact allocation identity before reading headers --
-    abi::emit_symbol_address(e, if e.target.arch == Arch::AArch64 { "x9" } else { "r10" }, "_heap_buf");
+    crate::codegen_support::runtime::ctx::emit_heap_base_address(e, if e.target.arch == Arch::AArch64 { "x9" } else { "r10" });
     op(e, "sub x10, x0, x9", "mov r11, rax", "derive the payload offset for exact identity validation");
     if e.target.arch == Arch::X86_64 { op(e, "", "sub r11, r10", "compute the heap-relative offset without altering the candidate"); }
     op(e, "cmp x10, #16", "cmp r11, 16", "exclude offsets below the first managed payload");
@@ -186,5 +187,39 @@ fn emit_realloc(e: &mut Emitter) {
         op(e, &format!("ldr q{index}, [sp, #{}]", index * 16), &format!("movdqu xmm{index}, XMMWORD PTR [rsp + {}]", index * 16), "restore vector arguments before returning to runtime ownership code");
     }
     abi::emit_frame_restore(e, 528);
+    abi::emit_return(e);
+}
+
+/// Collector vectors a context owns through `__rt_gc_candidate_realloc`, with the words
+/// that describe them: (vector, count, capacity). The memo table has no separate count.
+const RELEASED_VECTORS: &[(&str, Option<&str>, &str)] = &[
+    ("_gc_candidates_roots", Some("_gc_candidates_roots_count"), "_gc_candidates_roots_capacity"),
+    ("_gc_candidates_nodes", Some("_gc_candidates_nodes_count"), "_gc_candidates_nodes_capacity"),
+    ("_gc_candidates_anchors", Some("_gc_candidates_anchors_count"), "_gc_candidates_anchors_capacity"),
+    ("_gc_proofs", Some("_gc_proofs_count"), "_gc_proofs_capacity"),
+    ("_gc_proof_memos", None, "_gc_proof_memos_capacity"),
+];
+
+/// Frees the current context's libc-backed collector vectors and forgets their extents.
+///
+/// A pooled context runs this while it drains, so a worker never strands its collector
+/// metadata in the process allocator and the release check sees every owner cleared.
+fn emit_release(e: &mut Emitter) {
+    e.blank();
+    e.comment("--- runtime: gc_candidates_release ---");
+    e.label_global("__rt_gc_candidates_release");
+    abi::emit_frame_prologue(e, 16);
+    for (index, (vector, count, capacity)) in RELEASED_VECTORS.iter().enumerate() {
+        let skip = format!("__rt_gc_candidates_release_skip_{index}");
+        load(e, "x0", "rdi", vector);
+        op(e, &format!("cbz x0, {skip}"), "test rdi, rdi", "an empty vector has nothing to return to libc");
+        if e.target.arch == Arch::X86_64 { op(e, "", &format!("jz {skip}"), "skip the libc call for an empty vector"); }
+        e.bl_c("free"); // return this context's collector vector to libc
+        e.label(&skip);
+        abi::emit_store_zero_to_symbol(e, vector, 0);
+        if let Some(count) = count { abi::emit_store_zero_to_symbol(e, count, 0); }
+        abi::emit_store_zero_to_symbol(e, capacity, 0);
+    }
+    abi::emit_frame_restore(e, 16);
     abi::emit_return(e);
 }

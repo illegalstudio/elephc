@@ -62,7 +62,7 @@ pub fn emit_mixed_array_set(emitter: &mut Emitter) {
 ///   storage, while existing associative arrays call `__rt_hash_set`.
 /// - Array capacity is grown via `__rt_array_grow` if the target index exceeds current capacity.
 /// - Overwriting an existing slot releases the previous `Mixed` cell.
-/// - Extending the logical length zero-fills all gap slots before the written position.
+/// - Appending at the logical end keeps dense storage; sparse integer keys promote to Hash.
 /// - The helper frame is 80 bytes; callee-saved registers `x29`/`x30` are preserved.
 fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.blank();
@@ -1023,7 +1023,7 @@ fn emit_string_write_unwind(emitter: &mut Emitter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::Target;
+    use crate::codegen_support::platform::{Platform, Target};
 
     /// Reentrant retirement observes the replacement and cannot resume a stale slot store.
     #[test]
@@ -1042,6 +1042,35 @@ mod tests {
             assert!(after.contains("__rt_throw_current") && after.contains("__rt_mixed_array_set_done"), "{name}");
             assert!(!after.contains("[sp, #32]") && !after.contains("[rbp - 40]"),
                 "{name}: no saved destination pointer remains valid after a destructor");
+        }
+    }
+
+    // The strict greater-than guard preserves dense append-at-length and precedes COW/growth.
+
+    /// Requires sparse-key promotion before dense widening for direct and nested boxed writes.
+    #[test]
+    fn boxed_sparse_writes_promote_before_widening_on_both_architectures() {
+        for arch in [Arch::AArch64, Arch::X86_64] {
+            for nested in [false, true] {
+                let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+                let prefix = if nested {
+                    super::super::emit_mixed_array_fetch_for_write(&mut emitter);
+                    "__rt_mixed_array_gfw"
+                } else {
+                    emit_mixed_array_set(&mut emitter);
+                    "__rt_mixed_array_set"
+                };
+                let asm = emitter.output();
+                let indexed = asm.find(&format!("{prefix}_indexed:")).expect("indexed entry");
+                let body = &asm[indexed..];
+                let (guard, widening) = match arch {
+                    Arch::AArch64 => (format!("b.hi {prefix}_promote"), "bl __rt_array_to_mixed"),
+                    Arch::X86_64 => (format!("ja {prefix}_promote"), "call __rt_array_to_mixed"),
+                };
+                let promotion = body.find(&guard).expect("strict sparse-key promotion guard");
+                let conversion = body.find(widening).expect("dense element conversion");
+                assert!(promotion < conversion, "{arch:?}, nested={nested}: {body}");
+            }
         }
     }
 }

@@ -24,6 +24,8 @@ impl FakeOps {
                 [] => None,
                 [collector] => match self.get(*collector) {
                     FakeValue::Array(values) => Some(values.len()),
+                    // By-value collectors travel as hashes, matching generated EIR storage.
+                    FakeValue::Assoc(entries) => Some(entries.len()),
                     _ => return Err(EvalStatus::RuntimeFatal),
                 },
                 _ => return Err(EvalStatus::RuntimeFatal),

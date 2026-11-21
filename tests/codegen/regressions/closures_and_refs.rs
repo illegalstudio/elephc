@@ -191,6 +191,48 @@ $f();
     assert_eq!(out, "2");
 }
 
+/// A read-only by-reference capture must also observe later outer assignments that change the
+/// cell's runtime representation. The cell used to retain its creation-time type, so null-to-object
+/// remained `NULL` and int-to-float was read through integer storage.
+#[test]
+fn test_closure_use_by_ref_observes_later_outer_representation_change() {
+    let out = compile_and_run(
+        r#"<?php
+$value = null;
+$readObject = static function () use (&$value): void {
+    echo $value instanceof stdClass ? "object" : gettype($value);
+};
+$value = new stdClass();
+$readObject();
+
+$number = 1;
+$readNumber = static function () use (&$number): void {
+    var_dump($number);
+};
+$number = 1.5;
+$readNumber();
+"#,
+    );
+    assert_eq!(out, "objectfloat(1.5)\n");
+}
+
+/// Unsetting the outer symbol must not destroy a reference cell that an escaping closure still
+/// owns. PHP keeps the captured value reachable through the closure after the symbol is removed.
+#[test]
+fn test_by_ref_capture_unset_outer_symbol_preserves_closure() {
+    let out = compile_and_run(
+        r#"<?php
+$value = new stdClass();
+$read = static function () use (&$value): string {
+    return $value instanceof stdClass ? "object" : gettype($value);
+};
+unset($value);
+echo $read();
+"#,
+    );
+    assert_eq!(out, "object");
+}
+
 /// Regression for #304: by-reference captures stored in arrays must survive the
 /// defining function scope and observe loop updates made after the closure is created.
 #[test]

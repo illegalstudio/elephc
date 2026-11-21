@@ -11,6 +11,10 @@
 pub use elephc_chopper::syntax::{compiler_stack, lexer, names, parser, span};
 
 pub mod autoload;
+/// Structured cooperative scheduler prelude (`Elephc\Async`).
+pub mod async_prelude;
+/// Unified task API compiler-owned declarations (`Elephc\Task`).
+pub mod task_prelude;
 /// Local Cargo source inputs shared by bridge discovery and integration-test builders.
 #[doc(hidden)]
 pub mod bridge_sources;
@@ -94,6 +98,8 @@ pub mod apm_prelude;
 /// Optimizer passes.
 pub mod optimize;
 /// Parser for PHP syntax.
+/// Structured isolated-thread scheduler prelude (`Elephc\Parallel`).
+pub mod parallel_prelude;
 /// Selected PHP compatibility version for version-sensitive compiler surfaces.
 pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.

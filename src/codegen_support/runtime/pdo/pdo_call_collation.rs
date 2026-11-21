@@ -152,6 +152,7 @@ pub fn emit_pdo_call_collation(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #240]");                                  // arg0 = descriptor pointer
     emitter.instruction("ldr x1, [sp, #288]");                                  // arg1 = boxed Mixed argument cell
     emitter.instruction(&format!("ldr x9, [x0, #{}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the uniform invoker pointer
+    crate::codegen_support::callable_descriptor::emit_global_weak_invoker_context(emitter);
     emitter.instruction("blr x9");                                              // invoke comparator($a, $b) → OWNED boxed Mixed return in x0
     emitter.instruction("str x0, [sp, #296]");                                  // save the boxed return for later release
 
@@ -288,6 +289,7 @@ fn emit_pdo_call_collation_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // arg0 = descriptor pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // arg1 = boxed Mixed argument cell
     emitter.instruction(&format!("mov r10, QWORD PTR [rdi + {}]", CALLABLE_DESC_INVOKER_OFFSET)); // load the uniform invoker pointer
+    crate::codegen_support::callable_descriptor::emit_global_weak_invoker_context(emitter);
     emitter.instruction("call r10");                                            // invoke comparator($a, $b) → OWNED boxed Mixed return in rax
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the boxed return for later release
 

@@ -31,25 +31,18 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
             class_name
         )));
     }
-    let (
-        class_id,
-        property_count,
-        allow_dynamic_properties,
-        retained_offsets,
-        owned_reference_property_offsets,
-    ) = {
+    let (class_id, property_count, allow_dynamic_properties, retained_offsets, owned_references) = {
         let class_info =
             ctx.module.class_infos.get(&class_name).ok_or_else(|| {
                 CodegenIrError::unsupported(format!("unknown class {}", class_name))
             })?;
         let retained_offsets = cloned_property_retain_offsets(class_info);
-        let owned_reference_property_offsets = owned_reference_property_offsets(class_info);
         (
             class_info.class_id,
             class_info.properties.len(),
             class_info.has_property_hash_storage(),
             retained_offsets,
-            owned_reference_property_offsets,
+            owned_reference_property_offsets(class_info),
         )
     };
     let result = inst
@@ -64,6 +57,9 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
         property_count,
         allow_dynamic_properties,
         &[],
+        // Every declared slot is replaced by the shallow copy below. Allocating constructor-style
+        // reference cells here would orphan those cells when the copied source pointers overwrite
+        // them; the copy retains each shared source cell as the clone's independent owner instead.
         &[],
     )?;
     ctx.store_result_value(result)?;
@@ -82,7 +78,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
         abi::emit_store_to_address(ctx.emitter, result_reg, dest_reg, offset);
     }
     emit_clone_declared_property_slots(ctx, source_reg, dest_reg, property_count,
-        &retained_offsets, &owned_reference_property_offsets);
+        &retained_offsets, &owned_references);
     if allow_dynamic_properties {
         emit_clone_dynamic_property_hash(
             ctx,
@@ -91,7 +87,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
             dynamic_property_hash_offset(property_count),
         );
     }
-    if !owned_reference_property_offsets.is_empty() {
+    if !owned_references.is_empty() {
         emit_native_reference_bindings(ctx, dest_reg);
     }
     Ok(())

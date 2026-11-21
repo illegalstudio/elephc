@@ -193,7 +193,7 @@ mod tests {
             };
             assert!(assembly.find(scope).unwrap() < assembly.find(call).unwrap(), "{name}");
             let body = assembly.split_once(scope).unwrap().1;
-            assert!(body.find("_exc_value").unwrap() < body.find(publish).unwrap(), "{name}");
+            assert!(body.find(&crate::codegen_support::runtime::test_slot_ref(target.arch, "_exc_value")).unwrap() < body.find(publish).unwrap(), "{name}");
             assert!(body.contains("__rt_cleanup_preserve_exception"), "{name}: abandon interrupted result safely");
         }
     }

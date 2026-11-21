@@ -62,7 +62,10 @@ pub use aot_profile::{
 pub use eval_profile::{
     eval_signature, eval_signature_profile, EvalSignatureOverrideReason, EvalSignatureProfile,
 };
-pub use class_spec::{ClassContract, ClassKind, ClassRoute};
+pub use class_spec::{
+    reflection_capability_denial, ClassContract, ClassKind, ClassReflectionPolicy, ClassRoute,
+    ReflectionOperation,
+};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use constant_deprecation::{
     class_constant_deprecation, global_constant_deprecation, is_deprecated_class_constant_name,

@@ -1861,6 +1861,9 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
 /// Emits a platform-C global label for a user assembly helper.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
     emitter.label_global(&module.target.extern_symbol(name));
+    if module.required_runtime_features.eval_bridge {
+        crate::codegen_support::runtime::emit_eval_foreign_context_gateway(emitter, name);
+    }
 }
 
 #[cfg(test)]
@@ -1876,7 +1879,8 @@ mod catalog_tests {
             let asm = emitter.output();
             assert!(asm.contains(&target.extern_symbol("__elephc_eval_value_take_pending_throwable_v2")), "{name}");
             assert_eq!(asm.matches("__rt_throwable_box_owned").count(), 1, "{name}");
-            assert!(asm.find("_exc_value").unwrap() < asm.find("__rt_throwable_box_owned").unwrap(), "{name}");
+            let exc_value = crate::codegen_support::runtime::ctx::test_field_ref(target.arch, crate::codegen_support::runtime::ctx::CTX_EXC_VALUE_OFFSET);
+            assert!(asm.find(&exc_value).unwrap() < asm.find("__rt_throwable_box_owned").unwrap(), "{name}");
             assert!(asm.contains("__rt_eval_no_pending_throwable:"), "{name}");
         }
     }

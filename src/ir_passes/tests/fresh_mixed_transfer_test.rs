@@ -162,9 +162,14 @@ fn fresh_mixed_transfer_runs_after_integer_sinks() {
     module.functions.push(function);
     optimize_module(&mut module);
     let function = &module.functions[0];
-    assert!(function.instructions.iter().any(|inst| inst.op == Op::ICheckedAdd));
+    // The integer sink may now see through the clone (it treats `MixedClone` like an acquire),
+    // but only in its cast-justified form: the explicit `(int)` keeps its overflow mode. A plain
+    // `ICheckedAddToInt` (Bool(false)) would change overflow handling and stays forbidden.
+    assert!(function.instructions.iter().any(|inst| inst.op == Op::ICheckedAdd
+        || (inst.op == Op::ICheckedAddToInt && inst.immediate == Some(Immediate::Bool(true)))));
     assert!(!function.instructions.iter().any(|inst| inst.op == Op::MixedClone));
-    assert!(!function.instructions.iter().any(|inst| inst.op == Op::ICheckedAddToInt));
+    assert!(!function.instructions.iter().any(|inst| inst.op == Op::ICheckedAddToInt
+        && inst.immediate != Some(Immediate::Bool(true))));
 }
 
 /// Cleanup in another block is outside the local transfer proof.

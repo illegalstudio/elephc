@@ -56,7 +56,10 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     move_saved_eval_code_to_eval_args(ctx);
     let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
     abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_execute_with_deferred_catalog");
+    let arena_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    let arena_reg = crate::codegen_support::runtime::ctx::ctx_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, arena_arg, arena_reg);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_execute_in_context_v1");
     abi::emit_call_label(ctx.emitter, &symbol);
     pop_eval_context_class_scope(ctx, pushed_class_scope);
     prepare_eval_scope_reload(ctx);

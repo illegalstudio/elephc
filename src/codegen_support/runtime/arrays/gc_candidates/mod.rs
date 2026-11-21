@@ -26,6 +26,12 @@ pub(crate) fn op(e: &mut Emitter, arm: &str, x86: &str, intent: &str) {
 /// Loads a state word without borrowing another helper's live address register.
 pub(crate) fn load(e: &mut Emitter, arm: &str, x86: &str, symbol: &str) {
     let reg = if e.target.arch == Arch::AArch64 { arm } else { x86 };
+    // The allocator extent and capacity are per-context fields reached through the ctx register.
+    match symbol {
+        "_heap_off" => return crate::codegen_support::runtime::ctx::emit_heap_off_load(e, reg),
+        "_heap_max" => return crate::codegen_support::runtime::ctx::emit_heap_max_load(e, reg),
+        _ => {}
+    }
     abi::emit_symbol_address(e, reg, symbol);
     op(e, &format!("ldr {arm}, [{arm}]"), &format!("mov {x86}, QWORD PTR [{x86}]"), "read the addressed collector state without retaining its address");
 }

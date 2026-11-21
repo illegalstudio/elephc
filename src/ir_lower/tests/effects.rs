@@ -155,8 +155,14 @@ echo noisy_len("b");
     let pure = named_call(main, &module, "pure_len");
     let noisy = named_call(main, &module, "noisy_len");
 
-    assert_eq!(pure.effects, Effects::PURE);
-    assert_eq!(noisy.effects, Effects::OUTPUT | Effects::MAY_THROW);
+    // strlen's source pin and retirement update heap ownership even without PHP-visible output.
+    let ownership = Effects::WRITES_HEAP | Effects::REFCOUNT_OP;
+    assert_eq!(pure.effects, ownership);
+    // Echo may run a user output-buffer callback, so the summary keeps main's MAY_THROW.
+    assert_eq!(
+        noisy.effects,
+        Effects::OUTPUT | Effects::MAY_THROW | ownership
+    );
     assert!(!pure.effects.contains(Effects::READS_FS));
     assert!(!pure.effects.contains(Effects::MAY_THROW));
 }

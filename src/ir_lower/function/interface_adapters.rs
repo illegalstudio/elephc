@@ -117,6 +117,7 @@ fn lower_interface_adapter(
         &Default::default(), // synthesized calls have no written generic arguments
         &Default::default(), // loop storage types
         &Default::default(), // string increment/decrement locals
+        &Default::default(), // ref-cell Mixed locals
         &Default::default(), // killed binding sites
         &Default::default(), // detached reference sites
         &Default::default(), // retyped binding sites

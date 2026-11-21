@@ -106,6 +106,7 @@ pub(crate) fn variadic_element_type(sig: &FunctionSig) -> Option<PhpType> {
     let (_, collector) = sig.params.iter().find(|(name, _)| name == variadic)?;
     Some(match collector {
         PhpType::Array(element) => (**element).clone(),
+        PhpType::AssocArray { value, .. } => (**value).clone(),
         other => other.clone(),
     })
 }

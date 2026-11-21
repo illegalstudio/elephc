@@ -404,6 +404,7 @@ fn emit_user_function(
         )?;
         return Ok(());
     }
+    // Every callable publishes cleanup, including synthetic Parallel workers and Async methods.
     let layout = frame::layout_for_function(
         function,
         emitter.target,
@@ -571,6 +572,7 @@ fn emit_class_method(
         )?;
         return Ok(());
     }
+    // Every callable publishes cleanup, including synthetic Parallel workers and Async methods.
     let layout = frame::layout_for_function(
         function,
         emitter.target,
@@ -889,6 +891,9 @@ fn emit_generator_body(
     shared: &mut SharedCodegenState,
     regalloc_linear: bool,
 ) -> Result<()> {
+    // A suspended generator may be abandoned without returning through this function's ordinary
+    // epilogue. Keep an activation cleanup record so object destruction can release owned locals
+    // before unmapping the coroutine stack.
     // PHP source locations belong to the body, not to the synthetic coroutine constructor.
     emit_fn_marker(emitter, function.display_name(), body_label, !function.has_source_identity());
     let layout = frame::layout_for_function(

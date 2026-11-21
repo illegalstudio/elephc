@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - By-value boxed arguments are snapshotted before later argument side effects.
 
 use super::*;
 use crate::ir_lower::context::ReferencePropertyGuard;
@@ -313,7 +314,91 @@ fn lower_signature_argument(
         None => lower_expr(ctx, arg),
     });
     record_pointer_reference_argument(ctx, sig, index, arg);
-    coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+    let lowered = coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg);
+    snapshot_call_argument(ctx, lowered, sig.ref_params.get(index).copied().unwrap_or(false), arg.span)
+}
+
+/// Evaluates one source operand without invoking its declared scalar conversion.
+pub(super) fn lower_arg_source_with_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) -> crate::ir::ValueId {
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        return lower_arg_with_signature(ctx, sig, index, arg);
+    }
+    let (place_arg, _) = ref_argument_place(arg);
+    if let Some(value) = lower_by_ref_array_element_arg_with_signature(ctx, sig, index, place_arg) {
+        return value;
+    }
+    if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, place_arg) {
+        return value;
+    }
+    if let Some(lowered) = lower_tracked_callable_array_param(ctx, sig, index, place_arg) {
+        // Capture a proven callable target in the descriptor ABI before later source effects.
+        // The PHP local stays an array; only this by-value parameter operand is materialized.
+        return snapshot_call_argument(ctx, lowered, false, arg.span);
+    }
+    let lowered = match sig.params.get(index) {
+        Some((_, param_ty)) => lower_expr_for_parameter(
+            ctx, arg, param_ty, super::integer_destinations::parameter_is_source_typed(sig, index),
+        ),
+        None => lower_expr(ctx, arg),
+    };
+    // Object parameter diagnostics are a type check, not scalar binding: they keep their
+    // source position exactly as the eager positional path does.
+    let lowered = guard_object_param_argument(ctx, sig, index, lowered, arg).unwrap_or(lowered);
+    snapshot_call_argument(ctx, lowered, false, arg.span)
+}
+
+/// Snapshots a planned value argument without performing scalar binding early.
+/// Named/spread planning consumes the same primitive after source-order evaluation.
+pub(super) fn snapshot_call_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    lowered: LoweredValue,
+    by_ref: bool,
+    span: Span,
+) -> crate::ir::ValueId {
+    // A builtin result, a fresh string cast, its persisted copy or a concat is its own owner (or a view
+    // that the call-operand owner machinery pins): no later argument can mutate it, and an extra
+    // snapshot would shadow the owner record that machinery publishes.
+    let defining = ctx.builder.value_defining_op(lowered.value);
+    if defining == Some(Op::RuntimeCall)
+        || (ctx.builder.value_php_type(lowered.value).codegen_repr() == PhpType::Str
+            && matches!(defining, Some(Op::Cast | Op::StrPersist | Op::StrCharAt | Op::StrConcat)))
+    {
+        return lowered.value;
+    }
+    // Immutable data-section strings already survive every later source effect;
+    // persisting them would invent a heap owner at legacy borrowed call surfaces.
+    if ctx.builder.value_php_type(lowered.value).codegen_repr() == PhpType::Str
+        && ctx.builder.value_ownership(lowered.value) == Ownership::Persistent
+    {
+        return lowered.value;
+    }
+    if !by_ref
+        && !ctx.elide_argument_snapshots
+        && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(lowered.value))
+        && !matches!(ctx.builder.value_php_type(lowered.value).codegen_repr(), PhpType::Buffer(_))
+    {
+        // Entry-time parameter copying is too late: another argument may mutate the
+        // source cell before the callee starts. Reference arguments remain lvalues.
+        // Snapshotting retains/copies instead of moving the source. Emit a
+        // provisional release for a string view too: a later store may widen
+        // its slot to Mixed and make this read detach an owned string. Builder
+        // finalization prunes the release when storage remains concrete.
+        let owning_source = ctx.value_needs_release_after_use(lowered);
+        let snapshot = crate::ir_lower::ownership::copy_for_php_value_binding(
+            ctx, lowered, Some(span),
+        );
+        if owning_source {
+            crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
+        }
+        super::arg_evaluation::hold_argument_snapshot(ctx, snapshot, span)
+    } else {
+        lowered.value
+    }
 }
 
 /// Shares the checker's XML selection classification before any argument is evaluated.
@@ -441,7 +526,7 @@ pub(super) fn lower_arg_with_signature_options(
     capture_values: bool,
 ) -> crate::ir::ValueId {
     if !capture_values {
-        return lower_arg_with_signature(ctx, sig, index, arg);
+        return lower_arg_source_with_signature(ctx, sig, index, arg);
     }
     if sig.ref_params.get(index).copied().unwrap_or(false) {
         promote_captured_reference_argument(ctx, arg);
@@ -498,13 +583,13 @@ pub(super) fn capture_call_argument_value(
     let captured = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         let captured = ctx.emit_owned_value(Op::MixedClone, vec![value.value], None, ty,
             Op::MixedClone.default_effects(), Some(span));
-        if ctx.value_is_owning_temporary(value) {
+        if ctx.value_needs_release_after_use(value) {
             crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
         }
         captured
     } else {
         let captured = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(span));
-        if captured.value != value.value && ctx.value_is_owning_temporary(value) {
+        if captured.value != value.value && ctx.value_needs_release_after_use(value) {
             crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
         }
         captured
@@ -886,7 +971,23 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     {
         return unbox_iterable_param_storage(ctx, value, Some(arg.span));
     }
+    if matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        && !sig.ref_params.get(index).copied().unwrap_or(false)
+        && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
+    {
+        let declared_hash = sig.declared_params.get(index).copied().unwrap_or(false)
+            && matches!(param_ty, PhpType::AssocArray { .. });
+        if declared_hash {
+            return unbox_hash_param_storage(ctx, value, param_ty.clone(), Some(arg.span));
+        }
+        return unbox_array_param_storage(ctx, value, param_ty.clone(), Some(arg.span));
+    }
     if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+        let parameter = ctx.intern_string(&sig.params[index].0);
+        let guard = if ctx.argument_strict_types {
+            Op::StrictStringArgumentGuard
+        } else { Op::StringArgumentGuard };
+        ctx.emit_void(guard, vec![value.value], Some(Immediate::Data(parameter)), guard.default_effects(), Some(arg.span));
         return coerce_to_string(ctx, value, arg);
     }
     if bindable {
@@ -1197,22 +1298,14 @@ pub(super) fn coerce_operands_to_params(
     sig: &FunctionSig,
     mut operands: Vec<crate::ir::ValueId>,
 ) -> Vec<crate::ir::ValueId> {
-    let regular_param_count = crate::types::call_args::regular_param_count(sig);
-    let limit = operands.len().min(regular_param_count);
-    let needs_coercion = (0..limit)
-        .map(|index| operand_needs_param_coercion(ctx, sig, &operands, index))
-        .collect::<Vec<_>>();
-    if needs_coercion.iter().any(|needs_coercion| *needs_coercion) {
-        // Source evaluation has completed, but any parameter conversion below can throw.
-        // Publish the one last source value that did not need protection during source
-        // evaluation, plus synthesized owned operands, before the first conversion runs.
+    let limit = operands.len().min(crate::types::call_args::regular_param_count(sig));
+    if (0..limit).any(|index| operand_needs_param_coercion(ctx, sig, &operands, index)) {
+        // All source effects have run. Root every by-value input before any binding may throw.
         for index in 0..limit {
-            if sig.ref_params.get(index).copied().unwrap_or(false) {
-                continue;
+            if !sig.ref_params.get(index).copied().unwrap_or(false) {
+                let source = lowered_value_from_id(ctx, operands[index]);
+                operands[index] = root_evaluated_call_argument(ctx, source, Span::dummy()).value;
             }
-            let lowered = lowered_value_from_id(ctx, operands[index]);
-            operands[index] =
-                root_evaluated_call_argument(ctx, lowered, Span::dummy()).value;
         }
     }
     for index in 0..limit {
@@ -1240,6 +1333,19 @@ pub(super) fn coerce_operands_to_params(
                 value,
                 ir_type: ctx.builder.value_type(value),
             };
+            let parameter = ctx.intern_string(&sig.params[index].0);
+            let guard = if ctx.argument_strict_types {
+                Op::StrictStringArgumentGuard
+            } else {
+                Op::StringArgumentGuard
+            };
+            ctx.emit_void(
+                guard,
+                vec![value],
+                Some(Immediate::Data(parameter)),
+                guard.default_effects(),
+                None,
+            );
             let coerced = coerce_to_string_at_span(ctx, lowered, None);
             operands[index] =
                 root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
@@ -1646,6 +1752,110 @@ pub(super) fn lower_args_with_signature(
     lower_args_with_signature_options(ctx, sig, args, false, false)
 }
 
+/// Lowers arguments for an EIR callable whose variadic capture uses a tagged Mixed ABI slot.
+pub(super) fn lower_args_with_eir_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    lower_args_with_eir_abi(ctx, None, sig, args)
+}
+
+/// Keeps PHP argument planning separate from a user function's effective boxed EIR ABI.
+pub(super) fn lower_args_with_eir_user_function_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    owner: &str,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    lower_args_with_eir_abi(ctx, Some(owner), sig, args)
+}
+
+/// Materializes the effective boxed EIR ABI after shared PHP argument planning.
+fn lower_args_with_eir_abi(
+    ctx: &mut LoweringContext<'_, '_>,
+    owner: Option<&str>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let Some(sig) = sig else {
+        return lower_args(ctx, args);
+    };
+    let eir_sig = if let Some(owner) = owner {
+        crate::ir_lower::function::eir_signature_with_php_param_contracts(owner, sig, ctx.callable_param_sigs)
+    } else {
+        crate::ir_lower::function::eir_signature_with_associative_variadic_storage(sig)
+    };
+    let mut operands = lower_args_with_signature(ctx, Some(sig), args);
+    // Only a resolved user function supplies the authoritative EIR parameter ABI here.
+    // Native constructors/method intrinsics may expose a permissive PHP signature while
+    // their dedicated lowering still owns scalar/string materialization.
+    let boxed_regular_count = if owner.is_some() {
+        crate::types::call_args::regular_param_count(sig).min(operands.len())
+    } else {
+        0
+    };
+    for index in 0..boxed_regular_count {
+        if eir_sig.ref_params.get(index).copied().unwrap_or(false)
+            || eir_sig.params[index].1.codegen_repr() != PhpType::Mixed
+            || ctx.builder.value_php_type(operands[index]).codegen_repr() == PhpType::Mixed
+        {
+            continue;
+        }
+        // Expose allocating ABI conversions to EIR so both success and throw argument-cleanup
+        // edges can release them. Source expressions have already been evaluated exactly once.
+        let source = lowered_value_from_id(ctx, operands[index]);
+        let span = args.first().map(|arg| arg.span);
+        operands[index] = ctx.box_value_as_mixed(source, PhpType::Mixed, span).value;
+    }
+    let Some(variadic_name) = eir_sig.variadic.as_deref() else {
+        return operands;
+    };
+    let Some(variadic_index) = eir_sig
+        .params
+        .iter()
+        .position(|(name, _)| name == variadic_name)
+    else {
+        return operands;
+    };
+    if eir_sig
+        .ref_params
+        .get(variadic_index)
+        .copied()
+        .unwrap_or(false)
+    {
+        return operands;
+    }
+    let Some(value) = operands.get(variadic_index).copied() else {
+        return operands;
+    };
+    let target_ty = eir_sig.params[variadic_index].1.clone();
+    let source_ty = ctx.builder.value_php_type(value).codegen_repr();
+    let conversion = match (&target_ty, &source_ty) {
+        (PhpType::AssocArray { value: target_value, .. }, PhpType::Array(_))
+            if target_value.codegen_repr() == PhpType::Mixed => Some(Op::ArrayToHash),
+        (PhpType::AssocArray { value: target_value, .. }, PhpType::AssocArray { value, .. })
+            if target_value.codegen_repr() == PhpType::Mixed
+                && value.codegen_repr() != PhpType::Mixed =>
+        {
+            Some(Op::HashToMixed)
+        }
+        _ => None,
+    };
+    if let Some(op) = conversion {
+        let span = args.first().map(|arg| arg.span);
+        let hash = ctx.emit_value(
+            op,
+            vec![value],
+            None,
+            target_ty,
+            op.default_effects(),
+            span,
+        );
+        operands[variadic_index] = hash.value;
+    }
+    operands
+}
 
 /// Lowers arguments while preserving omission of trailing default-only parameter slots.
 pub(super) fn lower_args_with_signature_trimming_trailing_defaults(
@@ -1671,6 +1881,73 @@ pub(super) fn lower_args_with_signature_options(
 
 /// Promotes one runtime-parser output when its argument is evaluated in source order.
 pub(super) fn lower_args_with_signature_options_for_capture(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    trim_trailing_defaults: bool,
+    capture_values: bool,
+    capture_output_index: Option<(usize, PhpType)>,
+) -> Vec<crate::ir::ValueId> {
+    // Argument lists that only read literals or existing locals cannot throw between snapshots,
+    // so they need no cleanup handler. Skipping it keeps `throw new E("literal")` a plain
+    // terminating block and keeps loop counters free of exceptional edges. A variadic signature
+    // builds a collector that must stay protected while its elements bind.
+    let literal_only = sig.is_some_and(|sig| sig.variadic.is_none())
+        && args.iter().all(|arg| argument_evaluation_cannot_throw(ctx, arg));
+    if literal_only && sig.is_some() && !args.is_empty() {
+        // No sibling argument can mutate or throw, so by-value reads need no snapshot.
+        let previous = std::mem::replace(&mut ctx.elide_argument_snapshots, true);
+        let operands = lower_args_with_signature_options_inner(
+            ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
+        );
+        ctx.elide_argument_snapshots = previous;
+        return operands;
+    }
+    if sig.is_some() && !args.is_empty() {
+        // A lone positional argument has no sibling that could mutate it, so it needs no
+        // snapshot either. The flag is scoped to this list: nested calls decide for themselves.
+        let single_argument = sig.is_some_and(|sig| sig.variadic.is_none())
+            && args.len() == 1
+            && !matches!(args[0].kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. });
+        return super::arg_evaluation::protect_argument_evaluation(ctx, args[0].span, |ctx| {
+            let previous = std::mem::replace(&mut ctx.elide_argument_snapshots, single_argument);
+            let mut operands = lower_args_with_signature_options_inner(
+                ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
+            );
+            ctx.elide_argument_snapshots = previous;
+            if let Some(signature) = sig.filter(|signature| variadic_param_is_by_ref(signature)) {
+                if let Some(index) = crate::types::signatures::variadic_param_index(signature) {
+                    if let Some(value) = operands.get(index).copied() {
+                        let value = lowered_value_from_id(ctx, value);
+                        operands[index] = super::arg_evaluation::detach_reference_variadic_snapshot(
+                            ctx, value, args[0].span,
+                        ).value;
+                    }
+                }
+            }
+            operands
+        });
+    }
+    lower_args_with_signature_options_inner(ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index)
+}
+
+/// Returns whether evaluating one argument is a plain read that can never throw.
+///
+/// A snapshot taken for an earlier argument can only leak when a later source evaluation throws;
+/// parameter conversions root their operands before they can throw. Literals, `$this` and reads
+/// of locals that already own a slot cannot throw, so such lists need no cleanup handler. Keeping
+/// the handler out also keeps counter proofs (which fail closed on handlers) applicable.
+fn argument_evaluation_cannot_throw(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
+    match &arg.kind {
+        ExprKind::StringLiteral(_) | ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_) | ExprKind::Null | ExprKind::This => true,
+        ExprKind::Variable(name) => ctx.local_slots.contains_key(name),
+        _ => false,
+    }
+}
+
+/// Applies source-order capture/ref preparation before parameter-order binding and packing.
+fn lower_args_with_signature_options_inner(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     args: &[Expr],
@@ -1773,12 +2050,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         })
         .collect();
     if !trim_trailing_defaults {
-        for idx in fixed_arg_count..regular_param_count {
-            let Some(Some(default)) = sig.defaults.get(idx) else {
-                break;
-            };
-            operands.push(lower_arg_with_signature(ctx, sig, idx, default));
-        }
+        materialize_positional_argument_defaults(ctx, sig, fixed_arg_count, &mut operands);
     }
     if sig.variadic.is_some() {
         let tail = if args.len() > regular_param_count {
@@ -1786,10 +2058,13 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         } else {
             &[]
         };
+        let source_values = prepare_variadic_tail_values(ctx, sig, tail);
+        operands = coerce_operands_to_params(ctx, sig, operands);
         if crate::func_args::sig_has_hidden_argc_param(sig) {
             operands.push(emit_i64_at_span(ctx, args.len() as i64, crate::span::Span::dummy()).value);
         }
-        operands.push(lower_variadic_tail_array(ctx, sig, tail, args.len()).value);
+        operands.push(lower_variadic_tail_array_from_values(ctx, sig, tail, &source_values, args.len()).value);
+        return operands;
     }
     coerce_operands_to_params(ctx, sig, operands)
 }
@@ -2001,4 +2276,17 @@ fn property_argument_is_declared(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> b
                     matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
                 })
         })
+}
+
+/// Materializes omitted positional defaults through the shared signature and parameter binding.
+pub(super) fn materialize_positional_argument_defaults(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    supplied: usize,
+    operands: &mut Vec<crate::ir::ValueId>,
+) {
+    for index in supplied..crate::types::call_args::regular_param_count(sig) {
+        let Some(Some(default)) = sig.defaults.get(index) else { break; };
+        operands.push(lower_arg_with_signature(ctx, sig, index, default));
+    }
 }

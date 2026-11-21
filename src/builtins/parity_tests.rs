@@ -42,11 +42,14 @@ fn php_visible_extension_builtins() -> Vec<String> {
 /// Every injected prelude's declarations, as the AST the pipeline really injects.
 ///
 /// All are built in Rust except `curl_prelude`, which still tokenizes and parses PHP text
-/// at injection time; this function parses it exactly as the pipeline does so both kinds of
-/// surface sit inside the same structural audits.
+/// at injection time. `async_prelude` retains PHP source as a test oracle, but this function
+/// receives the transcribed AST the pipeline injects.
 fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program)> {
     let mut built = vec![
         ("bcmath_prelude", crate::bcmath_prelude::bcmath_declarations()),
+        ("task_prelude", crate::task_prelude::task_declarations()),
+        ("task_prelude(facade)", crate::task_prelude::facade_declarations()),
+        ("async_prelude", crate::async_prelude::async_declarations()),
         ("hash_prelude", crate::hash_prelude::hash_declarations()),
         ("core_prelude", crate::core_prelude::core_declarations()),
         ("random_prelude", crate::random_prelude::random_declarations()),
@@ -498,7 +501,18 @@ fn prelude_contracts_match_their_injected_signatures() {
 /// both a longer identifier (`__elephc_curl_easy_body(` for the contract name
 /// `curl_easy_body`) and a prose mention inside a `//` or `*` comment line.
 fn parse_prelude_declaration(source: &str, name: &str) -> Option<Vec<PreludeParam>> {
-    let needle = format!("function {name}(");
+    let (namespace, declaration) = name
+        .rsplit_once('\\')
+        .map_or((None, name), |(namespace, declaration)| {
+            (Some(namespace), declaration)
+        });
+    if let Some(namespace) = namespace {
+        let namespace_needle = format!("namespace {namespace}").to_ascii_lowercase();
+        if !source.to_ascii_lowercase().contains(&namespace_needle) {
+            return None;
+        }
+    }
+    let needle = format!("function {declaration}(");
     let start = source
         .match_indices(&needle)
         .find(|(index, _)| {

@@ -89,7 +89,7 @@ mod tests {
             let first = asm.find("__rt_decref_any").unwrap();
             let second = asm.find("__rt_callable_descriptor_release").unwrap();
             let free = asm.find("__rt_heap_free").unwrap();
-            let restore = asm.rfind("_gc_release_suppressed").unwrap();
+            let restore = asm.rfind(&crate::codegen_support::runtime::test_slot_ref(target.arch, "_gc_release_suppressed")).unwrap();
             let chain = asm.find("__rt_exception_chain").unwrap();
             let throw = asm.find("__rt_throw_current").unwrap();
             assert!(first < second && second < free && free < restore, "{name}");

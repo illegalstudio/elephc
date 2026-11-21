@@ -121,7 +121,7 @@ mod tests {
             let arch = emitter.target.arch;
             let assembly = emitter.output();
             let authenticate = assembly.find("__rt_reference_cell_owner").unwrap();
-            let records = assembly.find("_exc_call_frame_top").unwrap();
+            let records = assembly.find(&crate::codegen_support::runtime::test_slot_ref(arch, "_exc_call_frame_top")).unwrap();
             let retain = assembly.rfind("__rt_incref").unwrap();
             assert!(authenticate < records && records < retain, "{target}: authenticate before claim or retain");
             assert!(assembly.contains("__rt_cleanup_call_reference_argument"), "{target}: only argument owners transfer");

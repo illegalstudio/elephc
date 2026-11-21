@@ -17,10 +17,15 @@
 //!   are not yet supported and abort with a fatal diagnostic rather than
 //!   copying an unretained user capture.
 //! - Verified on macOS, iOS device/Simulator, and Linux AArch64 plus Linux x86_64.
+//! - Eval adapters prefer a five-argument context-aware hook; legacy four-argument
+//!   hooks remain separate and native descriptors need no Magician dependency.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::names::CALLED_CLASS_ID_LOCAL;
+
+#[cfg(test)]
+mod foreign_context_tests;
 
 const CALLED_CLASS_ID_SUFFIX: u32 = u32::from_le_bytes(*b"#gen");
 const CALLED_CLASS_ID_SUFFIX_OFFSET: usize = CALLED_CLASS_ID_LOCAL.len() - size_of::<u32>();
@@ -59,9 +64,18 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
         crate::codegen_support::callable_descriptor::CALLABLE_DESC_KIND_CALLBACK_ADAPTER
     ));
     emitter.instruction("b.ne __rt_closure_bind_native");                       // native descriptors keep the capture-shape path
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_elephc_eval_closure_bind_ctx_fn");
+    emitter.instruction("ldr x10, [x10]");                                      // load the optional five-argument eval rebinding hook
+    emitter.instruction("cbnz x10, __rt_closure_bind_context_hook");            // prefer explicit arena propagation when v2 is installed
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_elephc_eval_closure_bind_fn");
     emitter.instruction("ldr x10, [x10]");                                      // x10 = Magician's rebinding callback, or null
     emitter.instruction("cbz x10, __rt_closure_bind_unsupported");              // no eval support linked: keep the fatal answer
+    emitter.instruction("b __rt_closure_bind_hook_ready");                      // legacy callbacks retain their four-argument ABI
+    emitter.label("__rt_closure_bind_context_hook");
+    let arena_arg = crate::codegen_support::abi::int_arg_reg_name(emitter.target, 4);
+    let arena_reg = crate::codegen_support::runtime::ctx::ctx_reg(emitter);
+    crate::codegen_support::abi::emit_reg_move(emitter, arena_arg, arena_reg);
+    emitter.label("__rt_closure_bind_hook_ready");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the adapter descriptor
     emitter.instruction("ldr x0, [x9, #64]");                                   // pass the captured eval context
     emitter.instruction("ldr x1, [x9, #80]");                                   // pass the captured boxed callback
@@ -225,10 +239,20 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
         crate::codegen_support::callable_descriptor::CALLABLE_DESC_KIND_CALLBACK_ADAPTER
     ));
     emitter.instruction("jne __rt_closure_bind_native");                        // native descriptors keep the capture-shape path
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_elephc_eval_closure_bind_ctx_fn");
+    emitter.instruction("mov r11, [r11]");                                      // load the explicitly versioned five-argument hook
+    emitter.instruction("test r11, r11");                                       // determine whether the caller arena can be published
+    emitter.instruction("jnz __rt_closure_bind_context_hook");                  // prefer the context-aware hook without changing v1
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_elephc_eval_closure_bind_fn");
     emitter.instruction("mov r11, [r11]");                                      // r11 = Magician's rebinding callback, or null
     emitter.instruction("test r11, r11");                                       // is eval support linked at all?
     emitter.instruction("jz __rt_closure_bind_unsupported");                    // no: keep the fatal answer
+    emitter.instruction("jmp __rt_closure_bind_hook_ready");                    // keep the legacy callback's four-argument contract
+    emitter.label("__rt_closure_bind_context_hook");
+    let arena_arg = crate::codegen_support::abi::int_arg_reg_name(emitter.target, 4);
+    let arena_reg = crate::codegen_support::runtime::ctx::ctx_reg(emitter);
+    crate::codegen_support::abi::emit_reg_move(emitter, arena_arg, arena_reg);
+    emitter.label("__rt_closure_bind_hook_ready");
     emitter.instruction("mov r10, [rsp+0]");                                    // reload the adapter descriptor
     emitter.instruction("mov rdi, [r10+64]");                                   // pass the captured eval context
     emitter.instruction("mov rsi, [r10+80]");                                   // pass the captured boxed callback

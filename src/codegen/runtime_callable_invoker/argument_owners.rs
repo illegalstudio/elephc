@@ -194,7 +194,7 @@ mod tests {
             } else { "lea rax, [rsp + 48]" };
             assert!(assembly.contains(data), "{name}: an extended inventory cannot use the compact guard marker");
             assert!(assembly.contains("invoker_owners_probe_cleanup"), "{name}: {assembly}");
-            assert!(assembly.contains("_exc_call_frame_top"), "{name}: {assembly}");
+            assert!(assembly.contains(&crate::codegen_support::runtime::ctx::test_field_ref(target.arch, crate::codegen_support::runtime::ctx::CTX_EXC_CALL_FRAME_TOP_OFFSET)), "{name}: {assembly}");
         }
     }
 

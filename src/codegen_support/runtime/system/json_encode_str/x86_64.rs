@@ -44,6 +44,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // `test r15, N` instead of an rip-relative load.
     emitter.instruction("sub rsp, 80");                                         // reserve local slots + slot for the cached-flag callee-saved register
     emitter.instruction("mov QWORD PTR [rbp - 80], r15");                       // save callee-saved r15 across the encode call
+    emitter.instruction("mov QWORD PTR [rbp - 64], rbx");                       // preserve the caller's rbx (allocator-assigned cross-call register) before scratch use
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source string pointer across the JSON escaping loop
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the source string length across the JSON escaping loop
 
@@ -83,6 +84,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("call __rt_concat_publish");                            // advance _concat_off past a scratch-backed slice (rax/rdx preserved)
     // rdx already holds the source length; reuse it as the result length.
     emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 64]");                       // restore the caller's callee-saved rbx value
     emitter.instruction("mov rsp, rbp");                                        // unwind the scratch frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the unquoted numeric slice
@@ -196,42 +198,42 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_json_str_close");                             // finish by writing the closing quote once the whole source slice has been escaped
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the source string pointer for the current byte fetch
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the current concat-buffer write pointer before appending the next escaped byte
-    emitter.instruction("movzx r14, BYTE PTR [r10 + r13]");                     // load the next source byte and widen it so escape comparisons stay unsigned
-    emitter.instruction("cmp r14b, 34");                                        // does the source byte equal a JSON double quote?
+    emitter.instruction("movzx rbx, BYTE PTR [r10 + r13]");                     // load the next source byte and widen it so escape comparisons stay unsigned
+    emitter.instruction("cmp bl, 34");                                          // does the source byte equal a JSON double quote?
     emitter.instruction("je __rt_json_str_esc_quote");                          // escape embedded double quotes as \\"
-    emitter.instruction("cmp r14b, 92");                                        // does the source byte equal a backslash?
+    emitter.instruction("cmp bl, 92");                                          // does the source byte equal a backslash?
     emitter.instruction("je __rt_json_str_esc_backslash");                      // escape embedded backslashes as \\\\
-    emitter.instruction("cmp r14b, 10");                                        // does the source byte equal a newline?
+    emitter.instruction("cmp bl, 10");                                          // does the source byte equal a newline?
     emitter.instruction("je __rt_json_str_esc_n");                              // escape newlines as \\n
-    emitter.instruction("cmp r14b, 13");                                        // does the source byte equal a carriage return?
+    emitter.instruction("cmp bl, 13");                                          // does the source byte equal a carriage return?
     emitter.instruction("je __rt_json_str_esc_r");                              // escape carriage returns as \\r
-    emitter.instruction("cmp r14b, 9");                                         // does the source byte equal a horizontal tab?
+    emitter.instruction("cmp bl, 9");                                           // does the source byte equal a horizontal tab?
     emitter.instruction("je __rt_json_str_esc_t");                              // escape tabs as \\t
 
-    emitter.instruction("cmp r14b, 8");                                         // does the source byte equal a backspace?
+    emitter.instruction("cmp bl, 8");                                           // does the source byte equal a backspace?
     emitter.instruction("je __rt_json_str_esc_b");                              // escape it as \\b
-    emitter.instruction("cmp r14b, 12");                                        // does the source byte equal a form-feed?
+    emitter.instruction("cmp bl, 12");                                          // does the source byte equal a form-feed?
     emitter.instruction("je __rt_json_str_esc_f");                              // escape it as \\f
     // Any remaining control byte (< 0x20) routes through the unicode-escape
     // helper so the encoder never produces invalid JSON. The \\r/\\n/\\t/\\b/\\f
     // cases were filtered out above, so this catches 0x00..0x07, 0x0B, and
     // 0x0E..0x1F.
-    emitter.instruction("cmp r14b, 32");                                        // is the source byte a remaining control byte (< 0x20)?
+    emitter.instruction("cmp bl, 32");                                          // is the source byte a remaining control byte (< 0x20)?
     emitter.instruction("jb __rt_json_str_emit_ctrl_unicode");                  // route through the unicode-escape helper
 
     // -- JSON_HEX_TAG: '<' and '>' optionally encoded as \\u003C / \\u003E --
-    emitter.instruction("cmp r14b, 60");                                        // does the source byte equal '<'?
+    emitter.instruction("cmp bl, 60");                                          // does the source byte equal '<'?
     emitter.instruction("je __rt_json_str_check_hex_tag_x");                    // route to the JSON_HEX_TAG flag check
-    emitter.instruction("cmp r14b, 62");                                        // does the source byte equal '>'?
+    emitter.instruction("cmp bl, 62");                                          // does the source byte equal '>'?
     emitter.instruction("je __rt_json_str_check_hex_tag_x");                    // route to the JSON_HEX_TAG flag check
     // -- JSON_HEX_AMP: '&' optionally encoded as \\u0026 --
-    emitter.instruction("cmp r14b, 38");                                        // does the source byte equal '&'?
+    emitter.instruction("cmp bl, 38");                                          // does the source byte equal '&'?
     emitter.instruction("je __rt_json_str_check_hex_amp_x");                    // route to the JSON_HEX_AMP flag check
     // -- JSON_HEX_APOS: '\\'' optionally encoded as \\u0027 --
-    emitter.instruction("cmp r14b, 39");                                        // does the source byte equal '\\''?
+    emitter.instruction("cmp bl, 39");                                          // does the source byte equal '\\''?
     emitter.instruction("je __rt_json_str_check_hex_apos_x");                   // route to the JSON_HEX_APOS flag check
 
-    emitter.instruction("cmp r14b, 47");                                        // does the source byte equal a forward slash?
+    emitter.instruction("cmp bl, 47");                                          // does the source byte equal a forward slash?
     emitter.instruction("jne __rt_json_str_check_unicode_x");                   // skip the slash branch when the byte is something else
     emitter.instruction("test r15, 64");                                        // is JSON_UNESCAPED_SLASHES (bit 64) set? (cached flag)
     emitter.instruction("je __rt_json_str_esc_slash");                          // when the flag is clear, escape the slash as \/
@@ -239,7 +241,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
 
     // -- UTF-8 multibyte: escape to \uXXXX unless JSON_UNESCAPED_UNICODE is set --
     emitter.label("__rt_json_str_check_unicode_x");
-    emitter.instruction("cmp r14b, 128");                                       // is the source byte ASCII (< 0x80)?
+    emitter.instruction("cmp bl, 128");                                         // is the source byte ASCII (< 0x80)?
     emitter.instruction("jb __rt_json_str_check_done");                         // ASCII bytes copy as-is
     // Decode multibyte sequences before choosing raw UTF-8 or an escape.
     // U+2028 and U+2029 require both unescaped flags, even when other Unicode
@@ -247,7 +249,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_json_str_utf8_dispatch_x");                   // validate and decode the next UTF-8 sequence
 
     emitter.label("__rt_json_str_check_done");
-    emitter.instruction("mov BYTE PTR [r11], r14b");                            // copy ordinary bytes directly into the concat buffer without any escape expansion
+    emitter.instruction("mov BYTE PTR [r11], bl");                              // copy ordinary bytes directly into the concat buffer without any escape expansion
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer write pointer after the copied ordinary byte
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // persist the updated write pointer after copying the ordinary byte
     emitter.instruction("add r13, 1");                                          // advance to the next source byte after copying the ordinary byte
@@ -295,13 +297,13 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_json_str_check_done");                        // otherwise copy the byte verbatim
 
     // -- shared hex-escape emission: writes the 6-byte \\u00XX sequence --
-    // Inputs: r14b = source byte, r11 = current write pointer, r13 = source index
+    // Inputs: bl = source byte, r11 = current write pointer, r13 = source index
     emitter.label("__rt_json_str_emit_hex_x");
     emitter.instruction("mov BYTE PTR [r11], 92");                              // emit the backslash prefix
     emitter.instruction("mov BYTE PTR [r11 + 1], 117");                         // emit the unicode marker 'u'
     emitter.instruction("mov BYTE PTR [r11 + 2], 48");                          // emit the high padding zero
     emitter.instruction("mov BYTE PTR [r11 + 3], 48");                          // emit the second high padding zero
-    emitter.instruction("movzx r9, r14b");                                      // widen the source byte for arithmetic on a full register
+    emitter.instruction("movzx r9, bl");                                        // widen the source byte for arithmetic on a full register
     emitter.instruction("mov r12, r9");                                         // copy the byte for the high-nibble extraction
     emitter.instruction("shr r12, 4");                                          // extract the high nibble
     emitter.instruction("and r12, 0xF");                                        // mask to four bits
@@ -383,7 +385,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // Reuses the existing __rt_json_str_emit_u16_x helper, which expects
     // the codepoint in rdi and the running write pointer in r11.
     emitter.label("__rt_json_str_emit_ctrl_unicode");
-    emitter.instruction("movzx rdi, r14b");                                     // pass the control-byte codepoint to the emit helper
+    emitter.instruction("movzx rdi, bl");                                       // pass the control-byte codepoint to the emit helper
     emitter.instruction("mov QWORD PTR [rbp - 48], r13");                       // checkpoint the source index across the helper call
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the running write pointer
     emitter.instruction("call __rt_json_str_emit_u16_x");                       // emit \\u00XX for the control byte
@@ -399,16 +401,16 @@ pub(super) fn emit(emitter: &mut Emitter) {
     // sequences forbidden by RFC 3629). Both classes route to the
     // malformed handler so JSON_INVALID_UTF8_* and JSON_ERROR_UTF8 see
     // the same input each implementation observes on ARM64.
-    emitter.instruction("cmp r14b, 0xC2");                                      // is the lead byte below the smallest valid 2-byte start (0xC2)?
+    emitter.instruction("cmp bl, 0xC2");                                        // is the lead byte below the smallest valid 2-byte start (0xC2)?
     emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // route to the malformed handler
-    emitter.instruction("cmp r14b, 0xF5");                                      // is the lead byte at/above the first invalid 4+ byte range (0xF5)?
+    emitter.instruction("cmp bl, 0xF5");                                        // is the lead byte at/above the first invalid 4+ byte range (0xF5)?
     emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // route to the malformed handler
 
-    emitter.instruction("cmp r14b, 0xE0");                                      // lead byte 0xE0+ → 3- or 4-byte sequence
+    emitter.instruction("cmp bl, 0xE0");                                        // lead byte 0xE0+ → 3- or 4-byte sequence
     emitter.instruction("jb __rt_json_str_utf8_2_x");                           // otherwise (0xC2..0xDF) → 2-byte sequence
-    emitter.instruction("cmp r14b, 0xF0");                                      // lead byte 0xF0+ → 4-byte sequence
+    emitter.instruction("cmp bl, 0xF0");                                        // lead byte 0xF0+ → 4-byte sequence
     emitter.instruction("jb __rt_json_str_utf8_3_x");                           // otherwise (0xE0..0xEF) → 3-byte sequence
     emitter.instruction("jmp __rt_json_str_utf8_4_x");                          // 4-byte sequence (codepoint ≥ 0x10000)
 
@@ -430,7 +432,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("cmp r8, 0xC0");                                        // continuation bytes end at 0xBF
     emitter.instruction("mov r12, 1");                                          // bytes consumed before this malformed sequence
     emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
-    emitter.instruction("movzx rax, r14b");                                     // widen the lead byte for arithmetic
+    emitter.instruction("movzx rax, bl");                                       // widen the lead byte for arithmetic
     emitter.instruction("and rax, 0x1F");                                       // b1 & 0x1F → top 5 bits
     emitter.instruction("shl rax, 6");                                          // shift into bits 6..10
     emitter.instruction("and r8, 0x3F");                                        // b2 & 0x3F → low 6 bits
@@ -463,8 +465,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range -> malformed
     emitter.instruction("cmp rcx, 0xC0");                                       // continuation bytes end at 0xBF
     emitter.instruction("mov r12, 2");                                          // an invalid b3 consumes the lead byte and b2
-    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 -> malformed
-    emitter.instruction("movzx rax, r14b");                                     // widen the lead byte
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
+    emitter.instruction("movzx rax, bl");                                       // widen the lead byte
     emitter.instruction("and rax, 0x0F");                                       // b1 & 0x0F → top 4 bits
     emitter.instruction("shl rax, 12");                                         // shift into bits 12..15
     emitter.instruction("and r8, 0x3F");                                        // b2 & 0x3F → middle 6 bits
@@ -519,8 +521,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_json_str_utf8_malformed_x");                   // below the continuation range -> malformed
     emitter.instruction("cmp r9, 0xC0");                                        // continuation bytes end at 0xBF
     emitter.instruction("mov r12, 3");                                          // an invalid b4 consumes the lead byte, b2 and b3
-    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 -> malformed
-    emitter.instruction("movzx rax, r14b");                                     // widen the lead byte
+    emitter.instruction("jae __rt_json_str_utf8_malformed_x");                  // at/above 0xC0 → malformed
+    emitter.instruction("movzx rax, bl");                                       // widen the lead byte
     emitter.instruction("and rax, 0x07");                                       // b1 & 0x07 → top 3 bits
     emitter.instruction("shl rax, 18");                                         // shift into bits 18..20
     emitter.instruction("and r8, 0x3F");                                        // b2 & 0x3F → 6 bits
@@ -806,6 +808,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("sub rdx, rax");                                        // compute the final encoded-string length from write_end - write_start
     emitter.instruction("call __rt_concat_publish");                            // advance _concat_off past a scratch-backed result (rax/rdx preserved)
     emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
+    emitter.instruction("mov rbx, QWORD PTR [rbp - 64]");                       // restore the caller's callee-saved rbx value
     emitter.instruction("add rsp, 80");                                         // release the local JSON-string scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
     emitter.instruction("ret");                                                 // return the encoded JSON string slice in the x86_64 string result registers

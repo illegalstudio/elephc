@@ -201,6 +201,15 @@ fn test_error_enum_cannot_declare_abstract_methods() {
     expect_error("<?php trait T { abstract public function missing(); } enum Mode { use T; case Active; }", "Enum method Mode::missing cannot be abstract");
 }
 
+/// Rejects invented execution modes rather than silently choosing an execution engine.
+#[test]
+fn task_execution_enum_rejects_unknown_mode() {
+    expect_error(
+        "<?php \\Elephc\\Task\\Execution::Automatic;",
+        "Undefined enum case: Elephc\\Task\\Execution::Automatic",
+    );
+}
+
 /// Verifies that checking multiple classes with conflicting magic method contracts
 /// (private vs public `__toString`) produces at least two distinct errors.
 /// Uses `check_source_full` to collect and flatten all diagnostics.

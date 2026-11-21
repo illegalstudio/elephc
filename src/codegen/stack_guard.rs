@@ -80,7 +80,19 @@ pub(super) fn emit_stack_limit_check(emitter: &mut Emitter, ok_label: &str) {
     emitter.comment("call-stack overflow guard");
     match emitter.target.arch {
         Arch::AArch64 => {
-            if emitter.pic_data_refs {
+            if let Some(field) =
+                crate::codegen_support::runtime::ctx::per_context_symbol_offset(
+                    emitter,
+                    STACK_LIMIT_SYMBOL,
+                )
+            {
+                // A ctx build reads THIS context's floor. Routed here rather than through
+                // `emit_cmp_reg_to_symbol` so the sequence stays two instructions, the same
+                // length as the legacy `adrp`/`ldr` pair below: this runs in every function
+                // prologue that carries a guard.
+                crate::codegen_support::runtime::ctx::emit_ctx_load(emitter, "x9", field);
+                emitter.instruction("cmp sp, x9");                              // is the freshly reserved frame below this context's stack floor?
+            } else if emitter.pic_data_refs {
                 // PIC builds must reach the limit through the GOT; the shared helper owns
                 // that sequence and leaves the comparison flags set the same way.
                 abi::emit_cmp_reg_to_symbol(emitter, "sp", STACK_LIMIT_SYMBOL);
@@ -118,20 +130,33 @@ mod tests {
     #[test]
     fn test_prologue_check_macos_aarch64() {
         let asm = check_asm(Target::new(Platform::MacOS, Arch::AArch64));
-        assert!(asm.contains("adrp x9, _stack_limit@PAGE"), "{asm}");
-        assert!(asm.contains("ldr x9, [x9, _stack_limit@PAGEOFF]"), "{asm}");
+        assert!(
+            asm.contains(&format!(
+                "ldr x9, [x28, #{}]",
+                crate::codegen_support::runtime::ctx::CTX_STACK_LIMIT_OFFSET
+            )),
+            "{asm}"
+        );
         assert!(asm.contains("cmp sp, x9"), "{asm}");
         assert!(asm.contains("b.hs _test_stack_ok"), "{asm}");
         assert!(asm.contains("b __rt_stack_overflow"), "{asm}");
         assert!(asm.contains("_test_stack_ok:"), "{asm}");
     }
 
-    /// linux-aarch64 emits the same guard through the ELF `:lo12:` relocation spelling.
+    /// linux-aarch64 emits the same guard. It used to differ in the relocation spelling
+    /// (`:lo12:` against `@PAGEOFF`); the floor is a ctx field now, so there is no symbol
+    /// to relocate and the two targets converge. Kept as a separate test because the
+    /// BRANCH shape is what matters here, and it is per-target.
     #[test]
     fn test_prologue_check_linux_aarch64() {
         let asm = check_asm(Target::new(Platform::Linux, Arch::AArch64));
-        assert!(asm.contains("adrp x9, _stack_limit"), "{asm}");
-        assert!(asm.contains("ldr x9, [x9, :lo12:_stack_limit]"), "{asm}");
+        assert!(
+            asm.contains(&format!(
+                "ldr x9, [x28, #{}]",
+                crate::codegen_support::runtime::ctx::CTX_STACK_LIMIT_OFFSET
+            )),
+            "{asm}"
+        );
         assert!(asm.contains("cmp sp, x9"), "{asm}");
         assert!(asm.contains("b.hs _test_stack_ok"), "{asm}");
         assert!(asm.contains("b __rt_stack_overflow"), "{asm}");
@@ -143,7 +168,10 @@ mod tests {
     fn test_prologue_check_linux_x86_64() {
         let asm = check_asm(Target::new(Platform::Linux, Arch::X86_64));
         assert!(
-            asm.contains("cmp rsp, QWORD PTR [rip + _stack_limit]"),
+            asm.contains(&format!(
+                "cmp rsp, QWORD PTR [r14 + {}]",
+                crate::codegen_support::runtime::ctx::CTX_STACK_LIMIT_OFFSET
+            )),
             "{asm}"
         );
         assert!(asm.contains("jb __rt_stack_overflow"), "{asm}");

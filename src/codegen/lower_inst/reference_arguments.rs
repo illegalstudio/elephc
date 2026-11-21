@@ -599,11 +599,13 @@ pub(super) fn emit_ref_arg_cell_block(
             (
                 PhpType::Array(_) | PhpType::AssocArray { .. },
                 PhpType::Array(_) | PhpType::AssocArray { .. }
-            )
+            ) | (PhpType::Iterable, PhpType::Array(_))
         );
         if source_ty.codegen_repr() == cell.cell_ty.codegen_repr() || container_kept_as_is {
             // EIR still owns the default operand. The mutable cell needs its own retain
             // because the callee can replace it before EIR retires that original owner.
+            // Hash-backed collectors share the raw pointer ABI with Array(Mixed), and
+            // their no-op coercion does not acquire the cell's independent payload owner.
             if cell.cell_ty.codegen_repr() == PhpType::Str {
                 abi::emit_call_label(ctx.emitter, "__rt_str_persist");
             } else {

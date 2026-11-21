@@ -41,7 +41,7 @@ pub(super) fn emit_x86_64_mbstring(emitter: &mut Emitter, mbregex: bool) {
     emitter.instruction("mov rsi, r12");                                        // pass the original borrowed boxed argument array
     emitter.instruction("mov rdx, r13");                                        // retain the exact supplied count for arity and optional arguments
     emitter.instruction("xor ecx, ecx");                                        // use eval fragment default weak parsing until source profiles are propagated
-    emitter.instruction("mov r8, r15");                                         // propagate the retained active eval context to protected callbacks
+    emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // reload the frame-owned eval context without reusing the result-out register
     emit_invoke(emitter, mbregex);
     emitter.instruction("test rdx, rdx");                                       // inspect the non-unwinding invocation status
     emitter.instruction("jnz __elephc_runtime_builtin_v1_mbstring_failed_x86"); // return pending exceptions without successful result ownership

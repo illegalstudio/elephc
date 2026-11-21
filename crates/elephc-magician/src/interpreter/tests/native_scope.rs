@@ -11,6 +11,7 @@ use super::super::*;
 use super::support::*;
 
 mod argument_ownership;
+mod collector_storage;
 
 /// Foreign and nested bridge contexts restore adapter authorization after errors and panics.
 #[test]
@@ -195,6 +196,7 @@ fn native_global_call_exposes_and_retires_its_active_context() {
         descriptor: *mut std::ffi::c_void,
         _args: *mut crate::value::RuntimeCell,
         _invocation_scope: i64,
+        _arena: u64,
     ) -> *mut crate::value::RuntimeCell {
         let (expected_context, result) = unsafe {
             &*(descriptor
@@ -439,6 +441,7 @@ unsafe extern "C" fn fake_native_null_descriptor(
     _descriptor: *mut std::ffi::c_void,
     _args: *mut crate::value::RuntimeCell,
     _invocation_scope: i64,
+    _binding_policy: u64,
 ) -> *mut crate::value::RuntimeCell {
     std::ptr::null_mut()
 }

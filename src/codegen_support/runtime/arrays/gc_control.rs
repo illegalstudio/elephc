@@ -222,9 +222,8 @@ fn emit_gc_mem_caches_x86_64(emitter: &mut Emitter) {
 /// Emits the AArch64 scan that counts live cycle-collector candidate blocks.
 fn emit_gc_roots_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_status_roots");
-    abi::emit_symbol_address(emitter, "x9", "_heap_buf");
-    abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // keep the heap base live in the documented x9 symbol scratch
+    super::super::ctx::emit_heap_base_address(emitter, "x9");
+    super::super::ctx::emit_heap_off_load(emitter, "x10");
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap scan end
     emitter.instruction("mov x0, #0");                                          // initialize the candidate count
     emitter.label("__rt_gc_status_roots_loop");
@@ -264,8 +263,8 @@ fn emit_gc_roots_aarch64(emitter: &mut Emitter) {
 /// Emits the x86_64 scan that counts live cycle-collector candidate blocks.
 fn emit_gc_roots_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_status_roots");
-    abi::emit_symbol_address(emitter, "r8", "_heap_buf");
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_heap_off", 0);
+    super::super::ctx::emit_heap_base_address(emitter, "r8");
+    super::super::ctx::emit_heap_off_load(emitter, "r9");
     emitter.instruction("add r9, r8");                                          // compute the current heap scan end
     emitter.instruction("xor eax, eax");                                        // initialize the candidate count
     emitter.label("__rt_gc_status_roots_loop");

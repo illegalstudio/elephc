@@ -473,6 +473,21 @@ pub(super) fn check_types_impl(
     patch_builtin_spl_storage_signatures(&mut checker);
     patch_magic_method_signatures(&mut checker);
 
+    let extern_callback_functions = checker
+        .extern_functions
+        .iter()
+        .filter(|(_, signature)| {
+            signature
+                .params
+                .iter()
+                .any(|(_, ty)| ty.codegen_repr() == crate::types::PhpType::Callable)
+        })
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    checker.parallel_safety_analysis = Some(crate::optimize::ParallelSafetyAnalysis::from_program(
+        program,
+        extern_callback_functions,
+    ));
     // Every class, interface and enum is registered, and no body has been checked: a violated
     // bound is reported now, alone, instead of as whatever the instantiated body trips over.
     if let Err(error) =

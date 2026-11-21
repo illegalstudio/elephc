@@ -58,12 +58,12 @@ pub(super) fn emit_shared_tagged_reference_selection(emitter: &mut Emitter) {
             emitter.instruction(&format!("jz {done}"));                         // preserve ordinary insertion into the hash
             emitter.instruction("cmp QWORD PTR [r8 + 40], 7");                  // inspect the original entry rather than its dereferenced value
             emitter.instruction(&format!("jne {done}"));                        // preserve ordinary value and managed-reference updates
-            emitter.instruction("mov r14, QWORD PTR [r8 + 24]");                // keep the marker box in the existing tagged writer's input register
-            emitter.instruction("test r14, r14");                               // empty Mixed slots do not expose caller storage
+            emitter.instruction("mov r15, QWORD PTR [r8 + 24]");                // keep the marker box in the existing tagged writer's input register
+            emitter.instruction("test r15, r15");                               // empty Mixed slots do not expose caller storage
             emitter.instruction(&format!("jz {done}"));                         // leave their ownership with the ordinary setter
-            emitter.instruction(&format!("cmp QWORD PTR [r14], {INVOKER_ARG_REF_CELL_TAG}")); // ordinary boxes do not alias a caller slot
+            emitter.instruction(&format!("cmp QWORD PTR [r15], {INVOKER_ARG_REF_CELL_TAG}")); // ordinary boxes do not alias a caller slot
             emitter.instruction(&format!("jne {done}"));                        // only a descriptor marker can select its caller storage
-            emitter.instruction(&format!("cmp QWORD PTR [r14 + 16], {INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // recognize inline nullable-integer storage
+            emitter.instruction(&format!("cmp QWORD PTR [r15 + 16], {INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // recognize inline nullable-integer storage
             emitter.instruction("je __rt_hash_set_invoker_reference_tagged_x"); // validate and write the cell before any hash-owner transfer
             emitter.label(done);
             emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // restore the original table for normal COW and null normalization

@@ -56,6 +56,9 @@ fn eval_reflection_class_instantiate(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if let Some(message) = elephc_builtin_contract::reflection_capability_denial(
+        reflected_name, elephc_builtin_contract::ReflectionOperation::Construct,
+    ) { return eval_throw_error(&message, context, values); }
     if let Some(message) =
         eval_reflection_eval_instantiation_error_message(reflected_name, context)
     {
@@ -172,6 +175,9 @@ pub(super) fn eval_reflection_class_new_instance_without_constructor_result(
     else {
         return Ok(None);
     };
+    if let Some(message) = elephc_builtin_contract::reflection_capability_denial(
+        &reflected_name, elephc_builtin_contract::ReflectionOperation::Construct,
+    ) { return eval_throw_error(&message, context, values); }
     if let Some(message) =
         eval_reflection_eval_instantiation_error_message(&reflected_name, context)
     {

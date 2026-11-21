@@ -46,7 +46,7 @@ use crate::handles::{self, EasyEntry};
 /// non-compiled consumer simply leave the sink unset and take the direct-write fallback).
 static OUTPUT_SINK: AtomicUsize = AtomicUsize::new(0);
 
-/// The ABI of the published sink: `(ptr, len)`, no result — `__rt_stdout_write`'s own.
+/// The ABI of the published foreign-safe sink: `(ptr, len)`, no result.
 type OutputSink = unsafe extern "C" fn(*const u8, usize);
 
 /// Publishes the compiled program's terminal-output funnel for the default write path.
@@ -193,14 +193,14 @@ unsafe extern "C" fn write_callback(
 /// retrying it would spin forever.
 fn write_all_stdout(bytes: &[u8]) -> usize {
     // THE PUBLISHED SINK WINS when the compiled program registered one. It is
-    // `__rt_stdout_write`, the single indirection every `echo` travels through, so the body
+    // a foreign-safe adapter to `__rt_stdout_write`, the funnel every `echo` uses, so the body
     // meets output buffering, the `print_r` capture buffer and the `--web` response capture
     // exactly as PHP's own default write handler does (issue #875). It reports no failure, so
     // the whole chunk counts as written — the same contract `echo` has, where a failing
     // terminal write is not an error the program can observe either.
     let sink = OUTPUT_SINK.load(Ordering::Acquire);
     if sink != 0 {
-        // SAFETY: the address was published by generated code as `__rt_stdout_write`, whose
+        // SAFETY: generated code publishes a foreign-safe runtime adapter whose
         // signature is `(ptr, len)` with no result; `bytes` is valid for its own length and
         // the callee only reads from it.
         unsafe {

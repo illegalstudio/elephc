@@ -11,7 +11,7 @@
 //! - `ext/curl` classes are here, unconditionally: the compiler's curl prelude declares them in
 //!   every build, only their Magician support follows the `curl` feature (see `support.rs`).
 
-use crate::{BuiltinId, ClassContract, ClassKind, ClassRoute, PhpModule, PhpVersion};
+use crate::{BuiltinId, ClassContract, ClassKind, ClassReflectionPolicy, ClassRoute, PhpModule, PhpVersion};
 
 macro_rules! class {
     (
@@ -22,7 +22,8 @@ macro_rules! class {
         $(, dynamic_deprecated: $dynamic_deprecated:literal)?
         $(, dynamic_first: $dynamic_first:literal)?
         $(, hidden_properties: $hidden_properties:expr)?
-        $(, visible_methods: $visible_methods:expr)? $(,)?
+        $(, visible_methods: $visible_methods:expr)?
+        $(, reflection: $reflection:ident)? $(,)?
     ) => {
         ClassContract {
             cloneable: class!(@cloneable $($cloneable)?),
@@ -40,6 +41,7 @@ macro_rules! class {
             internal: class!(@flag $($internal)?),
             hidden_properties: class!(@hidden_properties $($hidden_properties)?),
             php_visible_methods: class!(@visible_methods $($visible_methods)?),
+            reflection: class!(@reflection $($reflection)?),
             php_manual: None,
         }
     };
@@ -57,6 +59,8 @@ macro_rules! class {
     (@hidden_properties) => { &[] };
     (@visible_methods $visible_methods:expr) => { Some($visible_methods) };
     (@visible_methods) => { None };
+    (@reflection $reflection:ident) => { ClassReflectionPolicy::$reflection };
+    (@reflection) => { ClassReflectionPolicy::Php };
 }
 
 pub(crate) static CLASSES: &[ClassContract] = &[
@@ -155,6 +159,26 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("DOMProcessingInstruction", "domprocessinginstruction", Class, Dom, Prelude),
     class!("DOMText", "domtext", Class, Dom, Prelude),
     class!("Dom\\XMLDocument", "dom\\xmldocument", Class, Dom, Prelude, since: Php84),
+    class!("Elephc\\Async\\__CancellationState", "elephc\\async\\__cancellationstate", Class, Elephc, Prelude, extension: true, internal: true),
+    class!("Elephc\\Async\\__RunResult", "elephc\\async\\__runresult", Class, Elephc, Prelude, extension: true, internal: true),
+    class!("Elephc\\Async\\__Scheduler", "elephc\\async\\__scheduler", Class, Elephc, Prelude, extension: true, internal: true),
+    class!("Elephc\\Async\\__ScopeState", "elephc\\async\\__scopestate", Class, Elephc, Prelude, extension: true, internal: true),
+    class!("Elephc\\Async\\__TaskOutcome", "elephc\\async\\__taskoutcome", Class, Elephc, Prelude, extension: true, internal: true),
+    class!("Elephc\\Async\\__TaskStart", "elephc\\async\\__taskstart", Class, Elephc, Prelude, extension: true, internal: true),
+    class!("Elephc\\Async\\Awaitable", "elephc\\async\\awaitable", Class, Elephc, Prelude, extension: true),
+    class!("Elephc\\Async\\Cancellation", "elephc\\async\\cancellation", Class, Elephc, Prelude, extension: true),
+    class!("Elephc\\Async\\CancelledException", "elephc\\async\\cancelledexception", Class, Elephc, Prelude, extension: true),
+    class!("Elephc\\Async\\TaskGroup", "elephc\\async\\taskgroup", Class, Elephc, Prelude, extension: true),
+    class!("Elephc\\Parallel\\Future", "elephc\\parallel\\future", Class, Elephc, Prelude, extension: true),
+    class!("Elephc\\Parallel\\TaskFailure", "elephc\\parallel\\taskfailure", Class, Elephc, Prelude, extension: true),
+    class!("Elephc\\Parallel\\TaskFailureKind", "elephc\\parallel\\taskfailurekind", Enum, Elephc, Prelude, extension: true),
+    class!("Elephc\\Parallel\\TaskGroup", "elephc\\parallel\\taskgroup", Class, Elephc, Prelude, extension: true),
+    class!("Elephc\\Parallel\\TaskGroupFailure", "elephc\\parallel\\taskgroupfailure", Class, Elephc, Prelude, extension: true),
+    class!("Elephc\\Task\\Execution", "elephc\\task\\execution", Enum, Elephc, Prelude, extension: true),
+    class!("Elephc\\Task\\PeriodicControl", "elephc\\task\\periodiccontrol", Class, Elephc, Prelude, extension: true, reflection: OpaqueCapability),
+    class!("Elephc\\Task\\Task", "elephc\\task\\task", Class, Elephc, Prelude, extension: true),
+    class!("Elephc\\Task\\TaskFailure", "elephc\\task\\taskfailure", Class, Elephc, Prelude, extension: true),
+    class!("Elephc\\Task\\TaskGroup", "elephc\\task\\taskgroup", Class, Elephc, Prelude, extension: true),
     class!("Elephc\\Testing\\AssertionFailedError", "elephc\\testing\\assertionfailederror", Class, Elephc, Prelude, extension: true),
     class!("Elephc\\Testing\\IncompleteTestError", "elephc\\testing\\incompletetesterror", Class, Elephc, Prelude, extension: true),
     class!("Elephc\\Testing\\Runner", "elephc\\testing\\runner", Class, Elephc, Prelude, extension: true),

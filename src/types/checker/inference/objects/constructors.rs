@@ -152,6 +152,8 @@ impl Checker {
                     if !self.can_access_member(declaring_class, visibility)
                         && !self.can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
                         && !self.can_construct_pdo_row_from_prelude_fetch(&class_name)
+                        && !self.can_construct_parallel_internal_from_prelude(&class_name)
+                        && !self.can_construct_task_periodic_control_from_prelude(&class_name, expr.span)
                     {
                         // elephc normally rejects an inaccessible constructor at compile
                         // time. `tidyNode` is the one prelude class whose php-src corpus
@@ -287,6 +289,36 @@ impl Checker {
             }
         }
         Ok(PhpType::Object(class_name))
+    }
+
+    /// Only generated TaskGroup registration paths may create a scope-owned periodic control.
+    fn can_construct_task_periodic_control_from_prelude(
+        &self, class_name: &str, span: crate::span::Span,
+    ) -> bool {
+        !span.is_from_source()
+            && class_name == "Elephc\\Task\\PeriodicControl"
+            && self.current_class.as_deref() == Some("Elephc\\Task\\TaskGroup")
+            && self.current_method.as_deref().is_some_and(|method| {
+                matches!(crate::names::php_symbol_key(method).as_str(), "every" | "__createperiodiccontrol")
+            })
+    }
+
+    /// Grants constructor access only to the compiler-owned Parallel orchestration paths.
+    fn can_construct_parallel_internal_from_prelude(&self, class_name: &str) -> bool {
+        let task_group_from_run = class_name == "Elephc\\Parallel\\TaskGroup"
+            && self.current_function.as_deref().is_some_and(|name| {
+                crate::names::php_symbol_key(name.trim_start_matches('\\'))
+                    == "elephc\\parallel\\run"
+            });
+        let future_from_drain = class_name == "Elephc\\Parallel\\Future"
+            && self.current_class.as_deref() == Some("Elephc\\Parallel\\TaskGroup")
+            && self.current_method.as_deref() == Some("__drain");
+        let periodic_future = class_name == "Elephc\\Parallel\\Future"
+            && self.current_class.as_deref() == Some("Elephc\\Parallel\\TaskGroup")
+            && self.current_method.as_deref().is_some_and(|method| {
+                crate::names::php_symbol_key(method) == "__spawnperiodic"
+            });
+        task_group_from_run || future_from_drain || periodic_future
     }
 
     /// Infers constructor arguments for a class that may have been declared by a prior eval call.

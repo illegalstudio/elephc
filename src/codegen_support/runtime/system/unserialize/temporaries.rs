@@ -138,7 +138,9 @@ mod tests {
     #[test]
     fn hydration_temporary_cleanup_is_bounded_on_all_targets() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let target = Target::parse(name).unwrap();
+            let slot = |symbol: &str| crate::codegen_support::runtime::test_slot_ref(target.arch, symbol);
+            let mut emitter = Emitter::new(target);
             emit_unserialize_temporaries(&mut emitter);
             let asm = emitter.output();
             let (defer, detach) = asm.split_once("__rt_unserialize_detach_data:").unwrap();
@@ -150,13 +152,13 @@ mod tests {
             };
             assert!(defer.contains(defer_frame), "{name}: saved data must fit above the callee stack");
             assert!(detach.contains(detach_frame), "{name}: cursor spills must fit below the frame footer");
-            assert!(detach.contains("_unser_active") && detach.contains("_unser_temporaries"), "{name}");
+            assert!(detach.contains(&slot("_unser_active")) && detach.contains(&slot("_unser_temporaries")), "{name}");
             let (depth_load, depth_compare) = if name == "linux-x86_64" {
-                ("mov rcx, QWORD PTR [rip + _unser_active]", "cmp r10, rcx")
+                (format!("mov rcx, QWORD PTR [{}]", slot("_unser_active")), "cmp r10, rcx")
             } else {
-                ("ldr x11, [x9]", "cmp x10, x11")
+                (format!("ldr x11, [{}]", slot("_unser_active")), "cmp x10, x11")
             };
-            assert!(detach.find(depth_load).unwrap() < detach.find(depth_compare).unwrap(),
+            assert!(detach.find(&depth_load).unwrap() < detach.find(depth_compare).unwrap(),
                 "{name}: compare the same active-depth register that was loaded");
             assert!(!detach.contains("__rt_heap_free"), "{name}: detachment must not invoke PHP");
             assert_eq!(finish.matches("__rt_cleanup_invoke").count(), 2, "{name}");

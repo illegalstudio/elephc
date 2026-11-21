@@ -1095,12 +1095,15 @@ mod tests {
                 false,
             )
             .unwrap();
+            let arch = emitter.target.arch;
             let asm = emitter.output();
             let spill = asm.find("param $source_method_arg").unwrap();
             let allocation = asm.find("__rt_array_new").unwrap();
             let publish = asm.find("__rt_cleanup_call_operand_owner").unwrap();
             let call = asm.find("_test_physical_method").unwrap();
-            let detach = asm.rfind("_exc_call_frame_top").unwrap();
+            let detach = asm
+                .rfind(&format!("{}]", crate::codegen_support::runtime::ctx::test_field_ref(arch, crate::codegen_support::runtime::ctx::CTX_EXC_CALL_FRAME_TOP_OFFSET)))
+                .unwrap();
             let release = asm.find("__rt_decref_any").unwrap();
             assert!(spill < allocation, "{target}: inputs must be spilled before allocation");
             assert!(allocation < publish, "{target}: allocation must precede publication");

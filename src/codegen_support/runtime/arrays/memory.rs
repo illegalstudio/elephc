@@ -26,12 +26,12 @@ pub fn emit_memory(emitter: &mut Emitter) {
         if arm {
             emitter.instruction("mov x11, x0");                                 // preserve the caller's real_usage flag before reading counters
             abi::emit_load_symbol_to_reg(emitter, "x0", counter, 0);
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_heap_max", 0);
+            crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "x10");
             emitter.instruction("cmp x11, #0");                                 // select reserved bytes only for a true real_usage flag
             emitter.instruction("csel x0, x10, x0, ne");                        // return arena capacity or current live accounting
         } else {
             abi::emit_load_symbol_to_reg(emitter, "rax", counter, 0);
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_heap_max", 0);
+            crate::codegen_support::runtime::ctx::emit_heap_max_load(emitter, "r10");
             emitter.instruction("test rdi, rdi");                               // inspect the SysV real_usage argument
             emitter.instruction("cmovne rax, r10");                             // include unused arena space when real_usage is true
         }
@@ -66,10 +66,18 @@ mod tests {
             emit_memory(&mut emitter);
             let asm = emitter.output();
             for symbol in ["__rt_memory_get_usage", "__rt_memory_get_peak_usage",
-                "__rt_memory_reset_peak_usage", "__rt_memory_get_allocations", "__rt_memory_get_frees",
-                "_gc_live", "_gc_peak", "_gc_allocs", "_gc_frees", "_heap_max"] {
+                "__rt_memory_reset_peak_usage", "__rt_memory_get_allocations", "__rt_memory_get_frees"] {
                 assert!(asm.contains(symbol), "{name}: missing {symbol}");
             }
+            for symbol in ["_gc_live", "_gc_peak", "_gc_allocs", "_gc_frees"] {
+                let slot = crate::codegen_support::runtime::test_slot_ref(Target::parse(name).unwrap().arch, symbol);
+                assert!(asm.contains(&slot), "{name}: missing {symbol}");
+            }
+            let heap_max = crate::codegen_support::runtime::ctx::test_field_ref(
+                Target::parse(name).unwrap().arch,
+                crate::codegen_support::runtime::ctx::CTX_HEAP_MAX_OFFSET,
+            );
+            assert!(asm.contains(&heap_max), "{name}: missing _heap_max");
             assert!(!asm.contains("__rt_heap_alloc"), "{name}");
         }
     }

@@ -83,7 +83,7 @@ fn emit_array_filter_int_direct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // save the loop cursor
     emitter.instruction("push r12");                                            // save the predicate entry
     emitter.instruction("push r13");                                            // save the packed source array
-    emitter.instruction("push r14");                                            // save the result hash
+    emitter.instruction("sub rsp, 8");                                            // reserve the result-hash slot (r14 is the reserved ctx register)
     emitter.instruction("push r15");                                            // save the source length
     emitter.instruction("sub rsp, 8");                                          // align the stack before helper calls
     emitter.instruction("mov r12, rdi");                                        // keep the predicate entry across hash calls
@@ -91,7 +91,7 @@ fn emit_array_filter_int_direct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r15, QWORD PTR [rsi]");                            // read the source length
     emitter.instruction("mov rdi, 4");                                          // start with a small hash capacity
     emitter.instruction("call __rt_hash_new");                                  // allocate the key-preserving result hash
-    emitter.instruction("mov r14, rax");                                        // keep the hash across predicate calls
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                                        // keep the hash across predicate calls
     emitter.instruction("xor ebx, ebx");                                        // start at the first source element
 
     emitter.label("__rt_array_filter_int_direct_loop_x86_64");
@@ -102,24 +102,24 @@ fn emit_array_filter_int_direct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call r12");                                            // call the raw bool predicate
     emitter.instruction("test eax, eax");                                       // did the predicate keep this element?
     emitter.instruction("jz __rt_array_filter_int_direct_next_x86_64");         // skip rejected elements
-    emitter.instruction("mov rdi, r14");                                        // pass the result hash
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                                        // pass the result hash
     emitter.instruction("mov rsi, rbx");                                        // preserve the original integer key
     emitter.instruction("mov rdx, -1");                                         // mark the key as an integer key
     emitter.instruction("mov rcx, QWORD PTR [r13 + rbx * 8 + 24]");             // copy the kept int value
     emitter.instruction("xor r8d, r8d");                                        // int values use no high payload word
     emitter.instruction("xor r9d, r9d");                                        // runtime tag 0 = int
     emitter.instruction("call __rt_hash_set");                                  // insert the kept entry without boxing its value
-    emitter.instruction("mov r14, rax");                                        // a growing hash may have moved
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                                        // a growing hash may have moved
 
     emitter.label("__rt_array_filter_int_direct_next_x86_64");
     emitter.instruction("inc rbx");                                             // advance to the next source element
     emitter.instruction("jmp __rt_array_filter_int_direct_loop_x86_64");        // continue filtering
 
     emitter.label("__rt_array_filter_int_direct_done_x86_64");
-    emitter.instruction("mov rax, r14");                                        // return the owning result hash
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                                        // return the owning result hash
     emitter.instruction("add rsp, 8");                                          // release the alignment slot
     emitter.instruction("pop r15");                                             // restore the source length
-    emitter.instruction("pop r14");                                             // restore the result hash
+    emitter.instruction("add rsp, 8");                                             // release the result-hash slot
     emitter.instruction("pop r13");                                             // restore the packed source array
     emitter.instruction("pop r12");                                             // restore the predicate entry
     emitter.instruction("pop rbx");                                             // restore the loop cursor

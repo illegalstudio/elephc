@@ -225,6 +225,10 @@ fn lower_method_call_with_binding(
     if let Some(call) = magic_method_calls::lower(ctx, object, method, args, op, expr) {
         return call;
     }
+    if op == Op::MethodCall && mixed_method_requires_descriptor(ctx, object.value, method) {
+        let method = Expr::new(ExprKind::StringLiteral(method.to_string()), expr.span);
+        return lower_dynamic_method_call_with_receiver(ctx, object, &method, args, expr);
+    }
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
         return lower_reflection_class_new_instance(ctx, None, object, args, expr);
     }
@@ -258,7 +262,11 @@ fn lower_method_call_with_binding(
     };
     // A concrete local load may later unbox physical Mixed storage after eval widens
     // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
-    let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
+    let (object, receiver_owner) = if fiber_switch_transfers_receiver(ctx, object, dispatch_method) {
+        (object, None)
+    } else {
+        root_method_receiver(ctx, object, expr.span)
+    };
     emit_native_factory_method_lookup(ctx, object, method, expr.span);
     let mut operands = vec![object.value];
     let reference_property_guard_mark = ctx.reference_property_guards.len();
@@ -289,7 +297,7 @@ fn lower_method_call_with_binding(
         .as_ref()
         .map_or(args, |rewrite| rewrite.args.as_slice());
     let arg_values =
-        enum_args.unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), call_args));
+        enum_args.unwrap_or_else(|| lower_args_with_eir_signature(ctx, sig.as_ref(), call_args));
     ctx.call_description = previous_description;
     let mut arg_values = arg_values;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
@@ -344,6 +352,8 @@ fn lower_method_call_with_binding(
     }
     if let Some(owner) = receiver_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
+    } else if fiber_switch_transfers_receiver(ctx, object, dispatch_method) {
+        ctx.builder.set_value_ownership(object.value, Ownership::Owned);
     } else {
         release_owning_receiver_temporary(ctx, object, expr.span);
     }
@@ -395,14 +405,11 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
     let mut call_args = Vec::with_capacity(args.len() + 1);
     call_args.push(callback);
     call_args.extend(args.iter().cloned());
-    let call = Expr::new(
-        ExprKind::FunctionCall {
-            name: Name::unqualified("call_user_func"),
-            args: call_args,
-        },
-        expr.span,
-    );
-    let result = lower_expr(ctx, &call);
+    // Synthetic source spans can all be dummy. Re-entering the function-call
+    // dispatcher would then mistake this callback array for parser desugaring
+    // and recurse back into dynamic-method lowering indefinitely.
+    let result = lower_dynamic_call_user_func(ctx, "call_user_func", &call_args, expr)
+        .expect("compiler-created callback array is a dynamic invocation");
     if let Some(slot) = method_slot { retire_owned_call_operand(ctx, slot, expr.span); }
     retire_owned_call_operand(ctx, receiver_slot, expr.span);
     result
@@ -528,6 +535,12 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                     || signature.returned_parameter_has_independent_owner(parameter_index));
             let independently_boxed = signature.is_some_and(|signature| {
                 call_arg_gets_independent_mixed_box(signature, parameter_index, &php_type)
+            }) || result.is_some_and(|result| {
+                // A native callable descriptor is not a Mixed cell. Returning it through a
+                // PHP Mixed contract creates a separate box that retains the descriptor payload;
+                // it therefore cannot consume this caller's raw descriptor reference.
+                php_type.codegen_repr() == PhpType::Callable
+                    && matches!(ctx.builder.value_php_type(result).codegen_repr(), PhpType::Mixed | PhpType::Union(_))
             });
             // The call result reuses this argument's payload — so the argument release
             // must be suppressed and the ownership left to flow through the result —

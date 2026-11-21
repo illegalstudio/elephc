@@ -23,6 +23,14 @@ pub(super) fn coerce_to_return_type(
     let value = ctx.retype_packed_address_for_pointer_sink(value, &return_php_type, span);
     crate::ir_lower::object_boundaries::guard_return(ctx, value, span);
     guard_declared_callable_return_value(ctx, value, span.unwrap_or_else(Span::dummy));
+    if ctx.return_type_is_declared && ctx.return_php_type.is_php_array() {
+        let source_ty = ctx.builder.value_php_type(value.value);
+        if !source_ty.is_php_array()
+            && matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        {
+            return super::array_return_boundary::lower(ctx, value, span.unwrap_or_else(Span::synthetic));
+        }
+    }
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
         return value;
     }
@@ -55,6 +63,9 @@ pub(super) fn coerce_to_return_type(
             crate::ir_lower::ownership::release_if_owned(ctx, value, span);
         }
         return unboxed;
+    }
+    if ctx.return_type_is_declared && ctx.return_php_type == PhpType::Str {
+        return super::string_return_boundary::lower(ctx, value, span.unwrap_or_else(Span::synthetic));
     }
     match ctx.return_type {
         IrType::I64 => {
@@ -352,6 +363,10 @@ pub(super) fn coerce_to_string(
     value: LoweredValue,
     span: Option<Span>,
 ) -> LoweredValue {
+    if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Bool {
+        return ctx.emit_value(Op::BoolToStr, vec![value.value], None, PhpType::Str,
+            Op::BoolToStr.default_effects(), span);
+    }
     match value.ir_type {
         IrType::Str => value,
         IrType::I64 | IrType::TaggedScalar => ctx.emit_value(

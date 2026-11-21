@@ -1151,11 +1151,18 @@ mod tests {
     /// Verifies chunked buffers auto-flush through the shared process core.
     #[test]
     fn append_chunk_threshold_triggers_process_and_write() {
+        let offset = crate::codegen_support::runtime::ctx::CTX_OB_CHUNK_SIZES_OFFSET;
         let mac = render(Platform::MacOS, Arch::AArch64);
-        assert!(mac.contains("_ob_chunk_sizes"));
+        // AArch64 splits a context-field address past 4 KiB into its page and remainder.
+        let arm_address = if offset < 4096 {
+            format!("x28, #{offset}")
+        } else {
+            format!("x28, #{}", offset & !0xfff)
+        };
+        assert!(mac.contains(&arm_address), "chunk-size array address: {arm_address}");
         assert!(mac.contains("bl __rt_ob_process_and_write"));
         let linux_x86 = render(Platform::Linux, Arch::X86_64);
-        assert!(linux_x86.contains("_ob_chunk_sizes"));
+        assert!(linux_x86.contains(&format!("[r14 + {offset}]")));
         assert!(linux_x86.contains("call __rt_ob_process_and_write"));
     }
 }

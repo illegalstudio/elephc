@@ -45,10 +45,10 @@ use crate::codegen_support::runtime::curl_abi_slots;
 /// pay-for-use property this module holds: a curl-free binary emits none of this.
 pub(crate) fn publish_elephc_curl_output_sink(emitter: &mut Emitter) {
     match emitter.target.arch {
-        Arch::AArch64 => abi::emit_symbol_address(emitter, "x0", "__rt_stdout_write"),
-        Arch::X86_64 => abi::emit_symbol_address(emitter, "rdi", "__rt_stdout_write"),
+        Arch::AArch64 => abi::emit_symbol_address(emitter, "x0", "__rt_curl_output_sink"),
+        Arch::X86_64 => abi::emit_symbol_address(emitter, "rdi", "__rt_curl_output_sink"),
     }
-    emitter.bl_c("elephc_curl_set_output_sink");                                // hand the bridge the funnel every echo uses
+    emitter.bl_c("elephc_curl_set_output_sink");                                // hand the bridge a foreign-safe entry to the ordinary output funnel
 }
 
 /// Publishes every `elephc_curl` entry point into its runtime slot.

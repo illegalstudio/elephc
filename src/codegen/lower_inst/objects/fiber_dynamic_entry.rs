@@ -195,6 +195,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
     }
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
 
+    let capability_refusals = emit_dynamic_new_capability_checks(ctx);
     let fallback_label = ctx.next_label("dynamic_new_mixed_fallback");
     let candidates = dynamic_new_mixed_candidates(
         ctx,
@@ -256,6 +257,8 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
         )?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
+
+    emit_dynamic_new_capability_refusals(ctx, &capability_refusals);
 
     // Each arm diverges into the unwinder, so none of them falls through to `done_label` and none
     // stores a result: a refused `new` leaves no object behind.
@@ -344,6 +347,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_without_construct
     }
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
 
+    let capability_refusals = emit_dynamic_new_capability_checks(ctx);
     let fallback_label = ctx.next_label("dynamic_new_no_ctor_mixed_fallback");
     super::constructorless_refusals::emit_constructorless_abstract_refusals(ctx, inst);
     let candidates = dynamic_new_without_constructor_mixed_candidates(ctx, inst)?;
@@ -364,6 +368,8 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_without_construct
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
+    emit_dynamic_new_capability_refusals(ctx, &capability_refusals);
+
     ctx.emitter.label(&fallback_label);
     if crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module) {
         let missing = ctx.next_label("dynamic_new_no_ctor_eval_missing");
@@ -380,4 +386,38 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_without_construct
 
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Checks resolved class IDs before allocation, including runtime aliases and mixed spellings.
+/// The saved string remains in place; refusal arms retain the extra lookup-ID stack slot.
+fn emit_dynamic_new_capability_checks(ctx: &mut FunctionContext<'_>) -> Vec<(String, String)> {
+    let mut denied = ctx.module.class_infos.iter().filter_map(|(name, info)| {
+        elephc_builtin_contract::reflection_capability_denial(
+            name, elephc_builtin_contract::ReflectionOperation::Construct,
+        ).map(|message| (info.class_id, message))
+    }).collect::<Vec<_>>();
+    denied.sort_by_key(|(id, _)| *id);
+    denied.dedup_by_key(|(id, _)| *id);
+    if denied.is_empty() { return Vec::new(); }
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, ptr, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, len, 8);
+    abi::emit_call_label(ctx.emitter, "__rt_instanceof_lookup");
+    emit_push_dynamic_new_class_id(ctx);
+    let refusals = denied.into_iter().map(|(id, message)| {
+        let label = ctx.next_label("dynamic_new_opaque_capability");
+        emit_compare_dynamic_new_class_id(ctx, id, &label);
+        (label, message)
+    }).collect();
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    refusals
+}
+
+/// Discards the lookup ID and class string before entering the ordinary catchable Error path.
+fn emit_dynamic_new_capability_refusals(ctx: &mut FunctionContext<'_>, refusals: &[(String, String)]) {
+    for (label, message) in refusals {
+        ctx.emitter.label(label);
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        super::super::exceptions::emit_error(ctx, message);
+    }
 }
