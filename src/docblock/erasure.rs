@@ -146,8 +146,16 @@ pub fn apply_for_file(program: Program, source: &str, path: &Path) -> Program {
     if erased_files().contains(&path) {
         return program;
     }
-    adopted().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(path);
-    super::apply(program, source)
+    // A file is only worth erasing if reading its annotations changed its declarations. A class
+    // whose templates exist only in its docblock is a non-destructive `DocView` overlay: its
+    // file reads the same with or without adoption, so a re-run that erased it would fix nothing
+    // and cost a whole extra compile.
+    let before = format!("{program:?}");
+    let program = super::apply(program, source);
+    if format!("{program:?}") != before {
+        adopted().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(path);
+    }
+    program
 }
 
 /// The adopting files a failed check round implicates, minus those already erased.
@@ -392,6 +400,24 @@ pub fn report_original_instead() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file whose only annotations are class templates (a `DocView`) reads the same with or
+    /// without adoption, so it is never an erasure candidate; one with a function template is.
+    #[test]
+    fn only_files_whose_declarations_changed_are_erasure_candidates() {
+        let parse = |source: &str| {
+            crate::parser::parse(&crate::lexer::tokenize(source).expect("tokenizes")).expect("parses")
+        };
+        let class_only = "<?php\n/** @template T */\nclass ErasureOverlayOnly {\n    /** @return T */\n    public function get() { return 1; }\n}\n";
+        let with_function = "<?php\n/**\n * @template T\n * @param T $v\n * @return T\n */\nfunction erasure_candidate_fn($v) { return $v; }\n";
+        let overlay_path = Path::new("/nonexistent/erasure-overlay-only.php");
+        let function_path = Path::new("/nonexistent/erasure-candidate-fn.php");
+        apply_for_file(parse(class_only), class_only, overlay_path);
+        apply_for_file(parse(with_function), with_function, function_path);
+        let adopted = adopted().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(!adopted.contains(&canonical(overlay_path)));
+        assert!(adopted.contains(&canonical(function_path)));
+    }
 
     #[test]
     fn names_quoted_and_instantiated_classes() {
