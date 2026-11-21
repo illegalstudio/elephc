@@ -19,7 +19,7 @@ use super::super::Checker;
 use super::super::InterfaceDeclInfo;
 use super::validation::{
     build_method_sig, declaration_is_source, late_static_return_compatible,
-    validate_signature_compatibility,
+    method_parameter_widening, validate_signature_compatibility, ParameterWidening,
 };
 use crate::types::traits::FlattenedClass;
 
@@ -139,7 +139,7 @@ pub(crate) fn build_interface_info_recursive(
                                 || declaration_is_source(checker, parent_name),
                                 |owner| declaration_is_source(checker, owner),
                             ),
-                    false,
+                    ParameterWidening::Exact,
                 )?;
                 if let Some(return_type) = parent_info.late_static_method_returns.get(method_name) {
                     methods.insert(method_name.clone(), parent_sig.clone());
@@ -198,7 +198,7 @@ pub(crate) fn build_interface_info_recursive(
                                 || declaration_is_source(checker, parent_name),
                                 |owner| declaration_is_source(checker, owner),
                             ),
-                    false,
+                    ParameterWidening::Exact,
                 )?;
                 if let Some(return_type) = parent_info
                     .late_static_static_method_returns
@@ -355,7 +355,7 @@ pub(crate) fn build_interface_info_recursive(
                     static_method_declaring_interfaces
                         .get(&method_key)
                         .is_none_or(|owner| declaration_is_source(checker, owner)),
-                    false,
+                    ParameterWidening::Exact,
                 )?;
                 if late_static_return_compatible(
                     checker,
@@ -412,7 +412,7 @@ pub(crate) fn build_interface_info_recursive(
                 method_declaring_interfaces
                     .get(&method_key)
                     .is_none_or(|owner| declaration_is_source(checker, owner)),
-                false,
+                method_parameter_widening(&method.name, false),
             )?;
             if late_static_return_compatible(
                 checker,
