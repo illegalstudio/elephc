@@ -1849,10 +1849,13 @@ fn validate_branch(
 /// Merges loop fallthroughs unless a break can bypass the modeled backedge state.
 fn merge_loop_exits(body: &[Stmt], exits: &[LocalFacts]) -> LocalFacts {
     if crate::termination::block_may_break_current_loop(body) {
-        LocalFacts::default()
-    } else {
-        merge_exits(exits)
+        let mut merged = merge_exits(exits);
+        for fact in merged.values.values_mut() {
+            *fact = ValueFact::Unknown;
+        }
+        return merged;
     }
+    merge_exits(exits)
 }
 
 /// Keeps only facts that agree on every possible control-flow exit.
