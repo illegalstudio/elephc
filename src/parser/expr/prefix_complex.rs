@@ -574,6 +574,7 @@ fn parse_closure_params(
     CompileError,
 > {
     let mut params = Vec::new();
+    let mut param_lines = Vec::new();
     let mut variadic = None;
     let mut variadic_by_ref = false;
     let mut variadic_type = None;
@@ -593,6 +594,7 @@ fn parse_closure_params(
         }
         // PHP 8.0 closure-parameter attributes (`fn(#[X] $a) => …`).
         crate::parser::consume_attribute_lists(tokens, pos)?;
+        param_lines.push(tokens.get(*pos).map_or(span.line, |(_, token)| token.span.line));
         if variadic.is_some() {
             return Err(CompileError::new(
                 span,
@@ -644,6 +646,7 @@ fn parse_closure_params(
         return Err(CompileError::new(span, "Expected ')' after parameters"));
     }
     *pos += 1;
+    crate::parser::stmt::params::record_param_lines(span, param_lines);
     Ok((params, variadic, variadic_by_ref, variadic_type))
 }
 

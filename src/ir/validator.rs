@@ -712,6 +712,7 @@ fn validate_instruction_immediate(
         | PackedFieldMixedToFloat
         | PackedFieldMixedToBool
         | ReturnBoundaryMixedToInt
+        | ScalarParamGuard
         | PropertyBoundaryCheckedToInt
         | PropInitialized
         | StaticPropInitialized

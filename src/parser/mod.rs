@@ -157,7 +157,11 @@ pub(crate) fn parse_test_source(source: &str) -> Result<Program, CompileError> {
 /// `parse` above carries it.
 #[allow(dead_code)]
 pub fn parse_internal(tokens: &[SpannedToken]) -> Result<Program, CompileError> {
-    parse_with_mode(tokens, crate::source::SourceMode::Internal)
+    // Helper and prelude sources share the entry file's source identity: see
+    // `stmt::params::without_recording_param_lines`.
+    stmt::params::without_recording_param_lines(|| {
+        parse_with_mode(tokens, crate::source::SourceMode::Internal)
+    })
 }
 
 /// Parses tokens under an explicit physical-file source mode.

@@ -32,6 +32,7 @@ try {{ {call}; }} catch (Exception $error) {{ echo 'caught'; }}
     let checked = crate::types::check(&program).unwrap();
     let optimizer = PostTypecheckOptimizer::new_with_type_metadata(
         &program, &checked.functions, &checked.classes, &checked.interfaces,
+        &checked.scalar_guard_arg_sites,
     );
     let result = optimizer.eliminate_dead_code(program, checked.local_binding_decision_spans());
     let retained = result.iter().any(|stmt| matches!(&stmt.kind,

@@ -714,6 +714,7 @@ pub(super) fn parse_params(
 > {
     let mut params = Vec::new();
     let mut param_attributes = Vec::new();
+    let mut param_lines = Vec::new();
     let mut variadic = None;
     let mut variadic_by_ref = false;
     let mut variadic_type = None;
@@ -732,6 +733,7 @@ pub(super) fn parse_params(
         }
         // PHP 8.0 parameter attributes (`function f(#[Sensitive] $s)`).
         let attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
+        param_lines.push(tokens.get(*pos).map_or(span.line, |(_, token)| token.span.line));
         if variadic.is_some() {
             return Err(CompileError::new(
                 span,
@@ -782,6 +784,7 @@ pub(super) fn parse_params(
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
         }
     }
+    record_param_lines(span, param_lines);
     Ok((
         params,
         param_attributes,
@@ -789,6 +792,55 @@ pub(super) fn parse_params(
         variadic_by_ref,
         variadic_type,
     ))
+}
+
+thread_local! {
+    /// Source line where each parameter starts (after its attributes), keyed by the start of
+    /// the declaration that owns the list; see [`param_lines`].
+    static PARAM_LINES: std::cell::RefCell<std::collections::HashMap<(u32, u32, u32), Vec<u32>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Set while a helper, prelude or discovery-only parse runs (see [`without_recording_param_lines`]).
+    static PARAM_LINES_SUSPENDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Records the start line of each parameter of the function, method or closure at `span`.
+pub(crate) fn record_param_lines(span: Span, lines: Vec<u32>) {
+    if PARAM_LINES_SUSPENDED.with(std::cell::Cell::get) {
+        return;
+    }
+    PARAM_LINES.with(|table| table.borrow_mut().insert((span.source_id(), span.line, span.col), lines));
+}
+
+/// Runs a parse that must not record parameter lines: an internal helper or prelude source
+/// (curl, tokenizer, xml, PDO, the datetime classes, the web application contracts, ...) or a
+/// discovery-only parse (the Composer classmap scan).
+///
+/// Those sources are lexed under the entry file's source identity 0, so their records would
+/// replace the entry's own at the same line and column (a one-line helper function at line 12
+/// gave an entry function declared there its parameter line). User files (the entry, includes,
+/// autoloaded files) record as usual.
+pub(crate) fn without_recording_param_lines<T>(parse: impl FnOnce() -> T) -> T {
+    let previous = PARAM_LINES_SUSPENDED.with(|flag| flag.replace(true));
+    let result = parse();
+    PARAM_LINES_SUSPENDED.with(|flag| flag.set(previous));
+    result
+}
+
+/// Forgets the parameter lines recorded for included files, whose source identities a new
+/// compile hands out again (`Span::reset_source_ids`): a stale entry would otherwise answer for
+/// a different file's declaration at the same position. The entry file (identity 0) has just
+/// been re-recorded by the compile that calls this.
+pub(crate) fn forget_included_param_lines() {
+    PARAM_LINES.with(|table| table.borrow_mut().retain(|(source_id, _, _), _| *source_id == 0));
+}
+
+/// Returns the line where each parameter of the function or method declared at `span` starts.
+///
+/// The AST keeps no span per parameter, and PHP reports a few parameter diagnostics (the `int`
+/// precision deprecation) on the parameter's own line, so the parser keeps the lines here,
+/// keyed by the declaration's start position and source.
+pub(crate) fn param_lines(span: Span) -> Option<Vec<u32>> {
+    PARAM_LINES.with(|table| table.borrow().get(&(span.source_id(), span.line, span.col)).cloned())
 }
 
 /// Parses a comma-separated list of `Name`s until a token that does not start a name is
@@ -908,4 +960,22 @@ pub(super) fn parse_name_list(
         break;
     }
     Ok((names, type_args))
+}
+
+#[cfg(test)]
+mod param_line_tests {
+    use super::*;
+
+    /// A new compile hands included-file source identities out again, so their recorded lines
+    /// are dropped; the entry file's (identity 0), re-recorded by that compile, stay.
+    #[test]
+    fn test_included_param_lines_are_forgotten_per_compile() {
+        let entry = Span::new_in_source(3, 1, 0);
+        let included = Span::new_in_source(3, 1, 7);
+        record_param_lines(entry, vec![3, 4]);
+        record_param_lines(included, vec![5]);
+        forget_included_param_lines();
+        assert_eq!(param_lines(entry), Some(vec![3, 4]));
+        assert_eq!(param_lines(included), None);
+    }
 }
