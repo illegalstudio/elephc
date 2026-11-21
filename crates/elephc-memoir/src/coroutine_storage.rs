@@ -38,6 +38,59 @@ pub const FIBER_OWN_CALL_FRAME_OFFSET: i32 = 104;
 pub const FIBER_OWN_MAGIC_SET_GUARD_OFFSET: i32 = 232;
 /// Byte offset of the saved deep-release GC suppression for this execution context.
 pub const FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET: i32 = 240;
+
+/// Main-stack counterpart of the coroutine resume pointer.
+pub const MAIN_SAVED_SP: &str = "_fiber_main_saved_sp";
+/// Parked main-stack magic-set guard head, also cleared at web request reset.
+pub const MAIN_SAVED_MAGIC_SET_GUARD: &str = "_fiber_main_saved_magic_set_guard";
+
+/// The same four values are parked in either the main globals or the Fiber object.
+const SUSPENDED_WORDS: [(&str, &str, i32, &str); 4] = [
+    ("_exc_handler_top", "_fiber_main_saved_exc", FIBER_OWN_EXC_HEAD_OFFSET, "x12"),
+    ("_exc_call_frame_top", "_fiber_main_saved_call_frame", FIBER_OWN_CALL_FRAME_OFFSET, "x13"),
+    ("_magic_set_guard_head", MAIN_SAVED_MAGIC_SET_GUARD, FIBER_OWN_MAGIC_SET_GUARD_OFFSET, "x14"),
+    ("_gc_release_suppressed", "_fiber_main_saved_gc_release_suppressed", FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET, "x14"),
+];
+
+/// Lists the saved main stack words in their fixed-data declaration order.
+pub fn main_context_symbols() -> impl Iterator<Item = &'static str> {
+    std::iter::once(MAIN_SAVED_SP).chain(SUSPENDED_WORDS.iter().map(|&(_, main, _, _)| main))
+}
+
+/// Storage where the native runtime chains are parked while their stack is inactive.
+#[derive(Clone, Copy)]
+pub enum SuspendedContext<'a> {
+    /// Main-thread execution stores its saved chains in runtime globals.
+    Main,
+    /// A suspended Fiber stores its saved chains in the Fiber object.
+    Fiber(&'a str),
+}
+
+impl SuspendedContext<'_> {
+    /// Parks the current stack's runtime chains before switching to another stack.
+    pub fn emit_save(self, emitter: &mut impl Emitter) {
+        for (active, main, fiber, arm_register) in SUSPENDED_WORDS {
+            let register = if emitter.arch() == Arch::AArch64 { arm_register } else { "r11" };
+            emitter.emit_load_symbol_to_reg(register, active, 0);
+            match self {
+                Self::Main => emitter.emit_store_reg_to_symbol(register, main, 0),
+                Self::Fiber(base) => emitter.emit_store_to_address(register, base, fiber as usize),
+            }
+        }
+    }
+
+    /// Restores the selected stack's runtime chains before adopting its saved SP.
+    pub fn emit_restore(self, emitter: &mut impl Emitter) {
+        for (active, main, fiber, arm_register) in SUSPENDED_WORDS {
+            let register = if emitter.arch() == Arch::AArch64 { arm_register } else { "r11" };
+            match self {
+                Self::Main => emitter.emit_load_symbol_to_reg(register, main, 0),
+                Self::Fiber(base) => emitter.emit_load_from_address(register, base, fiber as usize),
+            }
+            emitter.emit_store_reg_to_symbol(register, active, 0);
+        }
+    }
+}
 /// Byte offset of the first `start_args` slot (up to 7 Mixed pointers passed to Fiber::start; parallels AArch64 int arg regs).
 pub const FIBER_START_ARGS_OFFSET: i32 = 112;
 /// Maximum number of `start_args` slots (one per AArch64 integer argument register minus `$this`).

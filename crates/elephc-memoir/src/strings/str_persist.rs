@@ -388,3 +388,24 @@ pub fn emit_persist_from_frame(emitter: &mut impl Emitter, low: usize) {
     }
     crate::abi::emit_call_label(emitter, "__rt_str_persist");
 }
+
+
+/// Skips retirement when the exact base is scratch, borrowed, or already adopted.
+pub fn emit_branch_unless_transient(emitter: &mut impl crate::Emitter, pointer: &str, skip: &str) {
+    let result = emitter.int_result_reg();
+    if pointer != result {
+        emitter.emit_reg_move(result, pointer);
+    }
+    emitter.emit_call_label("__rt_heap_kind");
+    let kind = crate::layout::CONCAT_TEMP_HEAP_KIND;
+    match emitter.arch() {
+        crate::Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {result}, #{kind}"));             // accept only an unadopted native allocation
+            emitter.instruction(&format!("b.ne {skip}"));                       // leave borrowed and adopted values live
+        }
+        crate::Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {result}, {kind}"));              // accept only an unadopted native allocation
+            emitter.instruction(&format!("jne {skip}"));                        // leave borrowed and adopted values live
+        }
+    }
+}

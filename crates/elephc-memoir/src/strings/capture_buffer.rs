@@ -9,7 +9,68 @@
 //! - The compiler callback resets routing mode after storage is cleared, preserving instruction order.
 //! - Output formatting and destination selection remain compiler responsibilities.
 
-use crate::{abi, Arch, Emitter};
+use crate::{abi, owner_records, Arch, Emitter};
+
+const CAPTURE_OWNER_CHAIN: &str = "_exc_call_frame_top";
+
+/// Links a capture owner in the current temporary activation.
+fn link_capture_owner(emitter: &mut impl Emitter, address: &str) {
+    emitter.emit_reserve_temporary_stack(owner_records::RECORD_BYTES);
+    owner_records::publish_stack(emitter, address, 0, owner_records::Context {
+        head: CAPTURE_OWNER_CHAIN,
+        cleanup: "__rt_cleanup_call_operand_owner",
+        visitor: "__rt_gc_operand_frame_owners",
+    });
+}
+
+/// Roots the raw capture across rendering and switches it into return mode.
+pub fn emit_begin(emitter: &mut impl Emitter) {
+    let address = emitter.tertiary_scratch_reg();
+    emitter.emit_symbol_address(address, CaptureField::Buffer.symbol());
+    link_capture_owner(emitter, address);
+    emitter.emit_symbol_address(address, "__rt_cleanup_print_r_capture");
+    emitter.emit_store_to_sp(address, crate::activation_records::CLEANUP);
+    emitter.emit_call_label("__rt_pr_abort");
+    let result = emitter.int_result_reg();
+    emitter.emit_load_int_immediate(result, 1);
+    emitter.emit_store_reg_to_symbol(result, CaptureField::Mode.symbol(), 0);
+}
+
+/// Keeps the completed owner across a possibly reentrant output callback, then releases it.
+pub fn emit_write_owned(emitter: &mut impl Emitter, write: &str) {
+    let (pointer, length) = abi::string_result_regs(emitter);
+    emitter.emit_reserve_temporary_stack(16);
+    emitter.emit_store_to_sp(pointer, 0);
+    emitter.emit_store_to_sp(length, 8);
+    let address = emitter.tertiary_scratch_reg();
+    emitter.emit_temporary_stack_address(address, 0);
+    link_capture_owner(emitter, address);
+    emitter.emit_load_temporary_stack_slot(emitter.int_arg_reg_name(0), owner_records::RECORD_BYTES);
+    emitter.emit_load_temporary_stack_slot(emitter.int_arg_reg_name(1), owner_records::RECORD_BYTES + 8);
+    emitter.emit_call_label(write);
+    let record = emitter.secondary_scratch_reg();
+    emitter.comment("detach temporary call operand owner");
+    emitter.emit_temporary_stack_address(record, 0);
+    owner_records::unlink_record(emitter, CAPTURE_OWNER_CHAIN);
+    emitter.emit_release_temporary_stack(owner_records::RECORD_BYTES);
+    emitter.emit_load_temporary_stack_slot(emitter.int_result_reg(), 0);
+    emitter.emit_call_label("__rt_heap_free_safe");
+    emitter.emit_release_temporary_stack(16);
+}
+
+/// Detaches the live raw buffer for explicit retirement during persistent-request cleanup.
+pub fn emit_take_raw_buffer(emitter: &mut impl Emitter) {
+    let buffer = CaptureField::Buffer.symbol();
+    emitter.emit_load_symbol_to_reg(emitter.int_result_reg(), buffer, 0);
+    emitter.emit_store_zero_to_symbol(buffer, 0);
+}
+
+/// Clears the capture after its arena or raw buffer has been retired by the caller.
+pub fn emit_reset(emitter: &mut impl Emitter) {
+    for field in [CaptureField::Mode, CaptureField::Length, CaptureField::Buffer, CaptureField::Capacity] {
+        emitter.emit_store_zero_to_symbol(field.symbol(), 0);
+    }
+}
 
 /// Appends bytes into growable raw capture storage without a fixed output-size clamp.
 /// Inputs are a C-ABI source pointer and byte length; zero bytes require no allocation.

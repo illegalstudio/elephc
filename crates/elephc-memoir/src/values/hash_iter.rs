@@ -188,3 +188,42 @@ fn emit_hash_iter_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("mov r9, 8");                                           // return runtime value tag 8 = null when iteration is done
     emitter.instruction("ret");                                                 // return the terminal iterator state to the caller
 }
+
+/// Emits the AArch64 inline hash ordinal walk.
+///
+/// Follows the insertion-order `next` chain from the header head slot `x1` times and
+/// leaves the selected entry's address in `x10`. The cursor has already been bounds
+/// checked against the live count, so a chain that runs out early means the table is
+/// inconsistent; that branches to `invalid` instead of reading past the entries.
+pub fn emit_hash_ordinal_aarch64(emitter: &mut impl Emitter, prefix: &str, invalid: &str) {
+    emitter.emit_load_from_address("x9", "x0", hash_layout::ORDER_HEAD_OFFSET);                                   // x9 = insertion-order head slot index
+    emitter.label(&format!("{}_walk", prefix));
+    emitter.instruction("cmn x9, #1");                                          // has the insertion-order chain run out?
+    emitter.instruction(&format!("b.eq {}", invalid));                          // an exhausted chain has no entry at this ordinal
+    emitter.instruction("mov x10, #64");                                        // x10 = hash entry stride in bytes
+    hash_layout::emit_entry_address(emitter, "x10", "x0", "x9");
+    emitter.instruction(&format!("cbz x1, {}_walk_done", prefix));              // ordinal 0 selects the current entry
+    emitter.instruction("sub x1, x1, #1");                                      // consume one step of the requested ordinal
+    emitter.emit_load_from_address("x9", "x10", hash_layout::ENTRY_NEXT_OFFSET);                                  // x9 = next slot index from the insertion-order chain
+    emitter.instruction(&format!("b {}_walk", prefix));                         // keep walking towards the requested ordinal
+    emitter.label(&format!("{}_walk_done", prefix));
+}
+
+/// Emits the x86_64 inline hash ordinal walk.
+///
+/// Follows the insertion-order `next` chain from the header head slot `rsi` times and
+/// leaves the selected entry's address in `r10`. Branches to `invalid` if the chain runs
+/// out before the bounds-checked ordinal is reached.
+pub fn emit_hash_ordinal_x86_64(emitter: &mut impl Emitter, prefix: &str, invalid: &str) {
+    emitter.emit_load_from_address("rax", "rdi", hash_layout::ORDER_HEAD_OFFSET);                       // rax = insertion-order head slot index
+    emitter.label(&format!("{}_walk", prefix));
+    emitter.instruction("cmp rax, -1");                                         // has the insertion-order chain run out?
+    emitter.instruction(&format!("je {}", invalid));                            // an exhausted chain has no entry at this ordinal
+    hash_layout::emit_entry_address(emitter, "r10", "rdi", "rax");
+    emitter.instruction("test rsi, rsi");                                       // is the requested ordinal exhausted?
+    emitter.instruction(&format!("je {}_walk_done", prefix));                   // ordinal 0 selects the current entry
+    emitter.instruction("sub rsi, 1");                                          // consume one step of the requested ordinal
+    emitter.emit_load_from_address("rax", "r10", hash_layout::ENTRY_NEXT_OFFSET);                       // rax = next slot index from the insertion-order chain
+    emitter.instruction(&format!("jmp {}_walk", prefix));                       // keep walking towards the requested ordinal
+    emitter.label(&format!("{}_walk_done", prefix));
+}

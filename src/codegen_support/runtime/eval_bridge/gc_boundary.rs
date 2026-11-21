@@ -10,7 +10,7 @@
 
 use super::*;
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 
 /// Emits `gc_collect_cycles(Throwable **out) -> count` with a native exception boundary.
@@ -42,7 +42,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     elephc_memoir::activation_records::emit_save_sp_try_prefix(emitter, "x10", 0);
     emitter.instruction("mov x10, sp");                                         // address the complete native handler record
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "x10");
     emitter.instruction(&format!("add x0, sp, #{TRY_HANDLER_JMP_BUF_OFFSET}")); // pass this boundary's opaque jump buffer to libc
     // -- contain both collection outcomes below the Rust caller's frames --
     emitter.save_exception_handler();                                           // contain native throws before they can cross Rust frames
@@ -57,10 +57,9 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str xzr, [sp, #{count}]"));                   // the caller ignores the count when an exception escaped
     emitter.label("__elephc_eval_gc_finish");
     // -- restore surrounding exception and diagnostic state before publishing the result --
-    emitter.instruction("ldr x10, [sp]");                                       // recover the enclosing native exception handler
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("ldr x10, [sp, #{TRY_HANDLER_DIAG_DEPTH_OFFSET}]")); // restore diagnostic state even after longjmp
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    elephc_memoir::activation_records::emit_restore_try_fields(emitter, "x10", &elephc_memoir::activation_records::CALLBACK_REWIND_FIELDS, |emitter, register, field| {
+        abi::emit_load_from_address(emitter, register, "sp", field);
+    });
     emitter.instruction(&format!("ldr x10, [sp, #{previous}]"));                // return the parked exception owner to its enclosing scope
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_value", 0);
     emitter.instruction(&format!("ldr x1, [sp, #{throwable}]"));                // inspect the raw Throwable transferred by the catch path
@@ -94,7 +93,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", frame);
     emitter.instruction(&format!("lea r10, [rbp - {frame}]"));                  // address this invocation's handler record
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "r10");
     emitter.instruction(&format!("lea rdi, [rbp - {}]", frame - TRY_HANDLER_JMP_BUF_OFFSET)); // pass the boundary's opaque jump buffer
     // -- contain both collection outcomes below the Rust caller's frames --
     emitter.save_exception_handler();                                           // keep native exception jumps below Rust stack frames
@@ -110,10 +109,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // the count is unused when an exception escapes
     emitter.label("__elephc_eval_gc_finish");
     // -- restore surrounding exception and diagnostic state before publishing the result --
-    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {frame}]"));        // recover the caller's native exception handler
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", frame - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore suppression after either control-flow outcome
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", frame);
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // recover the enclosing exception owner parked at entry
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_value", 0);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // inspect the raw Throwable returned through the catch boundary

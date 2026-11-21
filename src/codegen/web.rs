@@ -90,7 +90,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // reset is the final backstop for non-Throwable request escapes, before the retired request
     // stack can be reused and before any reset destructor performs another property write.
     abi::emit_store_zero_to_symbol(emitter, "_magic_set_guard_head", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_fiber_main_saved_magic_set_guard", 0);
+    abi::emit_store_zero_to_symbol(emitter, elephc_memoir::coroutine_storage::MAIN_SAVED_MAGIC_SET_GUARD, 0);
     // The remaining transient owners point into the request heap. Clear them before the static
     // and global cleanup below can run user destructors: a destructor that echoes, throws, or
     // performs an HTTP call must never observe a previous request's buffer or callback state.
@@ -236,10 +236,7 @@ fn emit_output_buffer_reset(emitter: &mut Emitter) {
 /// that stale buffer instead of reaching its response.
 fn emit_print_r_capture_reset(emitter: &mut Emitter) {
     emitter.comment("reset any print_r capture abandoned by the previous request");
-    abi::emit_store_zero_to_symbol(emitter, "_print_r_mode", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_print_r_off", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_print_r_ptr", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_print_r_cap", 0);
+    elephc_memoir::strings::capture_buffer::emit_reset(emitter);
 }
 
 /// Clears transient request-owned pointers and counters that are not owned by static locals,

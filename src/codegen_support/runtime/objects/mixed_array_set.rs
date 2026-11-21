@@ -739,15 +739,8 @@ fn emit_string_payload_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, sp");                                          // the guard record, which the helper returned past
     emitter.instruction("bl __rt_exception_unguard_owned");                     // unlink it; x1/x2 survive the call
     emitter.instruction("add sp, sp, #48");                                     // pop the guard record
-    emitter.instruction("stp x1, x2, [sp, #48]");                               // keep the helper result across persistence
-    emitter.instruction("bl __rt_str_persist");                                 // x1/x2 = an owned copy for the cell
-    emitter.instruction("ldr x3, [sp, #48]");                                   // reload the helper result pointer
-    emitter.instruction("stp x1, x2, [sp, #48]");                               // keep the owned payload
-    emitter.instruction("cmp x1, x3");                                          // did persistence keep the helper block?
-    emitter.instruction("b.eq __rt_mixed_array_set_string_owned");              // then there is no temporary to release
-    emitter.instruction("mov x0, x3");                                          // release a heap-backed helper result that persist copied
-    emitter.instruction("bl __rt_heap_free_safe");                              // no-op for concat scratch
-    emitter.label("__rt_mixed_array_set_string_owned");
+    let replacement = elephc_memoir::strings::offset_result::OffsetResult { cell: 0, pointer: 48 };
+    replacement.emit_persist(emitter, "__rt_mixed_array_set_string_owned");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the retained-cell flag
     emitter.instruction("cbz x9, __rt_mixed_array_set_string_publish");         // no warning could have run a handler
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell
@@ -762,13 +755,7 @@ fn emit_string_payload_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_mixed");                                // release the last reference, freeing it
     emitter.instruction("b __rt_mixed_array_set_done");                         // the value was already consumed
     emitter.label("__rt_mixed_array_set_string_publish");
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell
-    emitter.instruction("ldr x0, [x10, #8]");                                   // the string payload being replaced
-    emitter.instruction("bl __rt_heap_free_safe");                              // the cell owns its string payload exclusively
-    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the target Mixed cell
-    emitter.instruction("ldp x1, x2, [sp, #48]");                               // reload the owned updated string
-    emitter.instruction("str x1, [x10, #8]");                                   // publish the new string pointer
-    emitter.instruction("str x2, [x10, #16]");                                  // publish the new string length
+    replacement.emit_publish(emitter);
     emitter.instruction("ldr x0, [sp, #32]");                                   // the cast value string
     emitter.instruction("bl __rt_heap_free_safe");                              // release it (no-op for scratch)
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the retained-cell flag
@@ -843,16 +830,8 @@ fn emit_string_payload_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // pop the guard record
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the result pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // reload the result length
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // keep the helper result across persistence
-    emitter.instruction("call __rt_str_persist");                               // rax/rdx = an owned copy for the cell
-    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // reload the helper result pointer
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // keep the owned payload pointer
-    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // keep the owned payload length
-    emitter.instruction("cmp rax, r10");                                        // did persistence keep the helper block?
-    emitter.instruction("je __rt_mixed_array_set_string_owned");                // then there is no temporary to release
-    emitter.instruction("mov rax, r10");                                        // release a heap-backed helper result that persist copied
-    emitter.instruction("call __rt_heap_free_safe");                            // no-op for concat scratch
-    emitter.label("__rt_mixed_array_set_string_owned");
+    let replacement = elephc_memoir::strings::offset_result::OffsetResult { cell: 8, pointer: 56 };
+    replacement.emit_persist(emitter, "__rt_mixed_array_set_string_owned");
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // was the cell retained?
     emitter.instruction("je __rt_mixed_array_set_string_publish");              // no warning could have run a handler
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
@@ -866,14 +845,7 @@ fn emit_string_payload_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_mixed");                              // release the last reference, freeing it
     emitter.instruction("jmp __rt_mixed_array_set_done");                       // the value was already consumed
     emitter.label("__rt_mixed_array_set_string_publish");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
-    emitter.instruction("mov rax, QWORD PTR [r10 + 8]");                        // the string payload being replaced
-    emitter.instruction("call __rt_heap_free_safe");                            // the cell owns its string payload exclusively
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the target Mixed cell
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the owned updated string pointer
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the new string pointer
-    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the owned updated string length
-    emitter.instruction("mov QWORD PTR [r10 + 16], rax");                       // publish the new string length
+    replacement.emit_publish(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the cast value string
     emitter.instruction("call __rt_heap_free_safe");                            // release it (no-op for scratch)
     emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // was the cell retained?

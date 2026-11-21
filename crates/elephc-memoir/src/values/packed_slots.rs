@@ -128,12 +128,69 @@ impl AttachedPackedSlots {
         emitter.label(&ready);
     }
 
+    /// Publishes the fresh child and retains an independent result owner.
+    pub fn emit_install_child(&self, emitter: &mut impl Emitter) {
+        self.emit_store_child(emitter);
+        retain_selected_child(emitter);
+    }
+
+    /// Detaches a selected child, then reacquires the installed slot after retirement.
+    pub fn emit_detach_child(&self, emitter: &mut impl Emitter, replaced: usize) {
+        let result = emitter.int_result_reg();
+        match emitter.arch() {
+            Arch::AArch64 => emitter.emit_store_to_sp(result, replaced),
+            Arch::X86_64 => emitter.store_at_offset(result, replaced),
+        }
+        emitter.emit_call_label("__rt_mixed_clone");
+        self.emit_store_child(emitter);
+        Self::emit_load_slot(emitter, result, replaced);
+        emitter.emit_call_label("__rt_decref_mixed");
+
+        let (array, index, address) = selected_child_registers(emitter.arch());
+        Self::emit_load_slot(emitter, array, self.array);
+        Self::emit_load_slot(emitter, index, self.index);
+        emit_load_indexed_word(emitter, array, index, result, address);
+        retain_selected_child(emitter);
+    }
+
+    /// Transfers the prepared result into the selected word in the current array.
+    fn emit_store_child(&self, emitter: &mut impl Emitter) {
+        let result = emitter.int_result_reg();
+        let (array, index, address) = selected_child_registers(emitter.arch());
+        Self::emit_load_slot(emitter, array, self.array);
+        Self::emit_load_slot(emitter, index, self.index);
+        match emitter.arch() {
+            Arch::AArch64 => emit_store_indexed_word(emitter, array, index, result, address),
+            Arch::X86_64 => emitter.instruction(&format!("mov QWORD PTR [{array} + {PACKED_PAYLOAD_OFFSET} + {index} * 8], {result}")), // publish into the parent before retiring the displaced child
+        }
+    }
+
     /// Loads a slot without translating its offset to a different frame base.
     fn emit_load_slot(emitter: &mut impl Emitter, register: &str, offset: usize) {
         match emitter.arch() {
             Arch::AArch64 => emitter.instruction(&format!("ldr {register}, [sp, #{offset}]")), // resolve an SP-relative caller slot
             Arch::X86_64 => emitter.load_at_offset(register, offset),
         }
+    }
+}
+
+/// Returns the registers that address a child slot in a write fetch.
+fn selected_child_registers(arch: Arch) -> (&'static str, &'static str, &'static str) {
+    match arch {
+        Arch::AArch64 => ("x10", "x9", "x13"),
+        Arch::X86_64 => ("r10", "r9", "r10"),
+    }
+}
+
+/// Retains the selected child without losing its pointer in the result register.
+fn retain_selected_child(emitter: &mut impl Emitter) {
+    let result = emitter.int_result_reg();
+    if emitter.arch() == Arch::X86_64 {
+        emitter.emit_push_reg(result);
+    }
+    emitter.emit_call_label("__rt_incref");
+    if emitter.arch() == Arch::X86_64 {
+        emitter.emit_pop_reg(result);
     }
 }
 
@@ -385,6 +442,21 @@ pub fn emit_packed_payload_x86_64(emitter: &mut impl Emitter, destination: &str,
     emitter.instruction(&format!("lea {destination}, [{array} + {PACKED_PAYLOAD_OFFSET}]")); // skip the packed array header
 }
 
+/// Borrows a checked word-sized slot at a dynamic index.
+pub fn emit_load_indexed_word(
+    emitter: &mut impl Emitter, array: &str, index: &str, value: &str, address: &str,
+) {
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emit_packed_payload_aarch64(emitter, address, array);
+            emitter.instruction(&format!("ldr {value}, [{address}, {index}, lsl #3]")); // borrow the checked packed slot
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov {value}, QWORD PTR [{array} + {PACKED_PAYLOAD_OFFSET} + {index} * 8]")); // borrow the checked packed slot
+        }
+    }
+}
+
 /// Writes one prepared owner into a reserved word-sized slot at a dynamic index.
 pub fn emit_store_indexed_word(
     emitter: &mut impl Emitter, array: &str, index: &str, value: &str, address: &str,
@@ -412,6 +484,11 @@ pub fn emit_publish_word_at(
 /// Publishes the number of initialized slots to the native packed array.
 pub fn emit_publish_length(emitter: &mut impl Emitter, array: &str, length: &str) {
     emitter.emit_store_to_address(length, array, 0);
+}
+
+/// Reads the logical length of checked packed storage.
+pub fn emit_load_length(emitter: &mut impl Emitter, destination: &str, array: &str) {
+    emitter.emit_load_from_address(destination, array, 0);
 }
 
 /// Loads the logical length and reserved capacity without touching the payload.

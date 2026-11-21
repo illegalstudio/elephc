@@ -142,7 +142,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     // -- write through a boxed descriptor-invoker marker stored in a Mixed hash entry --
     persistent_references::emit_write(emitter);
     emitter.label("__rt_hash_set_invoker_reference_write");
-    emitter.instruction("ldr x15, [x14, #16]");                                 // load the caller storage's runtime representation tag
+    elephc_memoir::layout::emit_load_mixed_high(emitter, "x15", "x14");
     emitter.instruction("cmp x15, #7");                                         // does the caller local hold a boxed Mixed handle?
     emitter.instruction("b.ne __rt_hash_set_invoker_reference_raw");            // concrete caller slots receive their native payload words
     emitter.instruction("ldr x13, [sp, #40]");                                  // load the replacement runtime value tag
@@ -407,7 +407,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
 
     persistent_references::emit_write(emitter);
     emitter.label("__rt_hash_set_invoker_reference_write_x");
-    emitter.instruction("mov r13, QWORD PTR [r14 + 16]");                       // load the caller storage's runtime representation tag
+    elephc_memoir::layout::emit_load_mixed_high(emitter, "r13", "r14");
     emitter.instruction("cmp r13, 7");                                          // does the caller local hold a boxed Mixed handle?
     emitter.instruction("jne __rt_hash_set_invoker_reference_raw_x");           // concrete caller slots receive their native payload words
     emitter.instruction("cmp QWORD PTR [rbp - 48], 7");                         // is the replacement already an owned boxed Mixed cell?

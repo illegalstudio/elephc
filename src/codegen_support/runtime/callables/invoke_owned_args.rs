@@ -14,7 +14,7 @@
 
 use crate::codegen_support::{abi, callable_descriptor, emit::Emitter, platform::Arch};
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 
 const FRAME_SIZE: usize = TRY_HANDLER_SLOT_SIZE + 128;
@@ -142,16 +142,13 @@ fn save_handler_state(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER_OFFSET);
     abi::emit_frame_slot_address(emitter, result, HANDLER_OFFSET);
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
 }
 
 /// Restores the caller's exception-handler chain and diagnostic suppression depth.
 fn restore_handler_state(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    abi::load_at_offset(emitter, result, HANDLER_OFFSET);
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
-    abi::load_at_offset(emitter, result, HANDLER_OFFSET - TRY_HANDLER_DIAG_DEPTH_OFFSET);
-    abi::emit_store_reg_to_symbol(emitter, result, "_rt_diag_suppression", 0);
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER_OFFSET);
 }
 
 /// Releases a boxed owner after clearing its slot, leaving reentrant cleanup idempotent.

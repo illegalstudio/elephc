@@ -28,127 +28,13 @@
 //!   `3` prev. `crate::builtins::semantics::ArrayPointerOp::seek_mode` is the single source
 //!   of truth for that mapping and must stay in step with the dispatch below.
 
-use crate::codegen_support::runtime::arrays::hash_layout;
+pub(super) use elephc_memoir::values::boxed_array::{
+    emit_normalize_array_aarch64 as emit_normalize_aarch64,
+    emit_normalize_array_x86_64 as emit_normalize_x86_64,
+};
+use elephc_memoir::values::hash_iter::{emit_hash_ordinal_aarch64, emit_hash_ordinal_x86_64};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-
-/// Emits the AArch64 inline normalization prologue shared by all three helpers and by
-/// `__rt_array_edge_value` (`array_first` / `array_last`).
-///
-/// Unwraps boxed Mixed cells until a bare container remains, then leaves the container
-/// pointer in `x0`, its live element count in `x11`, and its heap kind in `x12`, or
-/// branches to `invalid` when the input is not a live array or hash. Only `x9`-`x12` are
-/// touched, so the caller's `x1`/`x2` argument registers survive.
-pub(super) fn emit_normalize_aarch64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
-    emitter.label(&format!("{}_norm", prefix));
-    emitter.instruction(&format!("cbz x0, {}", invalid));                       // a null container is never positionable
-    crate::codegen_support::abi::emit_load_int_immediate(
-        emitter,
-        "x9",
-        crate::codegen_support::sentinels::NULL_SENTINEL,
-    );
-    emitter.instruction("cmp x0, x9");                                          // does the container carry the in-band null sentinel?
-    emitter.instruction(&format!("b.eq {}", invalid));                          // sentinel-null containers are never positionable
-    elephc_memoir::heap_kind::emit_load_metadata(emitter, "x9", "x0");
-    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
-    emitter.instruction("cmp x9, #5");                                          // is the container a boxed mixed cell?
-    emitter.instruction(&format!("b.eq {}_unbox", prefix));                     // mixed cells are unwrapped before anything else
-    emitter.instruction("cmp x9, #2");                                          // is the container an indexed array?
-    emitter.instruction(&format!("b.eq {}_live", prefix));                      // indexed arrays keep their count at header word 0
-    emitter.instruction("cmp x9, #3");                                          // is the container an associative hash?
-    emitter.instruction(&format!("b.eq {}_live", prefix));                      // hashes also keep their count at header word 0
-    emitter.instruction(&format!("b {}", invalid));                             // any other kind is not iterable here
-    emitter.label(&format!("{}_unbox", prefix));
-    emitter.instruction("ldr x10, [x0]");                                       // load the boxed mixed value tag
-    emitter.instruction("cmp x10, #4");                                         // does the cell box an indexed array?
-    emitter.instruction(&format!("b.eq {}_unwrap", prefix));                    // unwrap indexed array payloads
-    emitter.instruction("cmp x10, #5");                                         // does the cell box an associative array?
-    emitter.instruction(&format!("b.ne {}", invalid));                          // non-array mixed payloads are never positionable
-    emitter.label(&format!("{}_unwrap", prefix));
-    emitter.instruction("ldr x0, [x0, #8]");                                    // unbox the container pointer from mixed[8]
-    emitter.instruction(&format!("b {}_norm", prefix));                         // re-normalize in case the payload nests another cell
-    emitter.label(&format!("{}_live", prefix));
-    emitter.instruction("mov x12, x9");                                         // x12 = heap kind (2 = indexed, 3 = hash)
-    emitter.instruction("ldr x11, [x0, #0]");                                   // x11 = live element count from header word 0
-}
-
-/// Emits the x86_64 inline normalization prologue shared by all three helpers and by
-/// `__rt_array_edge_value` (`array_first` / `array_last`).
-///
-/// Unwraps boxed Mixed cells until a bare container remains, then leaves the container
-/// pointer in `rdi` and its live element count in `r11`, or branches to `invalid`. Only
-/// `rax`, `r10` and `r11` are touched, so the caller's `rsi`/`rdx` argument registers
-/// survive; callers that need the heap kind reload the header byte after the check.
-pub(super) fn emit_normalize_x86_64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
-    emitter.label(&format!("{}_norm", prefix));
-    emitter.instruction("test rdi, rdi");                                       // is the container pointer null?
-    emitter.instruction(&format!("je {}", invalid));                            // a null container is never positionable
-    crate::codegen_support::abi::emit_load_int_immediate(
-        emitter,
-        "r10",
-        crate::codegen_support::sentinels::NULL_SENTINEL,
-    );
-    emitter.instruction("cmp rdi, r10");                                        // does the container carry the in-band null sentinel?
-    emitter.instruction(&format!("je {}", invalid));                            // sentinel-null containers are never positionable
-    elephc_memoir::heap_kind::emit_load_kind_byte(emitter, "eax", "rdi");
-    emitter.instruction("cmp eax, 5");                                          // is the container a boxed mixed cell?
-    emitter.instruction(&format!("je {}_unbox", prefix));                       // mixed cells are unwrapped before anything else
-    emitter.instruction("cmp eax, 2");                                          // is the container an indexed array?
-    emitter.instruction(&format!("je {}_live", prefix));                        // indexed arrays keep their count at header word 0
-    emitter.instruction("cmp eax, 3");                                          // is the container an associative hash?
-    emitter.instruction(&format!("je {}_live", prefix));                        // hashes also keep their count at header word 0
-    emitter.instruction(&format!("jmp {}", invalid));                           // any other kind is not iterable here
-    emitter.label(&format!("{}_unbox", prefix));
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed mixed value tag
-    emitter.instruction("cmp r10, 4");                                          // does the cell box an indexed array?
-    emitter.instruction(&format!("je {}_unwrap", prefix));                      // unwrap indexed array payloads
-    emitter.instruction("cmp r10, 5");                                          // does the cell box an associative array?
-    emitter.instruction(&format!("jne {}", invalid));                           // non-array mixed payloads are never positionable
-    emitter.label(&format!("{}_unwrap", prefix));
-    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // unbox the container pointer from mixed[8]
-    emitter.instruction(&format!("jmp {}_norm", prefix));                       // re-normalize in case the payload nests another cell
-    emitter.label(&format!("{}_live", prefix));
-    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // r11 = live element count from header word 0
-}
-
-/// Emits the AArch64 inline hash ordinal walk.
-///
-/// Follows the insertion-order `next` chain from the header head slot `x1` times and
-/// leaves the selected entry's address in `x10`. The cursor has already been bounds
-/// checked against the live count, so a chain that runs out early means the table is
-/// inconsistent; that branches to `invalid` instead of reading past the entries.
-fn emit_hash_walk_aarch64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
-    emitter.instruction("ldr x9, [x0, #24]");                                   // x9 = insertion-order head slot index
-    emitter.label(&format!("{}_walk", prefix));
-    emitter.instruction("cmn x9, #1");                                          // has the insertion-order chain run out?
-    emitter.instruction(&format!("b.eq {}", invalid));                          // an exhausted chain has no entry at this ordinal
-    emitter.instruction("mov x10, #64");                                        // x10 = hash entry stride in bytes
-    hash_layout::emit_entry_address(emitter, "x10", "x0", "x9");
-    emitter.instruction(&format!("cbz x1, {}_walk_done", prefix));              // ordinal 0 selects the current entry
-    emitter.instruction("sub x1, x1, #1");                                      // consume one step of the requested ordinal
-    emitter.instruction("ldr x9, [x10, #56]");                                  // x9 = next slot index from the insertion-order chain
-    emitter.instruction(&format!("b {}_walk", prefix));                         // keep walking towards the requested ordinal
-    emitter.label(&format!("{}_walk_done", prefix));
-}
-
-/// Emits the x86_64 inline hash ordinal walk.
-///
-/// Follows the insertion-order `next` chain from the header head slot `rsi` times and
-/// leaves the selected entry's address in `r10`. Branches to `invalid` if the chain runs
-/// out before the bounds-checked ordinal is reached.
-fn emit_hash_walk_x86_64(emitter: &mut Emitter, prefix: &str, invalid: &str) {
-    emitter.instruction("mov rax, QWORD PTR [rdi + 24]");                       // rax = insertion-order head slot index
-    emitter.label(&format!("{}_walk", prefix));
-    emitter.instruction("cmp rax, -1");                                         // has the insertion-order chain run out?
-    emitter.instruction(&format!("je {}", invalid));                            // an exhausted chain has no entry at this ordinal
-    hash_layout::emit_entry_address(emitter, "r10", "rdi", "rax");
-    emitter.instruction("test rsi, rsi");                                       // is the requested ordinal exhausted?
-    emitter.instruction(&format!("je {}_walk_done", prefix));                   // ordinal 0 selects the current entry
-    emitter.instruction("sub rsi, 1");                                          // consume one step of the requested ordinal
-    emitter.instruction("mov rax, QWORD PTR [r10 + 56]");                       // rax = next slot index from the insertion-order chain
-    emitter.instruction(&format!("jmp {}_walk", prefix));                       // keep walking towards the requested ordinal
-    emitter.label(&format!("{}_walk_done", prefix));
-}
 
 /// array_ptr_seek: compute the next internal-pointer cursor for one PHP seek operation.
 ///
@@ -268,7 +154,7 @@ pub fn emit_array_ptr_key(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // value_hi unused for integers
     emitter.instruction("b __rt_mixed_from_value");                             // box the integer key and return it to the caller
     emitter.label("__rt_aptr_key_hash");
-    emit_hash_walk_aarch64(emitter, "__rt_aptr_key", "__rt_aptr_key_null");
+    emit_hash_ordinal_aarch64(emitter, "__rt_aptr_key", "__rt_aptr_key_null");
     emitter.instruction("ldr x9, [x10, #16]");                                  // x9 = key_len (-1 marks an integer key)
     emitter.instruction("ldr x13, [x10, #8]");                                  // x13 = key payload (integer value or string pointer)
     emitter.instruction("cmn x9, #1");                                          // is the entry keyed by an integer?
@@ -309,7 +195,7 @@ fn emit_array_ptr_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, 0");                                          // value_tag = 0 (integer)
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the integer key and return it to the caller
     emitter.label("__rt_aptr_key_hash");
-    emit_hash_walk_x86_64(emitter, "__rt_aptr_key", "__rt_aptr_key_null");
+    emit_hash_ordinal_x86_64(emitter, "__rt_aptr_key", "__rt_aptr_key_null");
     emitter.instruction("mov r8, QWORD PTR [r10 + 16]");                        // r8 = key_len (-1 marks an integer key)
     emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                         // r9 = key payload (integer value or string pointer)
     emitter.instruction("cmp r8, -1");                                          // is the entry keyed by an integer?
@@ -358,7 +244,7 @@ pub fn emit_array_ptr_value(emitter: &mut Emitter) {
     emitter.instruction("mov x3, #0");                                          // never warn: the cursor was already bounds-checked
     emitter.instruction("b __rt_array_get_mixed_key");                          // reuse the ordinary indexed read path and return its box
     emitter.label("__rt_aptr_val_hash");
-    emit_hash_walk_aarch64(emitter, "__rt_aptr_val", "__rt_aptr_val_false");
+    emit_hash_ordinal_aarch64(emitter, "__rt_aptr_val", "__rt_aptr_val_false");
     emitter.instruction("ldr x9, [x10, #24]");                                  // x9 = value_lo from the hash entry
     emitter.instruction("ldr x13, [x10, #32]");                                 // x13 = value_hi from the hash entry
     emitter.instruction("ldr x14, [x10, #40]");                                 // x14 = value_tag from the hash entry
@@ -398,7 +284,7 @@ fn emit_array_ptr_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor ecx, ecx");                                        // never warn: the cursor was already bounds-checked
     emitter.instruction("jmp __rt_array_get_mixed_key");                        // reuse the ordinary indexed read path and return its box
     emitter.label("__rt_aptr_val_hash");
-    emit_hash_walk_x86_64(emitter, "__rt_aptr_val", "__rt_aptr_val_false");
+    emit_hash_ordinal_x86_64(emitter, "__rt_aptr_val", "__rt_aptr_val_false");
     emitter.instruction("mov r8, QWORD PTR [r10 + 24]");                        // r8 = value_lo from the hash entry
     emitter.instruction("mov r9, QWORD PTR [r10 + 32]");                        // r9 = value_hi from the hash entry
     emitter.instruction("mov rax, QWORD PTR [r10 + 40]");                       // rax = value_tag from the hash entry

@@ -50,7 +50,7 @@ use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
     TRY_HANDLER_SLOT_SIZE,
 };
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 // The firewall handler record must match the layout __rt_throw_current assumes:
 // next@0, survivor@8, diag@TRY_HANDLER_DIAG_DEPTH_OFFSET,
@@ -191,7 +191,7 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
     // -- push a setjmp firewall handler around the invoke --
     elephc_memoir::activation_records::emit_save_arm_runtime_try_prefix(emitter, "x10");
     emitter.instruction("mov x10, sp");                                         // x10 = address of this handler record
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // link the record as the active handler
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "x10");
     emitter.instruction("add x0, sp, #24");                                     // x0 = &jmp_buf inside the handler record
     emitter.save_exception_handler();                                           // returns 0 on first pass, 1 when a throw longjmps back
     emitter.instruction("cbnz x0, __rt_pdo_call_agg_step_threw");               // nonzero → arrived via longjmp
@@ -204,10 +204,7 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #304]");                                  // save the new accumulator
 
     // pop the firewall handler before any further runtime calls
-    emitter.instruction("ldr x10, [sp, #0]");                                   // record.next
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_sp_try_handler(emitter, "x10", 0);
 
     // -- release the args container (drops the slot-0 accumulator incref) --
     argument_storage::emit_release_boxed_array(emitter, 296, 288);
@@ -224,10 +221,7 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
 
     // -- longjmp path: the step callback threw --
     emitter.label("__rt_pdo_call_agg_step_threw");
-    emitter.instruction("ldr x10, [sp, #0]");                                   // record.next
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_sp_try_handler(emitter, "x10", 0);
     cleanup_preserve::emit_discard_caught_exception(emitter, "__rt_pdo_call_agg_step_threw_released");
     // release the args container (drops the slot-0 incref) but PRESERVE the accumulator
     argument_storage::emit_release_boxed_array(emitter, 296, 288);
@@ -366,7 +360,7 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     // -- push a setjmp firewall handler around the invoke --
     elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", 320);
     emitter.instruction("lea r10, [rbp - 320]");                                // r10 = address of this handler record
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // link the record as the active handler
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "r10");
     emitter.instruction("lea rdi, [rbp - 296]");                                // rdi = &jmp_buf inside the handler record (record + 24)
     emitter.save_exception_handler();                                           // returns 0 on first pass, 1 when a throw longjmps back
     emitter.instruction("test rax, rax");                                       // did control arrive via longjmp?
@@ -380,10 +374,7 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the new accumulator
 
     // pop the firewall handler before any further runtime calls
-    emitter.instruction("mov r10, QWORD PTR [rbp - 320]");                      // record.next
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("mov r10, QWORD PTR [rbp - 304]");                      // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", 320);
 
     // -- release the args container (drops the slot-0 accumulator incref) --
     argument_storage::emit_release_boxed_array(emitter, 64, 56);
@@ -401,10 +392,7 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
 
     // -- longjmp path: the step callback threw --
     emitter.label("__rt_pdo_call_agg_step_threw_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 320]");                      // record.next
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("mov r10, QWORD PTR [rbp - 304]");                      // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", 320);
     cleanup_preserve::emit_discard_caught_exception(emitter, "__rt_pdo_call_agg_step_threw_released_x86");
     // release the args container (drops the slot-0 incref) but PRESERVE the accumulator
     argument_storage::emit_release_boxed_array(emitter, 64, 56);

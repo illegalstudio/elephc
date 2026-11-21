@@ -15,7 +15,7 @@
 
 use crate::codegen_support::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::codegen_support::{
     abi, arrays, callable_descriptor, emit::Emitter, platform::Arch, value_boxing,
@@ -413,21 +413,12 @@ fn release_callback_result(emitter: &mut Emitter) {
 /// Installs a native handler before acquiring the source root or invoking callbacks.
 fn install_boundary(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_value", PREVIOUS),
-        ("_exc_handler_top", HANDLER),
-        ("_exc_call_frame_top", HANDLER - 8),
-        (
-            "_rt_diag_suppression",
-            HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-        ),
-    ] {
-        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
-        abi::store_at_offset(emitter, result, offset);
-    }
+    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
+    abi::store_at_offset(emitter, result, PREVIOUS);
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_frame_slot_address(emitter, result, HANDLER);
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
     abi::emit_frame_slot_address(
         emitter,
         abi::int_arg_reg_name(emitter.target, 0),
@@ -440,16 +431,7 @@ fn install_boundary(emitter: &mut Emitter) {
 /// Restores the caller's handler and diagnostic depth after ownership cleanup.
 fn restore_boundary(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_handler_top", HANDLER),
-        (
-            "_rt_diag_suppression",
-            HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-        ),
-    ] {
-        abi::load_at_offset(emitter, result, offset);
-        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
-    }
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER);
 }
 
 /// Clears an owner slot without clobbering the result register.

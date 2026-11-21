@@ -10,71 +10,9 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
-/// Copies exact source history into a freshly rebuilt hash without acquiring PHP owners.
-fn emit_copy_history(emitter: &mut Emitter) {
-    use crate::codegen_support::runtime::arrays::hash_layout::NEXT_INDEX_OFFSET;
-    let arm = emitter.target.arch == Arch::AArch64;
-    super::label_c_global(emitter, "__elephc_eval_value_array_copy_index_history");
-    if arm {
-        emitter.instruction("sub sp, sp, #32");                                 // retain destination, source history, and linkage
-        emitter.instruction("stp x29, x30, [sp, #16]");                         // preserve the caller across reference resolution
-        emitter.instruction("str x1, [sp]");                                    // retain the freshly reconstructed destination
-    } else {
-        emitter.instruction("push rbp");                                        // preserve linkage and align calls
-        emitter.instruction("mov rbp, rsp");                                    // establish the metadata callback frame
-        emitter.instruction("sub rsp, 16");                                     // retain destination and source history
-        emitter.instruction("mov QWORD PTR [rsp], rsi");                        // retain the reconstructed destination
-        emitter.instruction("mov rax, rdi");                                    // adapt the source to private dereferencing
-    }
-    abi::emit_call_label(emitter, "__rt_mixed_deref");
-    emitter.instruction(if arm { "cbz x0, __rt_eval_copy_index_invalid" } else { "test rax, rax" }); // validate the borrowed source cell
-    if !arm { emitter.instruction("jz __rt_eval_copy_index_invalid"); }         // reject a missing source
-    emitter.instruction(if arm { "ldr x9, [x0]" } else { "mov r11, QWORD PTR [rax]" }); // inspect the source representation
-    emitter.instruction(if arm { "ldr x0, [x0, #8]" } else { "mov rax, QWORD PTR [rax + 8]" }); // borrow source array storage
-    emitter.instruction(if arm { "cmp x9, #4" } else { "cmp r11, 4" });         // indexed arrays preserve their dense length
-    emitter.instruction(if arm { "b.eq __rt_eval_copy_index_dense" } else { "je __rt_eval_copy_index_dense" }); // derive history before deleting a dense tail
-    emitter.instruction(if arm { "cmp x9, #5" } else { "cmp r11, 5" });         // associative arrays own the signed counter
-    emitter.instruction(if arm { "b.ne __rt_eval_copy_index_invalid" } else { "jne __rt_eval_copy_index_invalid" }); // reject unsupported source values
-    super::emit_branch_if_null_container(emitter, if arm { "x0" } else { "rax" }, if arm { "x10" } else { "r10" }, "__rt_eval_copy_index_empty");
-    emitter.instruction(&if arm { format!("ldr x0, [x0, #{NEXT_INDEX_OFFSET}]") } else { format!("mov rax, QWORD PTR [rax + {NEXT_INDEX_OFFSET}]") }); // retain the exact counter, including its initial sentinel
-    emitter.instruction(if arm { "b __rt_eval_copy_index_resolve" } else { "jmp __rt_eval_copy_index_resolve" }); // preserve associative history across destination resolution
-    emitter.label("__rt_eval_copy_index_dense");
-    super::emit_branch_if_null_container(emitter, if arm { "x0" } else { "rax" }, if arm { "x10" } else { "r10" }, "__rt_eval_copy_index_empty");
-    emitter.instruction(if arm { "ldr x0, [x0]" } else { "mov rax, QWORD PTR [rax]" }); // keep the original dense append index
-    emitter.instruction(if arm { "cbnz x0, __rt_eval_copy_index_resolve" } else { "test rax, rax" }); // preserve the nonempty dense length
-    if !arm { emitter.instruction("jnz __rt_eval_copy_index_resolve"); }        // an empty dense source has no integer insertion history
-    emitter.label("__rt_eval_copy_index_empty");
-    abi::emit_load_int_immediate(emitter, if arm { "x0" } else { "rax" }, i64::MIN);
-    emitter.label("__rt_eval_copy_index_resolve");
-    emitter.instruction(if arm { "str x0, [sp, #8]" } else { "mov QWORD PTR [rsp + 8], rax" }); // retain exact metadata across destination dereferencing
-    emitter.instruction(if arm { "ldr x0, [sp]" } else { "mov rax, QWORD PTR [rsp]" }); // resolve the newly reconstructed cell
-    abi::emit_call_label(emitter, "__rt_mixed_deref");
-    emitter.instruction(if arm { "cbz x0, __rt_eval_copy_index_invalid" } else { "test rax, rax" }); // require a valid destination cell
-    if !arm { emitter.instruction("jz __rt_eval_copy_index_invalid"); }         // reject an absent destination
-    emitter.instruction(if arm { "ldr x9, [x0]" } else { "mov r11, QWORD PTR [rax]" }); // inspect destination storage
-    emitter.instruction(if arm { "cmp x9, #5" } else { "cmp r11, 5" });         // arbitrary history requires associative storage
-    emitter.instruction(if arm { "b.ne __rt_eval_copy_index_invalid" } else { "jne __rt_eval_copy_index_invalid" }); // preserve unsupported destinations unchanged
-    emitter.instruction(if arm { "ldr x0, [x0, #8]" } else { "mov rax, QWORD PTR [rax + 8]" }); // borrow the fresh destination hash
-    super::emit_branch_if_null_container(emitter, if arm { "x0" } else { "rax" }, if arm { "x10" } else { "r10" }, "__rt_eval_copy_index_invalid");
-    emitter.instruction(if arm { "ldr x9, [sp, #8]" } else { "mov r10, QWORD PTR [rsp + 8]" }); // recover the original insertion history
-    emitter.instruction(&if arm { format!("str x9, [x0, #{NEXT_INDEX_OFFSET}]") } else { format!("mov QWORD PTR [rax + {NEXT_INDEX_OFFSET}], r10") }); // retain deleted-key history after copying live entries
-    emitter.instruction(if arm { "mov x0, #0" } else { "xor eax, eax" });       // report successful metadata transfer
-    emitter.instruction(if arm { "b __rt_eval_copy_index_done" } else { "jmp __rt_eval_copy_index_done" }); // share callback cleanup
-    emitter.label("__rt_eval_copy_index_invalid");
-    emitter.instruction(if arm { "mov x0, #2" } else { "mov eax, 2" });         // return unsupported storage without running PHP
-    emitter.label("__rt_eval_copy_index_done");
-    if arm {
-        emitter.instruction("ldp x29, x30, [sp, #16]");                         // restore caller linkage
-        emitter.instruction("add sp, sp, #32");                                 // retire borrowed metadata storage
-    } else {
-        emitter.instruction("leave");                                           // restore the caller frame and stack
-    }
-    emitter.instruction("ret");                                                 // return the independent host status
-}
-
 /// Emits a C2 boxed-array/output-index callback sharing native hash history and reference resolution.
 pub(crate) fn emit(emitter: &mut Emitter) {
-    emit_copy_history(emitter);
+    elephc_memoir::values::hash_next_index::emit_copy_array_history(emitter, "__elephc_eval_value_array_copy_index_history");
     let arm = emitter.target.arch == Arch::AArch64;
     super::label_c_global(emitter, "__elephc_eval_value_array_next_index");
     if arm {
@@ -116,7 +54,8 @@ pub(crate) fn emit(emitter: &mut Emitter) {
     emitter.instruction(if arm { "b __rt_eval_next_index_publish" } else { "jmp __rt_eval_next_index_publish" }); // return the native index without creating a detached array snapshot
     emitter.label("__rt_eval_next_index_dense");
     super::emit_branch_if_null_container(emitter, if arm { "x0" } else { "rax" }, if arm { "x10" } else { "r10" }, "__rt_eval_next_index_zero");
-    emitter.instruction(if arm { "ldr x0, [x0]" } else { "mov rax, QWORD PTR [rax]" }); // dense arrays append at their logical length
+    let result = abi::int_result_reg(emitter);
+    elephc_memoir::values::packed_slots::emit_load_length(emitter, result, result);
     emitter.instruction(if arm { "b __rt_eval_next_index_publish" } else { "jmp __rt_eval_next_index_publish" }); // preserve the computed dense index
     emitter.label("__rt_eval_next_index_zero");
     emitter.instruction(if arm { "mov x0, #0" } else { "xor eax, eax" });       // legacy null container payloads start at zero

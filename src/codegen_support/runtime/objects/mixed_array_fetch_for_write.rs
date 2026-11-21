@@ -170,34 +170,18 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [x0]");                                       // load the stored cell's payload tag
     emitter.instruction("cmp x11, #8");                                         // does the slot hold a boxed Mixed(null)?
     emitter.instruction("b.eq __rt_mixed_array_gfw_replace_null");              // PHP autovivifies null elements: replace the slot cell
-    emitter.instruction("str x0, [sp, #40]");                                   // preserve the replaced slot owner after the bounds check
-    emitter.instruction("bl __rt_mixed_clone");                                 // detach the child zval while preserving resource identity
-    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the unique parent array after cloning
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the selected slot index
-    emitter.instruction("add x13, x10, #24");                                   // address the parent array's boxed slots
-    emitter.instruction("str x0, [x13, x9, lsl #3]");                           // publish the detached child before releasing the old slot owner
-    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the replaced child cell
-    emitter.instruction("bl __rt_decref_mixed");                                // release only the parent slot's old reference
-    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the parent array after child cleanup
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the selected slot index after cleanup
-    emitter.instruction("add x13, x10, #24");                                   // address the unique parent's boxed slots again
-    emitter.instruction("ldr x0, [x13, x9, lsl #3]");                           // borrow the installed detached child
-    emitter.instruction("bl __rt_incref");                                      // acquire the caller's write-fetch result owner
+    let selection = AttachedPackedSlots { array: 24, index: 32, owner: 0 };
+    selection.emit_detach_child(emitter, 40);
     emitter.instruction("b __rt_mixed_array_gfw_return");                       // return the cell now installed in the unique parent
     emitter.label("__rt_mixed_array_gfw_replace_null");
     emitter.instruction("bl __rt_decref_mixed");                                // drop the slot's reference; aliases keep their own null value
     emitter.label("__rt_mixed_array_gfw_fill_slot");
     emitter.instruction("bl __rt_mixed_new_empty_array_cell");                  // allocate the autovivified empty-array cell
-    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the unique array pointer
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the target index
-    emitter.instruction("add x13, x10, #24");                                   // compute the indexed-array data base for the store
-    emitter.instruction("str x0, [x13, x9, lsl #3]");                           // install the fresh cell into the parent slot (slot owns one ref)
-    emitter.instruction("bl __rt_incref");                                      // retain the installed cell so the caller owns the returned result
+    selection.emit_install_child(emitter);
     emitter.instruction("b __rt_mixed_array_gfw_return");                       // finish after installing the autovivified element
 
     emitter.label("__rt_mixed_array_gfw_extend");
-    AttachedPackedSlots { array: 24, index: 32, owner: 0 }
-        .emit_grow_to_index(emitter, "__rt_mixed_array_gfw");
+    selection.emit_grow_to_index(emitter, "__rt_mixed_array_gfw");
     emitter.instruction("ldr x11, [sp, #40]");                                   // start filling at the captured logical length
     packed_slots::emit_publish_mixed_extension(emitter, "__rt_mixed_array_gfw", true);
     emitter.instruction("b __rt_mixed_array_gfw_fill_slot");                    // install the autovivified element into the new slot
@@ -306,16 +290,14 @@ fn emit_array_ensure_elem_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #64");                                     // reserve frame for the transient receiver cell and saved fp/lr
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
-    emitter.instruction("str x1, [sp, #16]");                                   // install the payload tag into the transient cell
-    emitter.instruction("str x0, [sp, #24]");                                   // install the container pointer into the transient cell payload
-    emitter.instruction("str xzr, [sp, #32]");                                  // clear the transient cell's high payload word
+    elephc_memoir::values::stack_cell::emit_container_receiver(emitter, 16, "x1", "x0");
     emitter.instruction("add x0, sp, #16");                                     // pass the transient cell as the fetch-for-write receiver
     emitter.instruction("mov x1, x2");                                          // forward key_lo into the fetch-for-write key register
     emitter.instruction("mov x2, x3");                                          // forward key_hi into the fetch-for-write key register
     emitter.instruction("mov x3, xzr");                                         // concrete local writes retain ordinary COW semantics
     emitter.instruction("bl __rt_mixed_array_get_for_write");                   // autovivify the element and publish container changes to the cell
     emitter.instruction("bl __rt_decref_mixed");                                // drop the returned child reference; the container slot keeps its own
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the possibly promoted/reallocated container pointer
+    elephc_memoir::values::stack_cell::emit_load_container_receiver(emitter, 16, "x0");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the container pointer for the local storeback
@@ -425,35 +407,18 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rax]");                            // load the stored cell's payload tag
     emitter.instruction("cmp r11, 8");                                          // does the slot hold a boxed Mixed(null)?
     emitter.instruction("je __rt_mixed_array_gfw_replace_null");                // PHP autovivifies null elements: replace the slot cell
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the replaced slot owner after the bounds check
-    emitter.instruction("call __rt_mixed_clone");                               // detach the child zval while preserving resource identity
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the unique parent array after cloning
-    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the selected slot index
-    emitter.instruction("mov QWORD PTR [r10 + 24 + r9 * 8], rax");              // publish the detached child before releasing the old slot owner
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the replaced child cell
-    emitter.instruction("call __rt_decref_mixed");                              // release only the parent slot's old reference
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the parent array after child cleanup
-    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the selected slot index after cleanup
-    emitter.instruction("mov rax, QWORD PTR [r10 + 24 + r9 * 8]");              // borrow the installed detached child
-    abi::emit_push_reg(emitter, "rax");
-    emitter.instruction("call __rt_incref");                                    // acquire the caller's write-fetch result owner
-    abi::emit_pop_reg(emitter, "rax");
+    let selection = AttachedPackedSlots { array: 32, index: 40, owner: 8 };
+    selection.emit_detach_child(emitter, 48);
     emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // return the cell now installed in the unique parent
     emitter.label("__rt_mixed_array_gfw_replace_null");
     emitter.instruction("call __rt_decref_mixed");                              // drop the slot's reference; aliases keep their own null value
     emitter.label("__rt_mixed_array_gfw_fill_slot");
     emitter.instruction("call __rt_mixed_new_empty_array_cell");                // allocate the autovivified empty-array cell
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the unique array pointer
-    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the target index
-    emitter.instruction("mov QWORD PTR [r10 + 24 + r9 * 8], rax");              // install the fresh cell into the parent slot (slot owns one ref)
-    abi::emit_push_reg(emitter, "rax");
-    emitter.instruction("call __rt_incref");                                    // retain the installed cell so the caller owns the returned result
-    abi::emit_pop_reg(emitter, "rax");
+    selection.emit_install_child(emitter);
     emitter.instruction("jmp __rt_mixed_array_gfw_return");                     // finish after installing the autovivified element
 
     emitter.label("__rt_mixed_array_gfw_extend");
-    AttachedPackedSlots { array: 32, index: 40, owner: 8 }
-        .emit_grow_to_index(emitter, "__rt_mixed_array_gfw");
+    selection.emit_grow_to_index(emitter, "__rt_mixed_array_gfw");
     abi::load_at_offset(emitter, "r11", 48);
     packed_slots::emit_publish_mixed_extension(emitter, "__rt_mixed_array_gfw", true);
     emitter.instruction("jmp __rt_mixed_array_gfw_fill_slot");                  // install the autovivified element into the new slot
@@ -560,16 +525,14 @@ fn emit_array_ensure_elem_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("sub rsp, 48");                                         // reserve the transient receiver cell (16-byte aligned)
-    emitter.instruction("mov QWORD PTR [rbp - 40], rsi");                       // install the payload tag into the transient cell
-    emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // install the container pointer into the transient cell payload
-    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // clear the transient cell's high payload word
+    elephc_memoir::values::stack_cell::emit_container_receiver(emitter, 40, "rsi", "rdi");
     emitter.instruction("lea rdi, [rbp - 40]");                                 // pass the transient cell as the fetch-for-write receiver
     emitter.instruction("mov rsi, rdx");                                        // forward key_lo into the fetch-for-write key register
     emitter.instruction("mov rdx, rcx");                                        // forward key_hi into the fetch-for-write key register
     emitter.instruction("xor ecx, ecx");                                        // concrete local writes retain ordinary COW semantics
     emitter.instruction("call __rt_mixed_array_get_for_write");                 // autovivify the element and publish container changes to the cell
     emitter.instruction("call __rt_decref_mixed");                              // drop the returned child reference; the container slot keeps its own
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the possibly promoted/reallocated container pointer
+    elephc_memoir::values::stack_cell::emit_load_container_receiver(emitter, 40, "rax");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the container pointer for the local storeback

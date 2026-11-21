@@ -8,7 +8,7 @@
 //! - Clearing the slot before destruction makes repeated cleanup safe.
 //! - The caller supplies the release entry and its surrounding exception handling.
 
-use crate::{abi, Arch, Emitter, FrameOffset, TargetAbi};
+use crate::{abi, Arch, Emitter, FrameOffset, RecordOffset, TargetAbi};
 
 /// Clears a pointer-sized owner slot without disturbing the native result register.
 pub fn emit_clear(emitter: &mut impl TargetAbi, offset: FrameOffset) {
@@ -38,6 +38,28 @@ pub fn emit_guarded_release(
 fn emit_take(emitter: &mut impl TargetAbi, offset: FrameOffset) {
     emitter.load_at_offset(emitter.int_result_reg(), offset.bytes());
     emit_clear(emitter, offset);
+}
+
+/// Transfers an owner from an addressed native record into the result register.
+pub fn emit_take_addressed(emitter: &mut impl TargetAbi, record: &str, offset: RecordOffset) {
+    let result = emitter.int_result_reg();
+    emitter.emit_load_from_address(result, record, offset.bytes());
+    emitter.emit_store_zero_to_address(record, offset.bytes());
+}
+
+/// Transfers a stack-resident owner and clears its slot before retirement.
+pub fn emit_take_stack(emitter: &mut impl Emitter, offset: RecordOffset) {
+    let offset = offset.bytes();
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x0, [sp, #{offset}]"));           // acquire the former owner for cleanup
+            emitter.instruction(&format!("str xzr, [sp, #{offset}]"));          // prevent repeated release when cleanup is resumed
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {offset}]")); // acquire the former owner for cleanup
+            emitter.instruction(&format!("mov QWORD PTR [rsp + {offset}], 0")); // prevent repeated release when cleanup is resumed
+        }
+    }
 }
 
 /// Preserves the caller's real stack while selecting a borrowed PHP frame for ordinary slot helpers.

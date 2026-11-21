@@ -11,7 +11,7 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch, sentinels};
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 
 const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 144;
@@ -75,11 +75,7 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
     }
     install_boundary(emitter, prefix);
     abi::load_at_offset(emitter, result, BORROWED);
-    abi::emit_call_label(emitter, "__rt_mixed_unbox");
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("mov rsi, rdx");                                    // adapt the snapshot constructor's high-word argument
-    }
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
+    elephc_memoir::values::mixed_from_value::emit_snapshot_borrowed_cell(emitter);
     abi::store_at_offset(emitter, result, SOURCE);
     abi::emit_load_int_immediate(emitter, result, 0);
     abi::emit_load_int_immediate(emitter, low, i64::from(product));
@@ -357,17 +353,12 @@ fn emit_cleanup(emitter: &mut Emitter, prefix: &str) {
 /// Installs a resumable owner boundary before allocation or warning dispatch.
 fn install_boundary(emitter: &mut Emitter, prefix: &str) {
     let result = abi::int_result_reg(emitter);
-    for (symbol, slot) in [
-        ("_exc_value", PREVIOUS), ("_exc_handler_top", HANDLER),
-        ("_exc_call_frame_top", HANDLER - 8),
-        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
-        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
-        abi::store_at_offset(emitter, result, slot);
-    }
+    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
+    abi::store_at_offset(emitter, result, PREVIOUS);
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_frame_slot_address(emitter, result, HANDLER);
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
     abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
     emitter.save_exception_handler();                                           // preserve the snapshot and partial number when a warning handler throws
     abi::emit_branch_if_int_result_nonzero(emitter, &format!("{prefix}_caught"));
@@ -376,10 +367,7 @@ fn install_boundary(emitter: &mut Emitter, prefix: &str) {
 /// Restores the enclosing exception handler and diagnostic depth.
 fn restore_boundary(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    for (symbol, slot) in [("_exc_handler_top", HANDLER), ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET)] {
-        abi::load_at_offset(emitter, result, slot);
-        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
-    }
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER);
 }
 
 /// Clears one root without clobbering a loaded owner or exception-chain argument.

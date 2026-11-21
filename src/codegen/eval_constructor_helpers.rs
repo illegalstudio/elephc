@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use crate::codegen::abi;
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -478,7 +478,7 @@ fn emit_aarch64_constructor_exception_boundary_push(emitter: &mut Emitter, escap
     emitter.comment("push eval constructor exception boundary");
     elephc_memoir::activation_records::emit_save_arm_fp_try_prefix(emitter, "x10", handler_offset);
     emitter.instruction(&format!("add x10, x29, #{}", handler_offset));         // compute the boundary handler record address
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "x10");
     emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp
         "add x0, x29, #{}",
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
@@ -491,13 +491,7 @@ fn emit_aarch64_constructor_exception_boundary_push(emitter: &mut Emitter, escap
 fn emit_aarch64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
     let handler_offset = CONSTRUCTOR_HELPER_HANDLER_OFFSET - 48;
     emitter.comment("pop eval constructor exception boundary");
-    emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset));       // reload the previous native exception-handler head
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(                                               // reload the saved diagnostic suppression depth
-        "ldr x10, [x29, #{}]",
-        handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    elephc_memoir::activation_records::emit_restore_arm_fp_try_handler(emitter, "x10", handler_offset);
 }
 
 /// Emits an x86_64 boundary handler so native constructor throws return to magician.
@@ -506,7 +500,7 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
     emitter.comment("push eval constructor exception boundary");
     elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", handler_base);
     emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));         // compute the boundary handler record address
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "r10");
     emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
@@ -520,15 +514,7 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
 fn emit_x86_64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
     let handler_base = CONSTRUCTOR_HELPER_FRAME_SIZE;
     emitter.comment("pop eval constructor exception boundary");
-    emitter.instruction(                                                        //reload the previous native exception-handler head
-        &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
-    );
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(                                               // reload the saved diagnostic suppression depth
-        "mov r10, QWORD PTR [rbp - {}]",
-        handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", handler_base);
 }
 
 /// Transfers the pending native exception as one owned box through the versioned eval ABI.

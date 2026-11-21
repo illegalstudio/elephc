@@ -69,7 +69,7 @@ use crate::codegen::{
     emit_box_runtime_payload_as_mixed,
 };
 use crate::codegen_support::try_handlers::{
-    EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::types::{FunctionSig, PhpType};
 
@@ -421,7 +421,7 @@ fn emit_invoker_exception_boundary_push(
         Arch::AArch64 => {
             elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "x10", handler_base);
             emitter.instruction(&format!("sub x10, x29, #{}", handler_base));   // compute the boundary handler record address
-            abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
+            elephc_memoir::activation_records::emit_publish_try_handler(emitter, "x10");
             emitter.instruction(&format!(                                       // pass the boundary jmp_buf to setjmp
                 "sub x0, x29, #{}",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
@@ -432,7 +432,7 @@ fn emit_invoker_exception_boundary_push(
         Arch::X86_64 => {
             elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", handler_base);
             emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base)); // compute the boundary handler record address
-            abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
+            elephc_memoir::activation_records::emit_publish_try_handler(emitter, "r10");
             emitter.instruction(&format!(                                       // pass the boundary jmp_buf to setjmp
                 "lea rdi, [rbp - {}]",
                 handler_base - TRY_HANDLER_JMP_BUF_OFFSET
@@ -449,25 +449,10 @@ fn emit_invoker_exception_boundary_pop(emitter: &mut Emitter, handler_base: usiz
     emitter.comment("pop eval callable exception boundary");
     match emitter.target.arch {
         Arch::AArch64 => {
-            abi::load_at_offset(emitter, "x10", handler_base);
-            abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-            abi::load_at_offset(
-                emitter,
-                "x10",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-            );
-            abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+            elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "x10", handler_base);
         }
         Arch::X86_64 => {
-            emitter.instruction(                                                // reload the previous native exception-handler head
-                &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
-            );
-            abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-            emitter.instruction(&format!(                                       // reload the saved diagnostic suppression depth
-                "mov r10, QWORD PTR [rbp - {}]",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            ));
-            abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+            elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", handler_base);
         }
     }
 }
@@ -4029,7 +4014,7 @@ mod tests {
         for offset in [
             INVOKER_BOUNDARY_BASE_OFFSET,
             INVOKER_BOUNDARY_BASE_OFFSET - 8,
-            INVOKER_BOUNDARY_BASE_OFFSET - TRY_HANDLER_DIAG_DEPTH_OFFSET,
+            INVOKER_BOUNDARY_BASE_OFFSET - elephc_memoir::layout::TRY_HANDLER_DIAG_DEPTH_OFFSET,
         ] {
             assert!(output.contains(&format!("    sub x9, x29, #{}\n", offset)));
         }

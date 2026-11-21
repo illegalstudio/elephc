@@ -15,11 +15,9 @@ use crate::codegen_support::platform::Arch;
 use crate::codegen_support::{abi, value_boxing};
 use crate::types::PhpType;
 
-/// Internal boxed-Mixed tag used only inside descriptor-invoker argument arrays.
-pub(crate) const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
-
-/// Internal source layout for inline nullable integers, matching tagged-scalar property metadata.
-pub(crate) const INVOKER_ARG_TAGGED_SCALAR_SOURCE: i64 = 12;
+pub(crate) use elephc_memoir::reference_cells::invoker_marker::{
+    INVOKER_ARG_REF_CELL_TAG, INVOKER_ARG_TAGGED_SCALAR_SOURCE,
+};
 
 /// Roots a nullable-reference refusal before retiring its owned rejected Mixed value.
 /// Leaves the accumulated exception pending so callers can finish their own owner cleanup.

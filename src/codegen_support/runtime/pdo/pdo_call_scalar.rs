@@ -54,7 +54,7 @@ use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
     TRY_HANDLER_SLOT_SIZE,
 };
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 // The firewall builds its handler record by hand and must match the layout the EIR
 // try/catch machinery and `__rt_throw_current` assume: next@0, survivor@8,
@@ -167,7 +167,7 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
     elephc_memoir::activation_records::emit_save_arm_runtime_try_prefix(emitter, "x10");
     // _exc_handler_top = &record (record base = sp + 0)
     emitter.instruction("mov x10, sp");                                         // x10 = address of this handler record
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // link the record as the active handler
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "x10");
     // setjmp(&jmp_buf) where jmp_buf = record + 24
     emitter.instruction("add x0, sp, #24");                                     // x0 = &jmp_buf inside the handler record
     emitter.save_exception_handler();                                           // returns 0 on first pass, 1 when a throw longjmps back
@@ -181,10 +181,7 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #288]");                                  // save the boxed return for decode + release
 
     // pop the firewall handler before any further runtime calls
-    emitter.instruction("ldr x10, [sp, #0]");                                   // record.next
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_sp_try_handler(emitter, "x10", 0);
 
     // -- type-preserving decode: unbox once and dispatch on the runtime tag --
     emitter.instruction("ldr x0, [sp, #288]");                                  // boxed return
@@ -256,10 +253,7 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
 
     // -- longjmp path: the callback threw --
     emitter.label("__rt_pdo_call_scalar_threw");
-    emitter.instruction("ldr x10, [sp, #0]");                                   // record.next
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_sp_try_handler(emitter, "x10", 0);
     cleanup_preserve::emit_discard_caught_exception(emitter, "__rt_pdo_call_scalar_threw_released");
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("mov x10, #-1");                                        // ElephcResult tag -1 = ERROR (bridge raises sqlite3_result_error)
@@ -372,7 +366,7 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     // -- push a setjmp firewall handler around the invoke --
     elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", 304);
     emitter.instruction("lea r10, [rbp - 304]");                                // r10 = address of this handler record
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // link the record as the active handler
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "r10");
     emitter.instruction("lea rdi, [rbp - 280]");                                // rdi = &jmp_buf inside the handler record (record + 24)
     emitter.save_exception_handler();                                           // returns 0 on first pass, 1 when a throw longjmps back
     emitter.instruction("test rax, rax");                                       // did control arrive via longjmp?
@@ -386,10 +380,7 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the boxed return for decode + release
 
     // pop the firewall handler before any further runtime calls
-    emitter.instruction("mov r10, QWORD PTR [rbp - 304]");                      // record.next
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("mov r10, QWORD PTR [rbp - 288]");                      // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", 304);
 
     // -- type-preserving decode: unbox once and dispatch on the runtime tag --
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // boxed return (unbox reads RAX)
@@ -455,10 +446,7 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
 
     // -- longjmp path: the callback threw --
     emitter.label("__rt_pdo_call_scalar_threw_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 304]");                      // record.next
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the handler record
-    emitter.instruction("mov r10, QWORD PTR [rbp - 288]");                      // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", 304);
     cleanup_preserve::emit_discard_caught_exception(emitter, "__rt_pdo_call_scalar_threw_released_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], -1");                             // out.tag = -1 (ERROR; bridge raises sqlite3_result_error)

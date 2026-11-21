@@ -13,7 +13,7 @@
 
 use crate::codegen_support::{abi, arrays, emit::Emitter, platform::Arch, value_boxing};
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::types::PhpType;
 
@@ -248,17 +248,12 @@ fn box_unboxed_value(emitter: &mut Emitter) {
 /// Registers a native handler before acquiring snapshots or constructing the result.
 fn install_boundary(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_value", PREVIOUS), ("_exc_handler_top", HANDLER),
-        ("_exc_call_frame_top", HANDLER - 8),
-        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
-        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
-        abi::store_at_offset(emitter, result, offset);
-    }
+    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
+    abi::store_at_offset(emitter, result, PREVIOUS);
+    elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_frame_slot_address(emitter, result, HANDLER);
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
     abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
     emitter.save_exception_handler();                                           // preserve every comparator owner across callback and cleanup throws
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_udiff_uintersect_caught");
@@ -267,13 +262,7 @@ fn install_boundary(emitter: &mut Emitter) {
 /// Restores the enclosing handler and warning-suppression depth after all temporary owners retire.
 fn restore_boundary(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_handler_top", HANDLER),
-        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
-        abi::load_at_offset(emitter, result, offset);
-        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
-    }
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER);
 }
 
 /// Clears a frame slot without clobbering the current owner or any of the first four C arguments.

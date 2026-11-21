@@ -14,11 +14,15 @@ use crate::{Emitter, Arch};
 
 
 pub const HEADER_SIZE: usize = 64;
+/// First occupied slot in insertion order.
+pub const ORDER_HEAD_OFFSET: usize = 24;
 pub const ENTRIES_OFFSET: usize = 40;
 pub const PINS_OFFSET: usize = 48;
 /// Signed next automatic integer index; i64::MIN marks an array with no integer insertions.
 pub const NEXT_INDEX_OFFSET: usize = 56;
 pub const ENTRY_SIZE: usize = 64;
+/// Link to the next occupied slot in an entry's insertion-order chain.
+pub const ENTRY_NEXT_OFFSET: usize = 56;
 
 /// Loads the owned entry-storage pointer without changing the hash header register.
 pub fn emit_entries(emitter: &mut impl Emitter, destination: &str, hash: &str) {

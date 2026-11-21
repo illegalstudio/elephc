@@ -820,12 +820,7 @@ fn emit_preg_replace_callback_install_boundary(
         Arch::AArch64 => {
             elephc_memoir::activation_records::emit_save_sp_try_prefix(emitter, "x10", handler_off);
             emitter.instruction(&format!("add x10, sp, #{}", handler_off));     // address of this handler record
-            crate::codegen_support::abi::emit_store_reg_to_symbol(
-                emitter,
-                "x10",
-                "_exc_handler_top",
-                0,
-            );
+            elephc_memoir::activation_records::emit_publish_try_handler(emitter, "x10");
             emitter.instruction(&format!("add x0, sp, #{}", jmp_off));          // x0 = jmp_buf inside the handler record
             emitter.save_exception_handler();
             emitter.instruction(&format!("cbnz x0, {}", threw_label));          // nonzero means a callback throw resumed here
@@ -833,12 +828,7 @@ fn emit_preg_replace_callback_install_boundary(
         Arch::X86_64 => {
             elephc_memoir::activation_records::emit_save_sp_try_prefix(emitter, "r10", handler_off);
             emitter.instruction(&format!("lea r10, [rsp + {}]", handler_off));  // address of this handler record
-            crate::codegen_support::abi::emit_store_reg_to_symbol(
-                emitter,
-                "r10",
-                "_exc_handler_top",
-                0,
-            );
+            elephc_memoir::activation_records::emit_publish_try_handler(emitter, "r10");
             emitter.instruction(&format!("lea rdi, [rsp + {}]", jmp_off));      // rdi = jmp_buf inside the handler record
             emitter.save_exception_handler();
             emitter.instruction("test eax, eax");                               // distinguish the first pass from a longjmp resume
@@ -853,42 +843,8 @@ fn emit_preg_replace_callback_install_boundary(
 /// `handler_off`. Uses `x10`/`r10` only, so the output cursor in `x11`/`r11`
 /// survives on the success path.
 fn emit_preg_replace_callback_unlink_boundary(emitter: &mut Emitter, handler_off: usize) {
-    let diag_off =
-        handler_off + crate::codegen_support::try_handlers::TRY_HANDLER_DIAG_DEPTH_OFFSET;
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x10, [sp, #{}]", handler_off));   // previous handler-stack top
-            crate::codegen_support::abi::emit_store_reg_to_symbol(
-                emitter,
-                "x10",
-                "_exc_handler_top",
-                0,
-            );
-            emitter.instruction(&format!("ldr x10, [sp, #{}]", diag_off));      // saved diagnostic depth
-            crate::codegen_support::abi::emit_store_reg_to_symbol(
-                emitter,
-                "x10",
-                "_rt_diag_suppression",
-                0,
-            );
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", handler_off)); // previous handler-stack top
-            crate::codegen_support::abi::emit_store_reg_to_symbol(
-                emitter,
-                "r10",
-                "_exc_handler_top",
-                0,
-            );
-            emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", diag_off)); // saved diagnostic depth
-            crate::codegen_support::abi::emit_store_reg_to_symbol(
-                emitter,
-                "r10",
-                "_rt_diag_suppression",
-                0,
-            );
-        }
-    }
+    let scratch = if emitter.target.arch == Arch::AArch64 { "x10" } else { "r10" };
+    elephc_memoir::activation_records::emit_restore_sp_try_handler(emitter, scratch, handler_off);
 }
 
 /// Frees the helper-owned buffers after a callback throw, then resumes unwinding.
@@ -913,12 +869,10 @@ fn emit_preg_replace_callback_rethrow(
     emit_preg_replace_callback_unlink_boundary(emitter, handler_off);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("ldr x0, [sp, #{}]", matches_off));    // reload the matches array the callback may have retained
-            emitter.instruction(&format!("str xzr, [sp, #{}]", matches_off));   // drop the slot before releasing the helper's reference
+            elephc_memoir::frame_owners::emit_take_stack(emitter, elephc_memoir::RecordOffset::new(matches_off));
             emitter.instruction("bl __rt_decref_array");                        // release the matches array unless the callback retained it
             for off in [subject_off, output_off, result_off] {
-                emitter.instruction(&format!("ldr x0, [sp, #{}]", off));        // load one helper-owned heap pointer
-                emitter.instruction(&format!("str xzr, [sp, #{}]", off));       // drop the slot before the free
+                elephc_memoir::frame_owners::emit_take_stack(emitter, elephc_memoir::RecordOffset::new(off));
                 emitter.instruction("bl __rt_heap_free_safe");                  // release it, skipping a null or non-heap pointer
             }
             emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));     // reload the compiled PCRE2 handle
@@ -928,12 +882,10 @@ fn emit_preg_replace_callback_rethrow(
             emitter.instruction("b __rt_throw_current");                        // rethrow with the original exception still pending
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", matches_off)); // reload the matches array the callback may have retained
-            emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", matches_off)); // drop the slot before releasing the helper's reference
+            elephc_memoir::frame_owners::emit_take_stack(emitter, elephc_memoir::RecordOffset::new(matches_off));
             emitter.instruction("call __rt_decref_array");                      // release the matches array unless the callback retained it
             for off in [subject_off, output_off, result_off] {
-                emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", off)); // load one helper-owned heap pointer
-                emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", off)); // drop the slot before the free
+                elephc_memoir::frame_owners::emit_take_stack(emitter, elephc_memoir::RecordOffset::new(off));
                 emitter.instruction("call __rt_heap_free_safe");                // release it, skipping a null or non-heap pointer
             }
             emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload the compiled PCRE2 handle

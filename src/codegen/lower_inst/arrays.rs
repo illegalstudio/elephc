@@ -3739,6 +3739,8 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
     ctx: &mut FunctionContext<'_>,
     retained_value: bool,
 ) {
+    use elephc_memoir::reference_cells::invoker_marker::{self, HighWord};
+
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
     let done_label = ctx.next_label("mixed_array_set_done");
@@ -3750,10 +3752,9 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
     ctx.emitter.instruction("ldr x9, [x0]");                                    // load the current logical length of the indexed array
     ctx.emitter.instruction("cmp x1, x9");                                      // only existing slots can hold by-reference marker cells
     ctx.emitter.instruction(&format!("b.hs {}", runtime_label));                // delegate appends and gap writes to the runtime setter
-    ctx.emitter.instruction("add x10, x0, #24");                                // compute the boxed-Mixed payload base for indexed slots
-    ctx.emitter.instruction("ldr x11, [x10, x1, lsl #3]");                      // load the existing boxed Mixed slot
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(ctx.emitter, "x0", "x1", "x11", "x10");
     ctx.emitter.instruction(&format!("cbz x11, {}", runtime_label));            // null gap slots are ordinary array writes
-    ctx.emitter.instruction("ldr x12, [x11]");                                  // load the existing Mixed tag for marker detection
+    elephc_memoir::layout::emit_load_mixed_tag(ctx.emitter, "x12", "x11");
     ctx.emitter.instruction(&format!("cmp x12, #{}", INVOKER_ARG_REF_CELL_TAG)); // check whether the slot aliases caller storage
     ctx.emitter.instruction(&format!("b.ne {}", runtime_label));                // ordinary boxed Mixed slots are replaced by the runtime setter
     if retained_value {
@@ -3768,8 +3769,7 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
         ctx.emitter.instruction("ldr x2, [sp], #16");                           // the fresh box is the value the marker paths consume
         ctx.emitter.instruction("ldp x0, x11, [sp], #16");                      // restore the array result and the marker
     }
-    ctx.emitter.instruction("ldr x12, [x11, #16]");                             // load the source runtime tag carried by the by-reference marker
-    ctx.emitter.instruction("ldr x10, [x11, #8]");                              // load the caller ref-cell address from the marker payload
+    invoker_marker::emit_project(ctx.emitter, "x11", "x12", "x10");
     ctx.emitter
         .instruction(
         &format!("cmp x12, #{}", runtime_value_tag(&PhpType::Mixed))
@@ -3798,10 +3798,7 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
     ctx.emitter.instruction("ldr x2, [sp], #16");                               // restore the fresh wrapper
     ctx.emitter.instruction("ldp x0, x10, [sp], #16");                          // restore the array result and ref-cell address
     ctx.emitter.label(&keep_occupant);
-    ctx.emitter.instruction("ldr x12, [x2, #8]");                               // load the replacement Mixed low payload word
-    ctx.emitter.instruction("str x12, [x10]");                                  // write the replacement low word through the caller ref-cell
-    ctx.emitter.instruction("ldr x12, [x2, #16]");                              // load the replacement Mixed high payload word
-    ctx.emitter.instruction("str x12, [x10, #8]");                              // write the replacement high word through the caller ref-cell
+    invoker_marker::emit_publish_box_payload(ctx.emitter, "x10", "x2", "x12", HighWord::Payload);
     ctx.emitter.instruction(&format!("b {published_label}"));                   // ordinary raw pairs already published their high word
     ctx.emitter.label(&tagged_label);
     let scalar_valid = ctx.next_label("mixed_array_set_ref_tagged_valid");
@@ -3814,14 +3811,10 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
     crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_pending_error(ctx.emitter, "x2");
     abi::emit_call_label(ctx.emitter, "__rt_throw_current");
     ctx.emitter.label(&scalar_valid);
-    ctx.emitter.instruction("ldr x12, [x2, #8]");                               // load the replacement nullable-integer payload
-    ctx.emitter.instruction("str x12, [x10]");                                  // publish the new scalar payload
-    ctx.emitter.instruction("ldr x12, [x2]");                                   // load the replacement PHP tag instead of its unused high payload
-    ctx.emitter.instruction("str x12, [x10, #8]");                              // preserve null versus integer zero in the tagged slot
+    invoker_marker::emit_publish_box_payload(ctx.emitter, "x10", "x2", "x12", HighWord::Tag);
     ctx.emitter.label(&published_label);
     ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the array result while freeing only the Mixed wrapper
-    ctx.emitter.instruction("mov x0, x2");                                      // pass the consumed fresh Mixed wrapper to heap_free
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    invoker_marker::emit_retire_moved_box(ctx.emitter, "x2");
     ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the array pointer as the ArraySet result
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the runtime setter after marker write-through
 
@@ -3839,8 +3832,7 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
     // incoming value was freshly boxed here (`fresh_boxed_value`), so the handle in `x2` is a
     // refcount-1 cell allocated at this store and can never be the occupant being released,
     // not even for `$items[0] = $items[0]`.
-    ctx.emitter.instruction("ldr x11, [x10]");                                  // load the boxed Mixed the caller ref-cell currently owns
-    ctx.emitter.instruction("str x2, [x10]");                                   // transfer the fresh boxed Mixed handle into the caller ref-cell
+    invoker_marker::emit_swap_box(ctx.emitter, "x10", "x2", "x11");
     ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the array result across the replaced-box release
     ctx.emitter.instruction("mov x0, x11");                                     // pass the replaced boxed Mixed to the release helper
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
@@ -3857,6 +3849,8 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
     ctx: &mut FunctionContext<'_>,
     retained_value: bool,
 ) {
+    use elephc_memoir::reference_cells::invoker_marker::{self, HighWord};
+
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
     let done_label = ctx.next_label("mixed_array_set_done");
@@ -3868,10 +3862,10 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
     ctx.emitter.instruction("mov r9, QWORD PTR [rdi]");                         // load the current logical length of the indexed array
     ctx.emitter.instruction("cmp rsi, r9");                                     // only existing slots can hold by-reference marker cells
     ctx.emitter.instruction(&format!("jae {}", runtime_label));                 // delegate appends and gap writes to the runtime setter
-    ctx.emitter.instruction("mov r10, QWORD PTR [rdi + 24 + rsi * 8]");         // load the existing boxed Mixed slot
+    elephc_memoir::values::packed_slots::emit_load_indexed_word(ctx.emitter, "rdi", "rsi", "r10", "r9");
     ctx.emitter.instruction("test r10, r10");                                   // check whether the existing slot is a null gap
     ctx.emitter.instruction(&format!("jz {}", runtime_label));                  // null gap slots are ordinary array writes
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the existing Mixed tag for marker detection
+    elephc_memoir::layout::emit_load_mixed_tag(ctx.emitter, "r11", "r10");
     ctx.emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG)); // check whether the slot aliases caller storage
     ctx.emitter.instruction(&format!("jne {}", runtime_label));                 // ordinary boxed Mixed slots are replaced by the runtime setter
     if retained_value {
@@ -3888,8 +3882,7 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
         abi::emit_pop_reg(ctx.emitter, "r10");
         abi::emit_pop_reg(ctx.emitter, "rdi");
     }
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                   // load the source runtime tag carried by the by-reference marker
-    ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                    // load the caller ref-cell address from the marker payload
+    invoker_marker::emit_project(ctx.emitter, "r10", "r11", "r10");
     ctx.emitter
         .instruction(
         &format!("cmp r11, {}", runtime_value_tag(&PhpType::Mixed))
@@ -3918,10 +3911,7 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
     ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 16]");                   // restore the fresh wrapper
     ctx.emitter.instruction("add rsp, 32");                                     // release the aligned spill
     ctx.emitter.label(&keep_occupant);
-    ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 8]");                    // load the replacement Mixed low payload word
-    ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // write the replacement low word through the caller ref-cell
-    ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 16]");                   // load the replacement Mixed high payload word
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r11");                    // write the replacement high word through the caller ref-cell
+    invoker_marker::emit_publish_box_payload(ctx.emitter, "r10", "rdx", "r11", HighWord::Payload);
     ctx.emitter.instruction(&format!("jmp {published_label}"));                 // ordinary raw pairs already published their high word
     ctx.emitter.label(&tagged_label);
     let scalar_valid = ctx.next_label("mixed_array_set_ref_tagged_valid");
@@ -3934,14 +3924,10 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
     crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_pending_error(ctx.emitter, "rdx");
     abi::emit_call_label(ctx.emitter, "__rt_throw_current");
     ctx.emitter.label(&scalar_valid);
-    ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 8]");                    // load the replacement nullable-integer payload
-    ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // publish the new scalar payload
-    ctx.emitter.instruction("mov r11, QWORD PTR [rdx]");                        // load the replacement PHP tag instead of its unused high payload
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r11");                    // preserve null versus integer zero in the tagged slot
+    invoker_marker::emit_publish_box_payload(ctx.emitter, "r10", "rdx", "r11", HighWord::Tag);
     ctx.emitter.label(&published_label);
     abi::emit_push_reg(ctx.emitter, "rdi");
-    ctx.emitter.instruction("mov rax, rdx");                                    // pass the consumed fresh Mixed wrapper to heap_free
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    invoker_marker::emit_retire_moved_box(ctx.emitter, "rdx");
     abi::emit_pop_reg(ctx.emitter, "rax");
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the runtime setter after marker write-through
 
@@ -3952,8 +3938,7 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
     );
     // See the AArch64 arm: the cell owns the box it holds, so the replaced one is released
     // here rather than orphaned (issue #1062), after the store rather than before it.
-    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the boxed Mixed the caller ref-cell currently owns
-    ctx.emitter.instruction("mov QWORD PTR [r10], rdx");                        // transfer the fresh boxed Mixed handle into the caller ref-cell
+    invoker_marker::emit_swap_box(ctx.emitter, "r10", "rdx", "r11");
     abi::emit_push_reg(ctx.emitter, "rdi");
     ctx.emitter.instruction("mov rax, r11");                                    // pass the replaced boxed Mixed to the release helper
     abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");

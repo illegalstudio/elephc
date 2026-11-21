@@ -345,23 +345,7 @@ fn release_transient_string(ctx: &mut FunctionContext<'_>, value: ValueId) -> Re
     ctx.load_value_to_result(value)?;
     let skip = ctx.next_label("release_transient_skip");
     let (pointer, _) = abi::string_result_regs(ctx.emitter);
-    let result = abi::int_result_reg(ctx.emitter);
-    // -- classify the producer's exact base before releasing an unadopted temporary --
-    if pointer != result {
-        ctx.emitter.instruction(&format!("mov {result}, {pointer}"));           // pass the produced string pointer to the heap classifier
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
-    let kind = crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {result}, #{kind}"));         // does the producer still own an unadopted heap temporary?
-            ctx.emitter.instruction(&format!("b.ne {skip}"));                   // scratch and adopted full-string stores must remain untouched
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {result}, {kind}"));          // does the producer still own an unadopted heap temporary?
-            ctx.emitter.instruction(&format!("jne {skip}"));                    // scratch and adopted full-string stores must remain untouched
-        }
-    }
+    elephc_memoir::strings::str_persist::emit_branch_unless_transient(ctx.emitter, pointer, &skip);
     ctx.load_value_to_result(value)?;
     release_loaded_string(ctx);
     ctx.emitter.label(&skip);

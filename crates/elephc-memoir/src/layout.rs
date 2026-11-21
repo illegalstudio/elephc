@@ -112,3 +112,8 @@ pub fn emit_load_mixed_tag(emitter: &mut impl crate::TargetAbi, dest: &str, cell
 pub fn emit_load_mixed_low(emitter: &mut impl crate::TargetAbi, dest: &str, cell: &str) {
     emitter.emit_load_from_address(dest, cell, 8);
 }
+
+/// Loads the second payload word from an already selected raw Mixed cell.
+pub fn emit_load_mixed_high(emitter: &mut impl crate::TargetAbi, dest: &str, cell: &str) {
+    emitter.emit_load_from_address(dest, cell, 16);
+}

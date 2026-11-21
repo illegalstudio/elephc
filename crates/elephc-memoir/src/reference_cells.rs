@@ -10,6 +10,7 @@
 use crate::{abi, Arch, Emitter};
 use crate::layout::{x86_64_heap_kind_word, REFERENCE_CELL_HEAP_KIND};
 pub mod argument_pins;
+pub mod invoker_marker;
 pub mod property;
 pub mod validation_pins;
 use validation_pins::subtract as subtract_validation_pins;

@@ -12,7 +12,7 @@
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 
 const FRAME_SIZE: usize = TRY_HANDLER_SLOT_SIZE + 160;
@@ -348,7 +348,7 @@ fn install_boundary(emitter: &mut Emitter) {
     elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_frame_slot_address(emitter, result, HANDLER);
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
     abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
     emitter.save_exception_handler();                                           // preserve map-owned inputs and partial results when a callback throws
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_map_boxed_caught");
@@ -357,13 +357,7 @@ fn install_boundary(emitter: &mut Emitter) {
 /// Restores the caller's handler chain and diagnostic depth after successful or failed mapping.
 fn restore_boundary(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_handler_top", HANDLER),
-        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
-        abi::load_at_offset(emitter, result, offset);
-        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
-    }
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER);
 }
 
 /// Clears a helper-owned slot without destroying a loaded value or outgoing hash arguments.

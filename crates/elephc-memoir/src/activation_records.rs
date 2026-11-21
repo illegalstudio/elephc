@@ -60,6 +60,11 @@ pub const REWIND_FIELDS: [RewindField; 3] = [
     RewindField::Handler, RewindField::CallFrame, RewindField::DiagnosticDepth,
 ];
 
+/// Fields restored when returning through a local callback boundary.
+pub const CALLBACK_REWIND_FIELDS: [RewindField; 2] = [
+    RewindField::Handler, RewindField::DiagnosticDepth,
+];
+
 /// Restores the selected fields in caller-supplied order from the given frame representation.
 pub fn emit_restore_try_fields<E: TargetAbi>(
     emitter: &mut E, scratch: &str, fields: &[RewindField],
@@ -140,6 +145,30 @@ pub fn emit_save_try_prefix<E: TargetAbi>(
 pub fn emit_save_frame_try_prefix(emitter: &mut impl TargetAbi, scratch: &str, offset: usize) {
     emit_save_try_prefix(emitter, scratch, |emitter, source, field| {
         emitter.store_at_offset(source, offset - field);
+    });
+}
+
+/// Unlinks a callback boundary stored at a negative frame-pointer displacement.
+pub fn emit_restore_frame_try_handler(emitter: &mut impl TargetAbi, scratch: &str, offset: usize) {
+    emit_restore_try_fields(emitter, scratch, &CALLBACK_REWIND_FIELDS, |emitter, register, field| {
+        emitter.load_at_offset(register, offset - field);
+    });
+}
+
+/// Unlinks a callback boundary stored at a positive AArch64 frame-pointer displacement.
+pub fn emit_restore_arm_fp_try_handler(emitter: &mut impl crate::Emitter, scratch: &str, offset: usize) {
+    emit_restore_try_fields(emitter, scratch, &CALLBACK_REWIND_FIELDS, |emitter, register, field| {
+        emitter.instruction(&format!("ldr {register}, [x29, #{}]", offset + field)); // reload the saved callback rewind word
+    });
+}
+
+/// Unlinks a callback boundary stored relative to the current stack pointer.
+pub fn emit_restore_sp_try_handler(emitter: &mut impl crate::Emitter, scratch: &str, offset: usize) {
+    emit_restore_try_fields(emitter, scratch, &CALLBACK_REWIND_FIELDS, |emitter, register, field| {
+        match emitter.arch() {
+            Arch::AArch64 => emitter.instruction(&format!("ldr {register}, [sp, #{}]", offset + field)), // reload the saved ARM64 callback rewind word
+            Arch::X86_64 => emitter.instruction(&format!("mov {register}, QWORD PTR [rsp + {}]", offset + field)), // reload the saved SysV callback rewind word
+        }
     });
 }
 

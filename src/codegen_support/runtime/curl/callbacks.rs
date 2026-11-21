@@ -162,7 +162,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     // -- push a setjmp firewall so a PHP throw cannot unwind through libcurl --
     elephc_memoir::activation_records::emit_save_arm_runtime_try_prefix(emitter, "x10");
     emitter.instruction("mov x10, sp");                                         // x10 = address of this handler record
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // link it as active
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "x10");
     emitter.instruction("add x0, sp, #24");                                     // x0 = &jmp_buf inside the handler record
     emitter.save_exception_handler();                                           // 0 on the first pass, 1 when a throw longjmps back
     emitter.instruction("cbnz x0, __rt_curl_invoke_cb_threw");                  // nonzero → arrived via longjmp
@@ -175,10 +175,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #264]");                                  // save the boxed return for decode + release
 
     // -- pop the firewall before any further runtime call --
-    emitter.instruction("ldr x10, [sp, #0]");                                   // record.next
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the record
-    emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_sp_try_handler(emitter, "x10", 0);
 
     // -- decode the return according to spec.result_kind --
     emitter.instruction("ldr x11, [sp, #240]");                                 // spec pointer
@@ -219,10 +216,7 @@ pub fn emit_curl_invoke_callback(emitter: &mut Emitter) {
 
     // -- longjmp path: the PHP callable threw --
     emitter.label("__rt_curl_invoke_cb_threw");
-    emitter.instruction("ldr x10, [sp, #0]");                                   // record.next
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the record
-    emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_sp_try_handler(emitter, "x10", 0);
     // `_exc_value` is deliberately LEFT SET: the throwable stays pending so
     // `__rt_curl_rethrow_pending` can re-raise it once libcurl has unwound its own
     // frames. Swallowing it here (as the PDO adapters do) would lose the exception.
@@ -330,7 +324,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     // -- push a setjmp firewall so a PHP throw cannot unwind through libcurl --
     elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, "r10", 288);
     emitter.instruction("lea r10, [rbp - 288]");                                // r10 = address of this handler record
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // link it as active
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, "r10");
     emitter.instruction("lea rdi, [rbp - 264]");                                // rdi = &jmp_buf inside the handler record
     emitter.save_exception_handler();                                           // 0 on the first pass, 1 when a throw longjmps back
     emitter.instruction("test rax, rax");                                       // did control arrive via longjmp?
@@ -344,10 +338,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the boxed return
 
     // -- pop the firewall before any further runtime call --
-    emitter.instruction("mov r10, QWORD PTR [rbp - 288]");                      // record.next
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the record
-    emitter.instruction("mov r10, QWORD PTR [rbp - 272]");                      // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", 288);
 
     // -- decode the return according to spec.result_kind --
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // spec pointer
@@ -392,10 +383,7 @@ fn emit_curl_invoke_callback_x86_64(emitter: &mut Emitter) {
 
     // -- longjmp path: the PHP callable threw --
     emitter.label("__rt_curl_invoke_cb_threw_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 288]");                      // record.next
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the record
-    emitter.instruction("mov r10, QWORD PTR [rbp - 272]");                      // saved diagnostic-suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, "r10", 288);
     // `_exc_value` stays SET on purpose — see the AArch64 body's comment.
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // spec pointer
     emitter.instruction("mov QWORD PTR [r11 + 48], -1");                        // spec.status = -1 (the callable threw)

@@ -309,3 +309,82 @@ fn emit_mixed_cell_promote_to_hash_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the installed hash in rax
 }
+
+/// Emits the AArch64 inline normalization prologue shared by all three helpers and by
+/// `__rt_array_edge_value` (`array_first` / `array_last`).
+///
+/// Unwraps boxed Mixed cells until a bare container remains, then leaves the container
+/// pointer in `x0`, its live element count in `x11`, and its heap kind in `x12`, or
+/// branches to `invalid` when the input is not a live array or hash. Only `x9`-`x12` are
+/// touched, so the caller's `x1`/`x2` argument registers survive.
+pub fn emit_normalize_array_aarch64(emitter: &mut impl Emitter, prefix: &str, invalid: &str) {
+    emitter.label(&format!("{}_norm", prefix));
+    emitter.instruction(&format!("cbz x0, {}", invalid));                       // a null container is never positionable
+    crate::abi::emit_load_int_immediate(
+        emitter,
+        "x9",
+        crate::layout::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp x0, x9");                                          // does the container carry the in-band null sentinel?
+    emitter.instruction(&format!("b.eq {}", invalid));                          // sentinel-null containers are never positionable
+    crate::heap_kind::emit_load_metadata(emitter, "x9", "x0");
+    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind
+    emitter.instruction("cmp x9, #5");                                          // is the container a boxed mixed cell?
+    emitter.instruction(&format!("b.eq {}_unbox", prefix));                     // mixed cells are unwrapped before anything else
+    emitter.instruction("cmp x9, #2");                                          // is the container an indexed array?
+    emitter.instruction(&format!("b.eq {}_live", prefix));                      // indexed arrays keep their count at header word 0
+    emitter.instruction("cmp x9, #3");                                          // is the container an associative hash?
+    emitter.instruction(&format!("b.eq {}_live", prefix));                      // hashes also keep their count at header word 0
+    emitter.instruction(&format!("b {}", invalid));                             // any other kind is not iterable here
+    emitter.label(&format!("{}_unbox", prefix));
+    emitter.instruction("ldr x10, [x0]");                                       // load the boxed mixed value tag
+    emitter.instruction("cmp x10, #4");                                         // does the cell box an indexed array?
+    emitter.instruction(&format!("b.eq {}_unwrap", prefix));                    // unwrap indexed array payloads
+    emitter.instruction("cmp x10, #5");                                         // does the cell box an associative array?
+    emitter.instruction(&format!("b.ne {}", invalid));                          // non-array mixed payloads are never positionable
+    emitter.label(&format!("{}_unwrap", prefix));
+    emitter.instruction("ldr x0, [x0, #8]");                                    // unbox the container pointer from mixed[8]
+    emitter.instruction(&format!("b {}_norm", prefix));                         // re-normalize in case the payload nests another cell
+    emitter.label(&format!("{}_live", prefix));
+    emitter.instruction("mov x12, x9");                                         // x12 = heap kind (2 = indexed, 3 = hash)
+    emitter.instruction("ldr x11, [x0, #0]");                                   // x11 = live element count from header word 0
+}
+
+/// Emits the x86_64 inline normalization prologue shared by all three helpers and by
+/// `__rt_array_edge_value` (`array_first` / `array_last`).
+///
+/// Unwraps boxed Mixed cells until a bare container remains, then leaves the container
+/// pointer in `rdi` and its live element count in `r11`, or branches to `invalid`. Only
+/// `rax`, `r10` and `r11` are touched, so the caller's `rsi`/`rdx` argument registers
+/// survive; callers that need the heap kind reload the header byte after the check.
+pub fn emit_normalize_array_x86_64(emitter: &mut impl Emitter, prefix: &str, invalid: &str) {
+    emitter.label(&format!("{}_norm", prefix));
+    emitter.instruction("test rdi, rdi");                                       // is the container pointer null?
+    emitter.instruction(&format!("je {}", invalid));                            // a null container is never positionable
+    crate::abi::emit_load_int_immediate(
+        emitter,
+        "r10",
+        crate::layout::NULL_SENTINEL,
+    );
+    emitter.instruction("cmp rdi, r10");                                        // does the container carry the in-band null sentinel?
+    emitter.instruction(&format!("je {}", invalid));                            // sentinel-null containers are never positionable
+    crate::heap_kind::emit_load_kind_byte(emitter, "eax", "rdi");
+    emitter.instruction("cmp eax, 5");                                          // is the container a boxed mixed cell?
+    emitter.instruction(&format!("je {}_unbox", prefix));                       // mixed cells are unwrapped before anything else
+    emitter.instruction("cmp eax, 2");                                          // is the container an indexed array?
+    emitter.instruction(&format!("je {}_live", prefix));                        // indexed arrays keep their count at header word 0
+    emitter.instruction("cmp eax, 3");                                          // is the container an associative hash?
+    emitter.instruction(&format!("je {}_live", prefix));                        // hashes also keep their count at header word 0
+    emitter.instruction(&format!("jmp {}", invalid));                           // any other kind is not iterable here
+    emitter.label(&format!("{}_unbox", prefix));
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the boxed mixed value tag
+    emitter.instruction("cmp r10, 4");                                          // does the cell box an indexed array?
+    emitter.instruction(&format!("je {}_unwrap", prefix));                      // unwrap indexed array payloads
+    emitter.instruction("cmp r10, 5");                                          // does the cell box an associative array?
+    emitter.instruction(&format!("jne {}", invalid));                           // non-array mixed payloads are never positionable
+    emitter.label(&format!("{}_unwrap", prefix));
+    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // unbox the container pointer from mixed[8]
+    emitter.instruction(&format!("jmp {}_norm", prefix));                       // re-normalize in case the payload nests another cell
+    emitter.label(&format!("{}_live", prefix));
+    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // r11 = live element count from header word 0
+}

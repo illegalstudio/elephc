@@ -11,6 +11,20 @@ use crate::Emitter;
 use crate::Arch;
 use crate::layout::{emit_branch_if_null_container, POINTER_ARRAY_VALUE_TYPE};
 
+/// Retains an unboxer's live payload in an independent heap cell.
+pub fn emit_rebox_unboxed_value(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
+        emitter.instruction("mov rsi, rdx");                                    // adapt the high payload word to the retaining constructor
+    }
+    emitter.emit_call_label("__rt_mixed_from_value");
+}
+
+/// Takes a heap snapshot of a borrowed cell without retaining the cell itself.
+pub fn emit_snapshot_borrowed_cell(emitter: &mut impl Emitter) {
+    emitter.emit_call_label("__rt_mixed_unbox");
+    emit_rebox_unboxed_value(emitter);
+}
+
 /// Retains or persists a runtime value and boxes it into a Mixed cell.
 ///
 /// Container-shaped tags with a zero or null-sentinel payload are normalized to

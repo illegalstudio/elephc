@@ -227,8 +227,7 @@ fn emit_native_debug_cleanup(emitter: &mut Emitter) {
     for (offset, release) in [(0, "__rt_decref_any"), (24, "__rt_decref_any"),
         (32, "__rt_heap_free_safe"), (64, "__rt_decref_any")] {
         abi::load_at_offset(emitter, state, 8);
-        abi::emit_load_from_address(emitter, result, state, offset);
-        abi::emit_store_zero_to_address(emitter, state, offset);
+        elephc_memoir::frame_owners::emit_take_addressed(emitter, state, elephc_memoir::RecordOffset::new(offset));
         abi::emit_unary_cleanup_preserving_exception(emitter, release, result);
     }
     restore_callback_walk(emitter);

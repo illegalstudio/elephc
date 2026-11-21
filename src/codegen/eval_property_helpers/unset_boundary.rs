@@ -10,7 +10,7 @@
 
 use super::*;
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 
 const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 96;
@@ -38,7 +38,7 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
     abi::emit_frame_slot_address(emitter, result, HANDLER);
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
     abi::emit_frame_slot_address(emitter, arg0, HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
     emitter.save_exception_handler();                                           // keep destructor exceptions below the Rust interpreter's frames
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_eval_unset_caught");
@@ -58,14 +58,9 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter) {
     abi::emit_load_int_immediate(emitter, result, 0);
     abi::store_at_offset(emitter, result, RESULT);
     emitter.label("__rt_eval_unset_finish");
-    for (symbol, offset) in [
-        ("_exc_handler_top", HANDLER),
-        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-        ("_exc_value", PREVIOUS),
-    ] {
-        abi::load_at_offset(emitter, result, offset);
-        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
-    }
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER);
+    abi::load_at_offset(emitter, result, PREVIOUS);
+    abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
     abi::load_at_offset(emitter, result, THROWN);
     abi::emit_branch_if_int_result_zero(emitter, "__rt_eval_unset_return");
     match emitter.target.arch {

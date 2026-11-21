@@ -12,7 +12,7 @@
 
 use crate::codegen_support::{abi, arrays, emit::Emitter, platform::Arch, value_boxing};
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::types::PhpType;
 
@@ -56,10 +56,10 @@ pub fn emit_array_reduce_boxed(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, result, BORROWED_SOURCE);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
     abi::store_at_offset(emitter, value_low_reg(emitter), PAYLOAD);
-    box_unboxed_value(emitter);
+    elephc_memoir::values::mixed_from_value::emit_rebox_unboxed_value(emitter);
     abi::store_at_offset(emitter, result, SOURCE);
     abi::load_at_offset(emitter, result, BORROWED_INITIAL);
-    acquire_borrowed_cell(emitter);
+    elephc_memoir::values::mixed_from_value::emit_snapshot_borrowed_cell(emitter);
     abi::store_at_offset(emitter, result, CARRY);
 
     // -- the logical iterator handles packed widths, hash holes and insertion order --
@@ -76,7 +76,7 @@ pub fn emit_array_reduce_boxed(emitter: &mut Emitter) {
         abi::store_at_offset(emitter, reg, ENTRY - index * 8);
     }
     abi::emit_frame_slot_address(emitter, result, ENTRY);
-    acquire_borrowed_cell(emitter);
+    elephc_memoir::values::mixed_from_value::emit_snapshot_borrowed_cell(emitter);
     abi::store_at_offset(emitter, result, INPUT);
     prepare_callback_arguments(emitter);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), CALLBACK);
@@ -134,20 +134,6 @@ pub fn emit_array_reduce_boxed(emitter: &mut Emitter) {
     abi::emit_jump(emitter, "__rt_array_reduce_boxed_cleanup");
 }
 
-/// Acquires real heap ownership from a stack triple without retaining the stack cell itself.
-fn acquire_borrowed_cell(emitter: &mut Emitter) {
-    abi::emit_call_label(emitter, "__rt_mixed_unbox");
-    box_unboxed_value(emitter);
-}
-
-/// Adapts the unboxer's high payload register before invoking the retaining value constructor.
-fn box_unboxed_value(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("mov rsi, rdx");                                    // preserve string lengths and resource kinds across the constructor ABI
-    }
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-}
-
 /// Builds an owned two-cell argument array, borrowing the carry and transferring the input owner.
 fn prepare_callback_arguments(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
@@ -181,7 +167,7 @@ fn install_boundary(emitter: &mut Emitter) {
     elephc_memoir::activation_records::emit_save_frame_try_prefix(emitter, result, HANDLER);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     abi::emit_frame_slot_address(emitter, result, HANDLER);
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
+    elephc_memoir::activation_records::emit_publish_try_handler(emitter, result);
     abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 0), HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
     emitter.save_exception_handler();                                           // keep intermediate owners reachable when a callback or destructor throws
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_reduce_boxed_caught");
@@ -190,13 +176,7 @@ fn install_boundary(emitter: &mut Emitter) {
 /// Restores the caller's handler and diagnostic depth after all reduction owners are retired.
 fn restore_boundary(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    for (symbol, offset) in [
-        ("_exc_handler_top", HANDLER),
-        ("_rt_diag_suppression", HANDLER - TRY_HANDLER_DIAG_DEPTH_OFFSET),
-    ] {
-        abi::load_at_offset(emitter, result, offset);
-        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
-    }
+    elephc_memoir::activation_records::emit_restore_frame_try_handler(emitter, result, HANDLER);
 }
 
 /// Clears an owner without clobbering either exception-chain or outgoing callback arguments.
