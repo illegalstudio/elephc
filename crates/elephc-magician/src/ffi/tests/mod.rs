@@ -20,7 +20,7 @@ use super::scope::*;
 use super::symbols::*;
 use crate::abi::{
     ElephcEvalContext, ElephcEvalResult, ElephcEvalScope, ABI_VERSION, SCOPE_FLAG_DIRTY,
-    SCOPE_FLAG_OWNED, SCOPE_FLAG_PRESENT, SCOPE_FLAG_UNSET,
+    SCOPE_FLAG_GLOBAL_ALIAS, SCOPE_FLAG_OWNED, SCOPE_FLAG_PRESENT, SCOPE_FLAG_UNSET,
 };
 use crate::context::{
     NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey, NativeCallableDefault,

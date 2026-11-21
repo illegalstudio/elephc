@@ -44,10 +44,10 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     let sync_globals = eval_sync_globals(ctx);
     prepare_dynamic_eval_scope_access_mask(ctx, &sync_locals, &sync_globals)?;
     let catalog = prepare_eval_scope_flush(ctx)?;
-    let global_aliases = eval_global_aliases(ctx);
+    let global_aliases = eval_global_aliases(ctx)?;
     flush_dynamic_eval_scope_locals(ctx, &sync_locals)?;
     flush_dynamic_eval_global_scope(ctx, &sync_globals)?;
-    mark_eval_scope_global_aliases(ctx, &global_aliases);
+    mark_eval_scope_global_aliases(ctx, &global_aliases)?;
     set_eval_context_global_scope(ctx);
     prepare_eval_native_catalog(ctx, catalog)?;
     let pushed_class_scope = push_eval_context_class_scope(ctx)?;

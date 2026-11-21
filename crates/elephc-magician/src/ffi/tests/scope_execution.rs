@@ -152,12 +152,24 @@ fn scope_mark_global_alias_records_target_name() {
             global_name.len() as u64,
         )
     };
+    let mut out_flags = 0;
+    let get_status = unsafe {
+        __elephc_eval_scope_get(
+            scope,
+            name.as_ptr(),
+            name.len() as u64,
+            std::ptr::null_mut(),
+            &mut out_flags,
+        )
+    };
     let target = unsafe { (*scope).global_alias_target("alias").map(str::to_string) };
     unsafe {
         __elephc_eval_scope_free(scope);
     }
 
     assert_eq!(status, EvalStatus::Ok.code());
+    assert_eq!(get_status, EvalStatus::Ok.code());
+    assert_ne!(out_flags & SCOPE_FLAG_GLOBAL_ALIAS, 0);
     assert_eq!(target.as_deref(), Some("source"));
 }
 

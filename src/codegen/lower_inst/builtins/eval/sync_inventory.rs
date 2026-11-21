@@ -70,7 +70,7 @@ pub(super) fn filter_eval_sync_locals_by_name(
 pub(super) fn local_uses_eval_global_sync(ctx: &FunctionContext<'_>, name: Option<&str>) -> bool {
     name.is_some_and(|name| {
         main_name_uses_eval_global_scope(ctx, name)
-            || eval_global_alias_names(ctx).contains(name)
+            || direct_eval_global_alias_names(ctx).contains(name)
     })
 }
 
@@ -80,30 +80,54 @@ pub(super) fn main_name_uses_eval_global_scope(ctx: &FunctionContext<'_>, name: 
 }
 
 /// Collects caller-scope `global` aliases that eval fragments inherit by name.
-pub(super) fn eval_global_aliases(ctx: &FunctionContext<'_>) -> Vec<EvalGlobalAlias> {
-    eval_global_alias_names(ctx)
+pub(super) fn eval_global_aliases(ctx: &FunctionContext<'_>) -> Result<Vec<EvalGlobalAlias>> {
+    let mut aliases = direct_eval_global_alias_names(ctx)
         .into_iter()
-        .map(|name| EvalGlobalAlias {
+        .map(|name| (name, None))
+        .collect::<BTreeMap<_, _>>();
+    for inst in &ctx.function.instructions {
+        if inst.op != Op::LoadGlobalRefCell {
+            continue;
+        }
+        let Some(name) = global_instruction_name(ctx, inst) else {
+            continue;
+        };
+        if aliases.contains_key(name) {
+            continue;
+        }
+        let slot = ctx
+            .function
+            .locals
+            .iter()
+            .find(|local| {
+                local.kind == LocalKind::PhpLocal && local.name.as_deref() == Some(name)
+            })
+            .map(|local| local.id)
+            .ok_or_else(|| {
+                CodegenIrError::invalid_module(format!(
+                    "eval global alias ${name} has no activation slot"
+                ))
+            })?;
+        aliases.insert(name.to_string(), Some(slot));
+    }
+    Ok(aliases
+        .into_iter()
+        .map(|(name, local_slot)| EvalGlobalAlias {
             global_name: name.clone(),
             name,
+            local_slot,
         })
-        .collect()
+        .collect())
 }
 
-/// Collects direct aliases and activation leases that bind a PHP name to global storage.
-fn eval_global_alias_names(ctx: &FunctionContext<'_>) -> BTreeSet<String> {
-    let mut names = ctx.function
+/// Collects aliases whose storage role cannot detach while the activation runs.
+fn direct_eval_global_alias_names(ctx: &FunctionContext<'_>) -> BTreeSet<String> {
+    ctx.function
         .locals
         .iter()
         .filter(|local| local.kind == LocalKind::GlobalAlias)
         .filter_map(|local| local.name.clone())
-        .collect::<BTreeSet<_>>();
-    names.extend(ctx.function.instructions.iter().filter_map(|inst| {
-        (inst.op == Op::LoadGlobalRefCell)
-            .then(|| global_instruction_name(ctx, inst).map(str::to_owned))
-            .flatten()
-    }));
-    names
+        .collect()
 }
 
 /// Collects program globals that can be boxed into the eval global scope.

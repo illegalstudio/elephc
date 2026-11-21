@@ -10865,6 +10865,38 @@ echo ":" . $g;
     assert_eq!(out, "2:2");
 }
 
+/// Verifies a detached `global` name reaches eval as the activation's new local binding.
+#[test]
+fn test_eval_detached_global_alias_uses_rebound_local() {
+    let out = compile_and_run(
+        r#"<?php
+$g = 1;
+function eval_detached_global_alias(int $selector) {
+    global $g;
+    unset($g);
+    $g = 2;
+    $source = $selector > 0 ? 'echo $g; $g = 3;' : '';
+    eval($source);
+    echo ":" . $g;
+}
+eval_detached_global_alias($argc);
+echo ":" . $g . "|";
+function eval_rebound_global_alias(int $selector) {
+    global $g;
+    unset($g);
+    $other = 4;
+    $g =& $other;
+    $source = $selector > 0 ? '$g = 5;' : '';
+    eval($source);
+    echo $g . ":" . $other;
+}
+eval_rebound_global_alias($argc);
+echo ":" . $g;
+"#,
+    );
+    assert_eq!(out, "2:3:1|5:5:1");
+}
+
 /// Verifies unsetting an eval global alias does not unset the actual global value.
 #[test]
 fn test_eval_global_alias_unset_keeps_global_storage() {

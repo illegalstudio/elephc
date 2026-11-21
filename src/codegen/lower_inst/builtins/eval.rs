@@ -11,7 +11,7 @@
 //!   lowering; this module only materializes the bridge ABI call.
 //! - The bridge is target-mangled like other C staticlib symbols.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::codegen::const_default_values;
@@ -69,6 +69,7 @@ const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 const EVAL_SCOPE_FLAG_NATIVE_SNAPSHOT: i64 = 1 << 5;
 const EVAL_SCOPE_FLAG_NATIVE_DETACHED: i64 = 1 << 6;
 const EVAL_SCOPE_FLAG_ASSIGN_REFERENCE: i64 = 1 << 7;
+const EVAL_SCOPE_FLAG_GLOBAL_ALIAS: i64 = 1 << 8;
 const EVAL_CLASS_LOOKUP_GET_CLASS: i64 = 0;
 const EVAL_CLASS_LOOKUP_GET_PARENT_CLASS: i64 = 1;
 const EVAL_MEMBER_LOOKUP_METHOD_EXISTS: i64 = 0;
@@ -140,6 +141,9 @@ enum EvalScopeReadParamSource {
 struct EvalGlobalAlias {
     name: String,
     global_name: String,
+    /// Activation slot whose runtime cell must still be the named global, or `None` for a
+    /// compiler-owned alias that cannot detach.
+    local_slot: Option<LocalSlotId>,
 }
 
 /// A module-local function that can be registered with the eval context.
