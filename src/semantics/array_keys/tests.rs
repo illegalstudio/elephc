@@ -111,6 +111,8 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         "<?php function returned_key_write(array $values): int { if (PHP_OS_FAMILY === 'Windows') { return $values[false] = 2; } return 1; }",
         "<?php function chained_key_write(array $values): void { if (PHP_OS_FAMILY === 'Windows') { $ignored = $values[false] = 2; } }",
         "<?php accept_key_writer(function(array $values): int { if (PHP_OS === 'Linux') { return $values[false] = 2; } return 1; });",
+        "<?php function nested_statement_key_write(array $values): void { if (PHP_OS_FAMILY === 'Windows') { $values[false][0] = 2; } }",
+        "<?php function nested_expression_key_write(array $values): int { if (PHP_OS_FAMILY === 'Windows') { return $values[false][1] = 3; } return 1; }",
     ] {
         let error = crate::semantics::validate_source(
             &parse(source, SourceMode::Php),
@@ -119,6 +121,23 @@ fn strict_array_key_source_validation_audits_target_guarded_writes() {
         .unwrap_err();
         assert!(error.message.contains("strict-array-keys"), "{source}: {error:?}");
     }
+}
+
+/// Stabilized expression keys retain their source facts without treating hidden temps as null.
+#[test]
+fn strict_array_key_source_validation_tracks_expression_preludes() {
+    for source in [
+        "<?php function key_is_int(): int { return 1; } function write_call_key(array $values): int { return $values[key_is_int()] = 2; }",
+        "<?php function write_ternary_key(array $values, bool $flag): bool { return $values[$flag ? 1 : 2] = ($flag = true); }",
+    ] {
+        crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+
+    let source = "<?php function write_stabilized_bool_key(array $values): int { return $values[!false] = 2; }";
+    let error = crate::semantics::validate_source(&parse(source, SourceMode::Php), profile())
+        .unwrap_err();
+    assert!(error.message.contains("strict-array-keys"), "{source}: {error:?}");
 }
 
 /// Source auditing leaves string offsets and ArrayAccess dimensions to their own contracts.

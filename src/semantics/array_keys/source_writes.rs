@@ -38,7 +38,13 @@ impl LocalFacts {
         self.values
             .get(name)
             .cloned()
-            .unwrap_or(ValueFact::Known(PhpType::Void))
+            .unwrap_or_else(|| {
+                if crate::names::is_generated_local_name(name) {
+                    ValueFact::Unknown
+                } else {
+                    ValueFact::Known(PhpType::Void)
+                }
+            })
     }
 
     /// Replaces one local fact after a source-order assignment.
@@ -195,18 +201,27 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
         {
             return;
         }
-        let ExprKind::Assignment { target, .. } = &expr.kind else {
+        let ExprKind::Assignment {
+            target, prelude, ..
+        } = &expr.kind
+        else {
             return;
         };
-        let ExprKind::ArrayAccess { array, index } = &target.kind else {
-            return;
+        let overlay = if prelude.is_empty() {
+            None
+        } else {
+            Some(locals_with_prelude(
+                self.locals,
+                prelude,
+                self.properties,
+                self.current_class,
+            ))
         };
-        let receiver = infer_expr(array, self.locals, self.properties, self.current_class);
-        self.error = validate_index(
+        let locals = overlay.as_ref().unwrap_or(self.locals);
+        self.error = validate_array_access_chain(
             self.profile,
-            &receiver,
-            index,
-            self.locals,
+            target,
+            locals,
             self.properties,
             self.current_class,
         )
@@ -216,6 +231,60 @@ impl AstVisitor for ExpressionWriteValidator<'_> {
     /// Restores the enclosing expression producer policy.
     fn expression_end(&mut self, _expr: &Expr) {
         self.source.leave_expression();
+    }
+}
+
+/// Applies parser-generated target stabilization facts in source evaluation order.
+fn locals_with_prelude(
+    entry: &LocalFacts,
+    statements: &[Stmt],
+    properties: &PropertyFacts,
+    current_class: Option<&str>,
+) -> LocalFacts {
+    let mut locals = entry.clone();
+    apply_prelude_facts(statements, &mut locals, properties, current_class);
+    locals
+}
+
+/// Records only local facts needed to type stabilized assignment targets.
+fn apply_prelude_facts(
+    statements: &[Stmt],
+    locals: &mut LocalFacts,
+    properties: &PropertyFacts,
+    current_class: Option<&str>,
+) {
+    for stmt in statements {
+        match &stmt.kind {
+            StmtKind::Assign { name, value } => {
+                let fact = infer_expr(value, locals, properties, current_class);
+                locals.set(name, fact);
+            }
+            StmtKind::TypedAssign {
+                type_expr, name, ..
+            } => locals.set(
+                name,
+                ValueFact::Known(crate::types::constant_binding::declared_type(type_expr)),
+            ),
+            StmtKind::RefAssign { target, source } => {
+                locals.set(target, ValueFact::Unknown);
+                if let ExprKind::Variable(source) = &source.kind {
+                    locals.set(source, ValueFact::Unknown);
+                }
+            }
+            StmtKind::StaticVar { name, init } => {
+                let fact = infer_expr(init, locals, properties, current_class);
+                locals.set(name, fact);
+            }
+            StmtKind::ListUnpack { vars, .. } => {
+                for name in vars {
+                    locals.set(name, ValueFact::Unknown);
+                }
+            }
+            StmtKind::Synthetic(body) => {
+                apply_prelude_facts(body, locals, properties, current_class);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -355,17 +424,13 @@ fn validate_stmt(
             }
         }
         StmtKind::NestedArrayAssign { target, .. } => {
-            if let ExprKind::ArrayAccess { array, index } = &target.kind {
-                let receiver = infer_expr(array, locals, properties, current_class);
-                validate_index(
-                    profile,
-                    &receiver,
-                    index,
-                    locals,
-                    properties,
-                    current_class,
-                )?;
-            }
+            validate_array_access_chain(
+                profile,
+                target,
+                locals,
+                properties,
+                current_class,
+            )?;
         }
         StmtKind::PropertyArrayAssign {
             object,
@@ -650,6 +715,30 @@ fn validate_index(
         return Ok(());
     };
     super::validate_write_receiver(profile, receiver, &key, index.span)
+}
+
+/// Validates every key whose immediate receiver can be proven while walking to the root.
+fn validate_array_access_chain(
+    profile: SemanticProfile,
+    target: &Expr,
+    locals: &LocalFacts,
+    properties: &PropertyFacts,
+    current_class: Option<&str>,
+) -> Result<(), CompileError> {
+    let mut current = target;
+    while let ExprKind::ArrayAccess { array, index } = &current.kind {
+        let receiver = infer_expr(array, locals, properties, current_class);
+        validate_index(
+            profile,
+            &receiver,
+            index,
+            locals,
+            properties,
+            current_class,
+        )?;
+        current = array;
+    }
+    Ok(())
 }
 
 /// Infers only receiver categories that are stable without full name or call resolution.
