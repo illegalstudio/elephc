@@ -629,6 +629,64 @@ fn validate_lazy_expression_writes(
                 _ => merge_exits(&[value_exit, default_exit]),
             })
         }
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            let subject_exit =
+                validate_expression_flow(subject, locals, properties, profile, current_class)?;
+            if let Some(selected) = statically_selected_match_value(
+                subject,
+                arms,
+                default.as_deref(),
+                profile,
+            ) {
+                return selected.map_or(Ok(subject_exit.clone()), |value| {
+                    validate_expression_flow(
+                        value,
+                        &subject_exit,
+                        properties,
+                        profile,
+                        current_class,
+                    )
+                });
+            }
+            let mut fallthrough = subject_exit;
+            let mut exits = Vec::new();
+            for (conditions, value) in arms {
+                for condition in conditions {
+                    fallthrough = validate_expression_flow(
+                        condition,
+                        &fallthrough,
+                        properties,
+                        profile,
+                        current_class,
+                    )?;
+                    exits.push(validate_expression_flow(
+                        value,
+                        &fallthrough,
+                        properties,
+                        profile,
+                        current_class,
+                    )?);
+                }
+            }
+            if let Some(default) = default {
+                exits.push(validate_expression_flow(
+                    default,
+                    &fallthrough,
+                    properties,
+                    profile,
+                    current_class,
+                )?);
+            }
+            Ok(if exits.is_empty() {
+                fallthrough
+            } else {
+                merge_exits(&exits)
+            })
+        }
         _ => unreachable!("only lazy expressions reach branch-aware write validation"),
     }
 }
@@ -829,6 +887,7 @@ fn is_lazy_flow_expression(expr: &Expr) -> bool {
         } | ExprKind::Ternary { .. }
             | ExprKind::ShortTernary { .. }
             | ExprKind::NullCoalesce { .. }
+            | ExprKind::Match { .. }
     )
 }
 
@@ -953,8 +1012,97 @@ fn apply_lazy_expression_facts(
                 None => value_fact,
             }
         }
+        ExprKind::Match {
+            subject,
+            arms,
+            default,
+        } => {
+            apply_expression_facts(subject, locals, properties, profile, current_class);
+            if let Some(selected) = statically_selected_match_value(
+                subject,
+                arms,
+                default.as_deref(),
+                profile,
+            ) {
+                return selected.map_or(ValueFact::Unknown, |value| {
+                    apply_expression_facts(value, locals, properties, profile, current_class)
+                });
+            }
+            let mut fallthrough = locals.clone();
+            let mut exits = Vec::new();
+            let mut values = Vec::new();
+            for (conditions, value) in arms {
+                for condition in conditions {
+                    apply_expression_facts(
+                        condition,
+                        &mut fallthrough,
+                        properties,
+                        profile,
+                        current_class,
+                    );
+                    let mut selected = fallthrough.clone();
+                    values.push(apply_expression_facts(
+                        value,
+                        &mut selected,
+                        properties,
+                        profile,
+                        current_class,
+                    ));
+                    exits.push(selected);
+                }
+            }
+            if let Some(default) = default {
+                values.push(apply_expression_facts(
+                    default,
+                    &mut fallthrough,
+                    properties,
+                    profile,
+                    current_class,
+                ));
+                exits.push(fallthrough);
+            }
+            if !exits.is_empty() {
+                *locals = merge_exits(&exits);
+            }
+            values
+                .into_iter()
+                .reduce(merge_value_facts)
+                .unwrap_or(ValueFact::Unknown)
+        }
         _ => unreachable!("only lazy expressions reach the lazy fact updater"),
     }
+}
+
+/// Selects a match result when every compared operand has exact scalar identity.
+fn statically_selected_match_value<'a>(
+    subject: &Expr,
+    arms: &'a [(Vec<Expr>, Expr)],
+    default: Option<&'a Expr>,
+    profile: SemanticProfile,
+) -> Option<Option<&'a Expr>> {
+    let subject = literal_match_fact(subject, profile)?;
+    for (conditions, value) in arms {
+        for condition in conditions {
+            if literal_match_fact(condition, profile)? == subject {
+                return Some(Some(value));
+            }
+        }
+    }
+    Some(default)
+}
+
+/// Retains only literal identities for which PHP match equality is unambiguous.
+fn literal_match_fact(expr: &Expr, profile: SemanticProfile) -> Option<ValueFact> {
+    if !matches!(
+        &expr.kind,
+        ExprKind::IntLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+    ) {
+        return None;
+    }
+    source_expr_fact(expr, profile)
 }
 
 /// Applies an operand that runs always, never, or along one possible control-flow edge.
