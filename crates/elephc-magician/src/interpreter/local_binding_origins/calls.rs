@@ -5,7 +5,7 @@
 //! - Assignment producers and observed builtin predicate source views.
 //!
 //! Key details:
-//! - Known untyped declarations remain explicitly open rather than inferring from one result.
+//! - Known untyped declarations open Locals bindings but remain unknown source evidence.
 //! - A shadowing user function never inherits a global builtin predicate identity.
 
 use super::*;
@@ -22,15 +22,17 @@ fn selected_name<'a>(name: &'a str, fallback: Option<&'a str>, context: &ElephcE
 
 /// Reads the selected return declaration while preserving unknown and explicit mixed roles.
 pub(in crate::interpreter) fn producer(name: &str, fallback: Option<&str>,
-    context: &ElephcEvalContext,
+    context: &ElephcEvalContext, role: ProducerContractRole,
 ) -> Option<EvalParameterType> {
     let name = selected_name(name, fallback, context);
     let source = if let Some(contract) = elephc_builtin_contract::lookup(&name) {
         Some(parameter_type(&builtin_producer_type(contract.returns)))
     } else if let Some(function) = context.function(&name) {
-        Some(function.return_type().cloned().unwrap_or_else(|| parameter_type(&Type::atom("mixed"))))
+        function.return_type().cloned().or_else(|| role.opens_unknown(context)
+            .then(|| parameter_type(&Type::atom("mixed"))))
     } else if let Some(function) = context.native_function(&name) {
-        Some(function.return_type().cloned().unwrap_or_else(|| parameter_type(&Type::atom("mixed"))))
+        function.return_type().cloned().or_else(|| role.opens_unknown(context)
+            .then(|| parameter_type(&Type::atom("mixed"))))
     } else { None };
     source.map(|ty| if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes)
         || context.semantic_profile().contains(elephc_semantics::StrictFeature::Mixed) { ty }

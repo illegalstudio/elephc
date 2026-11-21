@@ -33,9 +33,38 @@ pub(super) use arrays::{prepare_write as prepare_array_local_write, publish_writ
 pub(super) use arrays::source_schema as array_source_schema;
 pub(super) use arrays::prepare_value as prepare_array_value_origin;
 
+/// Selects whether absent producer metadata opens a local binding or remains an unknown source.
+#[derive(Clone, Copy)]
+pub(super) enum ProducerContractRole {
+    Binding,
+    Source,
+}
+
+impl ProducerContractRole {
+    /// Reports whether an untyped producer must keep a strict local binding open.
+    fn opens_unknown(self, context: &ElephcEvalContext) -> bool {
+        matches!(self, Self::Binding)
+            && context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals)
+    }
+}
+
 /// Captures a producer's declared alternatives without executing PHP or borrowing live maps.
 pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
     context: &ElephcEvalContext, scope: &ElephcEvalScope,
+) -> Option<EvalParameterType> {
+    producer_contract(expr, context, scope, ProducerContractRole::Binding)
+}
+
+/// Captures source evidence while preserving the difference between unknown and explicit mixed.
+pub(super) fn source_producer_contract(expr: &EvalExpr,
+    context: &ElephcEvalContext, scope: &ElephcEvalScope,
+) -> Option<EvalParameterType> {
+    producer_contract(expr, context, scope, ProducerContractRole::Source)
+}
+
+/// Shares structural producer discovery while keeping binding and source roles independent.
+fn producer_contract(expr: &EvalExpr, context: &ElephcEvalContext,
+    scope: &ElephcEvalScope, role: ProducerContractRole,
 ) -> Option<EvalParameterType> {
     let arrays = context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayTypes);
     if !arrays && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals)
@@ -44,17 +73,18 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
     match expr {
         EvalExpr::LoadVar(name) => {
             let kind = scope.local_type(name).or_else(|| scope.inferred_local_type(name))
-                .or_else(|| scope.native_binding_type(name)).cloned().unwrap_or_else(mixed);
+                .or_else(|| scope.native_binding_type(name)).cloned()
+                .or_else(|| role.opens_unknown(context).then(mixed));
             let contents = if arrays { generic_local_contracts(scope, name, context).into_iter()
                 .filter(|ty| arrays::contains_contents(&generic_type(ty))).collect::<Vec<_>>() }
                 else { Vec::new() };
-            if contents.is_empty() { Some(kind) } else {
-                let mut members = vec![generic_type(&kind)];
+            if contents.is_empty() { kind } else {
+                let mut members = kind.as_ref().map(generic_type).into_iter().collect::<Vec<_>>();
                 members.extend(contents.iter().map(generic_type));
                 Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Generic(Type::Intersection(members))], false))
             }
         },
-        EvalExpr::Assign { value, .. } => local_producer_contract(value, context, scope),
+        EvalExpr::Assign { value, .. } => producer_contract(value, context, scope, role),
         EvalExpr::Const(value) => Some(match value {
             EvalConst::Null => EvalParameterType::new(Vec::new(), true),
             EvalConst::Int(_) => EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false),
@@ -76,8 +106,8 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
             EvalCastType::Bool => EvalParameterTypeVariant::Bool,
         }], false)),
         EvalExpr::Ternary { condition, then_branch, else_branch } => {
-            let first = local_producer_contract(then_branch.as_deref().unwrap_or(condition), context, scope);
-            let second = local_producer_contract(else_branch, context, scope);
+            let first = producer_contract(then_branch.as_deref().unwrap_or(condition), context, scope, role);
+            let second = producer_contract(else_branch, context, scope, role);
             Some(match (first, second) {
                 (Some(first), Some(second)) => {
                     let nullable = first.allows_null() || second.allows_null();
@@ -88,10 +118,10 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
                 _ => mixed(),
             })
         }
-        EvalExpr::Call { name, .. } => calls::producer(name, None, context),
-        EvalExpr::NamespacedCall { name, fallback_name, .. } => calls::producer(name, Some(fallback_name), context),
+        EvalExpr::Call { name, .. } => calls::producer(name, None, context, role),
+        EvalExpr::NamespacedCall { name, fallback_name, .. } => calls::producer(name, Some(fallback_name), context, role),
         EvalExpr::DynamicCall { .. } | EvalExpr::DynamicMethodCall { .. }
-            | EvalExpr::DynamicStaticMethodCall { .. } => Some(mixed()),
+            | EvalExpr::DynamicStaticMethodCall { .. } => role.opens_unknown(context).then(mixed),
         _ => declared_sources::producer(expr, context, scope),
     }
 }

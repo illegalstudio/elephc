@@ -102,7 +102,7 @@ pub(super) fn producer(expr: &EvalExpr, context: &ElephcEvalContext,
             let class=class_name(name,context)?;
             let (_,constant)=context.class_constant(&class,constant)?;
             if !matches!(constant.value(),EvalExpr::Const(_)) {return None;}
-            generic_type(&local_producer_contract(constant.value(),context,scope)?)
+            generic_type(&source_producer_contract(constant.value(),context,scope)?)
         }
         EvalExpr::StaticPropertyGet {class_name:name,property}=> {
             let class=class_name(name,context)?;

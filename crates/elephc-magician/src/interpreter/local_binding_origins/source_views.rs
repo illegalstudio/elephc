@@ -69,11 +69,11 @@ pub(in crate::interpreter) fn source_view(expr: &EvalExpr,
                 let known = scope.inferred_local_type(name).or_else(|| scope.native_binding_type(name)).is_some()
                     || generic_local_contracts(scope, name, context).iter()
                         .any(|ty| arrays::contains_contents(&generic_type(ty)));
-                known.then(|| local_producer_contract(expr, context, scope)).flatten()
+                known.then(|| source_producer_contract(expr, context, scope)).flatten()
             }) }
         },
         EvalExpr::Assign { value, .. } => source_view(value, context, scope),
-        _ => local_producer_contract(expr, context, scope),
+        _ => source_producer_contract(expr, context, scope),
     }
 }
 
