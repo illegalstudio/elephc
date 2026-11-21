@@ -1113,6 +1113,17 @@ impl Checker {
             let captures = std::mem::take(&mut self.pending_ref_capture_invalidations);
             for name in captures {
                 self.invalidate_local_flow_narrowing(&name, env);
+                // `$found = null; $walk = function () use (&$found) { $found = ...; };` : the
+                // closure stores through the reference, so the `null` the local last held says
+                // nothing about what it holds once the closure ran (php binds a reference to no
+                // type). Its cell is already boxed; the checker's view follows it, or
+                // `new ReflectionFunction($found)` is refused for `got null` (symfony/polyfill-
+                // deepclone).
+                if self.by_ref_capture_boxed_locals.contains(&name)
+                    && env.get(&name) == Some(&PhpType::Void)
+                {
+                    env.insert(name, PhpType::Mixed);
+                }
             }
             self.apply_boxed_reference_outputs(expr.span, env);
             self.record_operation_exception_flow(expr, env);

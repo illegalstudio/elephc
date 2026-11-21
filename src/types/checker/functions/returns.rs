@@ -601,11 +601,17 @@ impl Checker {
                 &format!("{} expects {}, got null", context, expected),
             ));
         }
-        // Parameter compatibility accepts `Object|null` because PHP only throws when the
-        // value is actually null at run time. A nullable LOCAL returned as `W` is refused up
-        // front (the property-hook narrowing bug); any other expression (a property read, a
-        // call) reaches PHP's runtime `Return value must be of type W, null returned`.
-        if local_read && Self::union_contains_void(actual) && !Self::declared_type_accepts_null(expected) {
+        // A nullable value returned from a non-null declaration, a plain local included, is php's
+        // run-time `Return value must be of type T, null returned`: the declared-return boundary
+        // raises it when the value really is null. php compiles the function whatever the type
+        // elephc inferred for the local (`$x = preg_replace_callback(...); return $x;` from
+        // `: string`, symfony/asset-mapper's `makeImportsBare()`), so no refusal belongs here.
+        // `--strict-locals` is the static-analysis mode and keeps the refusal of a plain local.
+        if self.strict_locals
+            && local_read
+            && Self::union_contains_void(actual)
+            && !Self::declared_type_accepts_null(expected)
+        {
             return Err(CompileError::new(
                 span,
                 &format!("{} expects {}, got {}", context, expected, actual),

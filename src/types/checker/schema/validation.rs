@@ -620,6 +620,22 @@ pub(super) fn method_contract_is_source(
         return false;
     }
     let Some(info) = checker.classes.get(owner) else {
+        // An INTERFACE recorded as the declaring owner (an abstract class that leaves the
+        // contract unimplemented) is only as "source" as the interface that really declares the
+        // method: `interface TransportInterface extends \Stringable` declares no `__toString`,
+        // `Stringable` does, and a compiler-injected one is never widened by `func_args`
+        // (symfony/mailer's `NullTransport::__toString()`).
+        if let Some(interface) = checker.interfaces.get(owner) {
+            let (methods, declaring) = if is_static {
+                (&interface.static_methods, &interface.static_method_declaring_interfaces)
+            } else {
+                (&interface.methods, &interface.method_declaring_interfaces)
+            };
+            if methods.contains_key(method_key) {
+                let declaring = declaring.get(method_key).map(String::as_str).unwrap_or(owner);
+                return declaration_is_source(checker, declaring);
+            }
+        }
         return true;
     };
     if info

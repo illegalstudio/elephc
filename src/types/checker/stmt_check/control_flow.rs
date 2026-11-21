@@ -813,6 +813,9 @@ impl Checker {
                 // Widen after the key/value bindings are in the environment so a push of
                 // the foreach value variable joins with its real element type.
                 stabilize_loop_storage(self, stmt.span, body, None, None, ref_value_binding, env, None);
+                if !*value_by_ref {
+                    self.prove_foreach_value_binding(value_var, env);
+                }
                 // The contract may have just widened the SOURCE's payload — `array<string>` ->
                 // `array<mixed>` for `foreach ($chunks as &$chunk) { $chunk = new Chunk($chunk); }`
                 // — and the value variable is bound to that payload. Re-read it, or the body is
@@ -910,6 +913,13 @@ impl Checker {
                 let storage_entry = self.guarded_union_types.clone();
                 let mut flow = self.snapshot_conditional_flow(env);
                 self.exclude_conditional_binding_entry(&mut flow);
+                // With an `else` every path leaves through one of the arms, so the entry view is
+                // not an alternative of the join: `$c = "a" . $i; if (..) { $c = new S; } else {
+                // $c = new S($c); } $c->p[] = 1;` reads an `S`, not the `string|S` the entry
+                // contributed (symfony/var-dumper `ExceptionCaster::extractSource()`).
+                if else_body.is_some() {
+                    self.exclude_target_entry_exit(&mut flow);
+                }
                 let mut errors = Vec::new();
 
                 // Flow-sensitive type narrowing across the if / elseif* / else chain.

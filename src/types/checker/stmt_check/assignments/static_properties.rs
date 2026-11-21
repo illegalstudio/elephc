@@ -63,12 +63,27 @@ pub(super) fn check_static_property_assign(
     record_static_property_callable_sig(checker, &target.declaring_class, property, value, env)?;
 
     if target.property_has_declared_type {
-        checker.require_compatible_arg_type(
-            &target.prop_ty,
-            &val_ty,
-            span,
-            &format!("Static property {}::${}", target.class_name, property),
-        )?;
+        // php checks a `mixed` or nullable value against a typed static property when the store
+        // RUNS, like an instance property: `self::$e ??= unserialize(...)` into `\Exception`
+        // (symfony/cache `LockRegistry`) compiles and raises the `TypeError` only for a value
+        // that does not fit.
+        let defers_to_runtime_typing = matches!(val_ty, PhpType::Mixed)
+            || crate::types::param_binding::object_requires_runtime_nominal_guard(
+                &target.prop_ty,
+                &val_ty,
+            )
+            || crate::types::param_binding::gradual_object_requires_runtime_nominal_guard(
+                &target.prop_ty,
+                &val_ty,
+            );
+        if !defers_to_runtime_typing {
+            checker.require_compatible_arg_type(
+                &target.prop_ty,
+                &val_ty,
+                span,
+                &format!("Static property {}::${}", target.class_name, property),
+            )?;
+        }
         if let Some(updated_ty) =
             declared_array_storage_after_gradual_assignment(&target.prop_ty, &val_ty)
         {

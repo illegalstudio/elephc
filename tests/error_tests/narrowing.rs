@@ -25,7 +25,7 @@ fn test_nullable_object_lazy_local_join_rejects_nullable_exits() {
         "if ($service === null) { $service = new Service(); } $service = null;",
     ] {
         let source = format!("<?php final class Service {{}} function get(?Service $service, ?Service $replacement, bool $flag): Service {{ {branch} return $service; }}");
-        let error = check_source(&source).expect_err(branch);
+        let error = check_source_strict(&source).expect_err(branch);
         assert!(error.contains("return type expects Service, got Service|null"), "{branch}: {error}");
     }
 }

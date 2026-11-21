@@ -709,8 +709,44 @@ fn parse_type(text: &str) -> Option<TypeExpr> {
     // The whole annotation must be consumed, or `array<T>|null` would silently become
     // `array<T>` and the annotation would mean less than it says.
     match tokens.get(pos).map(|(token, _)| token) {
-        Some(crate::lexer::Token::Semicolon) => Some(parsed),
+        Some(crate::lexer::Token::Semicolon) => Some(normalize_doc_pseudo_types(parsed)),
         _ => None,
+    }
+}
+
+/// Reads PHPStan's `list<T>` as the array it is.
+///
+/// The language's grammar knows `array<T>` but not `list<T>`, which it takes for a generic class
+/// named `list`: `callable(T, list<Name>): T` then asks for an instance of `Ns\list<Name>` and
+/// refuses the array php passes (Doctrine's `TableEditor::renameColumnInConstraints()`). php
+/// never reads a docblock, so an annotation must not turn into a class that does not exist.
+fn normalize_doc_pseudo_types(ty: TypeExpr) -> TypeExpr {
+    let norm = |ty: Box<TypeExpr>| Box::new(normalize_doc_pseudo_types(*ty));
+    let norm_all = |types: Vec<TypeExpr>| -> Vec<TypeExpr> {
+        types.into_iter().map(normalize_doc_pseudo_types).collect()
+    };
+    match ty {
+        TypeExpr::GenericClass { name, mut args }
+            if args.len() == 1
+                && name.parts.len() == 1
+                && name.parts[0].eq_ignore_ascii_case("list") =>
+        {
+            TypeExpr::Array(Box::new(normalize_doc_pseudo_types(args.remove(0))))
+        }
+        TypeExpr::GenericClass { name, args } => {
+            TypeExpr::GenericClass { name, args: norm_all(args) }
+        }
+        TypeExpr::Array(inner) => TypeExpr::Array(norm(inner)),
+        TypeExpr::AssocArray { key, value } => {
+            TypeExpr::AssocArray { key: norm(key), value: norm(value) }
+        }
+        TypeExpr::CallableSig { params, ret } => {
+            TypeExpr::CallableSig { params: norm_all(params), ret: norm(ret) }
+        }
+        TypeExpr::Nullable(inner) => TypeExpr::Nullable(norm(inner)),
+        TypeExpr::Union(members) => TypeExpr::Union(norm_all(members)),
+        TypeExpr::Intersection(members) => TypeExpr::Intersection(norm_all(members)),
+        other => other,
     }
 }
 
@@ -900,6 +936,18 @@ mod tests {
             "<?php\n/**\n * @template T\n * @param non-empty-list<T> $a\n */\nfunction f($a) {}\n",
         );
         assert!(block.params.is_empty());
+    }
+
+    /// PHPStan's `list<T>` is the array it describes, also inside a callable signature, never a
+    /// class named `list`.
+    #[test]
+    fn reads_list_as_an_array_everywhere() {
+        let list_of_name = TypeExpr::Array(Box::new(TypeExpr::Named(Name::from("Name"))));
+        assert_eq!(parse_type("list<Name>"), Some(list_of_name.clone()));
+        match parse_type("callable(Name, list<Name>): Name") {
+            Some(TypeExpr::CallableSig { params, .. }) => assert_eq!(params[1], list_of_name),
+            other => panic!("not a callable signature: {other:?}"),
+        }
     }
 
     /// A trailing union member must not be silently dropped.

@@ -54,7 +54,7 @@ fn test_nullable_fallback_flow_r59_loop_guard_views() {
         let nullable = format!("function {name}(?int $value): ?int");
         assert!(source.contains(&nullable), "missing nullable return fixture: {name}");
         let required = source.replace(&nullable, &format!("function {name}(?int $value): int"));
-        expect_error(&required, "return type expects int");
+        expect_error_strict(&required, "return type expects int");
     }
 }
 
@@ -70,7 +70,7 @@ fn test_nullable_fallback_flow_r58_guard_value_containment() {
 fn test_nullable_fallback_flow_r57_instanceof_ternary_binding_views() {
     check_source(include_str!("../../examples/instanceof/main.php"))
         .unwrap_or_else(|error| panic!("existing instanceof example: {error}"));
-    expect_error("<?php interface Flag {} class Base {} function replace(?Base $item): Base { $item instanceof Flag ? ($item = null) : ($item = new Base()); return $item; }", "return type expects Base");
+    expect_error_strict("<?php interface Flag {} class Base {} function replace(?Base $item): Base { $item instanceof Flag ? ($item = null) : ($item = new Base()); return $item; }", "return type expects Base");
 }
 
 /// A boxed reference-local retains dynamic foreach dispatch behind an Iterable read view.
@@ -334,7 +334,7 @@ fn test_nullable_fallback_flow_r46_guarded_array_mutations() {
 fn test_nullable_fallback_flow_r46_array_reference_invalidations() {
     for effect in ["settype($a, 'string');", "replaceValue($a);"] {
         let source = format!("<?php function replaceValue(mixed &$a): void {{ $a = null; }} function run(?array $a): array {{ if ($a === null) return []; sort($a); {effect} return $a; }}");
-        expect_error(&source, "return type expects array");
+        expect_error_strict(&source, "return type expects array");
     }
 }
 
@@ -651,7 +651,7 @@ fn test_nullable_fallback_flow_r39_raw_proof_joins() {
 fn test_nullable_fallback_flow_r39_parameter_proofs() {
     let source = "<?php function readFallback(?int $value, int $default): int { $value ??= $default; return $value; } final class FallbackOwner { public function read(?int $value, int $default): int { $value ??= $default; return $value; } } $read = function (?int $value, int $default): int { $value ??= $default; return $value; };";
     check_source(source).unwrap();
-    expect_error("<?php function run(?int $value, int $default, int $key): int { $ints = [10]; $default = $ints[$key]; $value ??= $default; return $value; }", "return type expects int");
+    expect_error_strict("<?php function run(?int $value, int $default, int $key): int { $ints = [10]; $default = $ints[$key]; $value ??= $default; return $value; }", "return type expects int");
 }
 
 /// A fallible RHS cannot prove a nullable binding suitable for a non-null parameter.
@@ -773,14 +773,14 @@ fn test_nullable_fallback_flow_definite_binding_joins() {
         "if ($choose) { $value = $parameter; $value ??= 5; } try {} finally {} return $value;",
     ] {
         let source = format!("<?php function bindingJoin(?int $parameter, bool $choose): int {{ {body} }}");
-        expect_error(&source, "return type expects int");
+        expect_error_strict(&source, "return type expects int");
     }
     for (parameter, fallback, result) in [
         ("?string", "'fallback'", "string"),
         ("?BindingTarget", "new BindingTarget()", "BindingTarget"),
     ] {
         let source = format!("<?php class BindingTarget {{}} function bindingJoin({parameter} $parameter, bool $choose): {result} {{ if ($choose) {{ $value = $parameter; $value ??= {fallback}; }} return $value; }}");
-        expect_error(&source, "return type expects");
+        expect_error_strict(&source, "return type expects");
     }
     for body in [
         "$value = $parameter; $value ??= 5; return $value;",
@@ -807,7 +807,7 @@ fn test_nullable_fallback_flow_definite_binding_joins() {
 /// A nullable local introduced on only one branch cannot promise a non-null return.
 #[test]
 fn test_nullable_fallback_flow_review_maybe_unbound_integer_return() {
-    expect_error("<?php function run(?int $parameter, bool $choose): int { if ($choose) { $value = $parameter; if ($value === null) { $value = 5; } } return $value; }",
+    expect_error_strict("<?php function run(?int $parameter, bool $choose): int { if ($choose) { $value = $parameter; if ($value === null) { $value = 5; } } return $value; }",
         "return type expects int, got int|null");
 }
 
@@ -820,7 +820,7 @@ fn test_nullable_fallback_flow_review_relative_object_guard() {
         ("class Root {} class Node extends Root { static function accept(parent $other): int { return 1; } }", "Root", "Node::accept($maybe)"),
     ] {
         let source = format!("<?php {declaration} function run(?{receiver} $maybe, ?int $value): int {{ $value ??= 7; try {{ $value = null; {call}; return 1; }} catch (TypeError $error) {{}} return $value; }}");
-        expect_error(&source, "return type expects int, got int|null");
+        expect_error_strict(&source, "return type expects int, got int|null");
     }
 }
 
@@ -829,7 +829,7 @@ fn test_nullable_fallback_flow_review_relative_object_guard() {
 fn test_nullable_fallback_flow_review_builtin_catch_parents() {
     for parent in ["Error", "Throwable"] {
         let source = format!("<?php function run(?int $value, mixed $returned): int {{ $value ??= 7; try {{ $value = null; return $returned; }} catch ({parent} $error) {{}} return $value; }}");
-        expect_error(&source, "return type expects int, got int|null");
+        expect_error_strict(&source, "return type expects int, got int|null");
     }
 }
 
@@ -998,7 +998,7 @@ fn test_nullable_fallback_flow_review_must_run_loops() {
         let source = format!("<?php function run(?int $value, int $key): int {{ {body} }}");
         check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
     }
-    expect_error("<?php function run(?int $value, bool $flag): int { while ($flag) { if ($value === null) { return 0; } break; } return $value; }", "return type expects int");
+    expect_error_strict("<?php function run(?int $value, bool $flag): int { while ($flag) { if ($value === null) { return 0; } break; } return $value; }", "return type expects int");
 }
 
 /// A finally input includes pending loop and switch exits before its body is checked.
@@ -1075,12 +1075,12 @@ fn test_nullable_fallback_flow_review_statement_exceptions() {
             "try { ($value = null) |> passValue(...); } catch (RuntimeException $e) {} return $value;",
         ] {
             let source = format!("<?php class Label {{ public function __toString(): string {{ throw new RuntimeException('label'); }} }} class Bag {{ public function __set(string $name, mixed $value): void {{ throw new RuntimeException('set'); }} }} function mayThrow(bool $flag): void {{ if ($flag) {{ throw new RuntimeException('call'); }} }} function passValue(?int $value): int {{ return 0; }} function rows(bool $fail): iterable {{ yield 1; if ($fail) {{ throw new RuntimeException('rows'); }} }} function run(?int $value, Label $label, Bag $bag): int {{ {coalesce} {body} }}");
-            expect_error(&source, "return type expects int");
+            expect_error_strict(&source, "return type expects int");
         }
     }
     for setup in ["", "$old = null; $set = function () use (&$old) { $old = new RetiredFlow(); }; $set();"] {
         let source = format!("<?php class RetiredFlow {{ public function __destruct() {{ throw new RuntimeException('drop'); }} }} function mayThrow(bool $flag): void {{ if ($flag) {{ throw new RuntimeException('call'); }} }} function run(?int $value, ?RetiredFlow $old): int {{ $value ??= 5; {setup} try {{ mayThrow(false); $value = null; $old = null; $value ??= 6; }} catch (Throwable $e) {{ return $value; }} return 0; }}");
-        expect_error(&source, "return type expects int");
+        expect_error_strict(&source, "return type expects int");
     }
 
 }
@@ -1102,10 +1102,10 @@ fn test_nullable_fallback_flow_review_initializer_effects() {
             "static $saved = ($value = null) ?? 7;",
         ] {
             let source = format!("<?php function failInit(): int {{ throw new RuntimeException('x'); }} function &refInit(): int {{ throw new RuntimeException('x'); }} function makeHolderInit(): HolderInit {{ throw new RuntimeException('x'); }} class HolderInit {{ public int $slot = 1; public function &item(): int {{ throw new RuntimeException('x'); }} public static function &staticItem(): int {{ throw new RuntimeException('x'); }} }} function run(?int $value, HolderInit $holder): int {{ {coalesce} $arr = [1, 2]; try {{ {body} }} catch (RuntimeException $e) {{ $value = null; }} return $value; }}");
-            expect_error(&source, "return type expects int");
+            expect_error_strict(&source, "return type expects int");
         }
     }
-    expect_error("<?php class RefRetiredInit { public function __destruct() { throw new RuntimeException('drop'); } } function mayThrowRefInit(bool $flag): void { if ($flag) { throw new RuntimeException('earlier'); } } function run(?int $value, mixed $old): int { $value ??= 4; $source = 1; try { mayThrowRefInit(false); $value = null; $old = &$source; $value ??= 6; } catch (Throwable $e) { return $value; } return 0; }", "return type expects int");
+    expect_error_strict("<?php class RefRetiredInit { public function __destruct() { throw new RuntimeException('drop'); } } function mayThrowRefInit(bool $flag): void { if ($flag) { throw new RuntimeException('earlier'); } } function run(?int $value, mixed $old): int { $value ??= 4; $source = 1; try { mayThrowRefInit(false); $value = null; $old = &$source; $value ??= 6; } catch (Throwable $e) { return $value; } return 0; }", "return type expects int");
 }
 
 /// Eager operands and nonliteral callbacks cannot conceal a store from guarded reads.
@@ -1121,11 +1121,11 @@ fn test_nullable_fallback_flow_review_eager_operands() {
             "$kept = array_filter([1], (($value = null) ?? new OperandFlow())->accept(...)); return $value;",
         ] {
             let source = format!("<?php class OperandFlow {{ public function __construct(mixed $arg = null) {{}} public function accept(int $value): bool {{ return true; }} }} function run(?int $value, string $className): int {{ {coalesce} {body} }}");
-            let error = check_source(&source).expect_err("hidden null store must fail").to_string();
+            let error = check_source_strict(&source).expect_err("hidden null store must fail").to_string();
             assert!(error.contains("return type expects int"), "{source}: {error}");
         }
     }
-    expect_error("<?php class OperandFlow {} function run(?string $raw, ?int $value): int { if ($raw === null && $value !== null) { if (($value = null) instanceof OperandFlow) {} return $value; } return 0; }", "return type expects int");
+    expect_error_strict("<?php class OperandFlow {} function run(?string $raw, ?int $value): int { if ($raw === null && $value !== null) { if (($value = null) instanceof OperandFlow) {} return $value; } return 0; }", "return type expects int");
     check_source("<?php function run(): array { return array_filter(['one', ''], fn($text) => strlen($text) > 0); }").unwrap();
     for expression in ["yield ($value = null);", "yield from [($value = null)];"] {
         let source = format!("<?php function needYieldOperand(int $value): void {{}} function values(?int $value): iterable {{ $value ??= 4; {expression} needYieldOperand($value); }}");
@@ -1140,7 +1140,7 @@ fn test_nullable_fallback_flow_review_conditional_operands() {
     let mut admitted = Vec::new();
     for coalesce in ["$value ??= 4", "$value = $value ?? 4"] {
         let source = format!("<?php class ConditionalOperandFlow {{ public function take(int $arg): void {{}} }} function run(?int $value, ?ConditionalOperandFlow $receiver): int {{ $receiver?->take({coalesce}); return $value; }}");
-        match check_source(&source) {
+        match check_source_strict(&source) {
             Ok(_) => admitted.push(source),
             Err(error) => assert!(error.to_string().contains("return type expects int"), "{source}: {error}"),
         }
@@ -1169,7 +1169,7 @@ fn test_nullable_fallback_flow_review_conditional_operands() {
 fn test_nullable_fallback_flow_review_captured_null_reachability() {
     for coalesce in ["$value ??= 5;", "$value = $value ?? 5;"] {
         let source = format!("<?php function run(?int $value): int {{ {coalesce} $flag = null; $set = function () use (&$flag) {{ $flag = 1; }}; try {{ $set(); if ($flag === null) {{ return -1; }} $value = null; }} catch (RuntimeException $e) {{}} return $value; }}");
-        expect_error(&source, "return type expects int");
+        expect_error_strict(&source, "return type expects int");
     }
 }
 
@@ -1179,7 +1179,7 @@ fn test_nullable_fallback_flow_review_switch_arm_inputs() {
     for guard in ["$closed || $value === null", "$value === null"] {
         for first_exit in ["break;", "continue;", "return 1;"] {
             let source = format!("<?php function run(?int $value, int $key, bool $closed): int {{ switch ($key) {{ case 1: if ({guard}) {{ return -1; }} {first_exit} case 2: return $value; }} return 0; }}");
-            expect_error(&source, "return type expects int");
+            expect_error_strict(&source, "return type expects int");
         }
     }
     check_source("<?php function run(?int $value, int $key): ?int { switch ($key) { case 1: $value = null; case 2: return $value; default: return $value; } }").unwrap();
@@ -1201,7 +1201,7 @@ fn test_nullable_fallback_flow_review_plain_loop_nullability() {
     // The counter's next iteration can be float in the checker. Keep that assignment
     // diagnostic separate from the nullable return, whose payload is explicitly int.
     expect_error("<?php function run(?int $value, bool $flag): int { for ($i = 0; $i < 2; $i++) { $value = $flag ? null : $i; } return $value; }", "cannot reassign $value from int|null to int|float|null");
-    expect_error("<?php function run(?int $value, bool $flag): int { for ($i = 0; $i < 2; $i++) { $value = $flag ? null : (int)$i; } return $value; }", "return type expects int");
+    expect_error_strict("<?php function run(?int $value, bool $flag): int { for ($i = 0; $i < 2; $i++) { $value = $flag ? null : (int)$i; } return $value; }", "return type expects int");
     check_source("<?php function resetValue(?int &$value): void { $value = null; } function run(?int $value, array $xs, bool $flag): void { foreach ($xs as $x) { $value = $flag ? null : 1; } resetValue($value); }").unwrap();
 }
 
@@ -1292,9 +1292,9 @@ fn test_nullable_fallback_flow_review_switch_exits() {
     for prefix in ["$value ??= 3;", "$value = $value ?? 3;", "if ($value === null) { return 0; }"] {
         for exit in ["break", "continue"] {
             let source = format!("<?php function run(?int $value, int $key): int {{ {prefix} switch ($key) {{ case 1: if ($key > 0) {{ $value = null; {exit}; }} break; }} return $value; }}");
-            expect_error(&source, "return type expects int");
+            expect_error_strict(&source, "return type expects int");
         }
-        expect_error(&format!("<?php function run(?int $value, int $key): int {{ {prefix} switch ($key) {{ default: $value = null; case 1: return $value; }} return 0; }}"), "return type expects int");
+        expect_error_strict(&format!("<?php function run(?int $value, int $key): int {{ {prefix} switch ($key) {{ default: $value = null; case 1: return $value; }} return 0; }}"), "return type expects int");
         expect_error(&format!("<?php function need(int $value): void {{}} function run(?int $value, int $key): int {{ {prefix} switch ($key) {{ default: $value = null; case 1: need($value); }} return 0; }}"), "expects int");
         let source = format!("<?php function run(?int $value, int $key): ?int {{ {prefix} foreach ([1, 2] as $i) {{ switch ($key) {{ case 1: if ($key > 0) {{ $value = null; continue 2; }} break; }} }} return $value; }}");
         check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
@@ -1375,7 +1375,7 @@ fn test_nullable_fallback_flow_unsafe_joins() {
         "$value ??= 0; $value = null; return $value;",
     ] {
         let source = format!("<?php function fallback(?int $value, bool $flag): int {{ {body} }}");
-        let error = check_source(&source).expect_err(body);
+        let error = check_source_strict(&source).expect_err(body);
         assert!(error.contains("return type expects int"), "{body}: {error}");
     }
 }
@@ -1388,9 +1388,9 @@ fn test_nullable_fallback_flow_operand_mutation() {
         "$value !== null && (($value = null) === null)",
         "$value !== null && resetValue($value)",
     ] {
-        expect_error(&format!("<?php final class Service {{}} function resetValue(?Service &$value): bool {{ $value = null; return true; }} function fallback(?Service $value): Service {{ if ({condition}) {{ return $value; }} return new Service(); }}"), "return type expects Service");
+        expect_error_strict(&format!("<?php final class Service {{}} function resetValue(?Service &$value): bool {{ $value = null; return true; }} function fallback(?Service $value): Service {{ if ({condition}) {{ return $value; }} return new Service(); }}"), "return type expects Service");
     }
-    expect_error(
+    expect_error_strict(
         "<?php final class Service {} class Box { public ?Service $value = null; public function __get(string $name): bool { $this->value = null; return true; } } function fallback(Box $box, mixed $proxy): Service { if ($box->value !== null && $proxy->flag) { return $box->value; } return new Service(); }",
         "return type expects Service",
     );
@@ -1483,7 +1483,7 @@ fn test_nullable_fallback_flow_review_alias_barriers() {
         "$value ??= new Service(); global $value; return $value;",
         "$value ??= new Service(); static $value = null; return $value;",
     ] {
-        expect_error(&format!("<?php final class Service {{}} function run(?Service $value): Service {{ {body} }}"), "return type expects Service");
+        expect_error_strict(&format!("<?php final class Service {{}} function run(?Service $value): Service {{ {body} }}"), "return type expects Service");
     }
 }
 
@@ -1517,7 +1517,7 @@ fn test_nullable_fallback_flow_review_guarded_stores() {
     ] {
         check_source(source).unwrap_or_else(|error| panic!("{source}: {error}"));
     }
-    expect_error("<?php function run(?int $a, ?int $b, bool $closed): int { if ($closed || $a === null) { return 0; } $a = $b; return $a; }", "return type expects int");
+    expect_error_strict("<?php function run(?int $a, ?int $b, bool $closed): int { if ($closed || $a === null) { return 0; } $a = $b; return $a; }", "return type expects int");
 }
 
 /// Object alternatives retain a usable Throwable supertype on ambiguous boolean outcomes.
@@ -1543,7 +1543,7 @@ fn test_nullable_fallback_flow_review_reference_captures() {
         "$callbacks = [function () use (&$value) { $value = null; }]; $callbacks[0]();",
     ] {
         let source = format!("<?php final class S {{}} function run(?S $value): S {{ $value ??= new S(); {body} return $value; }}");
-        expect_error(&source, "return type expects S");
+        expect_error_strict(&source, "return type expects S");
     }
 }
 
@@ -1570,7 +1570,7 @@ fn test_nullable_fallback_flow_review_return_boundary_catches() {
     for prefix in ["$value ??= 1;", "$value = $value ?? 1;", "if ($value === null) { return 0; }"] {
         for call in ["returnChecked($input)", "ReturnBoundaryBox::read($input)"] {
             let source = format!("<?php function returnChecked(mixed $input): int {{ return $input; }} class ReturnBoundaryBox {{ public static function read(mixed $input): int {{ return $input; }} }} function run(?int $value, mixed $input): int {{ {prefix} $ignored = 0; try {{ $ignored = {call}; }} catch (TypeError $error) {{ $value = null; }} echo $ignored; return $value; }}");
-            expect_error(&source, "return type expects int");
+            expect_error_strict(&source, "return type expects int");
         }
     }
 }
@@ -1646,11 +1646,11 @@ fn test_nullable_fallback_flow_review_finally_continuation() {
     }
     for body in ["$value = null;", "resetFinallyContinuation($value);", "$write = function () use (&$value) { $value = null; }; $write();"] {
         let source = format!("<?php function resetFinallyContinuation(?int &$value): void {{ $value = null; }} function run(?int $value): int {{ try {{ if ($value === null) {{ return 0; }} }} finally {{ {body} }} return $value; }}");
-        expect_error(&source, "return type expects int");
+        expect_error_strict(&source, "return type expects int");
     }
     expect_error("<?php function needFinallyContinuation(int $value): void {} function run(?int $value): void { try { if ($value === null) { return; } } finally { needFinallyContinuation($value); } }", "expects int");
-    expect_error("<?php function run(?int $value, ?int $other): int { try { if ($value === null) { return 0; } if ($other === null) { return 0; } } finally { $other = null; $value = $other; } return $value; }", "return type expects int");
-    expect_error("<?php function run(?int $value, ?int $other): int { try { if ($value === null) { return 0; } } finally { $value = $other; $other ??= 1; } return $value; }", "return type expects int");
+    expect_error_strict("<?php function run(?int $value, ?int $other): int { try { if ($value === null) { return 0; } if ($other === null) { return 0; } } finally { $other = null; $value = $other; } return $value; }", "return type expects int");
+    expect_error_strict("<?php function run(?int $value, ?int $other): int { try { if ($value === null) { return 0; } } finally { $value = $other; $other ??= 1; } return $value; }", "return type expects int");
 }
 
 /// Conditional writes invalidate a non-null read on every expression control-flow surface.
@@ -1667,11 +1667,11 @@ fn test_nullable_fallback_flow_review_conditional_effects() {
             "$r = match ($n) { 1 => resetValue($value), default => false };",
         ] {
             let source = format!("<?php function resetValue(?int &$value): bool {{ $value = null; return true; }} function run(?int $value, bool $flag, int $n, ?bool $other): int {{ {prefix} {body} return $value; }}");
-            let error = check_source(&source).expect_err(&source);
+            let error = check_source_strict(&source).expect_err(&source);
             assert!(error.contains("return type expects int"), "{source}: {error}");
         }
     }
-    expect_error("<?php final class S {} function resetValue(?S &$value): bool { $value = null; return true; } function run(?S $value, bool $flag): S { $value ??= new S(); $r = $flag ? resetValue($value) : false; return $value; }", "return type expects S");
+    expect_error_strict("<?php final class S {} function resetValue(?S &$value): bool { $value = null; return true; } function run(?S $value, bool $flag): S { $value ??= new S(); $r = $flag ? resetValue($value) : false; return $value; }", "return type expects S");
 }
 
 /// A conditional coalescing default carries its writes to other previously narrowed locals.
@@ -1689,7 +1689,7 @@ fn test_nullable_fallback_flow_review_coalesce_default_effects() {
             "$other ??= (($value = null) === null);",
         ] {
             let source = format!("<?php function resetDefaultFlow(?int &$value): bool {{ $value = null; return true; }} function consumeDefaultFlow(bool $flag): void {{}} function run(?int $value, ?bool $other, bool $closed): int {{ {prefix} {body} return $value; }}");
-            expect_error(&source, "return type expects int");
+            expect_error_strict(&source, "return type expects int");
         }
     }
     check_source("<?php function resetSkippedFlow(?int &$value): bool { $value = null; return true; } function run(?int $value, bool $other): int { $value ??= 1; $other ??= resetSkippedFlow($value); return $value; }").unwrap();
@@ -1763,10 +1763,10 @@ fn test_nullable_fallback_flow_review_guarded_null_stores() {
             "is_int($value) && (($value = null) === null);",
         ] {
             let source = format!("<?php function run(?int $value): int {{ {prefix} {body} return $value; }}");
-            expect_error(&source, "return type expects int");
+            expect_error_strict(&source, "return type expects int");
         }
     }
-    expect_error("<?php class S {} final class ChildS extends S {} function run(?S $value): S { $value ??= new ChildS(); if ($value instanceof ChildS) { $value = null; } return $value; }", "return type expects S");
+    expect_error_strict("<?php class S {} final class ChildS extends S {} function run(?S $value): S { $value ??= new ChildS(); if ($value instanceof ChildS) { $value = null; } return $value; }", "return type expects S");
     for body in [
         "if (is_int($value)) { $value = 2; }",
         "if (is_int($value)) { $value = 2; } else { $value = 3; }",
@@ -1903,7 +1903,7 @@ fn test_nullable_fallback_flow_scalar_null_default_types() {
         ("$x = $argv[1] ?? null; takesString($x);", "expects string, got string|null"),
     ] {
         let source = format!("<?php {declarations} function run(?int $n, ?bool $b, int $i, string $k, array<string> $argv): int {{ {body} return 0; }}");
-        expect_error(&source, error);
+        expect_error_strict(&source, error);
     }
     for body in [
         "$x = $n ?? null; if ($x !== null) { takesInt($x); }",

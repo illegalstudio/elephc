@@ -345,6 +345,38 @@ pub(crate) fn classify_param_binding(
     }
 }
 
+/// Spells a declared scalar/array union the way php words it in a `TypeError`.
+///
+/// elephc's own rendering names a bare `array` `array<mixed>|array<mixed, mixed>` and keeps
+/// declaration order, where php says `array|bool` and puts `null` last (`?string` for the
+/// two-member nullable form). Only the members `gradual_union_requires_runtime_param_guard`
+/// admits get this treatment; anything else falls back to the type's own spelling.
+pub(crate) fn php_union_error_name(ty: &PhpType) -> String {
+    let PhpType::Union(members) = ty else {
+        return ty.to_string();
+    };
+    let mut ranked: Vec<(u8, &'static str)> = Vec::new();
+    for member in members {
+        let (order, name) = match member {
+            PhpType::Array(_) | PhpType::AssocArray { .. } => (0, "array"),
+            PhpType::Str => (1, "string"),
+            PhpType::Int => (2, "int"),
+            PhpType::Float => (3, "float"),
+            PhpType::Bool => (4, "bool"),
+            PhpType::Void => (5, "null"),
+            _ => return ty.to_string(),
+        };
+        if !ranked.iter().any(|(_, seen)| *seen == name) {
+            ranked.push((order, name));
+        }
+    }
+    ranked.sort_by_key(|(order, _)| *order);
+    if ranked.len() == 2 && ranked[1].1 == "null" {
+        return format!("?{}", ranked[0].1);
+    }
+    ranked.iter().map(|(_, name)| *name).collect::<Vec<_>>().join("|")
+}
+
 /// Returns whether a boxed gradual argument needs an active-tag check for a declared union.
 ///
 /// The supported union members map directly to stable Mixed runtime tags, so the guard can

@@ -24,6 +24,7 @@ pub(super) fn coerce_to_return_type(
     crate::ir_lower::object_boundaries::guard_return(ctx, value, span);
     let value = guard_generic_object_nominal_return(ctx, value, &return_php_type, span);
     let value = guard_gradual_union_return(ctx, value, &return_php_type, span);
+    let value = guard_nullable_scalar_return(ctx, value, &return_php_type, span);
     let source_declared_type = ctx.builder.value_php_type(value.value).clone();
     // A declared `int` return fed by a gradual value (a checked sum that may have become a float)
     // is verified by `declared_int_return_boundary` below, which throws php's TypeError for a
@@ -303,7 +304,7 @@ fn guard_gradual_union_return(
     let prefix = format!(
         "{}(): Return value must be of type {}, ",
         ctx.owner_name(),
-        return_type
+        crate::types::param_binding::php_union_error_name(return_type)
     );
     let name = ctx.intern_string(&prefix);
     // Only the check matters: the guard hands back the same box, and returning the original
@@ -316,6 +317,58 @@ fn guard_gradual_union_return(
             strict_types: ctx.php_strict_types,
         }),
         return_type.clone(),
+        crate::ir_lower::effects_lookup::runtime_effects(),
+        span,
+    );
+    value
+}
+
+/// Raises php's `TypeError` when a nullable boxed value reaches a declared `string`, `float` or
+/// `bool` return.
+///
+/// php never coerces `null` for a user function's return type, so `function f(): string { $x =
+/// preg_replace_callback(...); return $x; }` raises "Return value must be of type string, null
+/// returned" when the call fails, where the plain scalar cast below turned the null into `""`
+/// (symfony/asset-mapper's `makeImportsBare()`). Only the tag is checked; the cast that follows
+/// still performs php's weak scalar conversion of the accepted forms. An array is refused too,
+/// which php does as well.
+fn guard_nullable_scalar_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    return_type: &PhpType,
+    span: Option<Span>,
+) -> LoweredValue {
+    if !ctx.return_type_is_declared {
+        return value;
+    }
+    let source_type = ctx.builder.value_php_type(value.value).clone();
+    let nullable_box = matches!(&source_type, PhpType::Union(members)
+        if members.contains(&PhpType::Void))
+        && source_type.codegen_repr() == PhpType::Mixed
+        && value.ir_type == IrType::Heap(IrHeapKind::Mixed);
+    if !nullable_box {
+        return value;
+    }
+    let accepted = match (return_type, ctx.php_strict_types) {
+        (PhpType::Str, true) => vec![PhpType::Str],
+        (PhpType::Float, true) => vec![PhpType::Float, PhpType::Int],
+        (PhpType::Bool, true) => vec![PhpType::Bool],
+        (PhpType::Str | PhpType::Float | PhpType::Bool, false) => {
+            vec![PhpType::Int, PhpType::Float, PhpType::Str, PhpType::Bool]
+        }
+        _ => return value,
+    };
+    let prefix = format!(
+        "{}(): Return value must be of type {}, ",
+        ctx.owner_name(),
+        return_type
+    );
+    let name = ctx.intern_string(&prefix);
+    ctx.emit_value(
+        Op::RuntimeCall,
+        vec![value.value],
+        Some(Immediate::ParameterType { name, strict_types: ctx.php_strict_types }),
+        PhpType::Union(accepted),
         crate::ir_lower::effects_lookup::runtime_effects(),
         span,
     );

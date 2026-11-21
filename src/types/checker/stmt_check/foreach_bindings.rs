@@ -13,6 +13,25 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Records the foreach value binding as an entry proof, like a declared parameter's.
+    ///
+    /// The binding is a fresh value every iteration, so a branch of the body that stores an
+    /// incompatible value into the name (`$c = new Stub($c)`) must not leak that type into the
+    /// sibling branch, which still reads the element. Without the proof the name has no entry to
+    /// restore and the `else` arm reads the `then` arm's object (symfony/var-dumper
+    /// `ExceptionCaster::extractSource()`). Taken AFTER the loop-entry analysis, which drops the
+    /// proof of every name the body writes: the back edge of a foreach never reaches its value
+    /// variable, which the next iteration rebinds.
+    pub(super) fn prove_foreach_value_binding(&mut self, value_name: &str, env: &TypeEnv) {
+        let Some(ty) = env.get(value_name) else { return; };
+        if Self::is_raw_non_null_contract(ty) && self.local_flow_read_is_stable(value_name) {
+            self.guarded_union_types.insert(
+                value_name.to_string(),
+                super::super::GuardedLocalStorage { ty: ty.clone(), coalesced: false },
+            );
+        }
+    }
+
     /// Keeps pre-binding callbacks only when the source can actually invoke them or cleanup.
     pub(super) fn record_foreach_entry_exception_flow(
         &mut self, stmt: &Stmt, source: &PhpType, env: &TypeEnv,
