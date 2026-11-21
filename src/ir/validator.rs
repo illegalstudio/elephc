@@ -1080,7 +1080,9 @@ fn validate_opcode_rules(
                 local.kind == LocalKind::PhpLocal && local.name.as_deref().is_some_and(|name|
                     !crate::names::is_generated_local_name(name)))
                 && function.locals.get(owner.as_raw() as usize).is_some_and(|local|
-                    local.kind == LocalKind::RefCell && local.php_type == crate::types::PhpType::Mixed);
+                    local.kind == LocalKind::RefCell
+                        && crate::types::canonical_property_reference_payload(&local.php_type)
+                            .is_some());
             if !valid || !function.flags.tracks_local_binding_state || inst.result.is_some()
                 || !eval_scope_owners::has_scope_owner(function)
                 || !function.value(inst.operands[0]).is_some_and(|value| value.php_type == PhpType::Bool)
